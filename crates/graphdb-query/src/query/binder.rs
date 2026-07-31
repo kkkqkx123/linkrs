@@ -13,16 +13,13 @@ pub mod semantic_checker;
 pub mod validation;
 
 pub use binder_impl::Binder;
-pub use bound::{
-    BoundColumnRef, BoundExpression, BoundMatchStatement, BoundStatement,
-};
+pub use bound::{BoundColumnRef, BoundExpression, BoundMatchStatement, BoundStatement};
 pub use expr_binder::ExpressionBinder;
 pub use query_graph::{BoundEdgePattern, BoundEdgeTypeRef, BoundNodePattern, QueryGraph};
 pub use scope::{BinderScope, BinderVariable};
 pub use semantic_checker::validate_expression;
 pub use validation::{
-    AggregateCallInfo, ClauseKind, CypherClauseKind, HintSeverity, IndexHint,
-    OptimizationHint, OrderByClauseContext, PaginationContext, PathAnalysis,
-    SemanticInfo, ValidatedStatement, ValidationInfo, WhereClauseContext,
-    WithClauseContext, YieldClauseContext,
+    AggregateCallInfo, ClauseKind, CypherClauseKind, HintSeverity, IndexHint, OptimizationHint,
+    OrderByClauseContext, PaginationContext, PathAnalysis, SemanticInfo, ValidatedStatement,
+    ValidationInfo, WhereClauseContext, WithClauseContext, YieldClauseContext,
 };

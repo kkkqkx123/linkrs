@@ -111,7 +111,10 @@ fn check_expression_depth(expr: &Expression, depth: usize) -> DBResult<()> {
             check_expression_depth(expression, depth + 1)?;
         }
         Expression::ListComprehension {
-            source, filter, map, ..
+            source,
+            filter,
+            map,
+            ..
         } => {
             check_expression_depth(source, depth + 1)?;
             if let Some(f) = filter {
@@ -136,10 +139,11 @@ fn check_division_by_zero(expr: &Expression, depth: usize) -> DBResult<()> {
             right,
             ..
         } => {
-            if matches!(right.as_ref(),
+            if matches!(
+                right.as_ref(),
                 Expression::Literal(crate::core::Value::Int(0))
-                    | Expression::Literal(crate::core::Value::Float(0.0)))
-            {
+                    | Expression::Literal(crate::core::Value::Float(0.0))
+            ) {
                 return Err(DBError::from(QueryError::invalid_query(
                     "The divisor cannot be 0".to_string(),
                 )));
@@ -370,7 +374,9 @@ fn check_empty_names(expr: &Expression, depth: usize) -> DBResult<()> {
                 check_empty_names(arg, depth + 1)?;
             }
         }
-        Expression::Property { property, object, .. } => {
+        Expression::Property {
+            property, object, ..
+        } => {
             if property.is_empty() {
                 return Err(DBError::from(QueryError::invalid_query(
                     "Attribute name cannot be null".to_string(),

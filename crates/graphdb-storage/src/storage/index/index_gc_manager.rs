@@ -181,14 +181,20 @@ impl IndexGcManager {
         if self.needs_compaction() {
             let compacted = self.run_compaction(safe_ts);
             if compacted > 0 {
-                tracing::info!(indexes_compacted = compacted, "Generational compaction completed");
+                tracing::info!(
+                    indexes_compacted = compacted,
+                    "Generational compaction completed"
+                );
             }
         }
 
         // Retire generations whose max_ts is past the safe timestamp
         let retired = self.index_manager.retire_generations(safe_ts);
         if retired > 0 {
-            tracing::info!(generations_retired = retired, "Generation retirement completed");
+            tracing::info!(
+                generations_retired = retired,
+                "Generation retirement completed"
+            );
         }
 
         stats
@@ -264,24 +270,15 @@ impl IndexGcManager {
         if safe_ts == 0 {
             return 0;
         }
-        let identities: Vec<IndexIdentity> = self
-            .index_manager
-            .runtimes
-            .read()
-            .keys()
-            .copied()
-            .collect();
+        let identities: Vec<IndexIdentity> =
+            self.index_manager.runtimes.read().keys().copied().collect();
         let mut compacted = 0;
         for identity in identities {
             match self.index_manager.compact_native_index(identity, safe_ts) {
                 Ok(true) => compacted += 1,
                 Ok(false) => {}
                 Err(e) => {
-                    tracing::warn!(
-                        "Compaction failed for index {}: {}",
-                        identity.index_id,
-                        e
-                    );
+                    tracing::warn!("Compaction failed for index {}: {}", identity.index_id, e);
                 }
             }
         }

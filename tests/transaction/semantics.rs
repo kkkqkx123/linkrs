@@ -8,7 +8,6 @@
 
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
-
 /// Verify that after a full rollback, the transaction's write timestamp is released
 /// and the data it wrote is not visible through a new read transaction.
 #[test]

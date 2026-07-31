@@ -6,13 +6,13 @@ use crate::core::types::{
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use crate::storage::macros::forward_methods;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
     StorageStats, StorageSyncContextOps, StorageWriter,
 };
-use crate::storage::macros::forward_methods;
 use crate::sync::SyncManager;
 
 pub struct MetricsStorage<S: StorageClient> {

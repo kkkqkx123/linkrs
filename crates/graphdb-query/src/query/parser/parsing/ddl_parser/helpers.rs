@@ -116,7 +116,6 @@ impl DdlParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Value, ParseError> {
-        
         let parse_result = parse_expression(ctx)?;
 
         use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;

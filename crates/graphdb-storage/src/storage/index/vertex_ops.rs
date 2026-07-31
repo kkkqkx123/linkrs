@@ -45,17 +45,10 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 .manifest_catalog(space_id, index_id)
                 .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
             let manifest = catalog.acquire();
-            let index_definition = self
-                .index_definitions
-                .read()
-                .get(&identity)
-                .cloned();
+            let index_definition = self.index_definitions.read().get(&identity).cloned();
 
-            let covering = index_definition
-                .as_ref()
-                .is_some_and(|idx| idx.covering);
-            let new_values =
-                effective_index_values(index_definition.as_ref(), props, Vec::new());
+            let covering = index_definition.as_ref().is_some_and(|idx| idx.covering);
+            let new_values = effective_index_values(index_definition.as_ref(), props, Vec::new());
 
             let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
 
@@ -71,10 +64,13 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                         continue;
                     }
-                    for (_suffix, record) in shard
-                        .reverse_range_suffix_visible(&reverse_prefix.0, &reverse_end.0, write_ts)
-                    {
-                        if let Ok(encoded) = KeyParser::extract_value_from_reverse_suffix(&_suffix) {
+                    for (_suffix, record) in shard.reverse_range_suffix_visible(
+                        &reverse_prefix.0,
+                        &reverse_end.0,
+                        write_ts,
+                    ) {
+                        if let Ok(encoded) = KeyParser::extract_value_from_reverse_suffix(&_suffix)
+                        {
                             if existing_encoded.insert(encoded.clone()) {
                                 if let Ok(value) = OrderedCodec::new().decode(&encoded) {
                                     existing_values.push(normalize_int_value(&value));
@@ -127,8 +123,9 @@ impl VertexIndexOps for IndexDataManagerImpl {
             for value in &values_to_update {
                 let forward =
                     KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
-                let reverse =
-                    KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
+                let reverse = KeyBuilder::build_vertex_reverse_key_with_value(
+                    space_id, vertex_id, index_name, value,
+                )?;
                 let shard_id = route(&forward.0)?;
                 let mut entry = if covering {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
@@ -145,8 +142,9 @@ impl VertexIndexOps for IndexDataManagerImpl {
             for value in &values_to_remove {
                 let forward =
                     KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
-                let reverse =
-                    KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
+                let reverse = KeyBuilder::build_vertex_reverse_key_with_value(
+                    space_id, vertex_id, index_name, value,
+                )?;
                 let shard_id = route(&forward.0)?;
                 let mut entry = if covering {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
@@ -164,8 +162,9 @@ impl VertexIndexOps for IndexDataManagerImpl {
             for value in &values_to_add {
                 let forward =
                     KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
-                let reverse =
-                    KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
+                let reverse = KeyBuilder::build_vertex_reverse_key_with_value(
+                    space_id, vertex_id, index_name, value,
+                )?;
                 let shard_id = route(&forward.0)?;
                 let mut entry = if covering {
                     IndexRecord::new_with_columns(write_ts, included_columns.clone())
@@ -229,28 +228,26 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 .iter()
                 .filter_map(|s| generation.shard(s.shard_id))
             {
-                for (key, entry) in shard
-                    .forward_range(&prefix.0, &end.0)
-            {
-                if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(&key) {
-                    if tombstoned.contains(&vertex_id) {
-                        continue;
+                for (key, entry) in shard.forward_range(&prefix.0, &end.0) {
+                    if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(&key) {
+                        if tombstoned.contains(&vertex_id) {
+                            continue;
+                        }
+                        if seen.contains(&vertex_id) {
+                            continue;
+                        }
+                        if entry.created_ts > read_ts {
+                            continue;
+                        }
+                        if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
+                            tombstoned.insert(vertex_id);
+                            continue;
+                        }
+                        seen.insert(vertex_id.clone());
+                        results.push(vertex_id);
                     }
-                    if seen.contains(&vertex_id) {
-                        continue;
-                    }
-                    if entry.created_ts > read_ts {
-                        continue;
-                    }
-                    if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
-                        tombstoned.insert(vertex_id);
-                        continue;
-                    }
-                    seen.insert(vertex_id.clone());
-                    results.push(vertex_id);
                 }
             }
-        }
         }
         Ok(results)
     }

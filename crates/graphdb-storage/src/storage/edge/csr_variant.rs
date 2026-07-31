@@ -232,7 +232,9 @@ impl CsrVariant {
             };
             log::warn!(
                 "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
-                bytes, self.edge_count(), fallback
+                bytes,
+                self.edge_count(),
+                fallback
             );
             fallback
         } else {
@@ -427,6 +429,20 @@ impl CsrVariant {
             CsrVariant::None { .. } => CsrIterator::None,
         }
     }
+
+    /// Iterate over all physically present entries, including tombstoned ones.
+    ///
+    /// Used when rebuilding the CSR (e.g. vertex ID remapping) so entries
+    /// marked as deleted survive the rebuild.
+    pub fn iter_all(&self) -> CsrIterator<'_> {
+        match self {
+            CsrVariant::Multiple(csr) => CsrIterator::Multiple(csr.iter_all()),
+            CsrVariant::Single(csr) => CsrIterator::Single(csr.iter_all()),
+            CsrVariant::MultiSingle(csr) => CsrIterator::MultiSingle(csr.iter_all()),
+            CsrVariant::Labeled(csr) => CsrIterator::Labeled(csr.iter_all()),
+            CsrVariant::None { .. } => CsrIterator::None,
+        }
+    }
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types
@@ -466,7 +482,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -475,7 +492,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -489,7 +507,8 @@ mod tests {
         )
         .unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -498,7 +517,8 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -513,7 +533,9 @@ mod tests {
         assert!(csr.edges_of(0, 1).is_empty());
 
         // None variant should reject all insertions
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
+        assert!(csr
+            .insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .is_err());
         assert_eq!(csr.edge_count(), 0);
 
         // None variant should reject all deletions
@@ -556,14 +578,17 @@ mod tests {
 
         // After loading, should be None variant
         assert_eq!(csr2.edge_count(), 0);
-        assert!(csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
+        assert!(csr2
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .is_err());
     }
 
     #[test]
     fn test_clone() {
         let mut csr1 =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
 
         let csr2 = csr1.clone();
         assert_eq!(csr2.edge_count(), 1);
@@ -576,6 +601,8 @@ mod tests {
         let mut csr2 = csr1.clone();
 
         assert_eq!(csr2.edge_count(), 0);
-        assert!(csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
+        assert!(csr2
+            .insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .is_err());
     }
 }

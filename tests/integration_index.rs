@@ -7,6 +7,12 @@
 //! - Index queries (exact queries, range queries)
 //! - index cache
 
+use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
+#[cfg(feature = "qdrant")]
+use graphdb::core::Edge;
+use graphdb::core::{Value, Vertex};
+use graphdb::query::planning::plan::{IndexLimit, ScanType};
+use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 #[cfg(feature = "qdrant")]
 use graphdb::test_utils::storage_helpers::knows_edge_type_info;
 use graphdb::test_utils::{
@@ -14,12 +20,6 @@ use graphdb::test_utils::{
     storage_helpers::{create_test_space, person_tag_info},
     TestStorage,
 };
-use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
-#[cfg(feature = "qdrant")]
-use graphdb::core::Edge;
-use graphdb::core::{Value, Vertex};
-use graphdb::query::planning::plan::{IndexLimit, ScanType};
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -582,10 +582,7 @@ fn test_index_exact_query() {
     let vertices = vec![
         (VertexId::from_int64(1), Value::string("Alice")),
         (VertexId::from_int64(2), Value::string("Bob")),
-        (
-            VertexId::from_int64(3),
-            Value::string("Charlie"),
-        ),
+        (VertexId::from_int64(3), Value::string("Charlie")),
     ];
 
     for (vid, name) in &vertices {
@@ -702,11 +699,8 @@ fn test_index_query_no_match() {
 
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
 
-    let retrieved = get_storage(&storage).lookup_index(
-        "test_space",
-        "person_name_idx",
-        &Value::string("Bob"),
-    );
+    let retrieved =
+        get_storage(&storage).lookup_index("test_space", "person_name_idx", &Value::string("Bob"));
     let vertex_ids = retrieved.expect("索引查询应该成功");
     assert_count(&vertex_ids, 0, "匹配的顶点");
 }

@@ -381,11 +381,12 @@ impl OptimizerEngine {
 
         // Phase 2: Join order optimization (extract tables/conditions, reorder)
         if let Some(ref root) = plan.root.clone() {
-            let rewritten = crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
-                root,
-                &self.stats_manager,
-                &self.cost_calculator,
-            );
+            let rewritten =
+                crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
+                    root,
+                    &self.stats_manager,
+                    &self.cost_calculator,
+                );
             plan.set_root(rewritten);
         }
 
@@ -400,8 +401,9 @@ impl OptimizerEngine {
         // Try PatternApply unnesting at this level first.
         if let PatternApply(apply) = node {
             let analysis = self.batch_plan_analyzer.analyze(node);
-            if let UnnestDecision::ShouldUnnest { ref reason, .. } =
-                self.subquery_unnesting_optimizer.should_unnest(apply, &analysis)
+            if let UnnestDecision::ShouldUnnest { ref reason, .. } = self
+                .subquery_unnesting_optimizer
+                .should_unnest(apply, &analysis)
             {
                 log::debug!(
                     "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",

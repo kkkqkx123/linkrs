@@ -2,9 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, Edge, Value, Vertex};
-use graphdb_storage::storage::{
-    GraphStorage, StorageReader, StorageSchemaOps, StorageWriter,
-};
+use graphdb_storage::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -58,11 +56,9 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
                 storage
                     .create_edge_type(
                         &space,
-                        &EdgeTypeInfo::new("Link".to_string())
-                            .with_properties(vec![PropertyDef::new(
-                                "weight".to_string(),
-                                DataType::Double,
-                            )]),
+                        &EdgeTypeInfo::new("Link".to_string()).with_properties(vec![
+                            PropertyDef::new("weight".to_string(), DataType::Double),
+                        ]),
                     )
                     .expect("create edge type");
 
@@ -134,9 +130,8 @@ fn bench_search_workflow(c: &mut Criterion) {
     storage
         .create_tag(
             space,
-            &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("name".to_string(), DataType::String),
-            ]),
+            &TagInfo::new("Node".to_string())
+                .with_properties(vec![PropertyDef::new("name".to_string(), DataType::String)]),
         )
         .expect("create tag");
     setup_vertices(&mut storage, space, 100);
@@ -168,9 +163,10 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
             storage
                 .create_tag(
                     space,
-                    &TagInfo::new("Node".to_string()).with_properties(vec![
-                        PropertyDef::new("value".to_string(), DataType::Int),
-                    ]),
+                    &TagInfo::new("Node".to_string()).with_properties(vec![PropertyDef::new(
+                        "value".to_string(),
+                        DataType::Int,
+                    )]),
                 )
                 .expect("create tag");
 
@@ -179,9 +175,7 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
                     VertexId::from_string(format!("u{}", i)),
                     vec![Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::Int(i))]
-                            .into_iter()
-                            .collect(),
+                        [("value".to_string(), Value::Int(i))].into_iter().collect(),
                     )],
                 );
                 storage.insert_vertex(space, vertex).expect("insert");
@@ -202,9 +196,8 @@ fn bench_concurrent_mixed_workload(c: &mut Criterion) {
     storage
         .create_tag(
             space,
-            &TagInfo::new("Node".to_string()).with_properties(vec![
-                PropertyDef::new("value".to_string(), DataType::Int),
-            ]),
+            &TagInfo::new("Node".to_string())
+                .with_properties(vec![PropertyDef::new("value".to_string(), DataType::Int)]),
         )
         .expect("create tag");
     setup_vertices(&mut storage, space, 100);

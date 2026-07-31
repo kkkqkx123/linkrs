@@ -2,9 +2,9 @@
 //!
 //! Tests for batch processor edge cases
 
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
 use graphdb::core::Value;
 use graphdb::storage::StorageWriter;
+use graphdb::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-240: Empty batch handling
 #[test]
@@ -48,10 +48,7 @@ fn test_batch_flush_on_timeout() {
 
     // Insert single vertex (below batch size)
     let mut properties = std::collections::HashMap::new();
-    properties.insert(
-        "name".to_string(),
-        Value::string("Timeout Test"),
-    );
+    properties.insert("name".to_string(), Value::string("Timeout Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);

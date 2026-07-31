@@ -2,7 +2,6 @@
 //!
 //! Tests for dead letter queue, compensation, and recovery mechanisms
 
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::DataType;
 use graphdb::core::Value;
 use graphdb::search::SyncFailurePolicy;
@@ -10,6 +9,7 @@ use graphdb::sync::batch::BatchConfig;
 use graphdb::sync::coordinator::SyncCoordinator;
 use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use graphdb::sync::types::{ChangeType, IndexData, IndexType};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::sync::Arc;
 
 /// TC-060: Failed sync to dead letter queue
@@ -54,11 +54,7 @@ fn test_failed_sync_to_dead_letter_queue() {
         .expect("Failed to begin transaction");
 
     // Insert vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -135,11 +131,7 @@ fn test_crash_recovery_uncommitted_transaction() {
         .expect("Failed to begin transaction");
 
     // Insert vertex (buffered)
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -184,11 +176,7 @@ fn test_crash_recovery_committed_transaction() {
         .expect("Failed to begin transaction");
 
     // Insert vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");

@@ -335,10 +335,7 @@ impl DataChunk {
     ///
     /// Panics if column lengths are inconsistent or layout width doesn't
     /// match the number of columns.
-    pub fn from_columns(
-        columns: Vec<Vec<Value>>,
-        layout: Arc<SlotLayout>,
-    ) -> Self {
+    pub fn from_columns(columns: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
         let num_cols = columns.len();
         assert!(
             layout.is_empty() || num_cols == layout.len(),
@@ -391,18 +388,10 @@ impl DataChunk {
     ///
     /// Panics if the column count or row counts don't match.
     pub fn with_columns(mut self, columns: Vec<Vec<Value>>) -> Self {
-        assert_eq!(
-            columns.len(),
-            self.num_columns(),
-            "column count mismatch"
-        );
+        assert_eq!(columns.len(), self.num_columns(), "column count mismatch");
         if !self.rows.is_empty() {
             for col in &columns {
-                assert_eq!(
-                    col.len(),
-                    self.len(),
-                    "column length mismatch"
-                );
+                assert_eq!(col.len(), self.len(), "column length mismatch");
             }
         }
         self.columns = Some(columns);
@@ -551,11 +540,10 @@ impl DataChunk {
         for i in start..end {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
-        let columns = self.columns.as_ref().map(|cols| {
-            cols.iter()
-                .map(|col| col[start..end].to_vec())
-                .collect()
-        });
+        let columns = self
+            .columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|col| col[start..end].to_vec()).collect());
         Self {
             rows: selected,
             columns,
@@ -612,23 +600,30 @@ impl DataChunk {
         }
         // Fast path: all expressions are Variables — extract columns directly.
         // get_column() transposes from rows on demand, no full materialization needed.
-        if expressions.iter().all(|e| matches!(e, Expression::Variable(_))) {
+        if expressions
+            .iter()
+            .all(|e| matches!(e, Expression::Variable(_)))
+        {
             let mut columns = Vec::with_capacity(expressions.len());
             for expr in expressions {
                 if let Expression::Variable(name) = expr {
-                    let slot = self.layout.slot_id(name).ok_or_else(|| {
-                        ExpressionError::undefined_variable(name)
-                    })?;
-                    let col = self.get_column(slot).ok_or_else(|| {
-                        ExpressionError::undefined_variable(name)
-                    })?;
+                    let slot = self
+                        .layout
+                        .slot_id(name)
+                        .ok_or_else(|| ExpressionError::undefined_variable(name))?;
+                    let col = self
+                        .get_column(slot)
+                        .ok_or_else(|| ExpressionError::undefined_variable(name))?;
                     columns.push(col);
                 }
             }
             return Ok(columns);
         }
         // Fast path: all are Literal expressions
-        if expressions.iter().all(|e| matches!(e, Expression::Literal(_))) {
+        if expressions
+            .iter()
+            .all(|e| matches!(e, Expression::Literal(_)))
+        {
             let mut columns = Vec::with_capacity(expressions.len());
             for expr in expressions {
                 if let Expression::Literal(v) = expr {
@@ -738,12 +733,12 @@ impl DataChunk {
                 if let Some(col) = col_cache.get(name) {
                     return Ok(col.clone());
                 }
-                let slot = self.layout.slot_id(name).ok_or_else(|| {
-                    ExpressionError::undefined_variable(name)
-                })?;
-                self.get_column(slot).ok_or_else(|| {
-                    ExpressionError::undefined_variable(name)
-                })
+                let slot = self
+                    .layout
+                    .slot_id(name)
+                    .ok_or_else(|| ExpressionError::undefined_variable(name))?;
+                self.get_column(slot)
+                    .ok_or_else(|| ExpressionError::undefined_variable(name))
             }
 
             Expression::Parameter(name) => {

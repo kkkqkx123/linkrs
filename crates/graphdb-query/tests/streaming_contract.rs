@@ -87,10 +87,7 @@ fn contract_empty_input_returns_none() {
 #[test]
 fn contract_first_row_null() {
     let data = vec![
-        vec![
-            Value::Null(Default::default()),
-            Value::string("null_id"),
-        ],
+        vec![Value::Null(Default::default()), Value::string("null_id")],
         vec![Value::Int(1), Value::string("a")],
     ];
     let exec = make_scan(data.clone());

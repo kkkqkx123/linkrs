@@ -17,20 +17,14 @@ pub(crate) struct Chunk {
 }
 
 impl Chunk {
-    pub(crate) fn new(
-        id: ChunkId,
-        entries: Vec<(SecondaryIndexKey, IndexRecord)>,
-    ) -> Self {
-        let min_key = entries
-            .first()
-            .map(|(k, _)| k.clone())
-            .unwrap_or_default();
-        let max_key = entries
-            .last()
-            .map(|(k, _)| k.clone())
-            .unwrap_or_default();
+    pub(crate) fn new(id: ChunkId, entries: Vec<(SecondaryIndexKey, IndexRecord)>) -> Self {
+        let min_key = entries.first().map(|(k, _)| k.clone()).unwrap_or_default();
+        let max_key = entries.last().map(|(k, _)| k.clone()).unwrap_or_default();
         let estimated_size = estimate_entries_size(&entries);
-        let live_count = entries.iter().filter(|(_, e)| e.deleted_ts.is_none()).count();
+        let live_count = entries
+            .iter()
+            .filter(|(_, e)| e.deleted_ts.is_none())
+            .count();
         Self {
             id,
             min_key,
@@ -46,15 +40,11 @@ impl Chunk {
         lower: &[u8],
         upper: &[u8],
     ) -> Vec<(SecondaryIndexKey, IndexRecord)> {
-        let start = self
-            .entries
-            .partition_point(|(k, _)| k.as_slice() < lower);
+        let start = self.entries.partition_point(|(k, _)| k.as_slice() < lower);
         let end = if upper.is_empty() {
             self.entries.len()
         } else {
-            self
-                .entries
-                .partition_point(|(k, _)| k.as_slice() < upper)
+            self.entries.partition_point(|(k, _)| k.as_slice() < upper)
         };
         if start >= end {
             return Vec::new();
@@ -68,21 +58,16 @@ impl Chunk {
         upper: &[u8],
         read_ts: Timestamp,
     ) -> impl Iterator<Item = &(SecondaryIndexKey, IndexRecord)> {
-        let start = self
-            .entries
-            .partition_point(|(k, _)| k.as_slice() < lower);
+        let start = self.entries.partition_point(|(k, _)| k.as_slice() < lower);
         let end = if upper.is_empty() {
             self.entries.len()
         } else {
-            self
-                .entries
-                .partition_point(|(k, _)| k.as_slice() < upper)
+            self.entries.partition_point(|(k, _)| k.as_slice() < upper)
         };
         self.entries[start..end]
             .iter()
             .filter(move |(_, entry)| entry.is_visible_at(read_ts))
     }
-
 }
 
 pub(crate) fn build_chunks(
@@ -207,5 +192,4 @@ mod tests {
         let chunks = build_chunks(vec![], 65536);
         assert!(chunks.is_empty());
     }
-
 }

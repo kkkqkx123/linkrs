@@ -2,11 +2,11 @@
 //!
 //! Provides convenient query execution and result extraction functions for tests
 
-use crate::test_utils::TestResult;
 use crate::core::error::DBError;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionResult;
 use crate::query::QueryPipelineManager;
+use crate::test_utils::TestResult;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

@@ -400,7 +400,10 @@ fn parse_wal_file_bytes(
         if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
             return Err(WalError::Corrupted(format!(
                 "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
-                offset, expected_prev_lsn, header.prev_lsn(), header.lsn()
+                offset,
+                expected_prev_lsn,
+                header.prev_lsn(),
+                header.lsn()
             )));
         }
 
@@ -516,7 +519,11 @@ fn compute_checksum(header: &WalHeader, payload: &[u8]) -> u32 {
     use crc32fast::Hasher;
     let mut hasher = Hasher::new();
     hasher.update(&header.length.to_le_bytes());
-    hasher.update(&[header.op_type, header.is_update as u8, header.record_type as u8]);
+    hasher.update(&[
+        header.op_type,
+        header.is_update as u8,
+        header.record_type as u8,
+    ]);
     hasher.update(&header.flags.to_le_bytes());
     hasher.update(&header.timestamp.to_le_bytes());
     hasher.update(&header.lsn.to_le_bytes());
@@ -668,7 +675,12 @@ impl LocalWalParser {
         let file_start_lsn = file_header.start_lsn();
         self.file_headers.push(file_header);
 
-        let result = parse_wal_file_bytes(&buffer, file_start_lsn, self.recovery_mode, self.verify_checksum)?;
+        let result = parse_wal_file_bytes(
+            &buffer,
+            file_start_lsn,
+            self.recovery_mode,
+            self.verify_checksum,
+        )?;
 
         self.all_entries.extend(result.all_entries);
         self.corrupted_count += result.corrupted_count;

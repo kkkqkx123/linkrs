@@ -254,7 +254,7 @@ impl FreezeConfig {
             strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 50_000,
             delta_memory_threshold_bytes: 128 * 1024 * 1024, // 128MB
-            max_segment_age: Timestamp::MAX,                  // Never merge
+            max_segment_age: Timestamp::MAX,                 // Never merge
             deletion_threshold: 0.5,
             adaptive_segment_threshold: 20, // Low threshold for dev
             adaptive_maximum_segments: 50,  // Force freeze if >50 segments

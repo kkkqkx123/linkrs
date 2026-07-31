@@ -776,7 +776,10 @@ impl RecoveryApplier for GraphStorageContext {
 
 /// Resolve an external VertexId to its internal u32 ID.
 fn resolve_external_vid(
-    vertex_tables: &std::collections::HashMap<LabelId, std::sync::Arc<crate::storage::vertex::ShardedVertexTable>>,
+    vertex_tables: &std::collections::HashMap<
+        LabelId,
+        std::sync::Arc<crate::storage::vertex::ShardedVertexTable>,
+    >,
     label: LabelId,
     vid: VertexId,
     ts: Timestamp,

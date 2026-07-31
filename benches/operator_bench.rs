@@ -62,59 +62,47 @@ fn bench_expression_eval(c: &mut Criterion) {
             Expression::Variable("score".into()),
         ];
 
-        group.bench_function(
-            BenchmarkId::new("simple_predicate", chunk_size),
-            |b| {
-                b.iter_batched(
-                    || create_chunk(*chunk_size),
-                    |chunk| {
-                        let _ = chunk.evaluate_expression(&simple_pred, None);
-                    },
-                    BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_function(BenchmarkId::new("simple_predicate", chunk_size), |b| {
+            b.iter_batched(
+                || create_chunk(*chunk_size),
+                |chunk| {
+                    let _ = chunk.evaluate_expression(&simple_pred, None);
+                },
+                BatchSize::SmallInput,
+            )
+        });
 
-        group.bench_function(
-            BenchmarkId::new("compound_predicate", chunk_size),
-            |b| {
-                b.iter_batched(
-                    || create_chunk(*chunk_size),
-                    |chunk| {
-                        let _ = chunk.evaluate_expression(&compound_pred, None);
-                    },
-                    BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_function(BenchmarkId::new("compound_predicate", chunk_size), |b| {
+            b.iter_batched(
+                || create_chunk(*chunk_size),
+                |chunk| {
+                    let _ = chunk.evaluate_expression(&compound_pred, None);
+                },
+                BatchSize::SmallInput,
+            )
+        });
 
-        group.bench_function(
-            BenchmarkId::new("project_single", chunk_size),
-            |b| {
-                b.iter_batched(
-                    || create_chunk(*chunk_size),
-                    |chunk| {
-                        let _ = chunk.evaluate_expression(&project_single[0], None);
-                    },
-                    BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_function(BenchmarkId::new("project_single", chunk_size), |b| {
+            b.iter_batched(
+                || create_chunk(*chunk_size),
+                |chunk| {
+                    let _ = chunk.evaluate_expression(&project_single[0], None);
+                },
+                BatchSize::SmallInput,
+            )
+        });
 
-        group.bench_function(
-            BenchmarkId::new("project_multi_each", chunk_size),
-            |b| {
-                b.iter_batched(
-                    || create_chunk(*chunk_size),
-                    |chunk| {
-                        for expr in &project_multi {
-                            let _ = chunk.evaluate_expression(expr, None);
-                        }
-                    },
-                    BatchSize::SmallInput,
-                )
-            },
-        );
+        group.bench_function(BenchmarkId::new("project_multi_each", chunk_size), |b| {
+            b.iter_batched(
+                || create_chunk(*chunk_size),
+                |chunk| {
+                    for expr in &project_multi {
+                        let _ = chunk.evaluate_expression(expr, None);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
 
         group.bench_function(
             BenchmarkId::new("project_multi_expressions", chunk_size),
@@ -165,15 +153,11 @@ fn bench_filter_throughput(c: &mut Criterion) {
                     b.iter_batched(
                         || create_chunk(*chunk_size),
                         |mut chunk| {
-                            let results = chunk
-                                .evaluate_expression(pred, None)
-                                .unwrap();
+                            let results = chunk.evaluate_expression(pred, None).unwrap();
                             let selected: Vec<usize> = results
                                 .into_iter()
                                 .enumerate()
-                                .filter_map(|(i, v)| {
-                                    matches!(&v, Value::Bool(true)).then_some(i)
-                                })
+                                .filter_map(|(i, v)| matches!(&v, Value::Bool(true)).then_some(i))
                                 .collect();
                             let _ = chunk.take_indices(&selected);
                         },

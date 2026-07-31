@@ -1,7 +1,8 @@
-    #[cfg(test)]
-    #[allow(clippy::module_inception)]
-    mod tests {
-        use crate::core::types::{
+
+#[cfg(test)]
+#[allow(clippy::module_inception)]
+mod tests {
+    use crate::core::types::{
         EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, Timestamp,
         UserInfo, VertexId,
     };
@@ -717,9 +718,9 @@
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
         storage.create_tag_index("test_space", &index).unwrap();
 
@@ -761,10 +762,7 @@
             .unwrap();
         assert!(retrieved.is_some());
         let v = retrieved.unwrap();
-        assert_eq!(
-            v.properties.get("name"),
-            Some(&Value::string("Alice"))
-        );
+        assert_eq!(v.properties.get("name"), Some(&Value::string("Alice")));
     }
 
     #[test]
@@ -785,9 +783,9 @@
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
         storage.create_tag_index("test_space", &index).unwrap();
 
@@ -806,11 +804,7 @@
         storage.insert_vertex("test_space", vertex).unwrap();
 
         let before_update = storage
-            .lookup_index(
-                "test_space",
-                "person_name_idx",
-                &Value::string("Alice"),
-            )
+            .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
             .unwrap();
         assert_eq!(before_update, vec![Value::from(VertexId::from_int64(101))]);
 
@@ -819,10 +813,7 @@
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
-                    (
-                        "name".to_string(),
-                        Value::string("AliceUpdated"),
-                    ),
+                    ("name".to_string(), Value::string("AliceUpdated")),
                     ("age".to_string(), Value::BigInt(31)),
                 ]
                 .into_iter()
@@ -842,11 +833,7 @@
         assert_eq!(v.properties.get("age"), Some(&Value::BigInt(31)));
 
         let old_lookup = storage
-            .lookup_index(
-                "test_space",
-                "person_name_idx",
-                &Value::string("Alice"),
-            )
+            .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
             .unwrap();
         assert!(old_lookup.is_empty());
 
@@ -938,12 +925,7 @@
         storage.insert_vertex("test_space", vertex).unwrap();
 
         let results = storage
-            .scan_vertices_by_prop(
-                "test_space",
-                "Person",
-                "name",
-                &Value::string("Alice"),
-            )
+            .scan_vertices_by_prop("test_space", "Person", "name", &Value::string("Alice"))
             .unwrap();
         assert_eq!(results.len(), 1);
     }
@@ -1538,10 +1520,7 @@
             .unwrap()
             .unwrap();
 
-        assert_eq!(
-            retrieved.properties.get("name"),
-            Some(&Value::string(""))
-        );
+        assert_eq!(retrieved.properties.get("name"), Some(&Value::string("")));
         assert_eq!(
             retrieved.properties.get("age"),
             Some(&Value::BigInt(i64::MAX))
@@ -1802,4 +1781,105 @@
         assert_eq!(snapshot_tracker.cleanup_threshold(), Timestamp::MAX);
     }
 
+    #[test]
+    fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
+        // Regression: vertex compaction densifies internal IDs; the old-to-new
+        // mapping must be propagated into edge CSR rows/neighbors or every
+        // edge referencing a surviving vertex breaks (P9 phase 3).
+        let (_, mut storage) = create_persistent_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        setup_knows_edge(&mut storage);
+
+        // 100 vertices (internal ids 0..99 in insertion order).
+        for i in 1..=100i64 {
+            insert_test_vertex(&mut storage, i, &format!("v{i}"));
+        }
+
+        // Edges only between vertices that will survive compaction:
+        // odd pairs (1,3), (3,5), ..., (77,79) and (79,81), ..., (97,99).
+        let expected_edges: Vec<(i64, i64)> =
+            (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
+        for (src, dst) in &expected_edges {
+            let edge = Edge::new(
+                VertexId::from_int64(*src),
+                VertexId::from_int64(*dst),
+                "KNOWS".to_string(),
+                0,
+                std::collections::HashMap::new(),
+            );
+            storage.insert_edge("test_space", edge).unwrap();
+        }
+
+        // Delete 40 vertices (external ids 2..80 step 2); their internal ids
+        // are interleaved with survivors, forcing a real ID remap.
+        for i in (2..=80).step_by(2) {
+            storage
+                .delete_vertex("test_space", &VertexId::from_int64(i))
+                .unwrap();
+        }
+
+        let vertex_count_before = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<usize, crate::core::StorageError>(
+                    tables.values().map(|t| t.total_count()).sum::<usize>(),
+                )
+            })
+            .unwrap();
+        assert_eq!(vertex_count_before, 100);
+
+        storage.compact(&Default::default()).unwrap();
+
+        // 40 vertices removed by compaction.
+        let vertex_count_after = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<usize, crate::core::StorageError>(
+                    tables.values().map(|t| t.total_count()).sum::<usize>(),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            vertex_count_after, 60,
+            "compaction should remove 40 vertices"
+        );
+
+        // Deleted vertices no longer resolve.
+        assert!(storage
+            .get_vertex("test_space", &VertexId::from_int64(2))
+            .unwrap()
+            .is_none());
+
+        // Every surviving edge still resolves through the remapped edge CSR.
+        for (src, dst) in &expected_edges {
+            let retrieved = storage
+                .get_edge(
+                    "test_space",
+                    &VertexId::from_int64(*src),
+                    &VertexId::from_int64(*dst),
+                    "KNOWS",
+                    0,
+                )
+                .unwrap();
+            assert!(
+                retrieved.is_some(),
+                "edge {src}->{dst} lost after vertex compaction remap"
+            );
+        }
+
+        // Node-edge scans resolve through remapped out/in CSRs.
+        let out_edges = storage
+            .get_node_edges("test_space", &VertexId::from_int64(1), EdgeDirection::Out)
+            .unwrap();
+        assert_eq!(out_edges.len(), 1);
+        assert_eq!(out_edges[0].dst, VertexId::from_int64(3));
+        let in_edges = storage
+            .get_node_edges("test_space", &VertexId::from_int64(79), EdgeDirection::In)
+            .unwrap();
+        assert_eq!(in_edges.len(), 1);
+        assert_eq!(in_edges[0].src, VertexId::from_int64(77));
+    }
 }

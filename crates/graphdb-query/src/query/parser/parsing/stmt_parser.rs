@@ -103,10 +103,7 @@ impl StmtParser {
 
     /// Analyzing the pipe suffix (the | operator)
     /// Also handles sequential clauses like MATCH ... WITH ... RETURN
-    fn parse_pipe_suffix(
-        ctx: &mut ParseContext,
-        left: Stmt,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_pipe_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {
         if ctx.match_token(TokenKind::Pipe) {
             let start_span = left.span();
             let right = Self::parse_single_statement(ctx)?;
@@ -360,9 +357,7 @@ impl StmtParser {
     }
 
     /// Analyzing expressions (auxiliary method)
-    fn parse_expression(
-        ctx: &mut ParseContext,
-    ) -> Result<ContextualExpression, ParseError> {
+    fn parse_expression(ctx: &mut ParseContext) -> Result<ContextualExpression, ParseError> {
         crate::query::parser::parsing::expr_parser::parse_expression_with_context(
             ctx,
             ctx.expression_context_clone(),
@@ -370,9 +365,7 @@ impl StmtParser {
     }
 
     /// Analysis of extended SHOW statements (including SESSIONS, QUERIES, and CONFIGS)
-    fn parse_show_statement_extended(
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_show_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::{ShowConfigsStmt, ShowQueriesStmt, ShowSessionsStmt};
 
         let start_span = ctx.current_span();
@@ -500,9 +493,7 @@ impl StmtParser {
     }
 
     /// Analysis of the extended UPDATE statement (including UPDATE CONFIGS)
-    fn parse_update_statement_extended(
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_update_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::UpdateConfigsStmt;
         use crate::query::parser::parsing::dml_parser::DmlParser;
 
@@ -576,9 +567,7 @@ impl StmtParser {
 
     /// Analyzing the extended CREATE statement
     /// Distinguish between DDL CREATE statements (for creating tags, edges, spaces, or indexes) and Cypher CREATE statements for creating data.
-    fn parse_create_statement_extended(
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_create_statement_extended(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::parsing::ddl_parser::DdlParser;
         use crate::query::parser::parsing::dml_parser::DmlParser;
 
@@ -635,10 +624,7 @@ impl StmtParser {
     }
 
     /// Pipeline after parsing set operation statements, or end of the process.
-    fn parse_set_operation_suffix(
-        ctx: &mut ParseContext,
-        left: Stmt,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_set_operation_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::{SetOperationStmt, SetOperationType};
 
         // Check whether it is a set operator.
@@ -733,7 +719,6 @@ mod tests {
 
     #[test]
     fn test_parse_match_statement() {
-        
         let mut ctx = create_parser_context("MATCH (n:Person) RETURN n");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "MATCH parse failure: {:?}", result.err());
@@ -741,7 +726,6 @@ mod tests {
 
     #[test]
     fn test_parse_go_statement() {
-        
         let mut ctx = create_parser_context("GO 1 STEP FROM \"player100\" OVER follow");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "GO parse failure: {:?}", result.err());
@@ -749,7 +733,6 @@ mod tests {
 
     #[test]
     fn test_parse_create_tag_statement() {
-        
         let mut ctx =
             create_parser_context("CREATE TAG IF NOT EXISTS Person(name: STRING, age: INT)");
         let result = StmtParser::parse_statement(&mut ctx);
@@ -762,7 +745,6 @@ mod tests {
 
     #[test]
     fn test_parse_insert_vertex_statement() {
-        
         let mut ctx = create_parser_context(
             "INSERT VERTEX Person(name, age) VALUES \"player100\":(\"Tom\", 18)",
         );
@@ -776,7 +758,6 @@ mod tests {
 
     #[test]
     fn test_parse_delete_vertex_statement() {
-        
         let mut ctx = create_parser_context("DELETE VERTEX \"player100\"");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -788,7 +769,6 @@ mod tests {
 
     #[test]
     fn test_parse_use_statement() {
-        
         let mut ctx = create_parser_context("USE test_space");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "USE Parse failure: {:?}", result.err());
@@ -802,7 +782,6 @@ mod tests {
 
     #[test]
     fn test_parse_show_spaces_statement() {
-        
         let mut ctx = create_parser_context("SHOW SPACES");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -814,8 +793,6 @@ mod tests {
 
     #[test]
     fn test_create_space_statement_parses() {
-        
-
         // It has been tested that the CREATE SPACE statement can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE IF NOT EXISTS test_space");
         let result = StmtParser::parse_statement(&mut ctx);
@@ -848,8 +825,6 @@ mod tests {
 
     #[test]
     fn test_create_space_with_params_parses() {
-        
-
         // The test shows that the CREATE SPACE statement with parameters can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE test_space(vid_type=FIXEDSTRING32)");
         let result = StmtParser::parse_statement(&mut ctx);
@@ -881,7 +856,6 @@ mod tests {
 
     #[test]
     fn test_parse_explain_statement() {
-        
         let mut ctx = create_parser_context("EXPLAIN MATCH (n) RETURN n");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "EXPLAIN Parse failure: {:?}", result.err());
@@ -895,7 +869,6 @@ mod tests {
 
     #[test]
     fn test_parse_explain_with_format() {
-        
         let mut ctx = create_parser_context("EXPLAIN FORMAT = DOT MATCH (n) RETURN n");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -913,7 +886,6 @@ mod tests {
 
     #[test]
     fn test_parse_profile_statement() {
-        
         let mut ctx = create_parser_context("PROFILE GO FROM \"player100\" OVER follow");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "PROFILE parse failure: {:?}", result.err());
@@ -927,7 +899,6 @@ mod tests {
 
     #[test]
     fn test_parse_profile_with_format() {
-        
         let mut ctx = create_parser_context("PROFILE FORMAT = TABLE MATCH (n) RETURN n");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -945,7 +916,6 @@ mod tests {
 
     #[test]
     fn test_parse_group_by_statement() {
-        
         let mut ctx = create_parser_context("GROUP BY category YIELD category");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "GROUP BY Parse failure: {:?}", result.err());
@@ -961,7 +931,6 @@ mod tests {
 
     #[test]
     fn test_parse_group_by_multiple_items() {
-        
         let mut ctx = create_parser_context("GROUP BY category, type YIELD category, type");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -980,7 +949,6 @@ mod tests {
 
     #[test]
     fn test_parse_show_sessions() {
-        
         let mut ctx = create_parser_context("SHOW SESSIONS");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -998,7 +966,6 @@ mod tests {
 
     #[test]
     fn test_parse_show_queries() {
-        
         let mut ctx = create_parser_context("SHOW QUERIES");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1016,7 +983,6 @@ mod tests {
 
     #[test]
     fn test_parse_kill_query() {
-        
         let mut ctx = create_parser_context("KILL QUERY 123, 456");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1035,7 +1001,6 @@ mod tests {
 
     #[test]
     fn test_parse_show_configs() {
-        
         let mut ctx = create_parser_context("SHOW CONFIGS");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1053,7 +1018,6 @@ mod tests {
 
     #[test]
     fn test_parse_show_configs_with_module() {
-        
         let mut ctx = create_parser_context("SHOW CONFIGS storage");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1071,7 +1035,6 @@ mod tests {
 
     #[test]
     fn test_parse_update_configs() {
-        
         let mut ctx = create_parser_context("UPDATE CONFIGS max_connections = 100");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1090,7 +1053,6 @@ mod tests {
 
     #[test]
     fn test_parse_update_configs_with_module() {
-        
         let mut ctx = create_parser_context("UPDATE CONFIGS storage cache_size = 1024");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1109,7 +1071,6 @@ mod tests {
 
     #[test]
     fn test_parse_assignment_statement() {
-        
         let mut ctx = create_parser_context("$result = GO FROM \"player100\" OVER follow");
         let result = StmtParser::parse_statement(&mut ctx);
         assert!(
@@ -1130,7 +1091,6 @@ mod tests {
 
     #[test]
     fn test_parse_union_statement() {
-        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow UNION GO FROM \"player101\" OVER follow",
         );
@@ -1152,7 +1112,6 @@ mod tests {
 
     #[test]
     fn test_parse_intersect_statement() {
-        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow INTERSECT GO FROM \"player101\" OVER follow",
         );
@@ -1178,7 +1137,6 @@ mod tests {
 
     #[test]
     fn test_parse_minus_statement() {
-        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow MINUS GO FROM \"player101\" OVER follow",
         );

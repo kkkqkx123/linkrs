@@ -299,7 +299,9 @@ impl GraphDataStore {
     // Catalog lock order for operations that touch multiple registries:
     // label names -> label counters -> vertex tables -> edge tables -> edge label index.
     // A caller must never retain one of these guards while requesting an earlier guard.
-    fn read_vertex_tables(&self) -> CatalogReadGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
+    fn read_vertex_tables(
+        &self,
+    ) -> CatalogReadGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         let started = Instant::now();
         let guard = self.vertex_tables.read();
         self.lock_metrics
@@ -410,7 +412,9 @@ impl GraphDataStore {
         }
     }
 
-    fn write_vertex_tables(&self) -> CatalogWriteGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
+    fn write_vertex_tables(
+        &self,
+    ) -> CatalogWriteGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         let started = Instant::now();
         let guard = self.vertex_tables.write();
         self.lock_metrics
@@ -423,7 +427,9 @@ impl GraphDataStore {
         }
     }
 
-    fn read_edge_tables(&self) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
+    fn read_edge_tables(
+        &self,
+    ) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         let started = Instant::now();
         let guard = self.edge_tables.read();
         self.lock_metrics
@@ -443,7 +449,9 @@ impl GraphDataStore {
         self.read_edge_tables()
     }
 
-    fn write_edge_tables(&self) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
+    fn write_edge_tables(
+        &self,
+    ) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         let started = Instant::now();
         let guard = self.edge_tables.write();
         self.lock_metrics
@@ -596,9 +604,10 @@ impl GraphDataStore {
     ) -> StorageResult<R> {
         let arc = {
             let guard = self.vertex_tables.read();
-            guard.get(&label).ok_or_else(|| {
-                StorageError::label_not_found(format!("vertex label {}", label))
-            })?.clone()
+            guard
+                .get(&label)
+                .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?
+                .clone()
         };
         operation(&arc)
     }
@@ -688,9 +697,10 @@ impl GraphDataStore {
     ) -> StorageResult<R> {
         let arc = {
             let guard = self.edge_tables.read();
-            guard.get(key).ok_or_else(|| {
-                StorageError::label_not_found(format!("edge partition {:?}", key))
-            })?.clone()
+            guard
+                .get(key)
+                .ok_or_else(|| StorageError::label_not_found(format!("edge partition {:?}", key)))?
+                .clone()
         };
         let guard = arc.read();
         operation(&guard)
@@ -714,9 +724,10 @@ impl GraphDataStore {
     ) -> StorageResult<R> {
         let arc = {
             let guard = self.edge_tables.read();
-            guard.get(key).ok_or_else(|| {
-                StorageError::label_not_found(format!("edge partition {:?}", key))
-            })?.clone()
+            guard
+                .get(key)
+                .ok_or_else(|| StorageError::label_not_found(format!("edge partition {:?}", key)))?
+                .clone()
         };
         let mut guard = arc.write();
         operation(&mut guard)
@@ -909,10 +920,7 @@ impl GraphDataStore {
                 if !tables.contains_key(&key) {
                     let table = {
                         let template = tables.get(&template_key).ok_or_else(|| {
-                            StorageError::label_not_found(format!(
-                                "edge label {}",
-                                key.edge_label
-                            ))
+                            StorageError::label_not_found(format!("edge label {}", key.edge_label))
                         })?;
                         let guard = template.read();
                         create(&guard)?
@@ -923,9 +931,12 @@ impl GraphDataStore {
                         indexed_keys.push(key);
                     }
                 }
-                tables.get(&key).ok_or_else(|| {
-                    StorageError::label_not_found(format!("edge partition {:?}", key))
-                })?.clone()
+                tables
+                    .get(&key)
+                    .ok_or_else(|| {
+                        StorageError::label_not_found(format!("edge partition {:?}", key))
+                    })?
+                    .clone()
             }
         };
         let mut guard = table_arc.write();

@@ -48,9 +48,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         qctx: Arc<QueryContext>,
     ) -> DBResult<Option<BoundStatement>> {
         let space_id = qctx.space_id().unwrap_or(0);
-        let space_name = qctx.space_name().or_else(|| {
-            qctx.request_context().space_name.clone()
-        });
+        let space_name = qctx
+            .space_name()
+            .or_else(|| qctx.request_context().space_name.clone());
 
         let mut binder = Binder::new().with_space(space_name.clone(), space_id);
 

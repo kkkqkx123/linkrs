@@ -7,7 +7,9 @@ use crate::storage::index::manifest::ManifestCatalog;
 use crate::storage::index::shard_runtime::GenerationRuntime;
 use crate::storage::index::types::IndexRecord;
 use crate::storage::index::types::StaleChecker;
-use crate::storage::index::vertex_index_manager::{compute_vertex_index_scan_range, VertexIndexCursor};
+use crate::storage::index::vertex_index_manager::{
+    compute_vertex_index_scan_range, VertexIndexCursor,
+};
 use crate::storage::index::IndexDataManagerImpl;
 use std::collections::HashSet;
 use std::sync::Arc;

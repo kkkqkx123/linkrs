@@ -340,10 +340,7 @@ mod tests {
         assert_eq!(value_to_string(&Value::SmallInt(42)), "42");
         assert_eq!(value_to_string(&Value::Int(100)), "100");
         assert_eq!(value_to_string(&Value::BigInt(9999999999)), "9999999999");
-        assert_eq!(
-            value_to_string(&Value::string("hello")),
-            "hello"
-        );
+        assert_eq!(value_to_string(&Value::string("hello")), "hello");
         assert_eq!(value_to_string(&Value::Float(3.14)), "3.14");
         assert_eq!(value_to_string(&Value::Double(2.71828)), "2.71828");
         assert_eq!(value_to_string(&Value::Bool(true)), "true");
@@ -385,10 +382,7 @@ mod tests {
         assert_eq!(vertex.id, 5);
         assert_eq!(vertex.tags.len(), 1);
         assert_eq!(vertex.tags[0].name, "Person");
-        assert_eq!(
-            vertex.properties.get("name"),
-            Some(&Value::string("Alice"))
-        );
+        assert_eq!(vertex.properties.get("name"), Some(&Value::string("Alice")));
         assert_eq!(vertex.properties.get("age"), Some(&Value::BigInt(30)));
     }
 

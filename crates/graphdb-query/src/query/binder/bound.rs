@@ -6,13 +6,11 @@
 //! downstream phases never need to re-parse or re-resolve the AST.
 
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+use crate::core::types::semantic::{ColumnDef, ValueType};
 use crate::core::types::{EdgeDirection, OrderDirection, Span};
 use crate::core::DataType;
 use crate::core::Value;
-use crate::query::parser::ast::{
-    LimitClause, SampleClause, SkipClause, Steps,
-};
-use crate::core::types::semantic::{ColumnDef, ValueType};
+use crate::query::parser::ast::{LimitClause, SampleClause, SkipClause, Steps};
 
 use super::query_graph::QueryGraph;
 
@@ -88,9 +86,7 @@ pub enum BoundExpression {
     },
 
     /// Exists predicate
-    Exists {
-        query: Box<BoundStatement>,
-    },
+    Exists { query: Box<BoundStatement> },
 
     /// Pattern expression (path pattern in expression context)
     Pattern(QueryGraph),
@@ -99,13 +95,25 @@ pub enum BoundExpression {
     Label(String),
 
     /// Tag property access
-    TagProperty { tag_name: String, property: String, value_type: DataType },
+    TagProperty {
+        tag_name: String,
+        property: String,
+        value_type: DataType,
+    },
 
     /// Edge property access
-    EdgeProperty { edge_name: String, property: String, value_type: DataType },
+    EdgeProperty {
+        edge_name: String,
+        property: String,
+        value_type: DataType,
+    },
 
     /// Predicate expression (FILTER, ALL, ANY, etc.)
-    Predicate { func: String, args: Vec<BoundExpression>, return_type: DataType },
+    Predicate {
+        func: String,
+        args: Vec<BoundExpression>,
+        return_type: DataType,
+    },
 
     /// Subscript access (collection[index])
     Subscript {

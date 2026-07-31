@@ -2,9 +2,9 @@
 //!
 //! Tests for two-phase commit protocol implementation
 
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::{DataType, TransactionId};
 use graphdb::core::Value;
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -193,11 +193,7 @@ fn test_2pc_prepare_failure() {
         .expect("Failed to begin transaction");
 
     // Insert vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -242,11 +238,7 @@ fn test_2pc_storage_commit_failure() {
         .expect("Failed to begin transaction");
 
     // Insert vertex (buffered in sync manager)
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -294,11 +286,7 @@ fn test_2pc_index_sync_failure() {
         .expect("Failed to begin transaction");
 
     // Insert vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");

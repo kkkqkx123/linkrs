@@ -69,16 +69,8 @@ fn test_scan_vertices_lifecycle() {
 #[test]
 fn test_scan_edges_lifecycle() {
     let buffer = vec![
-        vec![
-            Value::Int(1),
-            Value::Int(2),
-            Value::string("edge"),
-        ],
-        vec![
-            Value::Int(2),
-            Value::Int(3),
-            Value::string("edge"),
-        ],
+        vec![Value::Int(1), Value::Int(2), Value::string("edge")],
+        vec![Value::Int(2), Value::Int(3), Value::string("edge")],
     ];
     let mut executor = StreamingExecutor::Source(
         OperatorBase::new(0),
@@ -356,14 +348,8 @@ fn test_aggregate_in_chain() {
 
 #[test]
 fn test_hash_join_in_chain() {
-    let left = Box::new(scan_vertices(vec![vec![
-        Value::Int(1),
-        Value::string("a"),
-    ]]));
-    let right = Box::new(scan_vertices(vec![vec![
-        Value::Int(1),
-        Value::string("x"),
-    ]]));
+    let left = Box::new(scan_vertices(vec![vec![Value::Int(1), Value::string("a")]]));
+    let right = Box::new(scan_vertices(vec![vec![Value::Int(1), Value::string("x")]]));
 
     let mut join = StreamingExecutor::Join(
         OperatorBase::new(0),
@@ -618,7 +604,6 @@ fn test_distinct_all_same() {
 
 #[cfg(test)]
 mod storage_backed {
-    use graphdb::test_utils::TestStorage;
     use graphdb::core::stats::StatsManager;
     use graphdb::core::types::VertexId;
     use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
@@ -632,6 +617,7 @@ mod storage_backed {
     use graphdb::storage::{
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
     };
+    use graphdb::test_utils::TestStorage;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;

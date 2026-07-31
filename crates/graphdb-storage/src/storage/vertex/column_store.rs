@@ -1428,8 +1428,7 @@ mod tests {
     fn test_column_string() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, false);
 
-        col.set(0, Some(&Value::string("Alice")))
-            .unwrap();
+        col.set(0, Some(&Value::string("Alice"))).unwrap();
         col.set(1, Some(&Value::string("Bob"))).unwrap();
 
         assert_eq!(col.get(0), Some(Value::string("Alice")));
@@ -1549,10 +1548,8 @@ mod tests {
     #[test]
     fn test_flush_and_reload_variable() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, true);
-        col.set(0, Some(&Value::string("Hello")))
-            .unwrap();
-        col.set(1, Some(&Value::string("World")))
-            .unwrap();
+        col.set(0, Some(&Value::string("Hello"))).unwrap();
+        col.set(1, Some(&Value::string("World"))).unwrap();
         col.set(2, None).unwrap();
 
         let (data, offsets, bitmap) = col.get_flush_data();
@@ -1578,8 +1575,7 @@ mod tests {
         let large_value = "a".repeat(1000);
         col.set(0, Some(&Value::string(large_value.clone())))
             .unwrap();
-        col.set(1, Some(&Value::string("short")))
-            .unwrap();
+        col.set(1, Some(&Value::string("short"))).unwrap();
 
         assert_eq!(col.get(0), Some(Value::string(large_value.clone())));
         assert_eq!(col.get(1), Some(Value::string("short")));
@@ -1657,11 +1653,9 @@ mod tests {
     fn test_column_string_with_nulls() {
         let mut col = Column::new("text".to_string(), 0, DataType::String, true);
 
-        col.set(0, Some(&Value::string("hello")))
-            .unwrap();
+        col.set(0, Some(&Value::string("hello"))).unwrap();
         col.set(1, None).unwrap();
-        col.set(2, Some(&Value::string("world")))
-            .unwrap();
+        col.set(2, Some(&Value::string("world"))).unwrap();
         col.set(3, None).unwrap();
 
         assert_eq!(col.get(0), Some(Value::string("hello")));
@@ -1756,8 +1750,7 @@ mod tests {
 
         // Insert low cardinality strings
         for (i, category) in categories.iter().enumerate() {
-            col.set(i, Some(&Value::string(category)))
-                .unwrap();
+            col.set(i, Some(&Value::string(category))).unwrap();
         }
 
         // Verify all values are stored and retrievable
@@ -1831,8 +1824,7 @@ mod tests {
 
         // Test empty string
         col.set(0, Some(&Value::string(""))).unwrap();
-        col.set(1, Some(&Value::string("normal")))
-            .unwrap();
+        col.set(1, Some(&Value::string("normal"))).unwrap();
 
         assert_eq!(col.get(0), Some(Value::string("")));
         assert_eq!(col.get(1), Some(Value::string("normal")));

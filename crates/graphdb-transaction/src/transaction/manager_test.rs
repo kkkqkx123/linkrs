@@ -792,10 +792,11 @@ fn test_cross_shard_final_review_no_false_abort() {
     for iteration in 0..20 {
         let barrier = Arc::new(Barrier::new(2));
         let manager = Arc::new(
-            TransactionManager::new(TransactionManagerConfig::default())
-                .with_commit_sink(Arc::new(PassThroughSink {
+            TransactionManager::new(TransactionManagerConfig::default()).with_commit_sink(
+                Arc::new(PassThroughSink {
                     barrier: Arc::clone(&barrier),
-                })),
+                }),
+            ),
         );
 
         let vid1 = VertexId::from_int64(iteration as i64 * 2);
@@ -823,15 +824,7 @@ fn test_cross_shard_final_review_no_false_abort() {
         let r1 = h1.join().expect("thread1");
         let r2 = h2.join().expect("thread2");
 
-        assert!(
-            r1.is_ok(),
-            "non-conflicting txn1 should commit: {:?}",
-            r1
-        );
-        assert!(
-            r2.is_ok(),
-            "non-conflicting txn2 should commit: {:?}",
-            r2
-        );
+        assert!(r1.is_ok(), "non-conflicting txn1 should commit: {:?}", r1);
+        assert!(r2.is_ok(), "non-conflicting txn2 should commit: {:?}", r2);
     }
 }

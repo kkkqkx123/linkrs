@@ -55,11 +55,7 @@ impl GraphStorageContext {
             .as_ref()
             .map(|m| FreezeGuard::new(m.clone()));
 
-        let totals = Arc::new(Mutex::new((
-            0u64,
-            false,
-            std::collections::HashSet::new(),
-        )));
+        let totals = Arc::new(Mutex::new((0u64, false, std::collections::HashSet::new())));
 
         self.persistent
             .data_store

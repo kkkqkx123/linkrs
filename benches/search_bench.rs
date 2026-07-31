@@ -15,11 +15,11 @@ fn create_benchmark_group<'a>(
 
 #[cfg(feature = "fulltext-search")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
-    use std::sync::Arc;
-    use tempfile::TempDir;
     use graphdb_search::search::config::FulltextConfig;
     use graphdb_search::search::manager::FulltextIndexManager;
     use graphdb_search::search::EngineType;
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut group = c.benchmark_group("fulltext_index_build");
@@ -52,7 +52,9 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
                         .expect("create");
                     for i in 0..id {
                         mgr.index_edge_property(
-                            1, "Article", "content",
+                            1,
+                            "Article",
+                            "content",
                             &format!("doc_{}", i),
                             &format!("benchmark document {}", i),
                         )
@@ -83,11 +85,11 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 
 #[cfg(feature = "fulltext-search")]
 fn bench_fulltext_search(c: &mut Criterion) {
-    use std::sync::Arc;
-    use tempfile::TempDir;
     use graphdb_search::search::config::FulltextConfig;
     use graphdb_search::search::manager::FulltextIndexManager;
     use graphdb_search::search::EngineType;
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     let temp_dir = TempDir::new().expect("temp dir");

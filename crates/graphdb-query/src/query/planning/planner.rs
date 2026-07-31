@@ -316,15 +316,21 @@ impl PlannerEnum {
             BoundStatement::Match(_) => Some(PlannerEnum::Match(MatchStatementPlanner::new())),
             BoundStatement::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
             BoundStatement::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
-            BoundStatement::FetchVertices(_) => Some(PlannerEnum::FetchVertices(FetchVerticesPlanner::new())),
-            BoundStatement::FetchEdges(_) => Some(PlannerEnum::FetchEdges(FetchEdgesPlanner::new())),
+            BoundStatement::FetchVertices(_) => {
+                Some(PlannerEnum::FetchVertices(FetchVerticesPlanner::new()))
+            }
+            BoundStatement::FetchEdges(_) => {
+                Some(PlannerEnum::FetchEdges(FetchEdgesPlanner::new()))
+            }
             BoundStatement::FindPath(_) => Some(PlannerEnum::Path(PathPlanner::new())),
             BoundStatement::Subgraph(_) => Some(PlannerEnum::Subgraph(SubgraphPlanner::new())),
             BoundStatement::Return(_) => Some(PlannerEnum::Return(ReturnPlanner::new())),
             BoundStatement::With(_) => Some(PlannerEnum::With(WithPlanner::new())),
             BoundStatement::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
             BoundStatement::Pipe(_) => Some(PlannerEnum::Pipe(PipePlanner::new())),
-            BoundStatement::SetOperation(_) => Some(PlannerEnum::SetOperation(SetOperationPlanner::new())),
+            BoundStatement::SetOperation(_) => {
+                Some(PlannerEnum::SetOperation(SetOperationPlanner::new()))
+            }
             BoundStatement::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
             BoundStatement::Other(stmt) => Self::from_stmt(&Arc::new(*stmt.clone())),
         }

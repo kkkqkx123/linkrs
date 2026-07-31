@@ -265,7 +265,8 @@ fn test_sort_rows_multi_column() {
 #[test]
 fn test_compare_rows_ascending() {
     let col_names = vec!["val".to_string()];
-    let layout = Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
+    let layout =
+        Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Ascending];
 
@@ -289,7 +290,8 @@ fn test_compare_rows_ascending() {
 #[test]
 fn test_compare_rows_descending() {
     let col_names = vec!["val".to_string()];
-    let layout = Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
+    let layout =
+        Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Descending];
 

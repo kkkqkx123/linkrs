@@ -9,6 +9,7 @@ use crate::core::metadata::{IndexManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
 use crate::core::UserStorage;
+use crate::storage::cold::ColdSnapshot;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
 use crate::storage::engine::config::PropertyGraphConfig;
@@ -19,7 +20,6 @@ use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::{gc_manager::VertexGcManager, IdKey};
-use crate::storage::cold::ColdSnapshot;
 use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
@@ -405,8 +405,7 @@ impl GraphStorageRuntime {
         version_manager: &Arc<VersionManager>,
         config: crate::storage::vertex::VertexGcConfig,
     ) -> Self {
-        let gc_manager =
-            VertexGcManager::new(data_store.clone(), version_manager.clone(), config);
+        let gc_manager = VertexGcManager::new(data_store.clone(), version_manager.clone(), config);
 
         Self {
             index_gc_manager: self.index_gc_manager.clone(),

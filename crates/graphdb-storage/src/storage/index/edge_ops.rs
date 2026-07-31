@@ -4,7 +4,7 @@ use crate::core::types::{IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::helpers::{
-    effective_index_values, edge_entity_ref, merged_included_columns,
+    edge_entity_ref, effective_index_values, merged_included_columns,
 };
 use crate::storage::index::key_codec::key_builder::normalize_int_value;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
@@ -51,17 +51,10 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 .manifest_catalog(space_id, index_id)
                 .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
             let manifest = catalog.acquire();
-            let index_definition = self
-                .index_definitions
-                .read()
-                .get(&identity)
-                .cloned();
+            let index_definition = self.index_definitions.read().get(&identity).cloned();
 
-            let covering = index_definition
-                .as_ref()
-                .is_some_and(|idx| idx.covering);
-            let new_values =
-                effective_index_values(index_definition.as_ref(), props, Vec::new());
+            let covering = index_definition.as_ref().is_some_and(|idx| idx.covering);
+            let new_values = effective_index_values(index_definition.as_ref(), props, Vec::new());
 
             let values: Vec<Value>;
             let included_columns: Vec<(String, Value)>;
@@ -93,10 +86,14 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                         if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                             continue;
                         }
-                        for (_suffix, record) in shard
-                            .reverse_range_suffix_visible(&reverse_prefix.0, &reverse_end.0, write_ts)
-                        {
-                            if let Ok(encoded) = KeyParser::extract_value_from_edge_reverse_suffix(&_suffix) {
+                        for (_suffix, record) in shard.reverse_range_suffix_visible(
+                            &reverse_prefix.0,
+                            &reverse_end.0,
+                            write_ts,
+                        ) {
+                            if let Ok(encoded) =
+                                KeyParser::extract_value_from_edge_reverse_suffix(&_suffix)
+                            {
                                 if existing_encoded.insert(encoded.clone()) {
                                     if let Ok(value) = OrderedCodec::new().decode(&encoded) {
                                         existing_values.push(normalize_int_value(&value));

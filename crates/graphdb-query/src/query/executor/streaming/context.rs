@@ -190,11 +190,7 @@ pub struct SplitRowContext<'a> {
 }
 
 impl<'a> SplitRowContext<'a> {
-    pub fn new(
-        left: &'a [Value],
-        right: &'a [Value],
-        layout: Arc<SlotLayout>,
-    ) -> Self {
+    pub fn new(left: &'a [Value], right: &'a [Value], layout: Arc<SlotLayout>) -> Self {
         let split = left.len();
         Self {
             left,

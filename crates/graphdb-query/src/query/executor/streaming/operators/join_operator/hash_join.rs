@@ -38,12 +38,8 @@ pub(super) fn next_hash_join(
             let cols = chunk.columns.as_deref();
             for (row_idx, row) in chunk.rows.iter().enumerate() {
                 memory_tracker.try_reserve_row(row)?;
-                let hash_key = evaluate_join_key(
-                    row,
-                    &col_names,
-                    hash_keys,
-                    cols.map(|c| (c, row_idx)),
-                )?;
+                let hash_key =
+                    evaluate_join_key(row, &col_names, hash_keys, cols.map(|c| (c, row_idx)))?;
                 build_side_hash
                     .entry(hash_key)
                     .or_default()
@@ -86,8 +82,7 @@ pub(super) fn next_hash_join(
                             ExpressionEvaluator::evaluate(condition, &mut ctx),
                             Ok(Value::Bool(b)) if b
                         ) {
-                            let mut combined =
-                                Vec::with_capacity(left_row.len() + right_row.len());
+                            let mut combined = Vec::with_capacity(left_row.len() + right_row.len());
                             combined.extend_from_slice(left_row);
                             combined.extend_from_slice(right_row);
                             result_rows.push(combined);
@@ -139,12 +134,8 @@ pub(super) fn next_hash_left_join(
             let cols = chunk.columns.as_deref();
             for (row_idx, row) in chunk.rows.iter().enumerate() {
                 memory_tracker.try_reserve_row(row)?;
-                let hash_key = evaluate_join_key(
-                    row,
-                    &col_names,
-                    hash_keys,
-                    cols.map(|c| (c, row_idx)),
-                )?;
+                let hash_key =
+                    evaluate_join_key(row, &col_names, hash_keys, cols.map(|c| (c, row_idx)))?;
                 build_side_hash
                     .entry(hash_key)
                     .or_default()
@@ -183,8 +174,7 @@ pub(super) fn next_hash_left_join(
                 {
                     for right_row in right_rows {
                         let mut ctx = SplitRowContext::new(left_row, right_row, Arc::clone(layout));
-                        let satisfied = match ExpressionEvaluator::evaluate(condition, &mut ctx)
-                        {
+                        let satisfied = match ExpressionEvaluator::evaluate(condition, &mut ctx) {
                             Ok(Value::Bool(b)) => b,
                             Ok(Value::Null(_)) => false,
                             Ok(_) => true,
@@ -196,8 +186,7 @@ pub(super) fn next_hash_left_join(
                             }
                         };
                         if satisfied {
-                            let mut combined =
-                                Vec::with_capacity(left_row.len() + right_row.len());
+                            let mut combined = Vec::with_capacity(left_row.len() + right_row.len());
                             combined.extend_from_slice(left_row);
                             combined.extend_from_slice(right_row);
                             result_rows.push(combined);

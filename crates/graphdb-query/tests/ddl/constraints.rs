@@ -226,10 +226,7 @@ fn test_default_value_execution_insert() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(18)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(18))]),
         );
 }
 
@@ -245,10 +242,7 @@ fn test_default_value_execution_override() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(25)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(25))]),
         );
 }
 
@@ -262,11 +256,7 @@ fn test_default_value_string_execution() {
         // Insert with name value, relying on DEFAULT for other properties
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Bob')")
         .assert_success()
-        .assert_vertex_props(
-            1,
-            "Person",
-            HashMap::from([("name", Value::string("Bob"))]),
-        );
+        .assert_vertex_props(1, "Person", HashMap::from([("name", Value::string("Bob"))]));
 }
 
 // ==================== NOT NULL Execution Tests ====================
@@ -306,10 +296,7 @@ fn test_default_with_not_null_constraint() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("unknown")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("unknown")), ("age", Value::Int(30))]),
         );
 }
 

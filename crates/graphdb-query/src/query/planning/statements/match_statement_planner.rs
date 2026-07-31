@@ -10,6 +10,8 @@
 //!   - Selection of intelligent scanning strategies (index scanning, attribute scanning, full table scanning)
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use crate::query::binder::validation::CypherClauseKind;
+use crate::query::binder::validation::ValidationInfo;
 use crate::query::metadata::MetadataContext;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::SubPlan;
@@ -21,8 +23,6 @@ use crate::query::planning::statements::pattern_planner;
 use crate::query::planning::statements::pattern_planner::PlanningContext;
 use crate::query::planning::statements::plan_combiner;
 use crate::query::planning::statements::statement_planner::{ClausePlanner, StatementPlanner};
-use crate::query::binder::validation::CypherClauseKind;
-use crate::query::binder::validation::ValidationInfo;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

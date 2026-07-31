@@ -41,7 +41,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Arc<PhysicalPlan>,
         crate::query::planning::plan::ExecutionPlan,
     )> {
-        let execution_plan = self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
+        let execution_plan =
+            self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
         let optimized_plan = self.optimize_execution_plan(execution_plan)?;
         let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         Ok((physical_plan, optimized_plan))
@@ -55,18 +56,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
         use crate::query::planning::planner::PlannerError;
 
-        let mut planner_enum = crate::query::planning::planner::PlannerEnum::from_bound_statement(bound)
-            .ok_or_else(|| DBError::from(QueryError::pipeline_planning_error(
-                PlannerError::NoSuitablePlanner(
-                    format!("No planner for bound statement: {}", bound.kind())
-                )
-            )))?;
+        let mut planner_enum = crate::query::planning::planner::PlannerEnum::from_bound_statement(
+            bound,
+        )
+        .ok_or_else(|| {
+            DBError::from(QueryError::pipeline_planning_error(
+                PlannerError::NoSuitablePlanner(format!(
+                    "No planner for bound statement: {}",
+                    bound.kind()
+                )),
+            ))
+        })?;
 
         let sub_plan = match planner_enum.plan_bound(bound, query_context.clone()) {
             Ok(plan) => plan,
             Err(PlannerError::UnsupportedOperation(_)) => {
                 let validated = super::prepared::build_validated_fallback(ast);
-                planner_enum.transform(&validated, query_context.clone())
+                planner_enum
+                    .transform(&validated, query_context.clone())
                     .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
             }
             Err(e) => return Err(DBError::from(QueryError::pipeline_planning_error(e))),

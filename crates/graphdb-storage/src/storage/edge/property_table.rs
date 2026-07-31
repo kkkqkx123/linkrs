@@ -191,7 +191,10 @@ fn deserialize_row_raw(schema: &[PropertySchema], data: &[u8]) -> Vec<(String, O
     result
 }
 
-fn deserialize_value_from_cursor(cursor: &mut Cursor<&[u8]>, data_type: &DataType) -> Option<Value> {
+fn deserialize_value_from_cursor(
+    cursor: &mut Cursor<&[u8]>,
+    data_type: &DataType,
+) -> Option<Value> {
     match data_type {
         DataType::Bool => {
             let mut b = [0u8; 1];

@@ -10,9 +10,8 @@
 //! - Nested operations
 //! - Aggregation operations
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test complex transaction with multiple operations
@@ -79,10 +78,7 @@ fn test_transaction_tag_modification() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 

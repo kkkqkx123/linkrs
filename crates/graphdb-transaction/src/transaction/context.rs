@@ -144,10 +144,7 @@ impl SavepointManager {
         }
     }
 
-    fn create_savepoint(
-        &mut self,
-        params: SavepointParams,
-    ) -> SavepointId {
+    fn create_savepoint(&mut self, params: SavepointParams) -> SavepointId {
         let id = self.next_id;
         self.next_id += 1;
         let sequence = self.next_sequence;
@@ -1102,7 +1099,6 @@ impl TransactionMutationRecorder for TransactionContext {
     fn record_schema_read(&self, resource: &str) {
         self.record_schema_read(resource);
     }
-
 }
 
 #[cfg(test)]

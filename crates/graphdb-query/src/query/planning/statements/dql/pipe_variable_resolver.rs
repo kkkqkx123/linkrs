@@ -443,10 +443,7 @@ mod tests {
                 ("vid", Value::Int(1)),
                 ("name", Value::string("Alice")),
             ]),
-            make_map(vec![
-                ("vid", Value::Int(2)),
-                ("name", Value::string("Bob")),
-            ]),
+            make_map(vec![("vid", Value::Int(2)), ("name", Value::string("Bob"))]),
         ]);
 
         resolver.set_variable("-".to_string(), VariableInfo::new("-".to_string(), value));
@@ -486,10 +483,7 @@ mod tests {
                 ("vid", Value::Int(1)),
                 ("name", Value::string("Alice")),
             ]),
-            make_map(vec![
-                ("vid", Value::Int(2)),
-                ("name", Value::string("Bob")),
-            ]),
+            make_map(vec![("vid", Value::Int(2)), ("name", Value::string("Bob"))]),
         ]);
 
         resolver.set_variable(

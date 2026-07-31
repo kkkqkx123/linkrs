@@ -381,7 +381,13 @@ impl JoinOperator {
                 build_side_hash,
                 all_right_rows,
                 left_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::HashLeftJoin {
                 join_condition,
@@ -399,7 +405,13 @@ impl JoinOperator {
                 build_side_hash,
                 all_right_rows,
                 left_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::NestedLoopJoin {
                 join_condition,
@@ -411,7 +423,13 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::InnerJoin {
                 join_condition,
@@ -423,7 +441,13 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::LeftJoin {
                 join_condition,
@@ -435,7 +459,13 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::RightJoin {
                 join_condition,
@@ -447,7 +477,13 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 right_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::FullOuterJoin {
                 join_condition,
@@ -465,7 +501,13 @@ impl JoinOperator {
                 matched_right_indices,
                 result_iter,
                 phase,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::CrossJoin {
                 all_left_rows,
@@ -479,7 +521,13 @@ impl JoinOperator {
                 all_right_rows,
                 left_consumed,
                 right_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
             Self::SemiJoin {
                 join_condition,
@@ -491,7 +539,13 @@ impl JoinOperator {
                 join_condition,
                 right_rows,
                 right_consumed,
-                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
+                &mut JoinCtx {
+                    base,
+                    left,
+                    right,
+                    memory_tracker,
+                    right_col_names,
+                },
             ),
         }
     }

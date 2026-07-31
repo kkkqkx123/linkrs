@@ -66,9 +66,7 @@ impl RegexFunction {
                             format!("Invalid regular expression: {}", pattern),
                         )
                     })?;
-                    Ok(Value::string(
-                        regex.replace_all(s, replacement.as_str()),
-                    ))
+                    Ok(Value::string(regex.replace_all(s, replacement.as_str())))
                 }
                 (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
                     Ok(Value::Null(NullType::Null))

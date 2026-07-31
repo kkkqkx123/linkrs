@@ -472,12 +472,18 @@ impl LabeledMutableCsr {
     pub fn iter(&self, ts: Timestamp) -> LabeledMutableCsrIterator<'_> {
         LabeledMutableCsrIterator::new(self, ts)
     }
+
+    /// Iterate over all physically present entries, including tombstoned ones.
+    pub fn iter_all(&self) -> LabeledMutableCsrIterator<'_> {
+        LabeledMutableCsrIterator::new_all(self)
+    }
 }
 
 /// Iterator over labeled CSR edges
 pub struct LabeledMutableCsrIterator<'a> {
     csr: &'a LabeledMutableCsr,
     ts: Timestamp,
+    include_deleted: bool,
     current_vertex: usize,
     range_idx: usize, // Index in the label_ranges of current vertex
     edge_idx: usize,  // Index within the current label range
@@ -488,6 +494,19 @@ impl<'a> LabeledMutableCsrIterator<'a> {
         Self {
             csr,
             ts,
+            include_deleted: false,
+            current_vertex: 0,
+            range_idx: 0,
+            edge_idx: 0,
+        }
+    }
+
+    /// Iterator over every stored entry, including tombstoned ones.
+    pub fn new_all(csr: &'a LabeledMutableCsr) -> Self {
+        Self {
+            csr,
+            ts: 0,
+            include_deleted: true,
             current_vertex: 0,
             range_idx: 0,
             edge_idx: 0,
@@ -511,7 +530,7 @@ impl<'a> Iterator for LabeledMutableCsrIterator<'a> {
                 while self.edge_idx < (range.count as usize) {
                     let nbr = self.csr.nbr_list[start + self.edge_idx];
                     self.edge_idx += 1;
-                    if nbr.is_valid_at(self.ts) {
+                    if self.include_deleted || nbr.is_valid_at(self.ts) {
                         return Some((VertexId::from_int64(self.current_vertex as i64), nbr));
                     }
                 }
@@ -540,8 +559,10 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges with implicit label 0
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1)
+            .unwrap();
 
         assert_eq!(csr.edge_count(), 2);
 
@@ -558,8 +579,10 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges
-        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10).unwrap();
-        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20)
+            .unwrap();
 
         // Query at different timestamps
         assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge created
@@ -579,10 +602,14 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(5, 100);
 
         // Insert multiple edges across vertices
-        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1).unwrap();
-        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1).unwrap();
-        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1).unwrap();
-        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1)
+            .unwrap();
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1)
+            .unwrap();
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1)
+            .unwrap();
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1)
+            .unwrap();
 
         // Iterate and collect
         let mut edges_from_iter: Vec<_> = csr.iter(999).collect();
@@ -608,8 +635,9 @@ mod tests {
                     VertexId::from_int64(100 + dst as i64),
                     EdgeId(edge_id),
                     0,
-                    1
-                ).unwrap();
+                    1,
+                )
+                .unwrap();
             }
         }
 

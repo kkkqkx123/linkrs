@@ -24,7 +24,9 @@ fn export_and_load(storage: &GraphStorage, dir: &std::path::Path, name: &str) {
     storage
         .export_cold_snapshot("test_space", "KNOWS", export_ts, &path)
         .expect("export cold snapshot");
-    storage.load_cold_snapshot(&path).expect("load cold snapshot");
+    storage
+        .load_cold_snapshot(&path)
+        .expect("load cold snapshot");
 }
 
 #[test]
@@ -59,7 +61,10 @@ fn cold_snapshot_get_edge_fallback() {
     assert_eq!(edge.src, VertexId::from_int64(1));
     assert_eq!(edge.dst, VertexId::from_int64(2));
     assert_eq!(edge.ranking, 0);
-    assert_eq!(edge.props.get("since"), Some(&graphdb_storage::core::Value::Int(2020)));
+    assert_eq!(
+        edge.props.get("since"),
+        Some(&graphdb_storage::core::Value::Int(2020))
+    );
 
     // A non-existent edge still returns None.
     let missing = storage
@@ -213,8 +218,7 @@ fn cold_snapshot_scan_edges_by_type() {
 
     let edges = storage.scan_edges_by_type("test_space", "KNOWS").unwrap();
     assert_eq!(edges.len(), 2);
-    let mut pairs: Vec<(VertexId, VertexId)> =
-        edges.iter().map(|e| (e.src, e.dst)).collect();
+    let mut pairs: Vec<(VertexId, VertexId)> = edges.iter().map(|e| (e.src, e.dst)).collect();
     pairs.sort_by_key(|(_, dst)| *dst);
     assert_eq!(pairs[0], (VertexId::from_int64(1), VertexId::from_int64(2)));
     assert_eq!(pairs[1], (VertexId::from_int64(2), VertexId::from_int64(3)));
@@ -238,7 +242,10 @@ fn cold_snapshot_count_edges_by_type() {
         )
         .unwrap();
 
-    assert_eq!(storage.count_edges_by_type("test_space", "KNOWS").unwrap(), 1);
+    assert_eq!(
+        storage.count_edges_by_type("test_space", "KNOWS").unwrap(),
+        1
+    );
 }
 
 #[test]

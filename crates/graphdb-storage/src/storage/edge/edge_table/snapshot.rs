@@ -10,6 +10,19 @@ use crate::core::StorageResult;
 use crate::storage::edge::PropertyTable;
 use std::collections::HashMap;
 
+pub(crate) use super::super::edge_table::remap::remap_immutable_csr;
+
+/// Truncated CSR row space: max edge-bearing row + 1 (Ladybug
+/// `getMaxOffsetWithRels()+1` semantics). Falls back to `fallback` when no
+/// edges survive at the snapshot timestamp.
+pub(crate) fn max_edge_row(edges: &[(u32, Nbr)], fallback: usize) -> usize {
+    let max_row = edges.iter().map(|(src, _)| *src).max();
+    match max_row {
+        Some(row) => (row as usize).saturating_add(1),
+        None => fallback,
+    }
+}
+
 /// Exported read-only snapshot of an edge table at a specific timestamp.
 ///
 /// Suitable for:
@@ -91,6 +104,21 @@ impl ExportedEdgeSnapshot {
     /// Get edge count for a vertex
     pub fn degree(&self, src: u32) -> usize {
         self.out_csr.edges_of(src).len()
+    }
+
+    /// Rebuild both CSRs with translated rows/neighbors and a truncated row
+    /// space (max edge-bearing row + 1) after a vertex compaction remap.
+    ///
+    /// `src_mapping` applies to out rows / in neighbors; `dst_mapping` to in
+    /// rows / out neighbors (per-label internal ID spaces).
+    pub fn remap_vertex_ids(
+        &mut self,
+        src_mapping: Option<&HashMap<u32, u32>>,
+        dst_mapping: Option<&HashMap<u32, u32>>,
+    ) -> StorageResult<()> {
+        self.out_csr = remap_immutable_csr(&self.out_csr, src_mapping, dst_mapping)?;
+        self.in_csr = remap_immutable_csr(&self.in_csr, dst_mapping, src_mapping)?;
+        Ok(())
     }
 }
 
@@ -192,6 +220,7 @@ mod tests {
     use crate::core::types::Timestamp;
     use crate::core::Value;
     use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use std::collections::HashMap;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
@@ -320,5 +349,40 @@ mod tests {
 
         let edges = snapshot.get_out_edges(0);
         assert_eq!(edges.len(), 1);
+    }
+
+    #[test]
+    fn test_exported_snapshot_remap_vertex_ids() {
+        let mut table = create_edge_table_with_props();
+        for (src, dst) in [(0u32, 4u32), (2, 5), (4, 5), (5, 4)] {
+            table
+                .insert_edge(
+                    src,
+                    dst,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
+                .unwrap();
+        }
+
+        let mut snapshot = table.export_snapshot(100).unwrap();
+        assert_eq!(snapshot.out_csr.vertex_capacity(), 6);
+        assert_eq!(snapshot.in_csr.vertex_capacity(), 6);
+        assert_eq!(snapshot.out_csr.edge_count(), 4);
+
+        let mapping: HashMap<u32, u32> = [(4, 3), (5, 4)].into_iter().collect();
+        snapshot
+            .remap_vertex_ids(Some(&mapping), Some(&mapping))
+            .unwrap();
+
+        assert_eq!(snapshot.out_csr.vertex_capacity(), 5);
+        assert_eq!(snapshot.in_csr.vertex_capacity(), 5);
+        assert_eq!(snapshot.out_csr.edge_count(), 4);
+        assert_eq!(snapshot.get_out_edges(3).len(), 1);
+        assert_eq!(snapshot.get_out_edges(4).len(), 1);
+        assert_eq!(snapshot.get_out_edges(5).len(), 0);
+        assert_eq!(snapshot.get_in_edges(3).len(), 2);
+        assert_eq!(snapshot.get_in_edges(4).len(), 2);
     }
 }

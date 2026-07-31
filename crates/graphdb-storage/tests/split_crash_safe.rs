@@ -32,21 +32,13 @@ fn split_uses_persisted_manifest_and_survives_restart() {
             .rebuild_tag_index("test_space", "person_name_idx")
             .expect("index should be rebuilt");
         storage
-            .split_native_index_at_value(
-                "test_space",
-                "person_name_idx",
-                &Value::string("M"),
-            )
+            .split_native_index_at_value("test_space", "person_name_idx", &Value::string("M"))
             .expect("index split should succeed");
         storage.flush().expect("split state should be durable");
 
         for name in ["Alice", "Mike", "Zoe"] {
             let rows = storage
-                .lookup_index(
-                    "test_space",
-                    "person_name_idx",
-                    &Value::string(name),
-                )
+                .lookup_index("test_space", "person_name_idx", &Value::string(name))
                 .expect("lookup should succeed");
             assert_eq!(rows.len(), 1, "lookup should find {name}");
         }
@@ -62,11 +54,7 @@ fn split_uses_persisted_manifest_and_survives_restart() {
     .expect("storage should reopen");
     for name in ["Alice", "Mike", "Zoe"] {
         let rows = storage
-            .lookup_index(
-                "test_space",
-                "person_name_idx",
-                &Value::string(name),
-            )
+            .lookup_index("test_space", "person_name_idx", &Value::string(name))
             .expect("lookup after restart should succeed");
         assert_eq!(rows.len(), 1, "restarted lookup should find {name}");
     }
@@ -103,11 +91,7 @@ fn split_and_concurrent_write_preserve_index_entries() {
             .expect("concurrent vertex should be inserted");
     });
     storage
-        .split_native_index_at_value(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Person050"),
-        )
+        .split_native_index_at_value("test_space", "person_name_idx", &Value::string("Person050"))
         .expect("concurrent split should succeed");
     writer.join().expect("writer should finish");
 
@@ -143,11 +127,7 @@ fn split_startup_reconciles_publishing_state() {
             .rebuild_tag_index("test_space", "person_name_idx")
             .expect("index should be rebuilt");
         storage
-            .split_native_index_at_value(
-                "test_space",
-                "person_name_idx",
-                &Value::string("M"),
-            )
+            .split_native_index_at_value("test_space", "person_name_idx", &Value::string("M"))
             .expect("index split should succeed");
         storage.flush().expect("split state should be durable");
 
@@ -180,11 +160,7 @@ fn split_startup_reconciles_publishing_state() {
     );
     for name in ["Alice", "Zoe"] {
         let rows = storage
-            .lookup_index(
-                "test_space",
-                "person_name_idx",
-                &Value::string(name),
-            )
+            .lookup_index("test_space", "person_name_idx", &Value::string(name))
             .expect("lookup after split recovery should succeed");
         assert_eq!(rows.len(), 1, "lookup should find {name}");
     }

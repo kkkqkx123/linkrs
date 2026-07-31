@@ -7,9 +7,8 @@
 //! - Transaction isolation - repeatable read
 //! - Read committed data only
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::transaction::{
     ConcurrencyMode, TransactionErrorKind, TransactionManager, TransactionManagerConfig,
     TransactionOptions,

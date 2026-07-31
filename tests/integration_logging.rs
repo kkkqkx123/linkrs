@@ -359,9 +359,7 @@ fn test_flexi_logger_integration() {
 
     // ========== Test 6: Timestamp Format ==========
     {
-        use flexi_logger::{
-            DeferredNow, TS_DASHES_BLANK_COLONS_DOT_BLANK,
-        };
+        use flexi_logger::{DeferredNow, TS_DASHES_BLANK_COLONS_DOT_BLANK};
 
         fn log_format(
             w: &mut dyn std::io::Write,
@@ -394,9 +392,8 @@ fn test_flexi_logger_integration() {
             "The log should contain the test messages."
         );
 
-        let timestamp_regex =
-            regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}")
-                .expect("Failed to create regex");
+        let timestamp_regex = regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}")
+            .expect("Failed to create regex");
         assert!(
             timestamp_regex.is_match(&log_content),
             "Log should contain a timestamp in format YYYY-MM-DD HH:MM:SS.mmm"
@@ -499,9 +496,7 @@ fn test_log_level_validation() {
 /// so this test validates the format function without starting a logger.
 #[test]
 fn test_log_timestamp_format() {
-    use flexi_logger::{
-        DeferredNow, TS_DASHES_BLANK_COLONS_DOT_BLANK,
-    };
+    use flexi_logger::{DeferredNow, TS_DASHES_BLANK_COLONS_DOT_BLANK};
 
     fn log_format(
         w: &mut dyn std::io::Write,
@@ -535,9 +530,8 @@ fn test_log_timestamp_format() {
         "The log should contain the test messages."
     );
 
-    let timestamp_regex =
-        regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}")
-            .expect("Failed to create regex");
+    let timestamp_regex = regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}")
+        .expect("Failed to create regex");
     assert!(
         timestamp_regex.is_match(&log_content),
         "Log should contain a timestamp in format YYYY-MM-DD HH:MM:SS.mmm"

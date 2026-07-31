@@ -9,6 +9,7 @@ use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::storage::edge::Nbr;
 use crate::storage::engine::data_store::EdgeTableKey;
+use crate::storage::vertex::{ShardedVertexTable, VertexRecord};
 
 use super::context::GraphStorageContext;
 use super::ops::endpoint_label_id;
@@ -28,8 +29,12 @@ pub(crate) struct GraphVertexCursor {
     tags: TagCache,
     /// Index into `tags.labels` indicating which table is currently being scanned.
     current_table_idx: usize,
-    /// Current internal ID within the current table.
-    current_internal_id: u32,
+    /// Projected records of the current table, loaded lazily per table.
+    pending: Vec<VertexRecord>,
+    /// Index into `pending`.
+    pending_idx: usize,
+    /// Whether `pending` holds the full scan of the current table.
+    current_table_scanned: bool,
     limit: Option<usize>,
     offset_remaining: usize,
     emitted: usize,
@@ -38,8 +43,6 @@ pub(crate) struct GraphVertexCursor {
     exhausted: bool,
     /// Read timestamp captured when the cursor is opened.
     ts: Timestamp,
-    /// Per-table max internal IDs, parallel to `tags.labels`.
-    table_max_ids: Vec<u32>,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -47,8 +50,8 @@ impl std::fmt::Debug for GraphVertexCursor {
         f.debug_struct("GraphVertexCursor")
             .field("space", &self.space)
             .field("tags", &self.tags.labels.len())
-            .field("current_internal_id", &self.current_internal_id)
             .field("current_table_idx", &self.current_table_idx)
+            .field("pending", &self.pending.len())
             .field("limit", &self.limit)
             .field("offset_remaining", &self.offset_remaining)
             .field("exhausted", &self.exhausted)
@@ -83,19 +86,10 @@ impl GraphVertexCursor {
                 .collect(),
         };
 
-        let (exhausted, table_max_ids) = ctx.data_store().with_vertex_tables(|tables| {
-            let max_ids: Vec<u32> = tags
-                .labels
+        let exhausted = ctx.data_store().with_vertex_tables(|tables| {
+            tags.labels
                 .iter()
-                .map(|label_id| {
-                    tables
-                        .get(label_id)
-                        .map(|t| t.total_count() as u32)
-                        .unwrap_or(0)
-                })
-                .collect();
-            let done = max_ids.iter().all(|&count| count == 0);
-            (done, max_ids)
+                .all(|label_id| tables.get(label_id).map_or(true, |t| t.total_count() == 0))
         });
 
         Ok(Self {
@@ -103,7 +97,9 @@ impl GraphVertexCursor {
             space,
             tags,
             current_table_idx: 0,
-            current_internal_id: 0,
+            pending: Vec::new(),
+            pending_idx: 0,
+            current_table_scanned: false,
             limit: options.limit,
             offset_remaining: options.offset,
             emitted: 0,
@@ -114,8 +110,39 @@ impl GraphVertexCursor {
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             exhausted,
             ts,
-            table_max_ids,
         })
+    }
+
+    /// Ensure `pending` holds unread records of the current table, advancing
+    /// through tables until one has records.
+    fn load_next_table(&mut self, tables: &HashMap<LabelId, Arc<ShardedVertexTable>>) {
+        loop {
+            if self.current_table_idx >= self.tags.labels.len() {
+                self.exhausted = true;
+                self.pending.clear();
+                return;
+            }
+            if self.current_table_scanned && self.pending_idx >= self.pending.len() {
+                self.current_table_idx += 1;
+                self.current_table_scanned = false;
+                continue;
+            }
+            if !self.current_table_scanned {
+                let label_id = self.tags.labels[self.current_table_idx];
+                self.pending.clear();
+                self.pending_idx = 0;
+                if let Some(table) = tables.get(&label_id) {
+                    self.pending = table.scan_projected(self.ts, self.projection.as_deref());
+                }
+                self.current_table_scanned = true;
+                if self.pending.is_empty() {
+                    self.current_table_idx += 1;
+                    self.current_table_scanned = false;
+                    continue;
+                }
+            }
+            return;
+        }
     }
 }
 
@@ -126,70 +153,53 @@ impl VertexCursor for GraphVertexCursor {
         }
 
         let batch_size = batch_size.max(1);
-        let ts = self.ts;
         let data_store = self.ctx.data_store().clone();
-        let tags = &self.tags;
-        let id_range = &self.id_range;
-        let projection = &self.projection;
+        let labels = self.tags.labels.clone();
+        let names = self.tags.names.clone();
+        let id_range = self.id_range.clone();
         let batch = data_store.with_vertex_tables(|tables| {
             let mut batch = Vec::new();
 
             while batch.len() < batch_size && !self.exhausted {
-                // Advance past exhausted tables.
-                while self.current_table_idx < tags.labels.len()
-                    && self.current_internal_id >= self.table_max_ids[self.current_table_idx]
-                {
-                    self.current_table_idx += 1;
-                    self.current_internal_id = 0;
+                if self.pending_idx >= self.pending.len() {
+                    self.load_next_table(tables);
+                    continue;
                 }
 
-                if self.current_table_idx >= tags.labels.len() {
-                    self.exhausted = true;
-                    break;
-                }
+                let record = &self.pending[self.pending_idx];
+                self.pending_idx += 1;
+                let internal_id = record.internal_id;
 
-                let internal_id = self.current_internal_id;
-                self.current_internal_id += 1;
-
-                if let Some(range) = id_range {
+                if let Some(ref range) = id_range {
                     if !((range.start as u32)..(range.end as u32)).contains(&internal_id) {
                         continue;
                     }
                 }
 
-                let label_id = tags.labels[self.current_table_idx];
-                if let Some(table) = tables.get(&label_id) {
-                    if let Some(record) =
-                        table.get_projected_by_internal_id(internal_id, ts, projection.as_deref())
-                    {
-                        let vid = record.vid;
-                        let tag_name = tags
-                            .names
-                            .get(&label_id)
-                            .map(|s| s.as_str())
-                            .unwrap_or("unknown");
-                        let props: HashMap<String, Value> =
-                            record.properties.iter().cloned().collect();
-                        let vertex_tag = Tag::new(tag_name.to_string(), props.clone());
+                let label_id = labels[self.current_table_idx];
+                let tag_name = names
+                    .get(&label_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+                let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+                let vertex_tag = Tag::new(tag_name.to_string(), props.clone());
 
-                        if self.offset_remaining > 0 {
-                            self.offset_remaining -= 1;
-                            continue;
-                        }
+                if self.offset_remaining > 0 {
+                    self.offset_remaining -= 1;
+                    continue;
+                }
 
-                        batch.push(Vertex {
-                            vid,
-                            id: internal_id as i64,
-                            tags: vec![vertex_tag],
-                            properties: props,
-                        });
-                        self.emitted += 1;
-                        if let Some(limit) = self.limit {
-                            if self.emitted >= limit {
-                                self.exhausted = true;
-                                break;
-                            }
-                        }
+                batch.push(Vertex {
+                    vid: record.vid,
+                    id: internal_id as i64,
+                    tags: vec![vertex_tag],
+                    properties: props,
+                });
+                self.emitted += 1;
+                if let Some(limit) = self.limit {
+                    if self.emitted >= limit {
+                        self.exhausted = true;
+                        break;
                     }
                 }
             }

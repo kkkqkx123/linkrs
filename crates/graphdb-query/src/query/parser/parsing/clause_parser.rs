@@ -8,8 +8,8 @@ use crate::core::types::graph_schema::EdgeDirection;
 use crate::query::parser::ast::stmt::*;
 use crate::query::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
-use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
+use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 
 /// Sentence parser
@@ -403,7 +403,6 @@ impl ClauseParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        
         parse_expression_with_context(ctx, ctx.expression_context_clone())
     }
 }

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::core::types::{CommitLsn, DurabilityLevel, EdgeIdentifier, Timestamp, TransactionId, VertexId};
+use crate::core::types::{
+    CommitLsn, DurabilityLevel, EdgeIdentifier, Timestamp, TransactionId, VertexId,
+};
 
 use super::context::TransactionContext;
 use super::error::TransactionError;
@@ -42,7 +44,9 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
 
     fn record_table_modification(&self, table_name: &str);
 
-    fn record_schema_write(&self, _resource: &str) -> Result<(), TransactionError> { Ok(()) }
+    fn record_schema_write(&self, _resource: &str) -> Result<(), TransactionError> {
+        Ok(())
+    }
 
     fn record_index_write(&self, _resource: &str) {}
 
@@ -51,7 +55,6 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
     fn record_edge_read(&self, _edge: EdgeIdentifier) {}
 
     fn record_schema_read(&self, _resource: &str) {}
-
 }
 
 pub trait TransactionCommitSink: Send + Sync {

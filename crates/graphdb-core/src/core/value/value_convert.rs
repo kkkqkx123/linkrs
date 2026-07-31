@@ -404,9 +404,7 @@ impl Value {
             DataType::String => self.to_string().map(Value::string),
             DataType::FixedString(len) => match self {
                 Value::String(s) => Ok(Value::fixed_string(*len, s.to_string())),
-                Value::FixedString { data: s, .. } => {
-                    Ok(Value::fixed_string(*len, s.clone()))
-                }
+                Value::FixedString { data: s, .. } => Ok(Value::fixed_string(*len, s.clone())),
                 _ => self.to_string().map(|s| Value::fixed_string(*len, s)),
             },
             DataType::Date => Ok(self.to_date()),

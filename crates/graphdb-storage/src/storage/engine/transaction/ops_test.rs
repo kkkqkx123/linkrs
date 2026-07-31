@@ -10,7 +10,7 @@ mod tests {
     use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::storage::engine::data_store::EdgeTableKey;
     use crate::storage::types::StoragePropertyDef;
-    use crate::storage::vertex::{ShardedVertexTable, VertexSchema};
+    use crate::storage::vertex::{IdKey, ShardedVertexTable, VertexSchema};
 
     use crate::storage::engine::transaction::ops::{
         create_edge_type_undo, create_vertex_type_undo, delete_edge_type, delete_vertex_type,
@@ -68,11 +68,14 @@ mod tests {
 
         let result = TransactionOps::add_vertex(&vertex_tables, 0, vid, &properties, 1);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), VertexId::from_int64(0));
 
         let table = vertex_tables.get(&0).unwrap();
         let internal = table.get_internal_id_by_i64(100, 1);
         assert!(internal.is_some());
+        assert_eq!(
+            result.unwrap(),
+            VertexId::from_int64(internal.unwrap() as i64)
+        );
     }
 
     #[test]
@@ -175,11 +178,7 @@ mod tests {
     fn test_resolve_vertex_id() {
         let table = create_vertex_table(0, "Person");
         table
-            .insert_by_i64(
-                100,
-                &[("name".to_string(), Value::string("Alice"))],
-                1,
-            )
+            .insert_by_i64(100, &[("name".to_string(), Value::string("Alice"))], 1)
             .unwrap();
         table
             .insert(
@@ -190,11 +189,20 @@ mod tests {
             .unwrap();
 
         let resolved_int = TransactionOps::resolve_vertex_id(&table, VertexId::from_int64(100), 1);
-        assert_eq!(resolved_int, Some(0));
+        assert!(resolved_int.is_some());
+        assert_eq!(
+            table.get_external_id(resolved_int.unwrap(), 1),
+            Some(IdKey::Int(100))
+        );
 
         let resolved_str =
             TransactionOps::resolve_vertex_id(&table, VertexId::from_string("user-bob-ext"), 1);
-        assert_eq!(resolved_str, Some(1));
+        assert!(resolved_str.is_some());
+        assert_ne!(resolved_int, resolved_str);
+        assert_eq!(
+            table.get_external_id(resolved_str.unwrap(), 1),
+            Some(IdKey::Text("user-bob-ext".to_string()))
+        );
 
         let not_found = TransactionOps::resolve_vertex_id(&table, VertexId::from_int64(999), 1);
         assert_eq!(not_found, None);
@@ -207,13 +215,14 @@ mod tests {
 
         TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
 
-        let result =
-            TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::from_int64(1), 2);
+        let result = TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::from_int64(1), 2);
         assert!(result.is_ok());
 
         // After deletion, the vertex should not be visible at timestamp 2
         let table = vertex_tables.get(&0).unwrap();
-        let v = table.get_by_internal_id(0, 2);
+        let internal = table.get_internal_id_by_i64(1, 2);
+        assert!(internal.is_none());
+        let v = internal.and_then(|id| table.get_by_internal_id(id, 2));
         assert!(v.is_none());
     }
 
@@ -245,7 +254,8 @@ mod tests {
         assert!(result.is_ok());
 
         let table = vertex_tables.get(&0).unwrap();
-        let record = table.get_by_internal_id(0, 2).unwrap();
+        let internal = table.get_internal_id_by_i64(1, 2).unwrap();
+        let record = table.get_by_internal_id(internal, 2).unwrap();
         let name_val = record
             .properties
             .iter()
@@ -344,7 +354,8 @@ mod tests {
         assert!(result.is_ok(), "revert_delete_vertex failed: {:?}", result);
 
         let table = vertex_tables.get(&0).unwrap();
-        let record = table.get_by_internal_id(0, 3);
+        let internal = table.get_internal_id_by_i64(1, 3).unwrap();
+        let record = table.get_by_internal_id(internal, 3);
         assert!(record.is_some());
     }
 
@@ -362,11 +373,22 @@ mod tests {
         TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
         TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(2), &[], 1).unwrap();
 
+        let src_internal = vertex_tables
+            .get(&0)
+            .unwrap()
+            .get_internal_id_by_i64(1, 1)
+            .unwrap();
+        let dst_internal = vertex_tables
+            .get(&0)
+            .unwrap()
+            .get_internal_id_by_i64(2, 1)
+            .unwrap();
+
         let add_params = AddEdgeParams {
             src_label: 0,
-            src_vid: 0,
+            src_vid: src_internal,
             dst_label: 0,
-            dst_vid: 1,
+            dst_vid: dst_internal,
             edge_label: 0,
             rank: 0,
         };
@@ -374,17 +396,17 @@ mod tests {
 
         let del_params = DeleteEdgeParams {
             src_label: 0,
-            src_vid: 0,
+            src_vid: src_internal,
             dst_label: 0,
-            dst_vid: 1,
+            dst_vid: dst_internal,
             edge_label: 0,
             rank: 0,
         };
         TransactionOps::delete_edge(&mut edge_tables, del_params, 0i32, 0i32, 2).unwrap();
 
         let revert_params = RevertDeleteEdgeParams {
-            src_vid: 0,
-            dst_vid: 1,
+            src_vid: src_internal,
+            dst_vid: dst_internal,
             rank: 0,
         };
         let table = edge_tables.get(&EdgeTableKey::new(0, 0, 0)).unwrap();

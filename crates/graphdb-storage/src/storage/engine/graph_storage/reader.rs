@@ -170,20 +170,19 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
                 for chunk in records.chunks(BATCH_SIZE) {
                     for record in chunk {
                         record_vertex_read(ctx, record.vid.clone());
-                        let entry = merged.entry(record.vid.clone()).or_insert_with(|| {
-                            MergedVertex {
-                                vid: record.vid.clone(),
-                                internal_id: record.internal_id,
-                                tags: Vec::new(),
-                                properties: HashMap::new(),
-                            }
-                        });
+                        let entry =
+                            merged
+                                .entry(record.vid.clone())
+                                .or_insert_with(|| MergedVertex {
+                                    vid: record.vid.clone(),
+                                    internal_id: record.internal_id,
+                                    tags: Vec::new(),
+                                    properties: HashMap::new(),
+                                });
                         entry.internal_id = record.internal_id;
                         let props: HashMap<String, Value> =
                             record.properties.iter().cloned().collect();
-                        entry
-                            .tags
-                            .push(Tag::new(tag_name.clone(), props.clone()));
+                        entry.tags.push(Tag::new(tag_name.clone(), props.clone()));
                         entry.properties.extend(props);
                     }
                 }
@@ -321,9 +320,15 @@ pub(crate) fn get_edge(
 
     // Fallback: check cold snapshot if hot missed
     if ts >= snapshot_min_ts(ctx, edge_label_id) {
-        if let Some((nbr, src_internal, dst_internal_vid)) =
-            query_cold_edge(ctx, edge_label_id, *src, *dst, src_label_id, dst_label_id, ts)
-        {
+        if let Some((nbr, src_internal, dst_internal_vid)) = query_cold_edge(
+            ctx,
+            edge_label_id,
+            *src,
+            *dst,
+            src_label_id,
+            dst_label_id,
+            ts,
+        ) {
             if let Some(snapshot) = ctx.cold_snapshots().read().get(&edge_label_id) {
                 let record = snapshot.nbr_to_edge_record(
                     &nbr,
@@ -370,11 +375,7 @@ fn query_cold_edge(
     let src_internal = vertex_id_to_internal(ctx, src_label, &src, ts)?;
     let dst_internal = vertex_id_to_internal(ctx, dst_label, &dst, ts)?;
     let nbr = snapshot.get_edge_to_dst(src_internal, dst_internal)?;
-    Some((
-        nbr,
-        src_internal,
-        VertexId::from_int64(dst_internal as i64),
-    ))
+    Some((nbr, src_internal, VertexId::from_int64(dst_internal as i64)))
 }
 
 pub(crate) fn get_node_edges(
@@ -506,8 +507,15 @@ pub(crate) fn get_node_edges(
 
         // Append cold snapshot edges for this edge type
         append_cold_node_edges(
-            ctx, &mut edges, edge_label_id, edge_type_name,
-            node_id, src_label_id, dst_label_id, direction, ts,
+            ctx,
+            &mut edges,
+            edge_label_id,
+            edge_type_name,
+            node_id,
+            src_label_id,
+            dst_label_id,
+            direction,
+            ts,
         )?;
     }
 
@@ -584,9 +592,8 @@ fn append_cold_node_edges(
         EdgeDirection::Both => {
             if let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) {
                 for nbr in snapshot.get_out_edges(internal) {
-                    let (dst_internal_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(
-                        nbr.neighbor,
-                    );
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
                     let dst_internal = dst_internal_vid.as_int64().unwrap_or(0) as u32;
                     let dst_ext =
                         external_id_string(ctx, dst_label, dst_internal, &dst_internal_vid, ts);
@@ -600,9 +607,8 @@ fn append_cold_node_edges(
             }
             if let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) {
                 for nbr in snapshot.get_in_edges(internal) {
-                    let (src_internal_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(
-                        nbr.neighbor,
-                    );
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
                     let src_internal = src_internal_vid.as_int64().unwrap_or(0) as u32;
                     let src_ext =
                         external_id_string(ctx, src_label, src_internal, &src_internal_vid, ts);
@@ -701,12 +707,8 @@ pub(crate) fn scan_edges_by_type(
                                 .unwrap_or_else(|| format!("{}", record.dst_vid))
                         };
 
-                        let edge = edge_record_to_edge(
-                            &record,
-                            edge_type,
-                            &src_external,
-                            &dst_external,
-                        );
+                        let edge =
+                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
                         edges.push(edge);
                     }
                 }
@@ -927,13 +929,13 @@ pub(crate) fn count_edges_by_type(
             dst_label_id,
             edge_label_id,
         );
-        ctx
-            .data_store()
+        ctx.data_store()
             .with_single_edge_table(&key, |t| Ok(t.edge_count()))
             .unwrap_or(0)
     };
 
-    let cold_count = ctx.cold_snapshots()
+    let cold_count = ctx
+        .cold_snapshots()
         .read()
         .get(&edge_label_id)
         .filter(|s| ts >= s.snapshot_ts())

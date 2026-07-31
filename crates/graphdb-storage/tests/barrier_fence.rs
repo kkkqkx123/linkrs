@@ -28,11 +28,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .expect("rebuild should succeed"));
 
     let indexed = storage
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Alice"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .expect("lookup after rebuild");
     assert_eq!(
         indexed,
@@ -46,11 +42,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .expect("insert Bob after rebuild");
 
     let indexed_bob = storage
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Bob"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Bob"))
         .expect("lookup Bob");
     assert_eq!(
         indexed_bob,
@@ -90,11 +82,7 @@ fn barrier_fence_survives_restart_after_rebuild() {
         .expect("rebuild after reopen should succeed"));
 
     let indexed = storage
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Alice"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .expect("lookup after reopen");
     assert_eq!(
         indexed,

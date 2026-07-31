@@ -592,7 +592,6 @@ mod tests {
         ) -> UndoLogResult<()> {
             Ok(())
         }
-
     }
 
     #[test]

@@ -497,10 +497,7 @@ pub fn create_test_vertex_with_vector(
     vector_prop: (&str, Vec<f32>),
 ) -> Vertex {
     let mut properties = HashMap::new();
-    properties.insert(
-        string_prop.0.to_string(),
-        Value::string(string_prop.1),
-    );
+    properties.insert(string_prop.0.to_string(), Value::string(string_prop.1));
 
     // Convert Vec<f32> to VectorValue
     use crate::core::VectorValue;

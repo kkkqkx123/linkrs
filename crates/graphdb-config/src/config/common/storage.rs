@@ -343,9 +343,7 @@ impl StorageConfig {
             || !(0.0..=1.0).contains(&self.index_eviction_low_ratio)
             || self.index_eviction_low_ratio >= self.index_eviction_high_ratio
         {
-            return Err(
-                "index eviction ratios must satisfy 0 < low < high <= 1".to_string(),
-            );
+            return Err("index eviction ratios must satisfy 0 < low < high <= 1".to_string());
         }
         Ok(())
     }

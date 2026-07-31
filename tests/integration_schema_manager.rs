@@ -5,10 +5,10 @@
 //! - Schema manager is properly initialized when vector search is enabled but fails
 //! - Basic DDL operations work regardless of vector search configuration
 
-use graphdb::test_utils::TestStorage;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;
+use graphdb::test_utils::TestStorage;
 use std::sync::Arc;
 
 /// Test that QueryPipelineManager works without schema_manager

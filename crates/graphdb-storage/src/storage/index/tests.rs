@@ -165,10 +165,9 @@ fn split_writes_only_the_selected_index_to_each_shard() {
         )
         .expect("write unrelated index key");
 
-    let boundary =
-        KeyBuilder::build_vertex_index_value_prefix(1, "first", &Value::string("M"))
-            .expect("build split boundary")
-            .0;
+    let boundary = KeyBuilder::build_vertex_index_value_prefix(1, "first", &Value::string("M"))
+        .expect("build split boundary")
+        .0;
     manager
         .split_native_index(
             IndexIdentity {
@@ -190,8 +189,9 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let (forward, _) = GenericIndexManager::<VertexIndexKeyGen>::load_data(&shard.checkpoint_file)
-            .expect("load split shard");
+        let (forward, _) =
+            GenericIndexManager::<VertexIndexKeyGen>::load_data(&shard.checkpoint_file)
+                .expect("load split shard");
         shard_entries += forward.len();
         assert!(forward.keys().all(|key| key.starts_with(&first_prefix)));
         assert!(forward.keys().all(|key| !key.starts_with(&second_prefix)));
@@ -696,8 +696,7 @@ fn wal_recovers_data_after_checkpoint() {
     );
     reverse.insert(
         vec![4, 5, 6],
-        IndexRecord::new(100)
-            .with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42))),
+        IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42))),
     );
 
     shard.replace(forward, reverse);
@@ -710,12 +709,24 @@ fn wal_recovers_data_after_checkpoint() {
     assert!(wal_path.exists(), "WAL file should exist after flush_wal");
 
     // Load a new shard from the same checkpoint - should replay WAL
-    let loaded_shard = ShardRuntime::load_with_pool_capacity::<VertexIndexKeyGen>(checkpoint_file.clone(), 128 * 1024 * 1024).unwrap();
+    let loaded_shard = ShardRuntime::load_with_pool_capacity::<VertexIndexKeyGen>(
+        checkpoint_file.clone(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
 
     let fwd = loaded_shard.read_forward();
     let rev = loaded_shard.read_reverse();
-    assert_eq!(fwd.snapshot().len(), 1, "Should have 1 forward entry after WAL replay");
-    assert_eq!(rev.snapshot().len(), 1, "Should have 1 reverse entry after WAL replay");
+    assert_eq!(
+        fwd.snapshot().len(),
+        1,
+        "Should have 1 forward entry after WAL replay"
+    );
+    assert_eq!(
+        rev.snapshot().len(),
+        1,
+        "Should have 1 reverse entry after WAL replay"
+    );
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -745,7 +756,10 @@ fn checkpoint_clears_wal() {
 
     // Checkpoint - should clear WAL
     shard.checkpoint::<VertexIndexKeyGen>().unwrap();
-    assert!(!wal_path.exists(), "WAL file should be removed after checkpoint");
+    assert!(
+        !wal_path.exists(),
+        "WAL file should be removed after checkpoint"
+    );
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);

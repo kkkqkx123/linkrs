@@ -46,7 +46,9 @@ fn append_schema_redo<T: serde::Serialize>(
                     | WalOpType::DropTagIndex
                     | WalOpType::CreateEdgeIndex
                     | WalOpType::DropEdgeIndex => recorder.record_index_write("index"),
-                    _ => recorder.record_schema_write("schema").map_err(|error| StorageError::db_error(error.to_string()))?,
+                    _ => recorder
+                        .record_schema_write("schema")
+                        .map_err(|error| StorageError::db_error(error.to_string()))?,
                 }
             }
             ctx.commit_write_timestamp(timestamp);

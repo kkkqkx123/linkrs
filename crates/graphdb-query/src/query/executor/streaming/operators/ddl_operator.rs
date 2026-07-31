@@ -59,11 +59,7 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
         .map(Value::string)
         .unwrap_or(Value::Null(NullType::Null));
     DataChunk::new_with_layout(
-        vec![vec![
-            Value::string(action),
-            name_val,
-            Value::string(status),
-        ]],
+        vec![vec![Value::string(action), name_val, Value::string(status)]],
         manage_result_layout(),
     )
 }

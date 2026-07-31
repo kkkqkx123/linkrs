@@ -255,10 +255,8 @@ mod tests {
     #[test]
     fn test_column_encoding_dictionary() {
         let mut col = DictionaryColumn::new();
-        col.set(0, Some(&Value::string("apple")))
-            .unwrap();
-        col.set(1, Some(&Value::string("banana")))
-            .unwrap();
+        col.set(0, Some(&Value::string("apple"))).unwrap();
+        col.set(1, Some(&Value::string("banana"))).unwrap();
         col.set(2, None).unwrap();
 
         let encoding = ColumnEncoding::Dictionary(col);
@@ -320,9 +318,7 @@ mod tests {
         let col = build_fsst_column(&strings, 100);
         let mut encoding = ColumnEncoding::Fsst(col);
 
-        encoding
-            .set(0, Some(&Value::string("world")))
-            .unwrap();
+        encoding.set(0, Some(&Value::string("world"))).unwrap();
         assert_eq!(encoding.get(0), Some(Value::string("world")));
 
         encoding.set(0, None).unwrap();

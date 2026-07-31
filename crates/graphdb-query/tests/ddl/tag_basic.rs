@@ -133,10 +133,7 @@ fn test_create_tag_execution_with_data() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -279,14 +276,8 @@ fn test_desc_execution_tag() {
         .query("DESCRIBE TAG Person")
         .assert_success()
         .assert_result_count(2)
-        .assert_result_contains(vec![
-            Value::string("name"),
-            Value::string("STRING"),
-        ])
-        .assert_result_contains(vec![
-            Value::string("age"),
-            Value::string("INT"),
-        ]);
+        .assert_result_contains(vec![Value::string("name"), Value::string("STRING")])
+        .assert_result_contains(vec![Value::string("age"), Value::string("INT")]);
 }
 
 #[test]

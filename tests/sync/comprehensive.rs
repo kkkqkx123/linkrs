@@ -3,9 +3,9 @@
 //! Tests covering remaining paths not covered by sync_2pc_protocol,
 //! sync_fault_tolerance, or sync_transaction_basic.
 
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::DataType;
 use graphdb::core::Value;
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 
 /// TC-100: Non-transactional direct path (on_vertex_change → BatchBuffer → commit)
 ///
@@ -158,20 +158,12 @@ fn test_multi_tag_transaction_atomicity() {
         .begin_transaction()
         .expect("Failed to begin transaction");
 
-    let person = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let person = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", person)
         .expect("Failed to insert person");
 
-    let company = create_test_vertex(
-        2,
-        "Company",
-        vec![("name", Value::string("TechCorp"))],
-    );
+    let company = create_test_vertex(2, "Company", vec![("name", Value::string("TechCorp"))]);
     harness
         .insert_vertex_with_txn("test_space", company)
         .expect("Failed to insert company");
@@ -211,11 +203,7 @@ fn test_rollback_no_side_effects() {
         .expect("Failed to create tag");
 
     harness.begin_transaction().expect("Failed to begin txn1");
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Committed"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Committed"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex1)
         .expect("Failed to insert into txn1");
@@ -223,11 +211,7 @@ fn test_rollback_no_side_effects() {
     harness.wait_for_async(200);
 
     harness.begin_transaction().expect("Failed to begin txn2");
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("RolledBack"))],
-    );
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("RolledBack"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex2)
         .expect("Failed to insert into txn2");
@@ -447,11 +431,7 @@ fn test_mixed_transactional_non_transactional() {
         )
         .expect("Failed to create tag");
 
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Original"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Original"))]);
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert initial vertex");
@@ -475,11 +455,7 @@ fn test_mixed_transactional_non_transactional() {
     harness
         .begin_transaction()
         .expect("Failed to begin transaction");
-    let updated_vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Updated"))],
-    );
+    let updated_vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Updated"))]);
     harness
         .insert_vertex_with_txn("test_space", updated_vertex)
         .expect("Failed to update vertex in txn");

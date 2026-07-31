@@ -615,9 +615,7 @@ impl SourceOperator {
                 ..
             } => next_buffer_chunk(base, buffer, current_index, col_names),
             Self::StorageScanVertices {
-                space_name,
-                cursor,
-                ..
+                space_name, cursor, ..
             } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
@@ -645,9 +643,7 @@ impl SourceOperator {
                 *cursor = Some(cur);
             },
             Self::StorageScanEdges {
-                space_name,
-                cursor,
-                ..
+                space_name, cursor, ..
             } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
@@ -687,8 +683,9 @@ impl SourceOperator {
                         // Check if already returned (state position >= ids.len()).
                         {
                             let mut arena = base.state_arena();
-                            if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
-                                arena.global.get_mut(&base.state_key())
+                            if let Some(GlobalState::Source(SourceState::GetVertices {
+                                position,
+                            })) = arena.global.get_mut(&base.state_key())
                             {
                                 if *position >= ids.len() {
                                     return Ok(None);
@@ -708,15 +705,18 @@ impl SourceOperator {
                                 storage_error("GetVertices", "get vertex", space_name, error)
                             })?
                         } else {
-                            guard.get_vertex_projected(space_name, &vid, projected_properties).map_err(|error| {
-                                storage_error("GetVertices", "get vertex", space_name, error)
-                            })?
+                            guard
+                                .get_vertex_projected(space_name, &vid, projected_properties)
+                                .map_err(|error| {
+                                    storage_error("GetVertices", "get vertex", space_name, error)
+                                })?
                         };
                         // Mark position as done so subsequent calls return None.
                         let mark_done = |base: &mut OperatorBase| {
                             let mut arena = base.state_arena();
-                            if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
-                                arena.global.get_mut(&base.state_key())
+                            if let Some(GlobalState::Source(SourceState::GetVertices {
+                                position,
+                            })) = arena.global.get_mut(&base.state_key())
                             {
                                 *position = ids.len();
                             }
@@ -724,7 +724,8 @@ impl SourceOperator {
                         if let Some(vertex) = vertex_opt {
                             let rows = vec![make_vertex_row(vertex)];
                             let reservation = reserve_memory(base, &rows)?;
-                            let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                            let mut chunk =
+                                DataChunk::new_with_layout(rows, base.output_layout.clone());
                             chunk.materialize_columns();
                             if let Some(r) = reservation {
                                 chunk = chunk.with_memory_reservation(r);
@@ -775,8 +776,9 @@ impl SourceOperator {
                         }
                     } else {
                         for vid in &cached_ids[start..position] {
-                            if let Some(vertex) =
-                                guard.get_vertex_projected(space_name, vid, projected_properties).map_err(|error| {
+                            if let Some(vertex) = guard
+                                .get_vertex_projected(space_name, vid, projected_properties)
+                                .map_err(|error| {
                                     storage_error("GetVertices", "get vertex", space_name, error)
                                 })?
                             {
@@ -786,7 +788,8 @@ impl SourceOperator {
                     }
                     if !rows.is_empty() {
                         let reservation = reserve_memory(base, &rows)?;
-                        let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                        let mut chunk =
+                            DataChunk::new_with_layout(rows, base.output_layout.clone());
                         chunk.materialize_columns();
                         if let Some(r) = reservation {
                             chunk = chunk.with_memory_reservation(r);
@@ -794,7 +797,7 @@ impl SourceOperator {
                         return Ok(Some(chunk));
                     }
                 }
-            },
+            }
             Self::GetEdges {
                 space_name, cursor, ..
             } => {
@@ -919,8 +922,9 @@ impl SourceOperator {
                             let mut rows = Vec::with_capacity(batch_size);
                             if projected_properties.is_empty() {
                                 for neighbor_id in &neighbor_ids[*position..end] {
-                                    if let Some(vertex) =
-                                        guard.get_vertex(space_name, neighbor_id).map_err(|error| {
+                                    if let Some(vertex) = guard
+                                        .get_vertex(space_name, neighbor_id)
+                                        .map_err(|error| {
                                             storage_error(
                                                 "GetNeighbors",
                                                 "get neighbor vertex",
@@ -934,8 +938,13 @@ impl SourceOperator {
                                 }
                             } else {
                                 for neighbor_id in &neighbor_ids[*position..end] {
-                                    if let Some(vertex) =
-                                        guard.get_vertex_projected(space_name, neighbor_id, projected_properties).map_err(|error| {
+                                    if let Some(vertex) = guard
+                                        .get_vertex_projected(
+                                            space_name,
+                                            neighbor_id,
+                                            projected_properties,
+                                        )
+                                        .map_err(|error| {
                                             storage_error(
                                                 "GetNeighbors",
                                                 "get neighbor vertex",
@@ -952,10 +961,12 @@ impl SourceOperator {
                             *position = end;
                             if !rows.is_empty() {
                                 let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk =
-                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
-                    chunk.materialize_columns();
-                    if let Some(r) = reservation {
+                                let mut chunk = DataChunk::new_with_layout(
+                                    rows,
+                                    Arc::clone(&base.output_layout),
+                                );
+                                chunk.materialize_columns();
+                                if let Some(r) = reservation {
                                     chunk = chunk.with_memory_reservation(r);
                                 }
                                 return Ok(Some(chunk));
@@ -1053,7 +1064,7 @@ impl SourceOperator {
                     Some((_layout, row)) => {
                         let chunk =
                             DataChunk::new_with_layout(vec![row], Arc::clone(&base.output_layout));
-                        
+
                         Ok(Some(chunk))
                     }
                     None => Ok(None),
@@ -1409,8 +1420,7 @@ mod tests {
 
     #[test]
     fn get_vertices_single_id_returns_none_on_second_call() {
-        let mock = crate::storage::MockStorage::new()
-            .expect("MockStorage should be created");
+        let mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
         let storage = Arc::new(RwLock::new(mock));
         let mut source = SourceOperator::GetVertices {
             storage: Some(storage),
@@ -1434,14 +1444,16 @@ mod tests {
 
         source.open(&mut base).expect("open should succeed");
 
-        let result1 = source
-            .next(&mut base)
-            .expect("first next should succeed");
-        assert!(result1.is_none(), "no vertex in mock, first call returns None");
+        let result1 = source.next(&mut base).expect("first next should succeed");
+        assert!(
+            result1.is_none(),
+            "no vertex in mock, first call returns None"
+        );
 
-        let result2 = source
-            .next(&mut base)
-            .expect("second next should succeed");
-        assert!(result2.is_none(), "second call must also return None (regression: do not re-emit)");
+        let result2 = source.next(&mut base).expect("second next should succeed");
+        assert!(
+            result2.is_none(),
+            "second call must also return None (regression: do not re-emit)"
+        );
     }
 }

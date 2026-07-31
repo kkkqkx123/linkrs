@@ -67,20 +67,12 @@ fn test_index_created_after_data_insertion() {
 
     // Verify index is populated
     let alice = storage
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Alice"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .unwrap();
     assert_eq!(alice, vec![Value::from(VertexId::from_int64(1))]);
 
     let bob = storage
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Bob"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Bob"))
         .unwrap();
     assert_eq!(bob, vec![Value::from(VertexId::from_int64(2))]);
 }
@@ -196,12 +188,7 @@ fn test_scan_vertices_by_property_match() {
 
     // Scan by matching name
     let result = storage
-        .scan_vertices_by_prop(
-            "test_space",
-            "Person",
-            "name",
-            &Value::string("Person3"),
-        )
+        .scan_vertices_by_prop("test_space", "Person", "name", &Value::string("Person3"))
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(
@@ -217,12 +204,7 @@ fn test_scan_vertices_by_property_match() {
 
     // Non-existent prop should return empty
     let empty_result = storage
-        .scan_vertices_by_prop(
-            "test_space",
-            "Person",
-            "name",
-            &Value::string("Nobody"),
-        )
+        .scan_vertices_by_prop("test_space", "Person", "name", &Value::string("Nobody"))
         .unwrap();
     assert!(empty_result.is_empty());
 }

@@ -220,20 +220,14 @@ pub fn verify_test_data(storage: &GraphStorage, space: &str) {
         .get_vertex(space, &VertexId::from_int64(1))
         .unwrap()
         .expect("Alice should exist");
-    assert_eq!(
-        alice.properties.get("name"),
-        Some(&Value::string("Alice"))
-    );
+    assert_eq!(alice.properties.get("name"), Some(&Value::string("Alice")));
     assert_eq!(alice.properties.get("age"), Some(&Value::BigInt(30)));
 
     let bob = storage
         .get_vertex(space, &VertexId::from_int64(2))
         .unwrap()
         .expect("Bob should exist");
-    assert_eq!(
-        bob.properties.get("name"),
-        Some(&Value::string("Bob"))
-    );
+    assert_eq!(bob.properties.get("name"), Some(&Value::string("Bob")));
 
     let edge = storage
         .get_edge(

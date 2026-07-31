@@ -41,6 +41,8 @@ mod complex;
 mod concurrent;
 #[path = "transaction/config_options.rs"]
 mod config_options;
+#[path = "transaction/crash_recovery.rs"]
+mod crash_recovery;
 #[path = "transaction/deadlock_prevention.rs"]
 mod deadlock_prevention;
 #[path = "transaction/edge.rs"]
@@ -55,8 +57,6 @@ mod http_api;
 mod lifecycle;
 #[path = "transaction/recovery.rs"]
 mod recovery;
-#[path = "transaction/crash_recovery.rs"]
-mod crash_recovery;
 #[path = "transaction/rollback_operations.rs"]
 mod rollback_operations;
 #[path = "transaction/semantics.rs"]

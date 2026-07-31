@@ -473,9 +473,9 @@ impl Default for CreatePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::query::binder::validation::ValidationInfo;
     use crate::query::parser::parsing::Parser;
     use crate::query::planning::planner::{Planner, ValidatedStatement};
-    use crate::query::binder::validation::ValidationInfo;
     use crate::query::QueryContext;
     use std::sync::Arc;
 

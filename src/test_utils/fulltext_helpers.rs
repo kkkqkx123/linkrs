@@ -6,9 +6,7 @@
 #![cfg(feature = "fulltext-search")]
 
 use crate::core::Value;
-use crate::search::{
-    EngineType, FulltextConfig, FulltextIndexManager, SearchError, SearchResult,
-};
+use crate::search::{EngineType, FulltextConfig, FulltextIndexManager, SearchError, SearchResult};
 use std::sync::Arc;
 use tempfile::TempDir;
 

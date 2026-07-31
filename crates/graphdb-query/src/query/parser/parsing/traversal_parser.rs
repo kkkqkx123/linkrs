@@ -11,8 +11,8 @@ use crate::query::parser::ast::pattern::{
 use crate::query::parser::ast::stmt::*;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::clause_parser::ClauseParser;
-use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
+use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 
 /// Graph Traversal Parser
@@ -698,7 +698,6 @@ impl TraversalParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        
         parse_expression_with_context(ctx, ctx.expression_context_clone())
     }
 }

@@ -2,12 +2,12 @@ use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
 use crate::core::types::TransactionId;
+use crate::query::binder::BoundStatement;
 use crate::query::executor::base::ExecutionResult;
 use crate::query::executor::streaming::instance::ResultSink;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::parser::ast::Stmt;
-use crate::query::binder::BoundStatement;
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
 use crate::storage::QueryStorage;
@@ -271,11 +271,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return self.execute_diagnostic(request);
         }
         let physical_plan = if let Some(ref bound) = request.bound_statement {
-            let (plan, _) = self.compile_from_bound(
-                request.query_context.clone(),
-                bound,
-                &request.ast,
-            )?;
+            let (plan, _) =
+                self.compile_from_bound(request.query_context.clone(), bound, &request.ast)?;
             plan
         } else {
             self.compile_or_get_cached(
@@ -319,11 +316,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok(StreamingQueryResult::from_execution_result(result));
         }
         let physical_plan = if let Some(ref bound) = request.bound_statement {
-            let (plan, _) = self.compile_from_bound(
-                request.query_context.clone(),
-                bound,
-                &request.ast,
-            )?;
+            let (plan, _) =
+                self.compile_from_bound(request.query_context.clone(), bound, &request.ast)?;
             plan
         } else {
             self.compile_or_get_cached(

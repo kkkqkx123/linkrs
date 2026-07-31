@@ -103,15 +103,18 @@ pub fn write_versioned_payload(buf: &mut Vec<u8>, version: u32, payload: &[u8]) 
 
 /// Read and validate a versioned payload from a reader.
 /// Returns the version and remaining payload bytes on success.
-pub fn read_versioned_payload<R: std::io::Read>(reader: &mut R, file_name: &str) -> StorageResult<(u32, Vec<u8>)> {
+pub fn read_versioned_payload<R: std::io::Read>(
+    reader: &mut R,
+    file_name: &str,
+) -> StorageResult<(u32, Vec<u8>)> {
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic).map_err(|e| {
         StorageError::deserialize_error(format!("{file_name}: failed to read magic: {e}"))
     })?;
     if magic != VERSIONED_PAYLOAD_MAGIC {
-        return Err(StorageError::deserialize_error(
-            format!("{file_name}: invalid magic bytes {magic:02x?}, expected LNKF"),
-        ));
+        return Err(StorageError::deserialize_error(format!(
+            "{file_name}: invalid magic bytes {magic:02x?}, expected LNKF"
+        )));
     }
     let mut version_buf = [0u8; 4];
     reader.read_exact(&mut version_buf).map_err(|e| {

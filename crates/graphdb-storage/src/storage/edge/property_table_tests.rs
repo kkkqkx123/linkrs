@@ -255,10 +255,7 @@ fn test_property_table_update_to_null() {
     table.add_property("optional".to_string(), DataType::String, true);
 
     let offset = table
-        .insert(
-            &[("optional".to_string(), Value::string("value"))],
-            100,
-        )
+        .insert(&[("optional".to_string(), Value::string("value"))], 100)
         .unwrap();
 
     // Update to null

@@ -172,10 +172,7 @@ fn test_type_function() {
 
     let result = registry.execute("type", &[Value::Edge(Box::new(edge))]);
     assert!(result.is_ok());
-    assert_eq!(
-        result.expect("type函数应该成功"),
-        Value::string("KNOWS")
-    );
+    assert_eq!(result.expect("type函数应该成功"), Value::string("KNOWS"));
 }
 
 #[test]
@@ -467,10 +464,7 @@ fn test_split_function() {
 
     let result = registry.execute(
         "split",
-        &[
-            Value::string("hello,world,test"),
-            Value::string(","),
-        ],
+        &[Value::string("hello,world,test"), Value::string(",")],
     );
     assert!(result.is_ok());
 
@@ -720,10 +714,7 @@ fn test_datetime_function() {
     ));
 
     // 测试 datetime(string)
-    let result = registry.execute(
-        "datetime",
-        &[Value::string("2024-01-15 14:30:00")],
-    );
+    let result = registry.execute("datetime", &[Value::string("2024-01-15 14:30:00")]);
     assert!(result.is_ok());
     assert!(matches!(
         result.expect("datetime函数应该成功"),
@@ -929,11 +920,7 @@ fn test_lpad_function() {
 
     let result = registry.execute(
         "lpad",
-        &[
-            Value::string("hello"),
-            Value::Int(10),
-            Value::string("*"),
-        ],
+        &[Value::string("hello"), Value::Int(10), Value::string("*")],
     );
     assert!(result.is_ok());
     assert_eq!(
@@ -948,11 +935,7 @@ fn test_rpad_function() {
 
     let result = registry.execute(
         "rpad",
-        &[
-            Value::string("hello"),
-            Value::Int(10),
-            Value::string("*"),
-        ],
+        &[Value::string("hello"), Value::Int(10), Value::string("*")],
     );
     assert!(result.is_ok());
     assert_eq!(
@@ -988,10 +971,7 @@ fn test_strcasecmp_function() {
     // equivalent
     let result = registry.execute(
         "strcasecmp",
-        &[
-            Value::string("Hello"),
-            Value::string("hello"),
-        ],
+        &[Value::string("Hello"), Value::string("hello")],
     );
     assert!(result.is_ok());
     assert_eq!(result.expect("strcasecmp函数应该成功"), Value::Int(0));
@@ -999,10 +979,7 @@ fn test_strcasecmp_function() {
     // less than
     let result = registry.execute(
         "strcasecmp",
-        &[
-            Value::string("apple"),
-            Value::string("banana"),
-        ],
+        &[Value::string("apple"), Value::string("banana")],
     );
     assert!(result.is_ok());
     assert_eq!(result.expect("strcasecmp函数应该成功"), Value::Int(-1));
@@ -1010,10 +987,7 @@ fn test_strcasecmp_function() {
     // more than
     let result = registry.execute(
         "strcasecmp",
-        &[
-            Value::string("banana"),
-            Value::string("apple"),
-        ],
+        &[Value::string("banana"), Value::string("apple")],
     );
     assert!(result.is_ok());
     assert_eq!(result.expect("strcasecmp函数应该成功"), Value::Int(1));

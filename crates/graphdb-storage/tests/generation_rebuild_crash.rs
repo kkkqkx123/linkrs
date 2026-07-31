@@ -42,11 +42,7 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .rebuild_tag_index("test_space", "person_name_idx")
         .expect("rebuild should recover after restart"));
     let indexed = reopened
-        .lookup_index(
-            "test_space",
-            "person_name_idx",
-            &Value::string("Alice"),
-        )
+        .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
         .expect("rebuilt index should be readable");
     assert_eq!(
         indexed,

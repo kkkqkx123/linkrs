@@ -316,8 +316,6 @@ impl From<GlobalCacheStatsSnapshot> for CacheStatsSummary {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -43,12 +43,8 @@ impl Value {
 
             // String concatenation
             (String(a), String(b)) => Ok(String(format!("{}{}", a, b).into())),
-            (String(a), FixedString { data: b, .. }) => {
-                Ok(String(format!("{}{}", a, b).into()))
-            }
-            (FixedString { data: a, .. }, String(b)) => {
-                Ok(String(format!("{}{}", a, b).into()))
-            }
+            (String(a), FixedString { data: b, .. }) => Ok(String(format!("{}{}", a, b).into())),
+            (FixedString { data: a, .. }, String(b)) => Ok(String(format!("{}{}", a, b).into())),
             (FixedString { data: a, .. }, FixedString { data: b, .. }) => {
                 Ok(String(format!("{}{}", a, b).into()))
             }

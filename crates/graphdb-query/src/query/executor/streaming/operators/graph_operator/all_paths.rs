@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::storage_ids::VertexId;

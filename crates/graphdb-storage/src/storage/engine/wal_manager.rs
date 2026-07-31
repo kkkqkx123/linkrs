@@ -157,7 +157,12 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn append_entry(&self, op_type: WalOpType, timestamp: Timestamp, payload: &[u8]) -> StorageResult<()> {
+    pub fn append_entry(
+        &self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+    ) -> StorageResult<()> {
         let Some(writer) = self.local_writer.as_ref() else {
             return Err(StorageError::wal_error(
                 "WAL writer is not initialized".to_string(),

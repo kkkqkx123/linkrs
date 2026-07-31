@@ -294,8 +294,7 @@ impl GraphStorageContext {
         let _active_spills = self.spiller().active_spills().read().len();
         // Exercise try_reserve_with_spill with a zero-byte probe to keep
         // the full reservation-with-spill path compiled and tested.
-        let _probe = self
-            .try_reserve_with_spill(MemoryCategory::Data, 0);
+        let _probe = self.try_reserve_with_spill(MemoryCategory::Data, 0);
         // Keep vertex GC stats exercised.
         if let Some(ref gc) = self.runtime.vertex_gc_manager {
             let _total = gc.total_removed();
@@ -437,10 +436,11 @@ impl GraphStorageContext {
         &self,
         category: crate::storage::engine::resource_budget::MemoryCategory,
         bytes: u64,
-    ) -> crate::core::StorageResult<
-        crate::storage::engine::resource_budget::MemoryReservation,
-    > {
-        self.persistent.spiller.try_reserve_with_spill(category, bytes)
+    ) -> crate::core::StorageResult<crate::storage::engine::resource_budget::MemoryReservation>
+    {
+        self.persistent
+            .spiller
+            .try_reserve_with_spill(category, bytes)
     }
 
     pub(crate) fn get_freeze_config_full(&self) -> crate::storage::engine::config::FreezeConfig {

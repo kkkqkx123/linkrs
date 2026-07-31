@@ -92,10 +92,7 @@ fn test_schema_evolution_flow() {
         .assert_success()
         // Query all fields
         .query("MATCH (p:Product) RETURN p.name, p.category")
-        .assert_result_contains(vec![
-            Value::string("Laptop"),
-            Value::string("Electronics"),
-        ]);
+        .assert_result_contains(vec![Value::string("Laptop"), Value::string("Electronics")]);
 }
 
 // ==================== Relationship Flow ====================

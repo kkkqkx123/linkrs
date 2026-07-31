@@ -255,7 +255,10 @@ impl GraphStorage {
     }
 
     /// Remove a cold snapshot by edge label ID, returning the removed snapshot.
-    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<crate::storage::cold::ColdSnapshot> {
+    pub fn remove_cold_snapshot(
+        &self,
+        label: LabelId,
+    ) -> Option<crate::storage::cold::ColdSnapshot> {
         self.ctx.remove_cold_snapshot(label)
     }
 
@@ -320,8 +323,7 @@ impl GraphStorage {
         // split snapshot.
         let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
         let _rebuild_guard = rebuild_gate.write();
-        let snapshot_timestamp =
-            SnapshotTimestamp::new(self.ctx.get_read_timestamp().max(1));
+        let snapshot_timestamp = SnapshotTimestamp::new(self.ctx.get_read_timestamp().max(1));
         let start_lsn = {
             let current = index_manager::current_wal_lsn(&self.ctx);
             if current == CommitLsn::ZERO {

@@ -139,10 +139,7 @@ pub fn plan_path_pattern(
                         i += 1;
                     }
                     PathElement::Alternative(patterns) => {
-                        let alt_plan = plan_alternative_patterns(
-                            patterns,
-                            ctx,
-                        )?;
+                        let alt_plan = plan_alternative_patterns(patterns, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
                                 SubPlan::new(Some(existing_root), plan.tail),
@@ -153,10 +150,7 @@ pub fn plan_path_pattern(
                         };
                     }
                     PathElement::Optional(elem) => {
-                        let opt_plan = plan_optional_element(
-                            elem,
-                            ctx,
-                        )?;
+                        let opt_plan = plan_optional_element(elem, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::left_join_plans(
                                 SubPlan::new(Some(existing_root), plan.tail),
@@ -479,10 +473,7 @@ pub fn plan_match_delete(
     Ok(SubPlan::new(Some(delete_node), input_plan.tail))
 }
 
-pub fn plan_pattern(
-    pattern: &Pattern,
-    ctx: &PlanningContext,
-) -> Result<SubPlan, PlannerError> {
+pub fn plan_pattern(pattern: &Pattern, ctx: &PlanningContext) -> Result<SubPlan, PlannerError> {
     match pattern {
         Pattern::Node(node) => plan_pattern_node(
             node,
@@ -492,7 +483,9 @@ pub fn plan_pattern(
             ctx.metadata_context,
             ctx.expr_context,
         ),
-        Pattern::Edge(edge) => plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context),
+        Pattern::Edge(edge) => {
+            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)
+        }
         Pattern::Path(_) => plan_path_pattern(pattern, ctx),
         Pattern::Variable(var) => plan_variable_pattern(var, ctx.space_id, ctx.validation_info),
     }
@@ -548,7 +541,9 @@ pub fn plan_optional_element(
             ctx.metadata_context,
             ctx.expr_context,
         )?,
-        PathElement::Edge(edge) => plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)?,
+        PathElement::Edge(edge) => {
+            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)?
+        }
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
                 "Optional paths do not support nested complex patterns".to_string(),

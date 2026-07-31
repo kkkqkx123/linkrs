@@ -454,6 +454,12 @@ impl VertexTable {
         self.id_indexer.len()
     }
 
+    /// Next free local id within this table: local ids are never reused, so
+    /// this is the highest id ever allocated plus one.
+    pub fn next_local_id(&self) -> u32 {
+        self.id_indexer.next_index()
+    }
+
     /// Pre-allocate ID indexer capacity for `additional` more vertices.
     pub fn reserve_id_capacity(&self, additional: usize) {
         self.id_indexer.reserve(additional);
@@ -461,6 +467,21 @@ impl VertexTable {
 
     pub fn scan(&self, ts: Timestamp) -> VertexIterator<'_> {
         VertexIterator::new(self, ts)
+    }
+
+    /// Scan all valid vertices at `ts`, fetching only the projected columns.
+    pub fn scan_projected(
+        &self,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<VertexRecord> {
+        let mut records = Vec::new();
+        for id in self.id_indexer.live_ids() {
+            if let Some(record) = self.get_projected_by_internal_id(id, ts, projection) {
+                records.push(record);
+            }
+        }
+        records
     }
 
     pub fn label(&self) -> LabelId {

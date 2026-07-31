@@ -961,8 +961,9 @@ fn transaction_status(error: TransactionError) -> Status {
     match error.kind() {
         TransactionErrorKind::TransactionNotFound => Status::not_found(message),
         TransactionErrorKind::TransactionNotOwner => Status::permission_denied(message),
-        TransactionErrorKind::TransactionTimeout
-        | TransactionErrorKind::TransactionExpired => Status::deadline_exceeded(message),
+        TransactionErrorKind::TransactionTimeout | TransactionErrorKind::TransactionExpired => {
+            Status::deadline_exceeded(message)
+        }
         TransactionErrorKind::WriteTransactionConflict => Status::aborted(message),
         TransactionErrorKind::InvalidStateForCommit
         | TransactionErrorKind::InvalidStateForAbort

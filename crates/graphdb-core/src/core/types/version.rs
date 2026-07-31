@@ -13,7 +13,10 @@ impl StorageVersion {
     pub fn from_u32(v: u32) -> StorageResult<Self> {
         match v {
             1 => Ok(StorageVersion::V1),
-            _ => Err(StorageError::unsupported_version(v, StorageVersion::CURRENT as u32)),
+            _ => Err(StorageError::unsupported_version(
+                v,
+                StorageVersion::CURRENT as u32,
+            )),
         }
     }
 

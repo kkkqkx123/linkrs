@@ -63,8 +63,8 @@ pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use types::StoragePropertyDef;
 
-pub use cold::cold_snapshot::ColdSnapshot;
 pub use crate::core::StorageError;
+pub use cold::cold_snapshot::ColdSnapshot;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test_mock::MockStorage;

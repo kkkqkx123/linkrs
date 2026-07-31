@@ -151,8 +151,12 @@ impl SegmentVersion {
         crc = crc
             .wrapping_mul(31)
             .wrapping_add(segment.csr.read().edge_count() as u32);
-        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_min as u32);
-        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_max as u32);
+        crc = crc
+            .wrapping_mul(31)
+            .wrapping_add(segment.create_ts_min as u32);
+        crc = crc
+            .wrapping_mul(31)
+            .wrapping_add(segment.create_ts_max as u32);
         crc
     }
 
@@ -197,7 +201,13 @@ impl CsrSegment {
         create_ts_max: Timestamp,
         deletion_info: DeletionInfo,
     ) -> Self {
-        Self::with_creation_ts(csr, create_ts_min, create_ts_max, deletion_info, Timestamp::MAX)
+        Self::with_creation_ts(
+            csr,
+            create_ts_min,
+            create_ts_max,
+            deletion_info,
+            Timestamp::MAX,
+        )
     }
 
     pub fn with_creation_ts(

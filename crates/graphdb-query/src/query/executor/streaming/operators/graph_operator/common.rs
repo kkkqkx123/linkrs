@@ -10,9 +10,9 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::slot::SlotLayout;
-    use crate::query::executor::traversal::config::TraversalConfig;
-    use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
-    use crate::query::executor::traversal::runtime::TraversalRuntime;
+use crate::query::executor::traversal::config::TraversalConfig;
+use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
+use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;

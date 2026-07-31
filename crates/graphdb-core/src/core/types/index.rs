@@ -321,11 +321,7 @@ mod tests {
 
     #[test]
     fn test_index_field_creation() {
-        let field = IndexField::new(
-            "name".to_string(),
-            Value::string("string"),
-            false,
-        );
+        let field = IndexField::new("name".to_string(), Value::string("string"), false);
 
         assert_eq!(field.name, "name");
         assert!(matches!(field.value_type, Value::String(_)));

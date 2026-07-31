@@ -117,7 +117,6 @@ fn test_parser_invalid_syntax() {
     assert!(result.is_err(), "Invalid syntax should return an error");
 }
 
-
 // ==================== Planner Integration Testing ====================
 
 #[test]

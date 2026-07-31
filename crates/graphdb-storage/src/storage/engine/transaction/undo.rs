@@ -127,11 +127,7 @@ impl UndoTarget for GraphStorageContext {
             dst_vid: checked_internal_vertex_id(&edge_id.dst_vid)?,
             rank: edge_id.rank,
         };
-        let key = EdgeTableKey::new(
-            edge_id.src_label,
-            edge_id.dst_label,
-            edge_id.edge_label,
-        );
+        let key = EdgeTableKey::new(edge_id.src_label, edge_id.dst_label, edge_id.edge_label);
         self.data_store()
             .with_single_edge_table_mut(&key, |table| {
                 TransactionOps::update_edge_property_undo_single(

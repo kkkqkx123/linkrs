@@ -75,6 +75,7 @@ fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
 }
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
+const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
@@ -150,7 +151,8 @@ impl SingleMutableCsr {
 
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
         if min_capacity > self.vertex_capacity() {
-            let new_capacity = min_capacity.next_power_of_two();
+            let new_capacity =
+                ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
             self.resize(new_capacity);
         }
     }
@@ -395,6 +397,11 @@ impl SingleMutableCsr {
     pub fn iter(&self, ts: Timestamp) -> SingleMutableCsrIterator<'_> {
         SingleMutableCsrIterator::new(self, ts)
     }
+
+    /// Iterate over all physically present entries, including tombstoned ones.
+    pub fn iter_all(&self) -> SingleMutableCsrIterator<'_> {
+        SingleMutableCsrIterator::new_all(self)
+    }
 }
 
 impl Default for SingleMutableCsr {
@@ -407,6 +414,7 @@ pub struct SingleMutableCsrIterator<'a> {
     csr: &'a SingleMutableCsr,
     current_vertex: usize,
     ts: Timestamp,
+    include_deleted: bool,
 }
 
 impl<'a> SingleMutableCsrIterator<'a> {
@@ -415,6 +423,17 @@ impl<'a> SingleMutableCsrIterator<'a> {
             csr,
             current_vertex: 0,
             ts,
+            include_deleted: false,
+        }
+    }
+
+    /// Iterator over every stored entry, including tombstoned ones.
+    pub fn new_all(csr: &'a SingleMutableCsr) -> Self {
+        Self {
+            csr,
+            current_vertex: 0,
+            ts: 0,
+            include_deleted: true,
         }
     }
 }
@@ -427,7 +446,16 @@ impl<'a> Iterator for SingleMutableCsrIterator<'a> {
             let vid = self.current_vertex;
             self.current_vertex += 1;
 
-            if let Some(nbr) = self.csr.get_edge_any_dst(vid as u32, self.ts) {
+            let nbr = if self.include_deleted {
+                self.csr
+                    .nbr_list
+                    .get(vid)
+                    .copied()
+                    .filter(|n| n.edge_id != INVALID_EDGE_ID)
+            } else {
+                self.csr.get_edge_any_dst(vid as u32, self.ts)
+            };
+            if let Some(nbr) = nbr {
                 return Some((VertexId::from_int64(vid as i64), nbr));
             }
         }
@@ -506,9 +534,13 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 100).unwrap();
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1, 99).is_err());
-        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 1, 101).unwrap();
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 100)
+            .unwrap();
+        assert!(csr
+            .insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1, 99)
+            .is_err());
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 1, 101)
+            .unwrap();
 
         assert_eq!(csr.edge_count(), 1);
     }
@@ -518,9 +550,12 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 0, 100).unwrap();
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 0, 100).unwrap();
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 0, 100).unwrap();
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 0, 100)
+            .unwrap();
+        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 0, 100)
+            .unwrap();
+        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 0, 100)
+            .unwrap();
 
         let data = csr1.dump();
 

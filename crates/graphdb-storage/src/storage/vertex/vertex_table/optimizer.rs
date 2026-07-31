@@ -6,15 +6,23 @@
 //! - Batch timestamp checks during compaction via CompactionCoordinator
 //! - Range-based column copying instead of row-by-row operations
 
+use super::compaction::CompactionCoordinator;
 use super::core::VertexTable;
 use crate::core::StorageResult;
 use crate::storage::vertex::IdKey;
+use std::collections::HashMap;
 
 impl VertexTable {
-    pub fn compact_with_ts_collect(
+    /// Compact vertices deleted at or before `ts` and return both the removed
+    /// external keys and the old-to-new internal ID mapping.
+    ///
+    /// The mapping is required by callers that propagate the remap to
+    /// dependent row-indexed structures (edge CSR rows, frozen segments,
+    /// cold snapshots) so vertex references stay stable.
+    pub fn compact_with_ts_collect_mapping(
         &mut self,
         ts: crate::core::types::Timestamp,
-    ) -> StorageResult<Vec<IdKey>> {
+    ) -> StorageResult<(Vec<IdKey>, HashMap<u32, u32>)> {
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(ts).collect();
 
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());
@@ -26,9 +34,10 @@ impl VertexTable {
             }
         }
 
-        self.compact_coordinated()?;
+        let mut coordinator = CompactionCoordinator::new();
+        coordinator.execute(self)?;
 
-        Ok(removed_keys)
+        Ok((removed_keys, coordinator.id_mapping().clone()))
     }
 
     /// Compact the vertex table using the unified CompactionCoordinator

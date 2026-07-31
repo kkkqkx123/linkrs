@@ -2,10 +2,10 @@
 //!
 //! Tests for basic transaction synchronization functionality
 
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::{DataType, VertexId};
 use graphdb::core::Value;
 use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::collections::HashMap;
 
 /// TC-001: Transaction vertex insert sync
@@ -69,9 +69,7 @@ fn test_transaction_vertex_insert_sync() {
     let unique_docs: std::collections::HashSet<_> = results.iter().map(|r| &r.doc_id).collect();
     assert_eq!(unique_docs.len(), 1, "Should find exactly one document");
     assert!(
-        results
-            .iter()
-            .any(|r| r.doc_id == Value::string("1")),
+        results.iter().any(|r| r.doc_id == Value::string("1")),
         "Should find vertex with id=1"
     );
 }
@@ -95,11 +93,7 @@ fn test_transaction_vertex_update_sync() {
         .expect("Failed to create tag");
 
     // Insert initial vertex (non-transactional)
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -117,11 +111,7 @@ fn test_transaction_vertex_update_sync() {
         .begin_transaction()
         .expect("Failed to begin transaction");
 
-    let new_vertex = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let new_vertex = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex_with_txn("test_space", new_vertex)
         .expect("Failed to insert vertex with transaction");
@@ -159,11 +149,7 @@ fn test_transaction_vertex_delete_sync() {
         .expect("Failed to create tag");
 
     // Insert vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -228,11 +214,7 @@ fn test_transaction_vertex_update_pipeline_sync() {
         .expect("Failed to create tag");
 
     // Insert initial vertex
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -244,11 +226,8 @@ fn test_transaction_vertex_update_pipeline_sync() {
         .begin_transaction()
         .expect("Failed to begin transaction");
 
-    let updated_vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("AliceUpdated"))],
-    );
+    let updated_vertex =
+        create_test_vertex(1, "Person", vec![("name", Value::string("AliceUpdated"))]);
     harness
         .insert_vertex_with_txn("test_space", updated_vertex)
         .expect("Failed to update vertex");
@@ -373,11 +352,7 @@ fn test_transaction_rollback_clears_index_buffer() {
         .expect("Failed to begin transaction");
 
     // Insert vertex (buffered)
-    let vertex = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
+    let vertex = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
     harness
         .insert_vertex_with_txn("test_space", vertex)
         .expect("Failed to insert vertex");
@@ -427,16 +402,8 @@ fn test_transaction_edge_insert_sync() {
         .expect("Failed to create edge type");
 
     // Insert vertices
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");
@@ -517,16 +484,8 @@ fn test_transaction_edge_with_properties_sync() {
         .expect("Failed to create edge type");
 
     // Insert vertices
-    let person = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let company = create_test_vertex(
-        100,
-        "Company",
-        vec![("name", Value::string("TechCorp"))],
-    );
+    let person = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let company = create_test_vertex(100, "Company", vec![("name", Value::string("TechCorp"))]);
     harness
         .insert_vertex("test_space", person)
         .expect("Failed to insert person");
@@ -540,10 +499,7 @@ fn test_transaction_edge_with_properties_sync() {
         .expect("Failed to begin transaction");
 
     let mut edge_props = HashMap::new();
-    edge_props.insert(
-        "position".to_string(),
-        Value::string("Engineer"),
-    );
+    edge_props.insert("position".to_string(), Value::string("Engineer"));
     edge_props.insert("since".to_string(), Value::Int(2020));
 
     let edge = graphdb::core::Edge::new(
@@ -576,8 +532,5 @@ fn test_transaction_edge_with_properties_sync() {
     assert!(edge_opt.is_some(), "Edge should exist");
 
     let edge = edge_opt.unwrap();
-    assert_eq!(
-        edge.props.get("position"),
-        Some(&Value::string("Engineer"))
-    );
+    assert_eq!(edge.props.get("position"), Some(&Value::string("Engineer")));
 }

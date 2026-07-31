@@ -15,8 +15,7 @@ use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
 use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps,
-    StorageSyncContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use crate::transaction::TransactionManager;
 use log::{info, warn};

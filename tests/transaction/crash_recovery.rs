@@ -3,14 +3,14 @@
 //! Uses the WAL RecoveryManager directly to simulate crash/recovery cycles.
 //! Verifies that committed WAL entries are replayed and uncommitted ones are discarded.
 
+use graphdb::core::Value;
+use graphdb::storage::StorageError;
 use graphdb::transaction::wal::recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager};
-use graphdb::transaction::wal::WalRecoveryMode;
 use graphdb::transaction::wal::writer::{LocalWalWriter, WalWriter};
+use graphdb::transaction::wal::WalRecoveryMode;
 use graphdb::transaction::wal::{
     InsertVertexRedo, LabelId, Timestamp, TransactionWalEntry, VertexId, WalOpType,
 };
-use graphdb::core::Value;
-use graphdb::storage::StorageError;
 use postcard::to_allocvec;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -39,7 +39,10 @@ impl RecoveryApplier for RecordingApplier {
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> Result<(), StorageError> {
-        self.replayed_vertices.lock().unwrap().push((label, vid, ts));
+        self.replayed_vertices
+            .lock()
+            .unwrap()
+            .push((label, vid, ts));
         self.replayed_vertex_props
             .lock()
             .unwrap()
@@ -247,7 +250,10 @@ fn write_wal_entries(
 fn recover(
     wal_dir: &Path,
     data_dir: &Path,
-) -> (Vec<(LabelId, VertexId, Timestamp)>, Vec<Vec<(String, Value)>>) {
+) -> (
+    Vec<(LabelId, VertexId, Timestamp)>,
+    Vec<Vec<(String, Value)>>,
+) {
     let mut manager = RecoveryManager::new(RecoveryConfig {
         wal_dir: wal_dir.to_path_buf(),
         data_dir: data_dir.to_path_buf(),
@@ -257,7 +263,9 @@ fn recover(
         start_lsn: None,
     });
     let applier = RecordingApplier::default();
-    manager.recover_with_applier(&applier).expect("recovery failed");
+    manager
+        .recover_with_applier(&applier)
+        .expect("recovery failed");
     (applier.replayed_vertices(), applier.replayed_vertex_props())
 }
 
@@ -271,11 +279,15 @@ fn test_committed_wal_entries_survive_recovery() {
     std::fs::create_dir_all(&data_dir).unwrap();
 
     // Write 3 committed entries at different timestamps
-    write_wal_entries(&wal_dir, &[
-        (1, 1, 1001, "Alice"),
-        (2, 1, 1002, "Bob"),
-        (3, 1, 1003, "Charlie"),
-    ]).unwrap();
+    write_wal_entries(
+        &wal_dir,
+        &[
+            (1, 1, 1001, "Alice"),
+            (2, 1, 1002, "Bob"),
+            (3, 1, 1003, "Charlie"),
+        ],
+    )
+    .unwrap();
 
     let (replayed, _) = recover(&wal_dir, &data_dir);
     assert_eq!(replayed.len(), 3);
@@ -294,10 +306,11 @@ fn test_uncommitted_tail_discarded() {
     std::fs::create_dir_all(&data_dir).unwrap();
 
     // Write 2 committed entries
-    write_wal_entries(&wal_dir, &[
-        (1, 1, 1001, "committed_1"),
-        (2, 1, 1002, "committed_2"),
-    ]).unwrap();
+    write_wal_entries(
+        &wal_dir,
+        &[(1, 1, 1001, "committed_1"), (2, 1, 1002, "committed_2")],
+    )
+    .unwrap();
 
     // Append an uncommitted entry (open writer, write, but don't finish the batch)
     let wal_uri = wal_dir.to_string_lossy().to_string();
@@ -309,17 +322,17 @@ fn test_uncommitted_tail_discarded() {
         properties: vec![("name".to_string(), Value::string("uncommitted"))],
     };
     writer
-        .append_entry(
-            WalOpType::InsertVertex,
-            3,
-            &to_allocvec(&redo).unwrap(),
-        )
+        .append_entry(WalOpType::InsertVertex, 3, &to_allocvec(&redo).unwrap())
         .unwrap();
     writer.sync().unwrap();
     writer.close();
 
     let (replayed, _) = recover(&wal_dir, &data_dir);
-    assert_eq!(replayed.len(), 2, "only committed entries should be recovered");
+    assert_eq!(
+        replayed.len(),
+        2,
+        "only committed entries should be recovered"
+    );
     assert_eq!(replayed[0].1, VertexId::from_int64(1001));
     assert_eq!(replayed[1].1, VertexId::from_int64(1002));
 }
@@ -363,8 +376,12 @@ fn test_vertex_properties_preserved_after_recovery() {
     let (_, props) = recover(&wal_dir, &data_dir);
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].len(), 2);
-    assert!(props[0].iter().any(|(k, v)| k == "name" && v == &Value::string("Alice")));
-    assert!(props[0].iter().any(|(k, v)| k == "age" && v == &Value::Int(30)));
+    assert!(props[0]
+        .iter()
+        .any(|(k, v)| k == "name" && v == &Value::string("Alice")));
+    assert!(props[0]
+        .iter()
+        .any(|(k, v)| k == "age" && v == &Value::Int(30)));
 }
 
 /// TC-CR04: Corrupted trailing bytes should not prevent recovery of committed entries
@@ -377,9 +394,7 @@ fn test_corrupted_trailing_bytes_recovery() {
     std::fs::create_dir_all(&data_dir).unwrap();
 
     // Write committed entries
-    write_wal_entries(&wal_dir, &[
-        (1, 1, 1001, "before_crash"),
-    ]).unwrap();
+    write_wal_entries(&wal_dir, &[(1, 1, 1001, "before_crash")]).unwrap();
 
     // Open a new writer and write an incomplete entry, then truncate to simulate corruption
     let wal_uri = wal_dir.to_string_lossy().to_string();
@@ -391,11 +406,7 @@ fn test_corrupted_trailing_bytes_recovery() {
         properties: vec![("name".to_string(), Value::string("corrupted"))],
     };
     writer
-        .append_entry(
-            WalOpType::InsertVertex,
-            2,
-            &to_allocvec(&redo).unwrap(),
-        )
+        .append_entry(WalOpType::InsertVertex, 2, &to_allocvec(&redo).unwrap())
         .unwrap();
     writer.sync().unwrap();
     writer.close();
@@ -410,10 +421,7 @@ fn test_corrupted_trailing_bytes_recovery() {
         let path = entry.path();
         let meta = std::fs::metadata(&path).unwrap();
         if meta.len() > 20 {
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .unwrap();
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
             file.set_len(meta.len() - 10).unwrap();
             drop(file);
         }
@@ -437,11 +445,15 @@ fn test_multiple_timestamp_ranges_recovery() {
     std::fs::create_dir_all(&wal_dir).unwrap();
     std::fs::create_dir_all(&data_dir).unwrap();
 
-    write_wal_entries(&wal_dir, &[
-        (10, 1, 1001, "batch1_a"),
-        (20, 1, 1002, "batch2_a"),
-        (30, 1, 1003, "batch3_a"),
-    ]).unwrap();
+    write_wal_entries(
+        &wal_dir,
+        &[
+            (10, 1, 1001, "batch1_a"),
+            (20, 1, 1002, "batch2_a"),
+            (30, 1, 1003, "batch3_a"),
+        ],
+    )
+    .unwrap();
 
     let (replayed, _) = recover(&wal_dir, &data_dir);
     assert_eq!(replayed.len(), 3);

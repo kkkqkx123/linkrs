@@ -384,7 +384,9 @@ impl IndexManifest {
         let mut file = std::fs::File::open(path)?;
         let (_version, payload) = crate::storage::persistence::read_versioned_payload(
             &mut file,
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("manifest.bin"),
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("manifest.bin"),
         )?;
         let manifest: Self = postcard::from_bytes(&payload)
             .map_err(|error| StorageError::db_error(format!("Read index manifest: {error}")))?;

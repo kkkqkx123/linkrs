@@ -73,7 +73,11 @@ pub fn create_vertex_type_with_id(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::new(label_id, user_name.to_string(), schema))
+            Ok(ShardedVertexTable::new(
+                label_id,
+                user_name.to_string(),
+                schema,
+            ))
         })
         .and_then(|label| {
             ctx.data_store().verify_invariants()?;
@@ -277,9 +281,7 @@ pub fn delete_edge_property(
     }
 
     ctx.data_store()
-        .for_each_edge_partition_mut(edge_label, |_key, table| {
-            table.remove_property(prop_name)
-        })?;
+        .for_each_edge_partition_mut(edge_label, |_key, table| table.remove_property(prop_name))?;
     Ok(())
 }
 

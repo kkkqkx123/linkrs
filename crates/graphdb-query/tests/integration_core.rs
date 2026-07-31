@@ -63,10 +63,7 @@ fn test_value_type_checking() {
     assert_eq!(Value::Bool(true).get_type(), DataType::Bool);
     assert_eq!(Value::Int(42).get_type(), DataType::Int);
     assert_eq!(Value::Float(1.5_f32).get_type(), DataType::Float);
-    assert_eq!(
-        Value::string("test").get_type(),
-        DataType::String
-    );
+    assert_eq!(Value::string("test").get_type(), DataType::String);
 
     // Numeric type checking
     assert!(Value::Int(42).is_numeric());
@@ -87,22 +84,10 @@ fn test_value_boolean_conversion() {
     assert_eq!(Value::Bool(false).to_bool(), Value::Bool(false));
 
     // string conversion
-    assert_eq!(
-        Value::string("true").to_bool(),
-        Value::Bool(true)
-    );
-    assert_eq!(
-        Value::string("TRUE").to_bool(),
-        Value::Bool(true)
-    );
-    assert_eq!(
-        Value::string("false").to_bool(),
-        Value::Bool(false)
-    );
-    assert_eq!(
-        Value::string("FALSE").to_bool(),
-        Value::Bool(false)
-    );
+    assert_eq!(Value::string("true").to_bool(), Value::Bool(true));
+    assert_eq!(Value::string("TRUE").to_bool(), Value::Bool(true));
+    assert_eq!(Value::string("false").to_bool(), Value::Bool(false));
+    assert_eq!(Value::string("FALSE").to_bool(), Value::Bool(false));
     assert_eq!(
         Value::string("invalid").to_bool(),
         Value::Null(NullType::Null)
@@ -175,14 +160,8 @@ fn test_value_float_conversion() {
     assert_eq!(Value::Int(42).to_float(), Value::Float(42.0));
 
     // string parsing
-    assert_eq!(
-        Value::string("1.5").to_float(),
-        Value::Float(1.5_f32)
-    );
-    assert_eq!(
-        Value::string("-2.5").to_float(),
-        Value::Float(-2.5)
-    );
+    assert_eq!(Value::string("1.5").to_float(), Value::Float(1.5_f32));
+    assert_eq!(Value::string("-2.5").to_float(), Value::Float(-2.5));
     assert_eq!(
         Value::string("invalid").to_float(),
         Value::Null(NullType::Null)
@@ -288,10 +267,7 @@ fn test_value_comparison() {
 
     // string comparison
     assert!(Value::string("b") > Value::string("a"));
-    assert_eq!(
-        Value::string("test"),
-        Value::string("test")
-    );
+    assert_eq!(Value::string("test"), Value::string("test"));
 
     // Boolean comparison
     assert!(Value::Bool(true) > Value::Bool(false));
@@ -882,10 +858,7 @@ fn test_basic_context_variables() {
 
     // Obtain the variable
     assert_eq!(ctx.get_variable("x"), Some(Value::Int(100)));
-    assert_eq!(
-        ctx.get_variable("y"),
-        Some(Value::string("test"))
-    );
+    assert_eq!(ctx.get_variable("y"), Some(Value::string("test")));
     assert_eq!(ctx.get_variable("z"), None);
 }
 

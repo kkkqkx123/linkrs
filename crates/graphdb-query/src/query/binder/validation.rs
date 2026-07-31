@@ -22,8 +22,14 @@ pub struct ValidatedStatement {
 }
 
 impl ValidatedStatement {
-    pub fn new(ast: Arc<crate::query::parser::ast::stmt::Ast>, validation_info: ValidationInfo) -> Self {
-        Self { ast, validation_info }
+    pub fn new(
+        ast: Arc<crate::query::parser::ast::stmt::Ast>,
+        validation_info: ValidationInfo,
+    ) -> Self {
+        Self {
+            ast,
+            validation_info,
+        }
     }
 
     pub fn stmt(&self) -> &crate::query::parser::ast::Stmt {
@@ -38,7 +44,9 @@ impl ValidatedStatement {
         &self.validation_info.alias_map
     }
 
-    pub fn expr_context(&self) -> &Arc<crate::core::types::expr::expression_context::ExpressionAnalysisContext> {
+    pub fn expr_context(
+        &self,
+    ) -> &Arc<crate::core::types::expr::expression_context::ExpressionAnalysisContext> {
         &self.ast.expr_context
     }
 }
@@ -132,11 +140,27 @@ impl Default for PathAnalysis {
 
 #[derive(Debug, Clone)]
 pub enum OptimizationHint {
-    UseIndexScan { table: String, column: String, condition: ContextualExpression },
-    LimitResults { reason: String, suggested_limit: usize },
-    PreFilter { condition: ContextualExpression, selectivity: f64 },
-    JoinOrder { optimal_order: Vec<String>, estimated_cost: f64 },
-    PerformanceWarning { message: String, severity: HintSeverity },
+    UseIndexScan {
+        table: String,
+        column: String,
+        condition: ContextualExpression,
+    },
+    LimitResults {
+        reason: String,
+        suggested_limit: usize,
+    },
+    PreFilter {
+        condition: ContextualExpression,
+        selectivity: f64,
+    },
+    JoinOrder {
+        optimal_order: Vec<String>,
+        estimated_cost: f64,
+    },
+    PerformanceWarning {
+        message: String,
+        severity: HintSeverity,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

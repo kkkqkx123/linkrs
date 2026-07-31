@@ -4,11 +4,11 @@
 //! Note: storage writes in `insert_vertex_with_txn` are immediate (not transactional).
 //! Rollback only affects sync/index state, not storage.
 
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
 use graphdb::core::{types::DataType, Value};
 use graphdb::storage::StorageWriter;
 use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use graphdb::sync::types::{ChangeType, IndexData, IndexType};
+use graphdb::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-260: Complete sync and verify
 #[test]
@@ -29,10 +29,7 @@ fn test_complete_sync_and_verify() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert(
-        "title".to_string(),
-        Value::string("Complete Test"),
-    );
+    properties.insert("title".to_string(), Value::string("Complete Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
@@ -71,10 +68,7 @@ fn test_transaction_commit_and_verify() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert(
-        "title".to_string(),
-        Value::string("Transaction Test"),
-    );
+    properties.insert("title".to_string(), Value::string("Transaction Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
@@ -117,10 +111,7 @@ fn test_transaction_rollback_and_verify() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert(
-        "title".to_string(),
-        Value::string("Rollback Test"),
-    );
+    properties.insert("title".to_string(), Value::string("Rollback Test"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);

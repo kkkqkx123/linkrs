@@ -9,9 +9,9 @@ use crate::query::parser::ast::stmt::*;
 use crate::query::parser::core::error::ParseError;
 use crate::query::parser::core::token::TokenKindExt;
 use crate::query::parser::parsing::clause_parser::ClauseParser;
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::traversal_parser::TraversalParser;
-use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::TokenKind;
 
 /// Data Modification Parser
@@ -774,7 +774,6 @@ impl DmlParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        
         parse_expression_with_context(ctx, ctx.expression_context_clone())
     }
 

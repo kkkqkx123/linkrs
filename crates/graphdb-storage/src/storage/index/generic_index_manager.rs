@@ -154,9 +154,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         Ok((forward_index, reverse_index))
     }
 
-    fn load_index_file(
-        path: &Path,
-    ) -> StorageResult<BTreeMap<SecondaryIndexKey, IndexRecord>> {
+    fn load_index_file(path: &Path) -> StorageResult<BTreeMap<SecondaryIndexKey, IndexRecord>> {
         use std::fs::File;
         use std::io::Read;
 

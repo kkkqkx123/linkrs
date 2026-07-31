@@ -52,7 +52,6 @@ impl IndexGcOps for IndexDataManagerImpl {
         }
         count
     }
-
 }
 
 #[cfg(test)]
@@ -84,9 +83,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
         manager.register_native_index(1, &index).expect("register");
         manager

@@ -6,9 +6,8 @@
 //! - Empty transaction (no operations)
 //! - Data visibility - committed data should be visible
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test basic transaction lifecycle - begin, commit, data persistence
@@ -27,10 +26,7 @@ fn test_transaction_basic_lifecycle() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 

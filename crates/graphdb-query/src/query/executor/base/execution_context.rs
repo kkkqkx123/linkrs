@@ -9,7 +9,6 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
-use crate::utils::Arena;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
@@ -17,6 +16,7 @@ use crate::search::tantivy_index::TantivySearchEngine;
 use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
+use crate::utils::Arena;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {

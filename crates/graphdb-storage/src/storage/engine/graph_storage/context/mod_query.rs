@@ -50,7 +50,11 @@ impl GraphStorageContext {
             .catalog_read_snapshot()
             .with_edge_tables(|tables| {
                 let mut records = Vec::new();
-                for table in tables.values().map(|arc| arc.read()).filter(|table| table.label() == edge_label) {
+                for table in tables
+                    .values()
+                    .map(|arc| arc.read())
+                    .filter(|table| table.label() == edge_label)
+                {
                     records.extend(table.scan(ts));
                 }
                 records

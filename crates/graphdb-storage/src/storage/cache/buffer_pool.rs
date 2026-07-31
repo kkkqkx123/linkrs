@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type LoaderFn<K, T> = Arc<dyn Fn(K) -> Option<(T, usize)> + Send + Sync>;
-type WriterFn<K, T> =
-    Arc<dyn Fn(K, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
+type WriterFn<K, T> = Arc<dyn Fn(K, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct CachedItem<T: Clone + Send + Sync> {
@@ -119,7 +118,8 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         let usage = self.current_usage();
 
         if usage.saturating_add(size_u64) > self.inner.capacity.load(Ordering::Acquire) {
-            let excess = usage.saturating_add(size_u64) - self.inner.capacity.load(Ordering::Acquire);
+            let excess =
+                usage.saturating_add(size_u64) - self.inner.capacity.load(Ordering::Acquire);
             self.evict(excess + 1);
         }
 

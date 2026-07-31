@@ -31,12 +31,7 @@ impl<'a> ExpressionBinder<'a> {
             Expression::Variable(name) => self
                 .scope
                 .lookup(name)
-                .and_then(|v| {
-                    v.properties
-                        .values()
-                        .next()
-                        .map(|vt| vt.to_data_type())
-                })
+                .and_then(|v| v.properties.values().next().map(|vt| vt.to_data_type()))
                 .unwrap_or(DataType::String),
 
             Expression::Property { object, property } => {
@@ -80,8 +75,7 @@ impl<'a> ExpressionBinder<'a> {
             },
 
             Expression::Function { name, args } => {
-                let arg_types: Vec<DataType> =
-                    args.iter().map(|a| self.resolve_type(a)).collect();
+                let arg_types: Vec<DataType> = args.iter().map(|a| self.resolve_type(a)).collect();
                 self.deduce_function_return_type(name, &arg_types)
             }
 
@@ -96,7 +90,11 @@ impl<'a> ExpressionBinder<'a> {
             Expression::List(_) => DataType::List,
             Expression::Map(_) => DataType::Map,
 
-            Expression::Case { conditions, default, .. } => {
+            Expression::Case {
+                conditions,
+                default,
+                ..
+            } => {
                 for (_, value) in conditions {
                     let t = self.resolve_type(value);
                     if t != DataType::Empty {
@@ -119,8 +117,7 @@ impl<'a> ExpressionBinder<'a> {
             Expression::ListComprehension { .. } => DataType::List,
             Expression::Reduce { .. } => DataType::String,
             Expression::WindowFunction { name, args, .. } => {
-                let arg_types: Vec<DataType> =
-                    args.iter().map(|a| self.resolve_type(a)).collect();
+                let arg_types: Vec<DataType> = args.iter().map(|a| self.resolve_type(a)).collect();
                 self.deduce_function_return_type(name, &arg_types)
             }
 
@@ -184,22 +181,13 @@ impl<'a> ExpressionBinder<'a> {
     }
 
     /// Deduce function return type from name and argument types.
-    pub fn deduce_function_return_type(
-        &self,
-        name: &str,
-        arg_types: &[DataType],
-    ) -> DataType {
+    pub fn deduce_function_return_type(&self, name: &str, arg_types: &[DataType]) -> DataType {
         match name.to_lowercase().as_str() {
             "abs" | "length" | "size" | "round" | "floor" | "ceil" => DataType::Int,
             "sqrt" | "pow" | "sin" | "cos" | "tan" => DataType::Float,
-            "concat"
-            | "substring"
-            | "trim"
-            | "ltrim"
-            | "rtrim"
-            | "upper"
-            | "lower"
-            | "type" => DataType::String,
+            "concat" | "substring" | "trim" | "ltrim" | "rtrim" | "upper" | "lower" | "type" => {
+                DataType::String
+            }
             "id" => DataType::Int,
             "properties" => DataType::Map,
             "labels" | "keys" | "values" | "range" | "reverse" => DataType::List,

@@ -9,10 +9,10 @@
 //! **StatementPlanner**: A trait at the statement level, responsible for the planning of entire sentences.
 //! **ClausePlanner**: A trait at the clause level, responsible for the planning of individual clauses.
 
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::Planner;
-use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -49,10 +49,10 @@ pub trait ClausePlanner: std::fmt::Debug {
 mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::query::binder::validation::ValidatedStatement;
     use crate::query::parser::ast::{Ast, Span};
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::query::binder::validation::ValidatedStatement;
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;
 

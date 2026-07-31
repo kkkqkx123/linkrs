@@ -22,8 +22,7 @@ fn create_benchmark_group<'a>(
 fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage init");
     let space_name = format!("bench_q{}e{}", vertex_count, edges_per_vertex);
-    let mut space =
-        SpaceInfo::new(space_name.clone()).with_vid_type(DataType::String);
+    let mut space = SpaceInfo::new(space_name.clone()).with_vid_type(DataType::String);
     storage.create_space(&mut space).expect("create space");
 
     storage
@@ -39,11 +38,10 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
     storage
         .create_edge_type(
             &space_name,
-            &EdgeTypeInfo::new("Link".to_string())
-                .with_properties(vec![PropertyDef::new(
-                    "weight".to_string(),
-                    DataType::Double,
-                )]),
+            &EdgeTypeInfo::new("Link".to_string()).with_properties(vec![PropertyDef::new(
+                "weight".to_string(),
+                DataType::Double,
+            )]),
         )
         .expect("create edge type");
 
@@ -54,16 +52,15 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
                 "Node".to_string(),
                 vec![
                     ("name".to_string(), Value::string(format!("node_{}", i))),
-                    (
-                        "value".to_string(),
-                        Value::Double(i as f64 * 0.1),
-                    ),
+                    ("value".to_string(), Value::Double(i as f64 * 0.1)),
                 ]
                 .into_iter()
                 .collect(),
             )],
         );
-        storage.insert_vertex(&space_name, vertex).expect("insert vertex");
+        storage
+            .insert_vertex(&space_name, vertex)
+            .expect("insert vertex");
     }
 
     for src in 0..vertex_count {
@@ -78,9 +75,7 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
                     .into_iter()
                     .collect(),
             };
-            storage
-                .insert_edge(&space_name, edge)
-                .expect("insert edge");
+            storage.insert_edge(&space_name, edge).expect("insert edge");
         }
     }
 
@@ -106,11 +101,10 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
     storage
         .create_edge_type(
             &space_name,
-            &EdgeTypeInfo::new("Link".to_string())
-                .with_properties(vec![PropertyDef::new(
-                    "weight".to_string(),
-                    DataType::Double,
-                )]),
+            &EdgeTypeInfo::new("Link".to_string()).with_properties(vec![PropertyDef::new(
+                "weight".to_string(),
+                DataType::Double,
+            )]),
         )
         .expect("create edge type");
 
@@ -127,7 +121,9 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
                 .collect(),
             )],
         );
-        storage.insert_vertex(&space_name, vertex).expect("insert vertex");
+        storage
+            .insert_vertex(&space_name, vertex)
+            .expect("insert vertex");
     }
 
     let max_edges = edges_per_vertex.min((vertex_count as usize).saturating_sub(1));
@@ -254,13 +250,17 @@ fn bench_large_count_operations(c: &mut Criterion) {
         let storage = setup_large_graph(vertex_count, 3);
         group.bench_function(BenchmarkId::new("count_vertices", vertex_count), |b| {
             b.iter(|| {
-                let n = storage.count_vertices_by_tag(&space_name, "Node").expect("count");
+                let n = storage
+                    .count_vertices_by_tag(&space_name, "Node")
+                    .expect("count");
                 black_box(n);
             });
         });
         group.bench_function(BenchmarkId::new("count_edges", vertex_count), |b| {
             b.iter(|| {
-                let n = storage.count_edges_by_type(&space_name, "Link").expect("count");
+                let n = storage
+                    .count_edges_by_type(&space_name, "Link")
+                    .expect("count");
                 black_box(n);
             });
         });
@@ -277,20 +277,23 @@ fn bench_large_edge_density(c: &mut Criterion) {
         group.throughput(Throughput::Elements(expected_total_edges as u64));
         group.bench_function(format!("scan_edges_{}", label), |b| {
             b.iter(|| {
-                let edges = storage.scan_edges_by_type(&space_name, "Link").expect("scan");
+                let edges = storage
+                    .scan_edges_by_type(&space_name, "Link")
+                    .expect("scan");
                 black_box(edges.len());
             });
         });
         group.bench_function(format!("cursor_scan_edges_{}", label), |b| {
             b.iter(|| {
-                let options = ScanOptions::new()
-                    .with_edge_type("Link".to_string());
+                let options = ScanOptions::new().with_edge_type("Link".to_string());
                 let mut cursor = storage
                     .create_edge_cursor(&space_name, &options)
                     .expect("edge cursor");
                 let mut count = 0usize;
                 while let Ok(batch) = cursor.next_batch(256) {
-                    if batch.is_empty() { break; }
+                    if batch.is_empty() {
+                        break;
+                    }
                     count += batch.len();
                 }
                 black_box(count);

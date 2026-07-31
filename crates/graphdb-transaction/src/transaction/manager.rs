@@ -231,8 +231,7 @@ pub struct TransactionManager {
     committed_vertex_writes: Mutex<ConflictMap<VertexId>>,
     /// Spatial index for O(1) edge conflict lookup.
     /// Key: (src_vid, dst_vid, edge_label).
-    committed_edge_writes:
-        Mutex<ConflictMap<(VertexId, VertexId, LabelId)>>,
+    committed_edge_writes: Mutex<ConflictMap<(VertexId, VertexId, LabelId)>>,
     /// Spatial index for O(1) schema resource conflict lookup.
     committed_schema_writes: Mutex<ConflictMap<String>>,
     /// Spatial index for O(1) index resource conflict lookup.
@@ -706,8 +705,11 @@ impl TransactionManager {
         // transactions write to these resources.
         if serializable {
             for vid in txn_read_set.vertices.iter() {
-                self.ssi_tracker
-                    .register_read(txn_id, ResourceId::Vertex(*vid), ctx.start_timestamp);
+                self.ssi_tracker.register_read(
+                    txn_id,
+                    ResourceId::Vertex(*vid),
+                    ctx.start_timestamp,
+                );
             }
             for edge in txn_read_set.edges.iter() {
                 self.ssi_tracker.register_read(
@@ -826,7 +828,10 @@ impl TransactionManager {
             let vertex_idx = self.committed_vertex_writes.lock();
             for vid in txn_read_set.vertices.iter() {
                 if let Some(entries) = vertex_idx.get(vid) {
-                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                    if entries
+                        .iter()
+                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                    {
                         drop(vertex_idx);
                         drop(committed);
                         self.stats.record_txn_conflict();
@@ -840,7 +845,10 @@ impl TransactionManager {
             for edge in txn_read_set.edges.iter() {
                 let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
                 if let Some(entries) = edge_idx.get(&key) {
-                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                    if entries
+                        .iter()
+                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                    {
                         drop(edge_idx);
                         drop(committed);
                         self.stats.record_txn_conflict();
@@ -853,7 +861,10 @@ impl TransactionManager {
             let schema_idx = self.committed_schema_writes.lock();
             for resource in txn_read_set.schema_resources.iter() {
                 if let Some(entries) = schema_idx.get(resource) {
-                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                    if entries
+                        .iter()
+                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                    {
                         drop(schema_idx);
                         drop(committed);
                         self.stats.record_txn_conflict();
@@ -1225,7 +1236,10 @@ impl TransactionManager {
                         if !other_ctx.is_write_validated() {
                             continue;
                         }
-                        if descriptor.write_set.has_conflict_with(&other_ctx.get_write_set()) {
+                        if descriptor
+                            .write_set
+                            .has_conflict_with(&other_ctx.get_write_set())
+                        {
                             drop(committed);
                             drop(_cert_guard);
                             self.stats.record_txn_conflict();
@@ -2376,7 +2390,6 @@ mod tests {
             ) -> UndoLogResult<()> {
                 Ok(())
             }
-
         }
 
         let sync_manager = Arc::new(SyncManager::new_without_fulltext());

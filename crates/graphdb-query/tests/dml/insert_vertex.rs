@@ -72,10 +72,7 @@ fn test_insert_execution_vertex() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -122,20 +119,14 @@ fn test_insert_if_not_exists_execution() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         )
         .exec_dml("INSERT VERTEX IF NOT EXISTS Person(name, age) VALUES 1:('Bob', 25)")
         .assert_success()
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -511,9 +502,5 @@ fn test_insert_vertex_empty_string() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('')")
         .assert_success()
         .assert_vertex_exists(1, "Person")
-        .assert_vertex_props(
-            1,
-            "Person",
-            HashMap::from([("name", Value::string(""))]),
-        );
+        .assert_vertex_props(1, "Person", HashMap::from([("name", Value::string(""))]));
 }

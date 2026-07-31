@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use memmap2::Mmap;
@@ -5,6 +6,7 @@ use memmap2::Mmap;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::storage::edge::edge_table::remap::remap_immutable_csr;
 use crate::storage::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
 
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
@@ -224,9 +226,9 @@ impl ColdSnapshot {
     }
 
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
-        self.out_csr.get_edge(src, dst).map(|e| {
-            Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp)
-        })
+        self.out_csr
+            .get_edge(src, dst)
+            .map(|e| Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
     }
 
     /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
@@ -254,8 +256,7 @@ impl ColdSnapshot {
         for src in 0..cap {
             let src_u32 = src as u32;
             for nbr in self.out_csr.edges_of(src_u32) {
-                let (dst_vid, rank) =
-                    TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
                 results.push(ColdEdgeRecord {
                     src_internal: src as u32,
                     dst_vid,
@@ -268,9 +269,13 @@ impl ColdSnapshot {
         results
     }
 
-    pub fn nbr_to_edge_record(&self, nbr: &Nbr, src_vid: VertexId, dst_vid: VertexId) -> EdgeRecord {
-        let (_, rank) =
-            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+    pub fn nbr_to_edge_record(
+        &self,
+        nbr: &Nbr,
+        src_vid: VertexId,
+        dst_vid: VertexId,
+    ) -> EdgeRecord {
+        let (_, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
         let properties = self
             .properties
             .read_properties(nbr.prop_offset)
@@ -282,6 +287,41 @@ impl ColdSnapshot {
             properties,
         }
     }
+
+    /// Rebuild both CSRs with translated rows/neighbors and a truncated row
+    /// space (max edge-bearing row + 1) after a vertex compaction remap.
+    ///
+    /// `src_mapping` applies to out rows / in neighbors; `dst_mapping` to in
+    /// rows / out neighbors (per-label internal ID spaces).
+    ///
+    /// Only the in-memory snapshot is updated; the backing `.lkcs` file is
+    /// left untouched and should be re-exported to stay consistent.
+    pub fn remap_vertex_ids(
+        &mut self,
+        src_mapping: Option<&HashMap<u32, u32>>,
+        dst_mapping: Option<&HashMap<u32, u32>>,
+    ) -> StorageResult<()> {
+        let new_out = remap_immutable_csr(&self.out_csr, src_mapping, dst_mapping)?;
+        let new_in = remap_immutable_csr(&self.in_csr, dst_mapping, src_mapping)?;
+
+        let out_capacity = new_out.vertex_capacity();
+        let in_capacity = new_in.vertex_capacity();
+        self.out_csr = new_out;
+        self.in_csr = new_in;
+        self.vertex_capacity = out_capacity.max(in_capacity);
+        self.edge_count = self.out_csr.edge_count();
+
+        log::debug!(
+            "ColdSnapshot[label={}] remapped vertex IDs (src_mapping={}, dst_mapping={}); capacity={}, edges={}",
+            self.label,
+            src_mapping.map(|m| m.len()).unwrap_or(0),
+            dst_mapping.map(|m| m.len()).unwrap_or(0),
+            self.vertex_capacity,
+            self.edge_count
+        );
+
+        Ok(())
+    }
 }
 
 fn read_arr<const N: usize>(data: &[u8], pos: &mut usize) -> [u8; N] {
@@ -292,13 +332,17 @@ fn read_arr<const N: usize>(data: &[u8], pos: &mut usize) -> [u8; N] {
 
 fn read_section<'a>(data: &'a [u8], pos: &mut usize) -> StorageResult<&'a [u8]> {
     if *pos + 8 > data.len() {
-        return Err(StorageError::deserialize_error("unexpected end of section length"));
+        return Err(StorageError::deserialize_error(
+            "unexpected end of section length",
+        ));
     }
     let len = u64::from_le_bytes(read_arr::<8>(data, pos)) as usize;
     if *pos + len > data.len() {
         return Err(StorageError::deserialize_error(format!(
             "section data exceeds file: offset={}, len={}, file_size={}",
-            *pos, len, data.len()
+            *pos,
+            len,
+            data.len()
         )));
     }
     let section = &data[*pos..*pos + len];
@@ -423,7 +467,13 @@ mod tests {
         let mut table = make_table();
         for i in 0..10u32 {
             table
-                .insert_edge(i, i + 1, 0, &[("weight".to_string(), Value::Double(i as f64))], 100)
+                .insert_edge(
+                    i,
+                    i + 1,
+                    0,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    100,
+                )
                 .unwrap();
         }
         let dir = tempfile::tempdir().unwrap();
@@ -454,7 +504,10 @@ mod tests {
         let scanned = snapshot.scan_edges();
         assert_eq!(scanned.len(), 3);
 
-        let keys: Vec<(u32, VertexId)> = scanned.iter().map(|r| (r.src_internal, r.dst_vid)).collect();
+        let keys: Vec<(u32, VertexId)> = scanned
+            .iter()
+            .map(|r| (r.src_internal, r.dst_vid))
+            .collect();
         assert!(keys.contains(&(0, VertexId::from_int64(1))));
         assert!(keys.contains(&(0, VertexId::from_int64(2))));
         assert!(keys.contains(&(3, VertexId::from_int64(4))));
@@ -496,11 +549,8 @@ mod tests {
         let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
 
         let nbr = snapshot.get_edge_to_dst(0, 1).expect("edge exists");
-        let record = snapshot.nbr_to_edge_record(
-            &nbr,
-            VertexId::from_int64(0),
-            VertexId::from_int64(1),
-        );
+        let record =
+            snapshot.nbr_to_edge_record(&nbr, VertexId::from_int64(0), VertexId::from_int64(1));
         assert_eq!(record.rank, 42);
     }
 
@@ -545,18 +595,93 @@ mod tests {
     }
 
     #[test]
+    fn test_cold_snapshot_remap_vertex_ids() {
+        let mut table = make_table();
+        for (src, dst) in [(0u32, 4u32), (2, 5), (4, 5), (5, 4)] {
+            table
+                .insert_edge(
+                    src,
+                    dst,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
+                .unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let mut snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+        assert_eq!(snapshot.vertex_capacity(), 6);
+        assert_eq!(snapshot.edge_count(), 4);
+
+        let mapping: HashMap<u32, u32> = [(4, 3), (5, 4)].into_iter().collect();
+        snapshot
+            .remap_vertex_ids(Some(&mapping), Some(&mapping))
+            .unwrap();
+
+        assert_eq!(snapshot.vertex_capacity(), 5);
+        assert_eq!(snapshot.edge_count(), 4);
+        assert_eq!(snapshot.get_out_edges(3).len(), 1);
+        assert_eq!(snapshot.get_out_edges(4).len(), 1);
+        assert_eq!(snapshot.get_out_edges(5).len(), 0);
+        assert_eq!(snapshot.get_in_edges(3).len(), 2);
+        assert_eq!(snapshot.get_in_edges(4).len(), 2);
+        assert_eq!(snapshot.degree(3), 1);
+    }
+
+    #[test]
+    fn test_cold_snapshot_remap_dst_only() {
+        let mut table = make_table();
+        for (src, dst) in [(0u32, 4u32), (2, 5), (4, 5), (5, 4)] {
+            table
+                .insert_edge(
+                    src,
+                    dst,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
+                .unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let mut snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let mapping: HashMap<u32, u32> = [(4, 3), (5, 4)].into_iter().collect();
+        snapshot.remap_vertex_ids(None, Some(&mapping)).unwrap();
+
+        assert_eq!(snapshot.vertex_capacity(), 6);
+        assert_eq!(snapshot.edge_count(), 4);
+        assert_eq!(snapshot.get_out_edges(4).len(), 1);
+        assert_eq!(snapshot.get_out_edges(5).len(), 1);
+        assert_eq!(snapshot.get_in_edges(3).len(), 2);
+        assert_eq!(snapshot.get_in_edges(4).len(), 2);
+        assert_eq!(snapshot.get_in_edges(5).len(), 0);
+    }
+
+    #[test]
     fn test_property_table_read_properties() {
         use crate::storage::edge::PropertyTable;
 
         let mut pt = PropertyTable::new();
-        pt.add_property("name".to_string(), crate::core::DataType::String, false).unwrap();
-        pt.add_property("age".to_string(), crate::core::DataType::Int, false).unwrap();
+        pt.add_property("name".to_string(), crate::core::DataType::String, false)
+            .unwrap();
+        pt.add_property("age".to_string(), crate::core::DataType::Int, false)
+            .unwrap();
 
-        let offset = pt.insert(
-            &[("name".to_string(), Value::String("Alice".into())),
-              ("age".to_string(), Value::Int(30))],
-            100,
-        ).unwrap();
+        let offset = pt
+            .insert(
+                &[
+                    ("name".to_string(), Value::String("Alice".into())),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+                100,
+            )
+            .unwrap();
 
         let props = pt.read_properties(offset).unwrap();
         assert_eq!(props.len(), 2);

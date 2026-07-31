@@ -872,7 +872,9 @@ mod tests {
 
         let mut engine = StreamingExecutionEngine::new();
         engine.register_executor(0, join);
-        let chunks = engine.execute_collected().expect("hash join should execute");
+        let chunks = engine
+            .execute_collected()
+            .expect("hash join should execute");
 
         assert_eq!(
             chunks
@@ -1060,7 +1062,9 @@ mod tests {
             .expect("gather tree should be registered");
 
         assert_eq!(engine.partition_count(), 2);
-        let chunks = engine.execute_collected().expect("gather execution should succeed");
+        let chunks = engine
+            .execute_collected()
+            .expect("gather execution should succeed");
         assert_eq!(chunks.iter().map(DataChunk::len).sum::<usize>(), 5);
 
         let profile = runtime.profile().flush_to_collector();
@@ -1124,11 +1128,29 @@ mod tests {
         );
 
         let board = runtime.profile();
-        assert_eq!(board.parallel_workers.load(std::sync::atomic::Ordering::Relaxed), 2);
-        assert!(board.parallel_wall_time_us.load(std::sync::atomic::Ordering::Relaxed) > 0);
-        assert!(board.parallel_work_time_us.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        assert_eq!(
+            board
+                .parallel_workers
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
         assert!(
-            board.parallel_buffered_chunks_peak.load(std::sync::atomic::Ordering::Relaxed) <= 2,
+            board
+                .parallel_wall_time_us
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
+        assert!(
+            board
+                .parallel_work_time_us
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
+        assert!(
+            board
+                .parallel_buffered_chunks_peak
+                .load(std::sync::atomic::Ordering::Relaxed)
+                <= 2,
             "one bounded channel per partition must cap queued chunks"
         );
     }
@@ -1164,7 +1186,13 @@ mod tests {
         runtime.cancel();
         assert!(stream.next_chunk().is_err());
         assert!(stream.close().is_ok());
-        assert!(runtime.profile().parallel_workers.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        assert!(
+            runtime
+                .profile()
+                .parallel_workers
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0
+        );
     }
 
     #[test]
@@ -1199,9 +1227,17 @@ mod tests {
             )
             .expect("build parallel merge gather");
 
-        let chunks = engine.execute_collected().expect("parallel merge gather execute");
+        let chunks = engine
+            .execute_collected()
+            .expect("parallel merge gather execute");
         assert_eq!(extract_ids(&chunks), vec![1, 2, 3, 4]);
-        assert_eq!(runtime.profile().parallel_workers.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert_eq!(
+            runtime
+                .profile()
+                .parallel_workers
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
     }
 
     #[test]
@@ -1229,7 +1265,9 @@ mod tests {
             )
             .expect("partitioned sort should build");
 
-        let chunks = engine.execute_collected().expect("partitioned sort should execute");
+        let chunks = engine
+            .execute_collected()
+            .expect("partitioned sort should execute");
         assert_eq!(extract_ids(&chunks), vec![1, 2, 3]);
         assert_eq!(chunks[0].col_names(), vec!["id"]);
     }
@@ -1322,7 +1360,9 @@ mod tests {
             )
             .expect("partitioned dedup tree should build");
 
-        let chunks = engine.execute_collected().expect("partitioned dedup should execute");
+        let chunks = engine
+            .execute_collected()
+            .expect("partitioned dedup should execute");
         let mut ids = extract_ids(&chunks);
         ids.sort();
         assert_eq!(ids, vec![1, 2, 3]);
@@ -1370,7 +1410,9 @@ mod tests {
             )
             .expect("partitioned limit tree should build");
 
-        let chunks = engine.execute_collected().expect("partitioned limit should execute");
+        let chunks = engine
+            .execute_collected()
+            .expect("partitioned limit should execute");
         assert_eq!(extract_ids(&chunks), vec![2, 3, 4]);
     }
 

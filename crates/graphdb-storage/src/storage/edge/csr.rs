@@ -96,7 +96,8 @@ impl Csr {
         if bpe == 0 {
             log::warn!(
                 "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback 24",
-                bytes, self.edge_count()
+                bytes,
+                self.edge_count()
             );
             24
         } else {

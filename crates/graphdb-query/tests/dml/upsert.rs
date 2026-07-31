@@ -76,10 +76,7 @@ fn test_upsert_execution_vertex_insert() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -96,10 +93,7 @@ fn test_upsert_execution_vertex_update() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Bob")),
-                ("age", Value::Int(35)),
-            ]),
+            HashMap::from([("name", Value::string("Bob")), ("age", Value::Int(35))]),
         );
 }
 
@@ -264,10 +258,7 @@ fn test_upsert_when_condition_update() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(31)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(31))]),
         );
 }
 
@@ -284,10 +275,7 @@ fn test_upsert_when_condition_skipped() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(51)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(51))]),
         );
 }
 
@@ -483,10 +471,7 @@ fn test_upsert_where_no_match() {
         .assert_vertex_props(
             999,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Bob")),
-                ("age", Value::Int(25)),
-            ]),
+            HashMap::from([("name", Value::string("Bob")), ("age", Value::Int(25))]),
         );
 }
 

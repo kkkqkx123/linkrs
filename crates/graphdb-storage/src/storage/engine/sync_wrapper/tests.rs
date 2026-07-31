@@ -10,7 +10,9 @@ use crate::core::vertex_edge_path::Tag;
 #[cfg(feature = "fulltext-search")]
 use crate::core::DataType;
 use crate::core::Edge;
-use crate::storage::{GraphStorage, MockStorage, StoragePersistenceOps, StorageReader, StorageWriter};
+use crate::storage::{
+    GraphStorage, MockStorage, StoragePersistenceOps, StorageReader, StorageWriter,
+};
 use crate::sync::SyncManager;
 
 #[test]
@@ -85,12 +87,9 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                 VertexId::from_int64(1),
                 vec![Tag::new(
                     "Person".to_string(),
-                    [(
-                        "name".to_string(),
-                        crate::core::Value::string("one"),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    [("name".to_string(), crate::core::Value::string("one"))]
+                        .into_iter()
+                        .collect(),
                 )],
             ),
         )
@@ -122,12 +121,9 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                 VertexId::from_int64(2),
                 vec![Tag::new(
                     "Person".to_string(),
-                    [(
-                        "name".to_string(),
-                        crate::core::Value::string("two"),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    [("name".to_string(), crate::core::Value::string("two"))]
+                        .into_iter()
+                        .collect(),
                 )],
             ),
         )

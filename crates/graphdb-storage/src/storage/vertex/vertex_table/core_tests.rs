@@ -50,11 +50,7 @@ fn test_delete() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     table.delete("v1", 200).unwrap();
@@ -70,25 +66,13 @@ fn test_iterator() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
     table
-        .insert(
-            "v2",
-            &[("name".to_string(), Value::string("Bob"))],
-            100,
-        )
+        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
         .unwrap();
     table
-        .insert(
-            "v3",
-            &[("name".to_string(), Value::string("Charlie"))],
-            100,
-        )
+        .insert("v3", &[("name".to_string(), Value::string("Charlie"))], 100)
         .unwrap();
 
     let count = table.scan(100).count();
@@ -209,25 +193,13 @@ fn test_batch_delete() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
     table
-        .insert(
-            "v2",
-            &[("name".to_string(), Value::string("Bob"))],
-            100,
-        )
+        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
         .unwrap();
     table
-        .insert(
-            "v3",
-            &[("name".to_string(), Value::string("Charlie"))],
-            100,
-        )
+        .insert("v3", &[("name".to_string(), Value::string("Charlie"))], 100)
         .unwrap();
 
     let deleted = table.batch_delete(&["v1", "v3"], 200).unwrap();
@@ -444,8 +416,9 @@ fn test_compact_delete_all() {
     assert_eq!(table.scan(200).count(), 0);
 
     let removed = table
-        .compact_with_ts_collect(300)
-        .expect("compact_with_ts_collect should succeed");
+        .compact_with_ts_collect_mapping(300)
+        .expect("compact_with_ts_collect_mapping should succeed")
+        .0;
     assert_eq!(removed.len(), 5, "Should have removed 5 deleted entries");
 
     assert_eq!(table.scan(200).count(), 0);
@@ -538,39 +511,19 @@ fn test_compact_id_consistency() {
 
     let _ids = [
         table
-            .insert(
-                "v0",
-                &[("name".to_string(), Value::string("Alice"))],
-                100,
-            )
+            .insert("v0", &[("name".to_string(), Value::string("Alice"))], 100)
             .unwrap(),
         table
-            .insert(
-                "v2",
-                &[("name".to_string(), Value::string("Bob"))],
-                100,
-            )
+            .insert("v2", &[("name".to_string(), Value::string("Bob"))], 100)
             .unwrap(),
         table
-            .insert(
-                "v4",
-                &[("name".to_string(), Value::string("Charlie"))],
-                100,
-            )
+            .insert("v4", &[("name".to_string(), Value::string("Charlie"))], 100)
             .unwrap(),
         table
-            .insert(
-                "v5",
-                &[("name".to_string(), Value::string("David"))],
-                100,
-            )
+            .insert("v5", &[("name".to_string(), Value::string("David"))], 100)
             .unwrap(),
         table
-            .insert(
-                "v8",
-                &[("name".to_string(), Value::string("Eve"))],
-                100,
-            )
+            .insert("v8", &[("name".to_string(), Value::string("Eve"))], 100)
             .unwrap(),
     ];
 
@@ -629,11 +582,7 @@ fn test_vertex_snapshot_isolation() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     let snap1 = table.register_snapshot(100).unwrap();
@@ -660,22 +609,14 @@ fn test_vertex_multiple_snapshots() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     let snap1 = table.register_snapshot(100).unwrap();
     assert_eq!(table.min_active_snapshot_ts(), 100);
 
     table
-        .insert(
-            "v2",
-            &[("name".to_string(), Value::string("Bob"))],
-            150,
-        )
+        .insert("v2", &[("name".to_string(), Value::string("Bob"))], 150)
         .unwrap();
 
     let snap2 = table.register_snapshot(200).unwrap();
@@ -707,11 +648,7 @@ fn test_vertex_concurrent_snapshots_same_timestamp() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     let snap1 = table.register_snapshot(100).unwrap();
@@ -738,11 +675,7 @@ fn test_vertex_gc_placeholder() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     let cleaned = table.gc(200).unwrap();
@@ -757,11 +690,7 @@ fn test_vertex_mvcc_table_ops() {
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
     table
-        .insert(
-            "v1",
-            &[("name".to_string(), Value::string("Alice"))],
-            100,
-        )
+        .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
         .unwrap();
 
     let snap = table.register_snapshot(100).unwrap();

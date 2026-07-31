@@ -180,12 +180,14 @@ impl UnaryOperator {
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     let params = state.parameters.as_ref();
-                    let columns = chunk.evaluate_expressions(output_expressions, params).map_err(|e| {
-                        QueryError::execution(format!(
-                            "Project expression evaluation failed: {}",
-                            e
-                        ))
-                    })?;
+                    let columns = chunk
+                        .evaluate_expressions(output_expressions, params)
+                        .map_err(|e| {
+                            QueryError::execution(format!(
+                                "Project expression evaluation failed: {}",
+                                e
+                            ))
+                        })?;
                     if !columns.is_empty() && !columns[0].is_empty() {
                         return Ok(Some(DataChunk::from_columns(
                             columns,
@@ -258,7 +260,9 @@ impl UnaryOperator {
                     for (_col_name, expr) in assignments.iter() {
                         let col = match chunk.evaluate_expression(expr, params) {
                             Ok(col) => col,
-                            Err(_) => vec![Value::Null(crate::core::value::NullType::Null); chunk.len()],
+                            Err(_) => {
+                                vec![Value::Null(crate::core::value::NullType::Null); chunk.len()]
+                            }
                         };
                         new_cols.push(col);
                     }

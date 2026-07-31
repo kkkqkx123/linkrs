@@ -300,10 +300,7 @@ fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
     }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
-            let parts: Vec<Value> = s
-                .split(delimiter.as_str())
-                .map(Value::string)
-                .collect();
+            let parts: Vec<Value> = s.split(delimiter.as_str()).map(Value::string).collect();
             Ok(Value::list(List { values: parts }))
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
@@ -677,10 +674,7 @@ fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
     }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
-            let parts: Vec<Value> = s
-                .split(delimiter.as_str())
-                .map(Value::string)
-                .collect();
+            let parts: Vec<Value> = s.split(delimiter.as_str()).map(Value::string).collect();
             Ok(Value::list(List { values: parts }))
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),

@@ -2,12 +2,12 @@
 //!
 //! Provides a high-level API for writing integration tests with fluent interface
 
-use crate::test_utils::TestResult;
 use crate::core::types::VertexId;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionResult;
 use crate::query::QueryPipelineManager;
 use crate::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
+use crate::test_utils::TestResult;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

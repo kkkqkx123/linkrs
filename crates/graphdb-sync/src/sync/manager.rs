@@ -1759,10 +1759,7 @@ mod tests {
                 1,
                 "Node",
                 &Value::string("node-1"),
-                &[(
-                    "text".to_string(),
-                    Value::string("durable graph event"),
-                )],
+                &[("text".to_string(), Value::string("durable graph event"))],
                 ChangeType::Insert,
             )
             .expect("change should stage");

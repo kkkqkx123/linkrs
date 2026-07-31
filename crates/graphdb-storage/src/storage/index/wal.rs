@@ -220,10 +220,7 @@ pub(crate) fn read_and_validate_wal_header<R: std::io::Read>(
 }
 
 /// Append a WAL entry to the WAL file.
-pub(crate) fn append_wal_entry<P: AsRef<Path>>(
-    wal_path: P,
-    entry: &WalEntry,
-) -> StorageResult<()> {
+pub(crate) fn append_wal_entry<P: AsRef<Path>>(wal_path: P, entry: &WalEntry) -> StorageResult<()> {
     let path = wal_path.as_ref();
     let is_new = !path.exists();
 
@@ -258,8 +255,7 @@ pub(crate) fn read_wal_entries<P: AsRef<Path>>(wal_path: P) -> StorageResult<Vec
 
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
-    read_and_validate_wal_header(&mut reader)
-        .map_err(|e| StorageError::io_error(e.to_string()))?;
+    read_and_validate_wal_header(&mut reader).map_err(|e| StorageError::io_error(e.to_string()))?;
 
     let mut entries = Vec::new();
     loop {
@@ -303,9 +299,7 @@ mod tests {
         let mut buf = Vec::new();
         entry.serialize_into(&mut buf).unwrap();
         let mut reader = std::io::Cursor::new(&buf);
-        let decoded = WalEntry::deserialize_from(&mut reader)
-            .unwrap()
-            .unwrap();
+        let decoded = WalEntry::deserialize_from(&mut reader).unwrap().unwrap();
 
         match decoded {
             WalEntry::Insert {
@@ -333,9 +327,7 @@ mod tests {
         let mut buf = Vec::new();
         entry.serialize_into(&mut buf).unwrap();
         let mut reader = std::io::Cursor::new(&buf);
-        let decoded = WalEntry::deserialize_from(&mut reader)
-            .unwrap()
-            .unwrap();
+        let decoded = WalEntry::deserialize_from(&mut reader).unwrap().unwrap();
 
         match decoded {
             WalEntry::MarkDeleted {
@@ -353,10 +345,8 @@ mod tests {
 
     #[test]
     fn serialize_with_included_columns() {
-        let record = IndexRecord::new_with_columns(
-            100,
-            vec![("name".to_string(), Value::string("Alice"))],
-        );
+        let record =
+            IndexRecord::new_with_columns(100, vec![("name".to_string(), Value::string("Alice"))]);
         let entry = WalEntry::Insert {
             is_forward: true,
             key: vec![1, 2, 3],
@@ -366,9 +356,7 @@ mod tests {
         let mut buf = Vec::new();
         entry.serialize_into(&mut buf).unwrap();
         let mut reader = std::io::Cursor::new(&buf);
-        let decoded = WalEntry::deserialize_from(&mut reader)
-            .unwrap()
-            .unwrap();
+        let decoded = WalEntry::deserialize_from(&mut reader).unwrap().unwrap();
 
         match decoded {
             WalEntry::Insert { record, .. } => {

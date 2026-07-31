@@ -3,13 +3,13 @@
 //! Responsible for planning the execution of the UNWIND clause, which expands the list into multiple lines.
 
 use crate::core::types::ContextualExpression;
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::UnwindNode;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

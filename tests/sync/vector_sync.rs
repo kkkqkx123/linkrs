@@ -139,10 +139,7 @@ async fn test_vector_index_location() {
 #[tokio::test]
 async fn test_point_data_with_payload() {
     let mut payload: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
-    payload.insert(
-        "category".to_string(),
-        Value::string("electronics"),
-    );
+    payload.insert("category".to_string(), Value::string("electronics"));
     payload.insert("price".to_string(), Value::string("99.99"));
 
     let point = VectorPointData {
@@ -157,10 +154,7 @@ async fn test_point_data_with_payload() {
         point.payload.get("category").unwrap(),
         &Value::string("electronics")
     );
-    assert_eq!(
-        point.payload.get("price").unwrap(),
-        &Value::string("99.99")
-    );
+    assert_eq!(point.payload.get("price").unwrap(), &Value::string("99.99"));
 }
 
 /// TC-204: Coordinator commit with disabled engine acts as no-op

@@ -251,10 +251,7 @@ fn test_alter_tag_properties_with_existing_data() {
             "Person".to_string(),
             vec![
                 ("name".to_string(), Value::string("Diana")),
-                (
-                    "email".to_string(),
-                    Value::string("diana@test.com"),
-                ),
+                ("email".to_string(), Value::string("diana@test.com")),
             ]
             .into_iter()
             .collect(),
@@ -494,10 +491,7 @@ fn test_batch_insert_failure_rollback_consistency() {
         .get_vertex("test_space", &VertexId::from_int64(1))
         .unwrap()
         .expect("Alice should still exist after failed batch");
-    assert_eq!(
-        alice.properties.get("name"),
-        Some(&Value::string("Alice"))
-    );
+    assert_eq!(alice.properties.get("name"), Some(&Value::string("Alice")));
 
     // Bob (vertex 2) should NOT have been inserted
     let bob = storage
@@ -582,10 +576,7 @@ fn test_multi_cycle_flush_and_load() {
             .get_vertex("test_space", &VertexId::from_int64(4))
             .unwrap()
             .expect("Dave should survive");
-        assert_eq!(
-            dave.properties.get("name"),
-            Some(&Value::string("Dave"))
-        );
+        assert_eq!(dave.properties.get("name"), Some(&Value::string("Dave")));
 
         // Edge from cycle 2 survived
         let edge_13 = storage
@@ -845,10 +836,7 @@ fn test_update_vertex_properties() {
         vec![Tag::new(
             "Person".to_string(),
             vec![
-                (
-                    "name".to_string(),
-                    Value::string("AliceUpdated"),
-                ),
+                ("name".to_string(), Value::string("AliceUpdated")),
                 ("age".to_string(), Value::BigInt(31)),
             ]
             .into_iter()

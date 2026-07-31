@@ -440,7 +440,8 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         let ts = 100u64;
         table
@@ -475,7 +476,8 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
+        let mut loaded_table =
+            TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");
@@ -506,7 +508,8 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table
             .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -539,7 +542,8 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
+        let mut loaded_table =
+            TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");

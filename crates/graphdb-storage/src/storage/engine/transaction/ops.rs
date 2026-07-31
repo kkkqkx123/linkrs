@@ -72,7 +72,11 @@ pub struct TransactionOps;
 
 impl TransactionOps {
     /// Resolve an external VertexId to an internal row ID.
-    pub fn resolve_vertex_id(table: &ShardedVertexTable, vid: VertexId, ts: Timestamp) -> Option<u32> {
+    pub fn resolve_vertex_id(
+        table: &ShardedVertexTable,
+        vid: VertexId,
+        ts: Timestamp,
+    ) -> Option<u32> {
         if let Some(int_id) = vid.as_int64() {
             table.get_internal_id_by_i64(int_id, ts)
         } else if let Some(str_id) = vid.as_str() {
@@ -559,7 +563,10 @@ pub fn create_vertex_type_undo(
         primary_key_index: 0,
         schema_version: 1,
     };
-    vertex_tables.insert(label, Arc::new(ShardedVertexTable::new(label, name.to_string(), schema)));
+    vertex_tables.insert(
+        label,
+        Arc::new(ShardedVertexTable::new(label, name.to_string(), schema)),
+    );
     Ok(())
 }
 
@@ -599,7 +606,7 @@ pub fn create_edge_type_undo(
     edge_tables.insert(
         EdgeTableKey::new(src_label, dst_label, label),
         Arc::new(RwLock::new(
-            EdgeStore::new(schema).map_err(|error| UndoLogError::UndoFailed(error.to_string()))?
+            EdgeStore::new(schema).map_err(|error| UndoLogError::UndoFailed(error.to_string()))?,
         )),
     );
     Ok(())

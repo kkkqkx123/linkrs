@@ -9,9 +9,8 @@
 //! - Multiple operations rollback - verify correct order of rollback
 //! - Savepoint with operation rollback - integration test
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test InsertVertex rollback via savepoint - verify inserted vertex is removed after rollback
@@ -47,10 +46,7 @@ fn test_rollback_update_vertex() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(25)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(25))]),
         )
         // Update the vertex
         .exec_dml("UPDATE 1 SET age = 30")
@@ -58,10 +54,7 @@ fn test_rollback_update_vertex() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -225,10 +218,7 @@ fn test_operation_sequence_with_modifications() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(31)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(31))]),
         )
         // Add another edge
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 2->1:(2021)")

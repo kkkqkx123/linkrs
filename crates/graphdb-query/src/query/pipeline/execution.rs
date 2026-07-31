@@ -168,30 +168,32 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         // Compile with per-phase timing (not from cache, to measure each phase)
         let plan_start = Instant::now();
-        let bound_for_profile = request.bound_statement.as_ref().expect("bound statement must exist");
-        let execution_plan =
-            match self.generate_execution_plan_from_bound(
-                request.query_context.clone(),
-                bound_for_profile,
-                &request.ast,
-            ) {
-                Ok(plan) => {
-                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                    metrics.set_plan_node_count(plan.node_count());
-                    metrics.record_plan_time(plan_start.elapsed());
-                    plan
-                }
-                Err(e) => {
-                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                    let error_info =
-                        ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    return Err(e);
-                }
-            };
+        let bound_for_profile = request
+            .bound_statement
+            .as_ref()
+            .expect("bound statement must exist");
+        let execution_plan = match self.generate_execution_plan_from_bound(
+            request.query_context.clone(),
+            bound_for_profile,
+            &request.ast,
+        ) {
+            Ok(plan) => {
+                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                metrics.set_plan_node_count(plan.node_count());
+                metrics.record_plan_time(plan_start.elapsed());
+                plan
+            }
+            Err(e) => {
+                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                let error_info =
+                    ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
+                profile.mark_failed_with_info(error_info.clone());
+                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                self.stats_manager
+                    .record_failed_query(profile.clone(), error_info);
+                return Err(e);
+            }
+        };
 
         let optimize_start = Instant::now();
         let optimized_plan = match self.optimize_execution_plan(execution_plan) {
@@ -402,7 +404,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             context.space_name = Some(space_name.clone());
         }
         if query_context.has_arena() {
-            context.arena = Some(Arc::new(parking_lot::Mutex::new(crate::utils::Arena::new())));
+            context.arena = Some(Arc::new(
+                parking_lot::Mutex::new(crate::utils::Arena::new()),
+            ));
         }
         context
     }

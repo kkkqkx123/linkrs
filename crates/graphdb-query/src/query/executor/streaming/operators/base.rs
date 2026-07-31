@@ -154,7 +154,10 @@ impl OperatorBase {
     pub fn take_state(&mut self) -> Option<GlobalState> {
         let rt = self.runtime.as_ref()?;
         let key = self.state_key();
-        rt.state_arena_for(self.partition_id).lock().global.remove(&key)
+        rt.state_arena_for(self.partition_id)
+            .lock()
+            .global
+            .remove(&key)
     }
 
     /// Insert a [`GlobalState`] into this operator's slot in the runtime arena.
@@ -166,7 +169,10 @@ impl OperatorBase {
             return;
         };
         let key = self.state_key();
-        rt.state_arena_for(self.partition_id).lock().global.insert(key, state);
+        rt.state_arena_for(self.partition_id)
+            .lock()
+            .global
+            .insert(key, state);
     }
 
     // ── Local state access (per-task) ──
@@ -182,14 +188,20 @@ impl OperatorBase {
             return;
         };
         let key = self.local_state_key(task_id);
-        rt.state_arena_for(self.partition_id).lock().local.insert(key, state);
+        rt.state_arena_for(self.partition_id)
+            .lock()
+            .local
+            .insert(key, state);
     }
 
     /// Take a [`LocalState`] out of the arena (for cleanup).
     pub fn take_local_state(&mut self, task_id: TaskId) -> Option<LocalState> {
         let rt = self.runtime.as_ref()?;
         let key = self.local_state_key(task_id);
-        rt.state_arena_for(self.partition_id).lock().local.remove(&key)
+        rt.state_arena_for(self.partition_id)
+            .lock()
+            .local
+            .remove(&key)
     }
 
     /// Access local state for a given task via a closure.
@@ -241,7 +253,9 @@ impl OperatorBase {
     pub fn record_profile_rows(&self, count: u64) {
         if let Some(rt) = &self.runtime {
             if let Some(entry) = rt.profile().get_entry(&self.profile_key()) {
-                entry.output_rows.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                entry
+                    .output_rows
+                    .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }

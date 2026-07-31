@@ -23,11 +23,7 @@ macro_rules! recovery_arm_ref {
                 $stats.wal_entries_replayed += 1;
                 $stats.last_lsn = $entry.lsn;
             }
-            Err(e) => {
-                return Err(recovery_deserialize_error(
-                    &mut $stats, $entry.lsn, $op, e,
-                ))
-            }
+            Err(e) => return Err(recovery_deserialize_error(&mut $stats, $entry.lsn, $op, e)),
         }
     }};
 }
@@ -257,8 +253,16 @@ impl RecoveryManager {
                     self.stats.last_lsn = entry.lsn;
                 }
                 WalOpType::InsertEdge => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        InsertEdgeRedo, replay_insert_edge)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        InsertEdgeRedo,
+                        replay_insert_edge
+                    )
                 }
                 WalOpType::UpdateVertexProp => {
                     let redo: UpdateVertexPropRedo = deserialize_redo(payload)?;
@@ -273,8 +277,16 @@ impl RecoveryManager {
                     self.stats.last_lsn = entry.lsn;
                 }
                 WalOpType::UpdateEdgeProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        UpdateEdgePropRedo, replay_update_edge_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        UpdateEdgePropRedo,
+                        replay_update_edge_prop
+                    )
                 }
                 WalOpType::DeleteVertex => {
                     let redo: DeleteVertexRedo = deserialize_redo(payload)?;
@@ -283,80 +295,232 @@ impl RecoveryManager {
                     self.stats.last_lsn = entry.lsn;
                 }
                 WalOpType::DeleteEdge => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DeleteEdgeRedo, replay_delete_edge)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteEdgeRedo,
+                        replay_delete_edge
+                    )
                 }
                 WalOpType::CreateVertexType => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        CreateVertexTypeRedo, replay_create_vertex_type)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateVertexTypeRedo,
+                        replay_create_vertex_type
+                    )
                 }
                 WalOpType::CreateEdgeType => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        CreateEdgeTypeRedo, replay_create_edge_type)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateEdgeTypeRedo,
+                        replay_create_edge_type
+                    )
                 }
                 WalOpType::DeleteVertexType => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DeleteVertexTypeRedo, replay_delete_vertex_type)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteVertexTypeRedo,
+                        replay_delete_vertex_type
+                    )
                 }
                 WalOpType::DeleteEdgeType => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DeleteEdgeTypeRedo, replay_delete_edge_type)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteEdgeTypeRedo,
+                        replay_delete_edge_type
+                    )
                 }
                 WalOpType::CreateSpace => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        CreateSpaceRedo, replay_create_space)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateSpaceRedo,
+                        replay_create_space
+                    )
                 }
                 WalOpType::DropSpace => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DropSpaceRedo, replay_drop_space)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DropSpaceRedo,
+                        replay_drop_space
+                    )
                 }
                 WalOpType::ClearSpace => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        ClearSpaceRedo, replay_clear_space)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        ClearSpaceRedo,
+                        replay_clear_space
+                    )
                 }
                 WalOpType::AlterSpaceComment => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        AlterSpaceCommentRedo, replay_alter_space_comment)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        AlterSpaceCommentRedo,
+                        replay_alter_space_comment
+                    )
                 }
                 WalOpType::AddVertexProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        AddVertexPropRedo, replay_add_vertex_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        AddVertexPropRedo,
+                        replay_add_vertex_prop
+                    )
                 }
                 WalOpType::AddEdgeProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        AddEdgePropRedo, replay_add_edge_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        AddEdgePropRedo,
+                        replay_add_edge_prop
+                    )
                 }
                 WalOpType::DeleteVertexProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DeleteVertexPropRedo, replay_delete_vertex_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteVertexPropRedo,
+                        replay_delete_vertex_prop
+                    )
                 }
                 WalOpType::DeleteEdgeProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DeleteEdgePropRedo, replay_delete_edge_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DeleteEdgePropRedo,
+                        replay_delete_edge_prop
+                    )
                 }
                 WalOpType::RenameVertexProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        RenameVertexPropRedo, replay_rename_vertex_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        RenameVertexPropRedo,
+                        replay_rename_vertex_prop
+                    )
                 }
                 WalOpType::RenameEdgeProp => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        RenameEdgePropRedo, replay_rename_edge_prop)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        RenameEdgePropRedo,
+                        replay_rename_edge_prop
+                    )
                 }
                 WalOpType::CreateTagIndex => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        CreateTagIndexRedo, replay_create_tag_index)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateTagIndexRedo,
+                        replay_create_tag_index
+                    )
                 }
                 WalOpType::DropTagIndex => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DropTagIndexRedo, replay_drop_tag_index)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DropTagIndexRedo,
+                        replay_drop_tag_index
+                    )
                 }
                 WalOpType::CreateEdgeIndex => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        CreateEdgeIndexRedo, replay_create_edge_index)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        CreateEdgeIndexRedo,
+                        replay_create_edge_index
+                    )
                 }
                 WalOpType::DropEdgeIndex => {
-                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
-                        DropEdgeIndexRedo, replay_drop_edge_index)
+                    recovery_arm_ref!(
+                        applier,
+                        op_type,
+                        entry,
+                        payload,
+                        ts,
+                        self.stats,
+                        DropEdgeIndexRedo,
+                        replay_drop_edge_index
+                    )
                 }
                 WalOpType::Compact => {
                     applier.replay_compact(ts)?;

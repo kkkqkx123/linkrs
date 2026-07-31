@@ -342,9 +342,7 @@ fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     match &args[0] {
-        Value::Vertex(v) => {
-            Ok(Value::from(v.vid))
-        }
+        Value::Vertex(v) => Ok(Value::from(v.vid)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The neighbors function requires a vertex type",
@@ -790,11 +788,7 @@ fn execute_variable_length_path_with_storage(
     let mut results: Vec<Vec<Value>> = Vec::new();
     let mut queue: VecDeque<(VertexId, Vec<Value>, i64)> = VecDeque::new();
 
-    queue.push_back((
-        start_vid,
-        vec![Value::from(start_vid)],
-        0,
-    ));
+    queue.push_back((start_vid, vec![Value::from(start_vid)], 0));
 
     while let Some((current, path, depth)) = queue.pop_front() {
         if depth >= max_depth {

@@ -6,7 +6,6 @@
 //! - Vector search configuration handling
 //! - Error handling when schema_manager is not available
 
-use graphdb::test_utils::TestStorage;
 use graphdb::api::core::QueryApi;
 use graphdb::api::server::graph_service::GraphService;
 use graphdb::config::Config;
@@ -14,6 +13,7 @@ use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
+use graphdb::test_utils::TestStorage;
 use std::sync::Arc;
 use vector_client::VectorClientConfig;
 

@@ -1,8 +1,8 @@
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::index::chunk::data::{Chunk, ChunkId};
-use crate::storage::index::chunk::chunked_index::ChunkedIndex;
 use crate::storage::cache::BufferPool;
+use crate::storage::index::chunk::chunked_index::ChunkedIndex;
+use crate::storage::index::chunk::data::{Chunk, ChunkId};
 use crate::storage::index::generic_index_manager::{write_entity_ref, EntityRefReader};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::types::IndexRecord;
@@ -16,10 +16,7 @@ const CHUNK_VERSION: u32 = 1;
 const CHIX_MAGIC: [u8; 4] = *b"CHIX";
 const CHIX_VERSION: u32 = 1;
 
-pub(crate) fn serialize_chunk<W: Write>(
-    writer: &mut W,
-    chunk: &Chunk,
-) -> std::io::Result<()> {
+pub(crate) fn serialize_chunk<W: Write>(writer: &mut W, chunk: &Chunk) -> std::io::Result<()> {
     writer.write_all(&CHUNK_MAGIC)?;
     writer.write_all(&CHUNK_VERSION.to_le_bytes())?;
     writer.write_all(&chunk.id.to_le_bytes())?;
@@ -178,18 +175,17 @@ pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chun
             let name_len = u32::from_le_bytes(name_len_bytes) as usize;
             let mut name_bytes = vec![0u8; name_len];
             reader.read_exact(&mut name_bytes)?;
-            let name = String::from_utf8(name_bytes).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-            })?;
+            let name = String::from_utf8(name_bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
 
             let mut val_len_bytes = [0u8; 4];
             reader.read_exact(&mut val_len_bytes)?;
             let val_len = u32::from_le_bytes(val_len_bytes) as usize;
             let mut val_bytes = vec![0u8; val_len];
             reader.read_exact(&mut val_bytes)?;
-            let value = OrderedCodec::new().decode(&val_bytes).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-            })?;
+            let value = OrderedCodec::new()
+                .decode(&val_bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
             included_columns.push((name, value));
         }
 
@@ -295,10 +291,7 @@ pub(crate) fn deserialize_chunk_index<R: Read>(
     Ok(descriptors)
 }
 
-pub(crate) fn write_chunk_file<P: AsRef<Path>>(
-    path: P,
-    chunk: &Chunk,
-) -> StorageResult<()> {
+pub(crate) fn write_chunk_file<P: AsRef<Path>>(path: P, chunk: &Chunk) -> StorageResult<()> {
     let tmp_path = path.as_ref().with_extension("tmp");
     let mut file = std::fs::File::create(&tmp_path)?;
     serialize_chunk(&mut file, chunk)?;
@@ -426,8 +419,14 @@ mod tests {
     #[test]
     fn chunk_serialization_roundtrip() {
         let entries = vec![
-            (vec![1, 2, 3], IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42)))),
-            (vec![4, 5, 6], IndexRecord::new_with_columns(200, vec![("name".into(), Value::string("test"))])),
+            (
+                vec![1, 2, 3],
+                IndexRecord::new(100).with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42))),
+            ),
+            (
+                vec![4, 5, 6],
+                IndexRecord::new_with_columns(200, vec![("name".into(), Value::string("test"))]),
+            ),
         ];
         let chunk = Chunk::new(0, entries);
 
@@ -437,8 +436,14 @@ mod tests {
 
         assert_eq!(chunk.id, deserialized.id);
         assert_eq!(chunk.entries.len(), deserialized.entries.len());
-        assert_eq!(chunk.entries[0].1.created_ts, deserialized.entries[0].1.created_ts);
-        assert_eq!(chunk.entries[1].1.included_columns.as_ref().unwrap()[0].0, "name");
+        assert_eq!(
+            chunk.entries[0].1.created_ts,
+            deserialized.entries[0].1.created_ts
+        );
+        assert_eq!(
+            chunk.entries[1].1.included_columns.as_ref().unwrap()[0].0,
+            "name"
+        );
     }
 
     #[test]

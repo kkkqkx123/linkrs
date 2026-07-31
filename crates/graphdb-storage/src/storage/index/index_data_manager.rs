@@ -8,14 +8,17 @@ use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::helpers::{
     edge_entity_ref, flush_split_generation, merge_split_wal_changes, vertex_entity_ref,
 };
-use crate::storage::index::key_codec::key_types::{SecondaryIndexKey, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE};
+use crate::storage::index::key_codec::key_types::{
+    SecondaryIndexKey, KEY_TYPE_EDGE_REVERSE, KEY_TYPE_VERTEX_REVERSE,
+};
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
     ManifestHandle,
 };
 use crate::storage::index::shard_runtime::{
-    generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps, IndexRuntime,
+    generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps,
+    IndexRuntime,
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use crate::storage::persistence::{read_versioned_payload, write_versioned_payload};
@@ -23,8 +26,8 @@ use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct IndexDataManagerImpl {
@@ -506,7 +509,15 @@ impl IndexDataManagerImpl {
             .ok_or_else(|| StorageError::invalid_operation("Index manifest has no shards"))?;
         maps.insert(shard.shard_id, (forward, reverse));
         let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
-        runtime.install_generation(generation_from_maps_with_pool_capacity(&manifest, maps, None, 0, Vec::new(), Vec::new(), pool_cap));
+        runtime.install_generation(generation_from_maps_with_pool_capacity(
+            &manifest,
+            maps,
+            None,
+            0,
+            Vec::new(),
+            Vec::new(),
+            pool_cap,
+        ));
         self.manifest_catalog(manifest.space_id, manifest.index_id)
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?
             .publish(manifest)
@@ -531,16 +542,14 @@ impl IndexDataManagerImpl {
         let index_def = self.index_definitions.read().get(&identity).cloned();
         match (index_type, index_def.as_ref()) {
             (Some(IndexType::TagIndex), Some(def)) => {
-                let fwd =
-                    KeyBuilder::build_vertex_index_prefix(identity.space_id, &def.name).0;
+                let fwd = KeyBuilder::build_vertex_index_prefix(identity.space_id, &def.name).0;
                 let mut rev = Vec::with_capacity(9);
                 rev.extend_from_slice(&identity.space_id.to_le_bytes());
                 rev.push(KEY_TYPE_VERTEX_REVERSE);
                 (fwd, rev)
             }
             (Some(IndexType::EdgeIndex), Some(def)) => {
-                let fwd =
-                    KeyBuilder::build_edge_index_prefix(identity.space_id, &def.name).0;
+                let fwd = KeyBuilder::build_edge_index_prefix(identity.space_id, &def.name).0;
                 let mut rev = Vec::with_capacity(9);
                 rev.extend_from_slice(&identity.space_id.to_le_bytes());
                 rev.push(KEY_TYPE_EDGE_REVERSE);
@@ -566,10 +575,7 @@ impl IndexDataManagerImpl {
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
             .ok_or_else(|| {
-                StorageError::not_found(format!(
-                    "Index {} has no manifest",
-                    identity.index_id
-                ))
+                StorageError::not_found(format!("Index {} has no manifest", identity.index_id))
             })?;
         let runtime = self.runtime(identity.space_id, identity.index_id)?;
         let current = catalog.acquire().manifest().clone();
@@ -594,13 +600,9 @@ impl IndexDataManagerImpl {
                 }
             })
             .collect();
-        let next_manifest = IndexManifest::new(
-            identity.space_id,
-            identity.index_id,
-            next_gen,
-            new_shards,
-        )
-        .map_err(StorageError::db_error)?;
+        let next_manifest =
+            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)
+                .map_err(StorageError::db_error)?;
 
         let current_gen = runtime.generation(current.generation);
 
@@ -623,7 +625,9 @@ impl IndexDataManagerImpl {
         }
 
         runtime.install_generation(generation);
-        catalog.publish(next_manifest).map_err(StorageError::db_error)?;
+        catalog
+            .publish(next_manifest)
+            .map_err(StorageError::db_error)?;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_publish();
         }
@@ -690,10 +694,7 @@ impl IndexDataManagerImpl {
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
             .ok_or_else(|| {
-                StorageError::not_found(format!(
-                    "Index {} has no manifest",
-                    identity.index_id
-                ))
+                StorageError::not_found(format!("Index {} has no manifest", identity.index_id))
             })?;
         let runtime = self.runtime(identity.space_id, identity.index_id)?;
         let current = catalog.acquire().manifest().clone();
@@ -770,13 +771,9 @@ impl IndexDataManagerImpl {
                 }
             })
             .collect();
-        let next_manifest = IndexManifest::new(
-            identity.space_id,
-            identity.index_id,
-            next_gen,
-            new_shards,
-        )
-        .map_err(StorageError::db_error)?;
+        let next_manifest =
+            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)
+                .map_err(StorageError::db_error)?;
 
         // Step 3: Create generation runtime and flush before publishing
         let current_gen = runtime.generation(current.generation);
@@ -794,16 +791,12 @@ impl IndexDataManagerImpl {
         let index_type = self.index_types.read().get(&identity).cloned();
         if self.index_root.is_some() {
             match index_type {
-                Some(IndexType::TagIndex) => {
-                    flush_split_generation::<
-                        crate::storage::index::key_codec::VertexIndexKeyGen,
-                    >(&next_manifest, &next_runtime)?
-                }
-                Some(IndexType::EdgeIndex) => {
-                    flush_split_generation::<
-                        crate::storage::index::key_codec::EdgeIndexKeyGen,
-                    >(&next_manifest, &next_runtime)?
-                }
+                Some(IndexType::TagIndex) => flush_split_generation::<
+                    crate::storage::index::key_codec::VertexIndexKeyGen,
+                >(&next_manifest, &next_runtime)?,
+                Some(IndexType::EdgeIndex) => flush_split_generation::<
+                    crate::storage::index::key_codec::EdgeIndexKeyGen,
+                >(&next_manifest, &next_runtime)?,
                 None => {}
             }
         }
@@ -817,7 +810,9 @@ impl IndexDataManagerImpl {
         }
 
         runtime.install_generation(next_runtime);
-        catalog.publish(next_manifest).map_err(StorageError::db_error)?;
+        catalog
+            .publish(next_manifest)
+            .map_err(StorageError::db_error)?;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_publish();
         }
@@ -854,7 +849,11 @@ impl IndexDataManagerImpl {
         let serialized = postcard::to_allocvec(state)
             .map_err(|e| StorageError::serialize_error(e.to_string()))?;
         let mut versioned = Vec::new();
-        write_versioned_payload(&mut versioned, crate::core::types::StorageVersion::CURRENT as u32, &serialized);
+        write_versioned_payload(
+            &mut versioned,
+            crate::core::types::StorageVersion::CURRENT as u32,
+            &serialized,
+        );
         {
             let mut file = std::fs::File::create(&temporary)?;
             file.write_all(&versioned)?;
@@ -876,10 +875,7 @@ impl IndexDataManagerImpl {
             return Ok(None);
         }
         let mut file = std::fs::File::open(&path)?;
-        let (_version, payload) = read_versioned_payload(
-            &mut file,
-            "generation_build.bin",
-        )?;
+        let (_version, payload) = read_versioned_payload(&mut file, "generation_build.bin")?;
         let state: GenerationBuildState = postcard::from_bytes(&payload)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         Ok(Some(state))
@@ -1216,7 +1212,15 @@ impl IndexDataManagerImpl {
         let current_gen = runtime.generation(current.generation);
         let (fwd_prefix, rev_prefix) = self.compute_prefixes(identity);
         let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
-        let next_runtime = generation_from_maps_with_pool_capacity(&next, maps, current_gen.as_ref(), 0, fwd_prefix, rev_prefix, pool_cap);
+        let next_runtime = generation_from_maps_with_pool_capacity(
+            &next,
+            maps,
+            current_gen.as_ref(),
+            0,
+            fwd_prefix,
+            rev_prefix,
+            pool_cap,
+        );
         match index_type {
             IndexType::TagIndex => flush_split_generation::<
                 crate::storage::index::key_codec::VertexIndexKeyGen,
@@ -1350,9 +1354,7 @@ impl IndexDataManagerImpl {
                     if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                         continue;
                     }
-                    for (key, record) in shard
-                        .reverse_range(&reverse_prefix.0, &reverse_end.0)
-                    {
+                    for (key, record) in shard.reverse_range(&reverse_prefix.0, &reverse_end.0) {
                         if !record.is_visible_at(write_ts) {
                             continue;
                         }
@@ -1382,7 +1384,8 @@ impl IndexDataManagerImpl {
             let mut per_shard: HashMap<u32, IndexMaps> = HashMap::new();
             let entity_ref = vertex_entity_ref(vertex_id);
 
-            let encoded_values: Vec<Vec<u8>> = reverse_meta.iter().map(|(_, e)| e.clone()).collect();
+            let encoded_values: Vec<Vec<u8>> =
+                reverse_meta.iter().map(|(_, e)| e.clone()).collect();
             for (rev_key, _) in reverse_meta {
                 let shard_id = route(&rev_key)?;
                 let (_, ref mut rev_map) = per_shard.entry(shard_id).or_default();
@@ -1412,9 +1415,7 @@ impl IndexDataManagerImpl {
                 let mut fwd_keys: Vec<SecondaryIndexKey> = Vec::new();
                 for gen in &chain {
                     for shard in gen.shards() {
-                        for (key, record) in shard
-                            .forward_range(&forward.0, &fwd_end.0)
-                        {
+                        for (key, record) in shard.forward_range(&forward.0, &fwd_end.0) {
                             if record.is_visible_at(write_ts) {
                                 fwd_keys.push(key);
                             }
@@ -1479,9 +1480,7 @@ impl IndexDataManagerImpl {
                     if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                         continue;
                     }
-                    for (key, record) in shard
-                        .reverse_range(&reverse_prefix.0, &reverse_end.0)
-                    {
+                    for (key, record) in shard.reverse_range(&reverse_prefix.0, &reverse_end.0) {
                         if !record.is_visible_at(write_ts) {
                             continue;
                         }
@@ -1511,7 +1510,8 @@ impl IndexDataManagerImpl {
             let mut per_shard: HashMap<u32, IndexMaps> = HashMap::new();
             let entity_ref = edge_entity_ref(src, dst, edge_type, ranking);
 
-            let encoded_values: Vec<Vec<u8>> = reverse_meta.iter().map(|(_, e)| e.clone()).collect();
+            let encoded_values: Vec<Vec<u8>> =
+                reverse_meta.iter().map(|(_, e)| e.clone()).collect();
             for (rev_key, _) in reverse_meta {
                 let shard_id = route(&rev_key)?;
                 let (_, ref mut rev_map) = per_shard.entry(shard_id).or_default();
@@ -1541,9 +1541,7 @@ impl IndexDataManagerImpl {
                 let mut fwd_keys: Vec<SecondaryIndexKey> = Vec::new();
                 for gen in &chain {
                     for shard in gen.shards() {
-                        for (key, record) in shard
-                            .forward_range(&forward.0, &fwd_end.0)
-                        {
+                        for (key, record) in shard.forward_range(&forward.0, &fwd_end.0) {
                             if record.is_visible_at(write_ts) {
                                 fwd_keys.push(key);
                             }
@@ -1622,9 +1620,7 @@ impl IndexDataManagerImpl {
                 let mut fwd_keys: Vec<SecondaryIndexKey> = Vec::new();
                 for gen in &chain {
                     if let Some(shard) = gen.shard(shard_def.shard_id) {
-                        for (key, record) in
-                            shard.forward_range(&prefix.0, &end.0)
-                        {
+                        for (key, record) in shard.forward_range(&prefix.0, &end.0) {
                             if record.is_visible_at(write_ts) {
                                 fwd_keys.push(key);
                             }
@@ -1642,8 +1638,7 @@ impl IndexDataManagerImpl {
 
                 let rev_match: fn(&[u8], &str) -> bool = match index_type {
                     IndexType::TagIndex => |key, name| {
-                        KeyParser::parse_vertex_reverse_key_v2(key)
-                            .is_ok_and(|(_, n)| n == name)
+                        KeyParser::parse_vertex_reverse_key_v2(key).is_ok_and(|(_, n)| n == name)
                     },
                     IndexType::EdgeIndex => |key, name| {
                         KeyParser::parse_edge_reverse_key(key)

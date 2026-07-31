@@ -28,7 +28,10 @@ impl std::fmt::Debug for MemoryBudget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemoryBudget")
             .field("max_bytes", &self.max_bytes)
-            .field("allocated", &self.allocated.load(std::sync::atomic::Ordering::Relaxed))
+            .field(
+                "allocated",
+                &self.allocated.load(std::sync::atomic::Ordering::Relaxed),
+            )
             .field("id", &self.id)
             .finish()
     }

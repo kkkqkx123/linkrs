@@ -53,11 +53,7 @@ impl BinderScope {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.variables.contains_key(name)
-            || self
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.contains(name))
+        self.variables.contains_key(name) || self.parent.as_ref().is_some_and(|p| p.contains(name))
     }
 
     pub fn all_variables(&self) -> Vec<&BinderVariable> {

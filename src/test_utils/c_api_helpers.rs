@@ -87,10 +87,7 @@ impl CApiTestSession {
             ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::session::graphdb_session_create(
-                db.handle(),
-                &mut session,
-            )
+            crate::api::embedded::c_api::session::graphdb_session_create(db.handle(), &mut session)
         };
 
         assert_eq!(
@@ -135,10 +132,7 @@ impl CApiTestTransaction {
         let mut txn: *mut crate::api::embedded::c_api::types::graphdb_txn_t = ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::transaction::graphdb_txn_begin(
-                session.handle(),
-                &mut txn,
-            )
+            crate::api::embedded::c_api::transaction::graphdb_txn_begin(session.handle(), &mut txn)
         };
 
         assert_eq!(
@@ -161,8 +155,7 @@ impl CApiTestTransaction {
 
     /// Commit a transaction
     pub fn commit(self) {
-        let rc =
-            unsafe { crate::api::embedded::c_api::transaction::graphdb_txn_commit(self.txn) };
+        let rc = unsafe { crate::api::embedded::c_api::transaction::graphdb_txn_commit(self.txn) };
         assert_eq!(
             rc,
             graphdb_error_code_t::GRAPHDB_OK as i32,
@@ -207,8 +200,7 @@ impl CApiTestResult {
     /// Create results from executing queries within the conversation.
     pub fn from_query(session: &CApiTestSession, query: &str) -> Self {
         let query_cstring = CString::new(query).expect("Invalid query string");
-        let mut result: *mut crate::api::embedded::c_api::types::graphdb_result_t =
-            ptr::null_mut();
+        let mut result: *mut crate::api::embedded::c_api::types::graphdb_result_t = ptr::null_mut();
 
         let rc = unsafe {
             crate::api::embedded::c_api::query::graphdb_execute(

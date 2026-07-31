@@ -10,16 +10,16 @@
 //! 5. Scope reset: Only the variables that are output are retained; all other variables become invisible.
 
 use crate::core::types::expr::expression_utils::extract_group_info;
+use crate::core::types::semantic::AliasType;
 use crate::core::YieldColumn;
+use crate::query::binder::validation::{
+    CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
+};
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::core::types::semantic::AliasType;
-use crate::query::binder::validation::{
-    CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
-};
 use crate::query::QueryContext;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -242,10 +242,10 @@ impl WithClausePlanner {
     /// - Handling aggregate expressions and grouping keys
     fn extract_with_context(stmt: &Stmt) -> Result<WithClauseContext, PlannerError> {
         use crate::core::YieldColumn;
-        use crate::query::parser::ast::Stmt;
         use crate::query::binder::validation::{
             OrderByClauseContext, PaginationContext, YieldClauseContext,
         };
+        use crate::query::parser::ast::Stmt;
 
         let with_stmt = match stmt {
             Stmt::With(w) => w,

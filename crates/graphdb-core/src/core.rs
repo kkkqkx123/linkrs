@@ -16,8 +16,8 @@ pub mod wal;
 
 // Error and result types
 pub use error::{
-    DBError, DBResult, ErrorCategory, ManagerError, ManagerResult,
-    PlanNodeVisitError, QueryError, QueryResult, StorageError, StorageResult,
+    DBError, DBResult, ErrorCategory, ManagerError, ManagerResult, PlanNodeVisitError, QueryError,
+    QueryResult, StorageError, StorageResult,
 };
 
 // External error code

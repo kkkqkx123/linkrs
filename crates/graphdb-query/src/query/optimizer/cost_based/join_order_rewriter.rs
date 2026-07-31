@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::analysis_utils::collect_variables_from_contextual;
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
@@ -10,7 +10,8 @@ use crate::query::optimizer::stats::StatisticsManager;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
-type PredMap = HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>>;
+type PredMap =
+    HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>>;
 
 /// A leaf input to a join chain — a subtree whose root is not a reorderable join.
 #[derive(Debug, Clone)]
@@ -164,7 +165,11 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatisticsManager) -> u64 {
             child * 2
         }
         PlanNodeEnum::Expand(n) => {
-            let child = n.dependencies().first().map(|c| estimate_leaf_rows(c, stats)).unwrap_or(10000);
+            let child = n
+                .dependencies()
+                .first()
+                .map(|c| estimate_leaf_rows(c, stats))
+                .unwrap_or(10000);
             child * 3
         }
         _ => 10000,
@@ -222,12 +227,18 @@ fn flatten_recursive(
     match classify_join(node) {
         JoinNodeType::Inner => {
             let (left, right, hash_keys, probe_keys) = match node {
-                PlanNodeEnum::InnerJoin(n) => {
-                    (n.left_input(), n.right_input(), n.hash_keys().to_vec(), n.probe_keys().to_vec())
-                }
-                PlanNodeEnum::HashInnerJoin(n) => {
-                    (n.left_input(), n.right_input(), n.hash_keys().to_vec(), n.probe_keys().to_vec())
-                }
+                PlanNodeEnum::InnerJoin(n) => (
+                    n.left_input(),
+                    n.right_input(),
+                    n.hash_keys().to_vec(),
+                    n.probe_keys().to_vec(),
+                ),
+                PlanNodeEnum::HashInnerJoin(n) => (
+                    n.left_input(),
+                    n.right_input(),
+                    n.hash_keys().to_vec(),
+                    n.probe_keys().to_vec(),
+                ),
                 _ => unreachable!(),
             };
 
@@ -295,9 +306,7 @@ fn has_index_scan(node: &PlanNodeEnum) -> bool {
     )
 }
 
-pub fn build_optimizer_input(
-    chain: &FlattenedJoinChain,
-) -> (Vec<TableInfo>, Vec<JoinCondition>) {
+pub fn build_optimizer_input(chain: &FlattenedJoinChain) -> (Vec<TableInfo>, Vec<JoinCondition>) {
     let tables: Vec<TableInfo> = chain
         .leaves
         .iter()
@@ -328,8 +337,7 @@ pub fn build_optimizer_input(
             } else {
                 (left.to_string(), right.to_string())
             };
-            JoinCondition::new(left_id, right_id)
-                .with_selectivity(p.selectivity)
+            JoinCondition::new(left_id, right_id).with_selectivity(p.selectivity)
         })
         .collect();
 
@@ -406,13 +414,11 @@ pub fn reconstruct_join_tree(
                 } else {
                     (rid, lid)
                 };
-                let (hash_keys, probe_keys) = resolve_keys_for_pair(
-                    &pair_key,
-                    &pred_map,
-                    &left,
-                    &right_node,
-                );
-                Some(build_hash_inner_join(left, right_node, hash_keys, probe_keys))
+                let (hash_keys, probe_keys) =
+                    resolve_keys_for_pair(&pair_key, &pred_map, &left, &right_node);
+                Some(build_hash_inner_join(
+                    left, right_node, hash_keys, probe_keys,
+                ))
             }
             None => Some(right_node),
         };
@@ -434,8 +440,12 @@ fn resolve_keys_for_pair(
             let left_vars = collect_variables_from_slice(hk);
             let right_vars = collect_variables_from_slice(pk);
 
-            let swap = left_vars.iter().any(|v| right_id.contains(v) || v.contains(&right_id))
-                || right_vars.iter().any(|v| left_id.contains(v) || v.contains(&left_id));
+            let swap = left_vars
+                .iter()
+                .any(|v| right_id.contains(v) || v.contains(&right_id))
+                || right_vars
+                    .iter()
+                    .any(|v| left_id.contains(v) || v.contains(&left_id));
             if swap {
                 return (pk.clone(), hk.clone());
             }
@@ -626,7 +636,8 @@ mod tests {
 
     fn make_scan(id: &str, rows: u64) -> PlanNodeEnum {
         // Use a StartNode as a stand-in leaf for testing
-        let mut node = crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
+        let mut node =
+            crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
         node.set_output_var(id.to_string());
         node.set_col_names(vec![id.to_string()]);
         PlanNodeEnum::Start(node)
@@ -641,20 +652,26 @@ mod tests {
         let ctx = std::sync::Arc::new(
             crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
-        let hash_keys: Vec<ContextualExpression> = hk.iter().map(|s| {
-            let meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::types::expr::Expression::Variable(s.to_string()),
-            );
-            let id = ctx.register_expression(meta);
-            crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
-        }).collect();
-        let probe_keys: Vec<ContextualExpression> = pk.iter().map(|s| {
-            let meta = crate::core::types::expr::ExpressionMeta::new(
-                crate::core::types::expr::Expression::Variable(s.to_string()),
-            );
-            let id = ctx.register_expression(meta);
-            crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
-        }).collect();
+        let hash_keys: Vec<ContextualExpression> = hk
+            .iter()
+            .map(|s| {
+                let meta = crate::core::types::expr::ExpressionMeta::new(
+                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                );
+                let id = ctx.register_expression(meta);
+                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+            })
+            .collect();
+        let probe_keys: Vec<ContextualExpression> = pk
+            .iter()
+            .map(|s| {
+                let meta = crate::core::types::expr::ExpressionMeta::new(
+                    crate::core::types::expr::Expression::Variable(s.to_string()),
+                );
+                let id = ctx.register_expression(meta);
+                crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
+            })
+            .collect();
         PlanNodeEnum::HashInnerJoin(
             HashInnerJoinNode::new(left, right, hash_keys, probe_keys).unwrap(),
         )
@@ -729,9 +746,8 @@ mod tests {
             crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
         use crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode;
-        let left_join = PlanNodeEnum::LeftJoin(
-            LeftJoinNode::new(inner, c, vec![], vec![]).unwrap(),
-        );
+        let left_join =
+            PlanNodeEnum::LeftJoin(LeftJoinNode::new(inner, c, vec![], vec![]).unwrap());
 
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
@@ -748,12 +764,7 @@ mod tests {
             tables.push(make_scan(&format!("t{}", i), (i as u64 + 1) * 100));
         }
         // Build a left-deep join chain
-        let mut join = make_hash_join(
-            tables[0].clone(),
-            tables[1].clone(),
-            vec![],
-            vec![],
-        );
+        let mut join = make_hash_join(tables[0].clone(), tables[1].clone(), vec![], vec![]);
         for i in 2..12 {
             join = make_hash_join(join, tables[i].clone(), vec![], vec![]);
         }

@@ -696,10 +696,30 @@ fn parse_function_call(
 
     let is_aggregate = matches!(
         name_upper.as_str(),
-        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "COLLECT" | "COLLECT_SET" | "STD"
-            | "STDDEV_POP" | "STDDEV_SAMP" | "PRODUCT" | "PERCENTILE_CONT" | "VARIANCE"
-            | "MEDIAN" | "MODE" | "BOOL_AND" | "BOOL_OR" | "PERCENTILE" | "DISTINCT" | "BIT_AND"
-            | "BIT_OR" | "GROUP_CONCAT" | "VEC_SUM" | "VEC_AVG"
+        "COUNT"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
+            | "COLLECT"
+            | "COLLECT_SET"
+            | "STD"
+            | "STDDEV_POP"
+            | "STDDEV_SAMP"
+            | "PRODUCT"
+            | "PERCENTILE_CONT"
+            | "VARIANCE"
+            | "MEDIAN"
+            | "MODE"
+            | "BOOL_AND"
+            | "BOOL_OR"
+            | "PERCENTILE"
+            | "DISTINCT"
+            | "BIT_AND"
+            | "BIT_OR"
+            | "GROUP_CONCAT"
+            | "VEC_SUM"
+            | "VEC_AVG"
     );
 
     if is_aggregate {
@@ -736,10 +756,14 @@ fn parse_function_call(
             "MIN" => crate::core::types::operators::AggregateFunction::Min(field_name),
             "MAX" => crate::core::types::operators::AggregateFunction::Max(field_name),
             "COLLECT" => crate::core::types::operators::AggregateFunction::Collect(field_name),
-            "COLLECT_SET" => crate::core::types::operators::AggregateFunction::CollectSet(field_name),
+            "COLLECT_SET" => {
+                crate::core::types::operators::AggregateFunction::CollectSet(field_name)
+            }
             "STD" => crate::core::types::operators::AggregateFunction::Std(field_name),
             "STDDEV_POP" => crate::core::types::operators::AggregateFunction::StddevPop(field_name),
-            "STDDEV_SAMP" => crate::core::types::operators::AggregateFunction::StddevSamp(field_name),
+            "STDDEV_SAMP" => {
+                crate::core::types::operators::AggregateFunction::StddevSamp(field_name)
+            }
             "PRODUCT" => crate::core::types::operators::AggregateFunction::Product(field_name),
             "PERCENTILE_CONT" => {
                 let percentile = if args.len() > 1 {
@@ -839,7 +863,10 @@ fn parse_function_call(
             })
         } else {
             Ok(ParseResult {
-                expr: Expression::Function { name, args: func_args },
+                expr: Expression::Function {
+                    name,
+                    args: func_args,
+                },
                 span,
             })
         }

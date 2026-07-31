@@ -7,9 +7,9 @@ use crate::core::types::expr::Expression;
 use crate::core::types::semantic::{AliasType, ValueType};
 use crate::core::types::EdgeDirection;
 use crate::core::value::NullType;
+use crate::core::DBResult;
 use crate::core::DataType;
 use crate::core::Value;
-use crate::core::DBResult;
 use crate::query::parser::ast::pattern::{PathElement, Pattern};
 use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::{
@@ -19,12 +19,11 @@ use crate::query::parser::ast::{
 use super::bound::{
     BoundAggregateCall, BoundExpression, BoundFetchEdgesStatement, BoundFetchVerticesStatement,
     BoundFindPathStatement, BoundFunctionCall, BoundGoStatement, BoundGroupByStatement,
-    BoundLookupStatement, BoundLookupTarget, BoundMatchDeleteClause,
-    BoundMatchDeleteTarget, BoundMatchStatement, BoundPipeStatement,
-    BoundReturnClause, BoundReturnItem, BoundReturnStatement,
-    BoundSetOperationStatement, BoundStatement, BoundSubgraphStatement,
-    BoundUnwindStatement, BoundWhereClause, BoundWithStatement, BoundYieldClause,
-    BoundYieldItem, SetOperationKind,
+    BoundLookupStatement, BoundLookupTarget, BoundMatchDeleteClause, BoundMatchDeleteTarget,
+    BoundMatchStatement, BoundPipeStatement, BoundReturnClause, BoundReturnItem,
+    BoundReturnStatement, BoundSetOperationStatement, BoundStatement, BoundSubgraphStatement,
+    BoundUnwindStatement, BoundWhereClause, BoundWithStatement, BoundYieldClause, BoundYieldItem,
+    SetOperationKind,
 };
 use super::expr_binder::ExpressionBinder;
 use super::query_graph::{
@@ -66,7 +65,11 @@ impl Binder {
     }
 
     /// Bind an AST into a fully resolved BoundStatement.
-    pub fn bind(mut self, ast: Arc<Ast>, _qctx: Arc<crate::query::QueryContext>) -> DBResult<BoundStatement> {
+    pub fn bind(
+        mut self,
+        ast: Arc<Ast>,
+        _qctx: Arc<crate::query::QueryContext>,
+    ) -> DBResult<BoundStatement> {
         let bound = self.bind_stmt(&ast.stmt)?;
         Ok(bound)
     }
@@ -97,9 +100,11 @@ impl Binder {
         super::semantic_checker::validate_expression(expr)?;
         let type_hint = expr.data_type();
         let Some(inner) = expr.get_expression() else {
-            return Err(DBError::from(crate::core::error::QueryError::invalid_query(
-                "Expression not found in context".to_string(),
-            )));
+            return Err(DBError::from(
+                crate::core::error::QueryError::invalid_query(
+                    "Expression not found in context".to_string(),
+                ),
+            ));
         };
         self.bind_inner_expr(&inner, type_hint.as_ref())
     }
@@ -168,11 +173,12 @@ impl Binder {
                     .iter()
                     .map(|a| self.bind_inner_expr(a, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                let arg_types: Vec<DataType> =
-                    args.iter().map(|a| a.return_type()).collect();
+                let arg_types: Vec<DataType> = args.iter().map(|a| a.return_type()).collect();
                 let return_type = {
                     let expr_binder = ExpressionBinder::new(&self.scope);
-                    ValueType::from_data_type(&expr_binder.deduce_function_return_type(name, &arg_types))
+                    ValueType::from_data_type(
+                        &expr_binder.deduce_function_return_type(name, &arg_types),
+                    )
                 };
                 Ok(BoundExpression::Function(BoundFunctionCall {
                     name: name.clone(),
@@ -190,10 +196,15 @@ impl Binder {
                     .iter()
                     .map(|a| self.bind_inner_expr(a, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                let arg_type = args.first().map(|a| a.return_type()).unwrap_or(DataType::Empty);
+                let arg_type = args
+                    .first()
+                    .map(|a| a.return_type())
+                    .unwrap_or(DataType::Empty);
                 let return_type = {
                     let expr_binder = ExpressionBinder::new(&self.scope);
-                    ValueType::from_data_type(&expr_binder.deduce_aggregate_return_type(func, &arg_type))
+                    ValueType::from_data_type(
+                        &expr_binder.deduce_aggregate_return_type(func, &arg_type),
+                    )
                 };
                 Ok(BoundExpression::Aggregate(BoundAggregateCall {
                     function_name: format!("{:?}", func),
@@ -237,7 +248,9 @@ impl Binder {
                     .as_ref()
                     .map(|e| self.bind_inner_expr(e, None))
                     .transpose()?;
-                let return_type = conds.first().map(|(_, v)| v.return_type())
+                let return_type = conds
+                    .first()
+                    .map(|(_, v)| v.return_type())
                     .or_else(|| def.as_ref().map(|d| d.return_type()))
                     .unwrap_or(DataType::String);
                 Ok(BoundExpression::Case {
@@ -257,10 +270,7 @@ impl Binder {
                     target_type: target_type.clone(),
                 })
             }
-            Expression::Subscript {
-                collection,
-                index,
-            } => {
+            Expression::Subscript { collection, index } => {
                 let col = self.bind_inner_expr(collection, None)?;
                 let idx = self.bind_inner_expr(index, None)?;
                 Ok(BoundExpression::Subscript {
@@ -286,8 +296,14 @@ impl Binder {
                 Ok(BoundExpression::List(
                     vec![
                         col,
-                        s.unwrap_or(BoundExpression::Literal(Value::Null(NullType::Null), DataType::Null)),
-                        e.unwrap_or(BoundExpression::Literal(Value::Null(NullType::Null), DataType::Null)),
+                        s.unwrap_or(BoundExpression::Literal(
+                            Value::Null(NullType::Null),
+                            DataType::Null,
+                        )),
+                        e.unwrap_or(BoundExpression::Literal(
+                            Value::Null(NullType::Null),
+                            DataType::Null,
+                        )),
                     ],
                     DataType::List,
                 ))
@@ -297,10 +313,7 @@ impl Binder {
                     .iter()
                     .map(|e| self.bind_inner_expr(e, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::Path(
-                    elems,
-                    DataType::List,
-                ))
+                Ok(BoundExpression::Path(elems, DataType::List))
             }
             Expression::Label(l) => Ok(BoundExpression::Label(l.clone())),
             Expression::ListComprehension {
@@ -342,7 +355,10 @@ impl Binder {
                 property: property.clone(),
                 value_type: DataType::String,
             }),
-            Expression::EdgeProperty { edge_name, property } => Ok(BoundExpression::EdgeProperty {
+            Expression::EdgeProperty {
+                edge_name,
+                property,
+            } => Ok(BoundExpression::EdgeProperty {
                 edge_name: edge_name.clone(),
                 property: property.clone(),
                 value_type: DataType::String,
@@ -382,15 +398,11 @@ impl Binder {
                     .iter()
                     .map(|e| self.bind_inner_expr(e, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::PathBuild(
-                    elems,
-                    DataType::List,
-                ))
+                Ok(BoundExpression::PathBuild(elems, DataType::List))
             }
-            Expression::Parameter(p) => Ok(BoundExpression::ParameterRef(
-                p.clone(),
-                DataType::String,
-            )),
+            Expression::Parameter(p) => {
+                Ok(BoundExpression::ParameterRef(p.clone(), DataType::String))
+            }
             Expression::Vector(v) => Ok(BoundExpression::Vector(v.clone())),
             Expression::WindowFunction {
                 name,
@@ -464,13 +476,19 @@ impl Binder {
 
     // ── MATCH binding (produces QueryGraph) ────────────────────────────────
 
-    fn bind_match(&mut self, stmt: &crate::query::parser::ast::MatchStmt) -> DBResult<BoundStatement> {
+    fn bind_match(
+        &mut self,
+        stmt: &crate::query::parser::ast::MatchStmt,
+    ) -> DBResult<BoundStatement> {
         let query_graph = self.build_query_graph(&stmt.patterns)?;
 
         let where_clause = stmt
             .where_clause
             .as_ref()
-            .map(|c| self.bind_expr(c).map(|be| BoundWhereClause { condition: be }))
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
             .transpose()?;
 
         let return_clause = stmt
@@ -486,12 +504,11 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| {
-                            super::bound::BoundOrderByItem {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
                                 expression: be,
                                 direction: item.direction,
-                            }
-                        })
+                            })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
@@ -509,7 +526,11 @@ impl Binder {
                 name: node.variable.clone(),
                 alias_type: AliasType::Node,
                 tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
-                properties: node.tags.iter().flat_map(|t| t.properties.clone()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
                 is_defined: true,
             });
         }
@@ -517,8 +538,16 @@ impl Binder {
             self.scope.define_variable(BinderVariable {
                 name: edge.variable.clone(),
                 alias_type: AliasType::Edge,
-                tags: edge.edge_types.iter().map(|e| e.edge_type_name.to_string()).collect(),
-                properties: edge.edge_types.iter().flat_map(|e| e.properties.clone()).collect(),
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
                 is_defined: true,
             });
         }
@@ -554,7 +583,9 @@ impl Binder {
     ) -> DBResult<Option<String>> {
         match pattern {
             Pattern::Node(np) => {
-                let var = np.variable.clone()
+                let var = np
+                    .variable
+                    .clone()
                     .unwrap_or_else(|| format!("__anon_n{}", graph.node_count()));
 
                 let tags = self.resolve_tags(&np.labels)?;
@@ -565,7 +596,9 @@ impl Binder {
                 Ok(Some(var))
             }
             Pattern::Edge(ep) => {
-                let var = ep.variable.clone()
+                let var = ep
+                    .variable
+                    .clone()
                     .unwrap_or_else(|| format!("__anon_e{}", graph.edge_count()));
 
                 let edge_types = self.resolve_edge_types(&ep.edge_types)?;
@@ -613,7 +646,9 @@ impl Binder {
     ) -> DBResult<Option<String>> {
         match element {
             PathElement::Node(np) => {
-                let var = np.variable.clone()
+                let var = np
+                    .variable
+                    .clone()
                     .unwrap_or_else(|| format!("__anon_n{}", graph.node_count()));
                 let tags = self.resolve_tags(&np.labels)?;
                 graph.add_node(BoundNodePattern {
@@ -623,7 +658,9 @@ impl Binder {
                 Ok(Some(var))
             }
             PathElement::Edge(ep) => {
-                let var = ep.variable.clone()
+                let var = ep
+                    .variable
+                    .clone()
                     .unwrap_or_else(|| format!("__anon_e{}", graph.edge_count()));
                 let edge_types = self.resolve_edge_types(&ep.edge_types)?;
 
@@ -648,7 +685,9 @@ impl Binder {
                 Ok(None)
             }
             PathElement::Optional(elem) => self.process_path_element(elem, graph, prev_node_var),
-            PathElement::Repeated(elem, _rep) => self.process_path_element(elem, graph, prev_node_var),
+            PathElement::Repeated(elem, _rep) => {
+                self.process_path_element(elem, graph, prev_node_var)
+            }
         }
     }
 
@@ -663,18 +702,18 @@ impl Binder {
         if let Some(ref sm) = self.schema_manager {
             if let Some(ref space_name) = self.space_name {
                 for label in labels {
-                    let tag_info = sm
-                        .get_tag(space_name, label)
-                        .map_err(|e| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(
-                                format!("Failed to resolve tag '{}': {}", label, e),
-                            ))
-                        })?
-                        .ok_or_else(|| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(
-                                format!("Tag '{}' not found in space '{}'", label, space_name),
-                            ))
-                        })?;
+                    let tag_info =
+                        sm.get_tag(space_name, label)
+                            .map_err(|e| {
+                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                    format!("Failed to resolve tag '{}': {}", label, e),
+                                ))
+                            })?
+                            .ok_or_else(|| {
+                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                    format!("Tag '{}' not found in space '{}'", label, space_name),
+                                ))
+                            })?;
 
                     let mut properties = std::collections::HashMap::new();
                     for prop in &tag_info.properties {
@@ -714,14 +753,16 @@ impl Binder {
                     let edge_info = sm
                         .get_edge_type(space_name, et)
                         .map_err(|e| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(
-                                format!("Failed to resolve edge type '{}': {}", et, e),
-                            ))
+                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                                "Failed to resolve edge type '{}': {}",
+                                et, e
+                            )))
                         })?
                         .ok_or_else(|| {
-                            DBError::from(crate::core::error::QueryError::invalid_query(
-                                format!("Edge type '{}' not found in space '{}'", et, space_name),
-                            ))
+                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                                "Edge type '{}' not found in space '{}'",
+                                et, space_name
+                            )))
                         })?;
 
                     let mut properties = std::collections::HashMap::new();
@@ -763,7 +804,10 @@ impl Binder {
         let where_clause = stmt
             .where_clause
             .as_ref()
-            .map(|c| self.bind_expr(c).map(|be| BoundWhereClause { condition: be }))
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
             .transpose()?;
 
         let yield_clause = stmt
@@ -783,13 +827,20 @@ impl Binder {
             steps: stmt.steps.clone(),
             from,
             over,
-            direction: stmt.over.as_ref().map(|o| o.direction).unwrap_or(EdgeDirection::Out),
+            direction: stmt
+                .over
+                .as_ref()
+                .map(|o| o.direction)
+                .unwrap_or(EdgeDirection::Out),
             where_clause,
             yield_clause,
         }))
     }
 
-    fn bind_lookup(&mut self, stmt: &crate::query::parser::ast::LookupStmt) -> DBResult<BoundStatement> {
+    fn bind_lookup(
+        &mut self,
+        stmt: &crate::query::parser::ast::LookupStmt,
+    ) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
             crate::query::parser::ast::LookupTarget::Tag(t) => {
                 self.resolve_tags(std::slice::from_ref(t))?;
@@ -807,7 +858,10 @@ impl Binder {
         let where_clause = stmt
             .where_clause
             .as_ref()
-            .map(|c| self.bind_expr(c).map(|be| BoundWhereClause { condition: be }))
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
             .transpose()?;
 
         let yield_clause = stmt
@@ -824,7 +878,10 @@ impl Binder {
         }))
     }
 
-    fn bind_fetch(&mut self, stmt: &crate::query::parser::ast::FetchStmt) -> DBResult<BoundStatement> {
+    fn bind_fetch(
+        &mut self,
+        stmt: &crate::query::parser::ast::FetchStmt,
+    ) -> DBResult<BoundStatement> {
         match &stmt.target {
             FetchTarget::Vertices {
                 tag_name,
@@ -879,7 +936,10 @@ impl Binder {
         let where_clause = stmt
             .where_clause
             .as_ref()
-            .map(|c| self.bind_expr(c).map(|be| BoundWhereClause { condition: be }))
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
             .transpose()?;
 
         let yield_clause = stmt
@@ -888,7 +948,10 @@ impl Binder {
             .map(|yc| self.bind_yield_clause(yc))
             .transpose()?;
 
-        let over = stmt.over.as_ref().map(|o| (o.edge_types.clone(), o.direction));
+        let over = stmt
+            .over
+            .as_ref()
+            .map(|o| (o.edge_types.clone(), o.direction));
 
         Ok(BoundStatement::FindPath(BoundFindPathStatement {
             span: stmt.span,
@@ -918,7 +981,10 @@ impl Binder {
         let where_clause = stmt
             .where_clause
             .as_ref()
-            .map(|c| self.bind_expr(c).map(|be| BoundWhereClause { condition: be }))
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
             .transpose()?;
 
         let yield_clause = stmt
@@ -927,7 +993,10 @@ impl Binder {
             .map(|yc| self.bind_yield_clause(yc))
             .transpose()?;
 
-        let over = stmt.over.as_ref().map(|o| (o.edge_types.clone(), o.direction));
+        let over = stmt
+            .over
+            .as_ref()
+            .map(|o| (o.edge_types.clone(), o.direction));
 
         Ok(BoundStatement::Subgraph(BoundSubgraphStatement {
             span: stmt.span,
@@ -963,12 +1032,11 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| {
-                            super::bound::BoundOrderByItem {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
                                 expression: be,
                                 direction: item.direction,
-                            }
-                        })
+                            })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
@@ -984,7 +1052,10 @@ impl Binder {
         }))
     }
 
-    fn bind_with(&mut self, stmt: &crate::query::parser::ast::WithStmt) -> DBResult<BoundStatement> {
+    fn bind_with(
+        &mut self,
+        stmt: &crate::query::parser::ast::WithStmt,
+    ) -> DBResult<BoundStatement> {
         let items = stmt
             .items
             .iter()
@@ -1027,10 +1098,7 @@ impl Binder {
         &mut self,
         stmt: &crate::query::parser::ast::PipeStmt,
     ) -> DBResult<BoundStatement> {
-        let statements = vec![
-            self.bind_stmt(&stmt.left)?,
-            self.bind_stmt(&stmt.right)?,
-        ];
+        let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
 
         Ok(BoundStatement::Pipe(BoundPipeStatement {
             span: stmt.span,
@@ -1100,12 +1168,11 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| {
-                            super::bound::BoundOrderByItem {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
                                 expression: be,
                                 direction: item.direction,
-                            }
-                        })
+                            })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
@@ -1143,12 +1210,11 @@ impl Binder {
                 ob.items
                     .iter()
                     .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| {
-                            super::bound::BoundOrderByItem {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
                                 expression: be,
                                 direction: item.direction,
-                            }
-                        })
+                            })
                     })
                     .collect::<DBResult<Vec<_>>>()
             })

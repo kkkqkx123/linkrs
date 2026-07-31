@@ -481,8 +481,12 @@ impl StreamingExecutor {
         let Some(entry) = rt.profile().get_entry(&self.profile_key()) else {
             return;
         };
-        entry.spilled_bytes.fetch_add(spilled_bytes, std::sync::atomic::Ordering::Relaxed);
-        entry.spill_count.fetch_add(spill_count, std::sync::atomic::Ordering::Relaxed);
+        entry
+            .spilled_bytes
+            .fetch_add(spilled_bytes, std::sync::atomic::Ordering::Relaxed);
+        entry
+            .spill_count
+            .fetch_add(spill_count, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a resource cleanup callback with the attached runtime.

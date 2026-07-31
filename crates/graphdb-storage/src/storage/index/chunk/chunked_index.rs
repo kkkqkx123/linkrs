@@ -198,9 +198,7 @@ impl ChunkedIndex {
         let desc_size: usize = self
             .chunks
             .iter()
-            .map(|(_, min_k, max_k)| {
-                std::mem::size_of::<ChunkId>() + min_k.len() + max_k.len()
-            })
+            .map(|(_, min_k, max_k)| std::mem::size_of::<ChunkId>() + min_k.len() + max_k.len())
             .sum();
         self.prefix.capacity() as u64 + desc_size as u64 + self.pool.current_usage()
     }
@@ -290,7 +288,11 @@ mod tests {
             map.insert(vec![i; 512], IndexRecord::new(i as u64));
         }
         let idx = ChunkedIndex::from_btree(vec![], &map, u64::MAX);
-        assert!(idx.chunk_count() >= 2, "expected multiple chunks, got {}", idx.chunk_count());
+        assert!(
+            idx.chunk_count() >= 2,
+            "expected multiple chunks, got {}",
+            idx.chunk_count()
+        );
         assert_eq!(idx.snapshot().len(), 200);
     }
 
@@ -306,13 +308,23 @@ mod tests {
     fn range_with_empty_lower_returns_all() {
         let mut map = BTreeMap::new();
         // suffix key: OrderedCodec(Int(2020)) + entity_id bytes
-        map.insert(vec![0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xE4, 0x01], IndexRecord::new(10));
-        map.insert(vec![0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xE5, 0x02], IndexRecord::new(10));
+        map.insert(
+            vec![0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xE4, 0x01],
+            IndexRecord::new(10),
+        );
+        map.insert(
+            vec![0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xE5, 0x02],
+            IndexRecord::new(10),
+        );
         let idx = ChunkedIndex::from_btree(vec![], &map, 65536);
         // Simulate IndexPredicate::All with prefix stripping:
         // lower_suffix = &[], upper_suffix = &[last_byte+1] where last_byte is from build_range_end
         let results = idx.range(&[], &[0xFF]);
-        assert_eq!(results.len(), 2, "should find all entries with empty lower bound");
+        assert_eq!(
+            results.len(),
+            2,
+            "should find all entries with empty lower bound"
+        );
         // upper bound that is larger than all keys
         let results = idx.range(&[], &[0x04]);
         assert_eq!(results.len(), 2, "0x03 < 0x04, so all entries should match");

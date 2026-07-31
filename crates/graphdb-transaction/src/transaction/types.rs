@@ -675,11 +675,7 @@ impl TransactionStats {
                 });
     }
 
-    pub fn record_resource_metrics(
-        &self,
-        _metrics: TransactionResourceMetrics,
-    ) {
-    }
+    pub fn record_resource_metrics(&self, _metrics: TransactionResourceMetrics) {}
 
     pub fn record_txn_begin(&self) {
         self.increment_total();

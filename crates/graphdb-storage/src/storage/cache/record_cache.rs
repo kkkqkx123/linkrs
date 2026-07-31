@@ -99,8 +99,10 @@ impl RecordCache {
     /// Update cache capacities dynamically (e.g., in response to memory pressure).
     pub fn set_capacity(&self, new_max_memory: u64) {
         let total_ratio = self.config.memory_ratio.0 + self.config.memory_ratio.1;
-        let base_vertex_memory = new_max_memory * self.config.memory_ratio.0 as u64 / total_ratio as u64;
-        let base_id_index_memory = new_max_memory * self.config.memory_ratio.1 as u64 / total_ratio as u64;
+        let base_vertex_memory =
+            new_max_memory * self.config.memory_ratio.0 as u64 / total_ratio as u64;
+        let base_id_index_memory =
+            new_max_memory * self.config.memory_ratio.1 as u64 / total_ratio as u64;
         // BufferPool capacity is used for eviction target; set via the pool's capacity field
         // Note: BufferPool doesn't expose set_capacity - the eviction threshold is read from capacity
         // For dynamic resizing, we recreate pools with new capacities
@@ -143,16 +145,18 @@ impl RecordCache {
         ts: Timestamp,
     ) {
         let key = (IdIndexCacheKey::new(label_id, external_id.to_string()), ts);
-        self.id_index_pool
-            .insert(key, IdIndexCacheValue { internal_id }, std::mem::size_of::<IdIndexCacheValue>());
+        self.id_index_pool.insert(
+            key,
+            IdIndexCacheValue { internal_id },
+            std::mem::size_of::<IdIndexCacheValue>(),
+        );
         self.id_index_stats.record_insertion();
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
         let key = IdIndexCacheKey::new(label_id, external_id.to_string());
-        self.id_index_pool.retain(|(k, _ts), _| {
-            k.label_id != label_id || k.external_id != external_id
-        });
+        self.id_index_pool
+            .retain(|(k, _ts), _| k.label_id != label_id || k.external_id != external_id);
         self.id_index_stats.record_invalidation();
     }
 
@@ -174,8 +178,7 @@ impl RecordCache {
     pub fn insert_vertex(&self, key: VertexCacheKey, vertex: CachedVertex) {
         let ts = vertex.cached_at_ts;
         let size = vertex.estimated_size() as usize;
-        self.vertex_pool
-            .insert((key, ts), vertex, size);
+        self.vertex_pool.insert((key, ts), vertex, size);
         self.vertex_stats.record_insertion();
     }
 
@@ -191,13 +194,15 @@ impl RecordCache {
     /// Invalidate all vertex entries for a given label.
     /// Scans all entries, O(n) complexity.
     pub fn invalidate_vertices_by_label(&self, label_id: u32) {
-        self.vertex_pool.retain(|(vk, _ts), _| vk.label_id != label_id);
+        self.vertex_pool
+            .retain(|(vk, _ts), _| vk.label_id != label_id);
         self.vertex_stats.record_invalidation();
     }
 
     /// Invalidate all ID index entries for a given label.
     pub fn invalidate_id_indexes_by_label(&self, label_id: u32) {
-        self.id_index_pool.retain(|(k, _ts), _| k.label_id != label_id);
+        self.id_index_pool
+            .retain(|(k, _ts), _| k.label_id != label_id);
         self.id_index_stats.record_invalidation();
     }
 

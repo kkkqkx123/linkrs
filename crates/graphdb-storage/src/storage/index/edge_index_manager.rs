@@ -20,8 +20,7 @@ pub(crate) fn compute_edge_index_scan_range(
     let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
     match &plan.predicate {
         IndexPredicate::Equal(value) => {
-            let prefix =
-                KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
+            let prefix = KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
             let end = KeyBuilder::build_range_end(&prefix);
             Ok((prefix.0, end.0))
         }
@@ -33,11 +32,8 @@ pub(crate) fn compute_edge_index_scan_range(
         } => {
             let start = match lower {
                 Some(value) => {
-                    let prefix = KeyBuilder::build_edge_index_value_prefix(
-                        space_id,
-                        &index.name,
-                        value,
-                    )?;
+                    let prefix =
+                        KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
                     if *include_lower {
                         prefix.0
                     } else {
@@ -48,11 +44,8 @@ pub(crate) fn compute_edge_index_scan_range(
             };
             let end = match upper {
                 Some(value) => {
-                    let prefix = KeyBuilder::build_edge_index_value_prefix(
-                        space_id,
-                        &index.name,
-                        value,
-                    )?;
+                    let prefix =
+                        KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
                     if *include_upper {
                         KeyBuilder::build_range_end(&prefix).0
                     } else {
@@ -238,11 +231,9 @@ fn project_edge_row(
     };
     let columns = included_columns.unwrap_or(&[]);
     if !projection.is_empty()
-        && !projection.iter().all(|name| {
-            columns
-                .iter()
-                .any(|(candidate, _)| candidate == name)
-        })
+        && !projection
+            .iter()
+            .all(|name| columns.iter().any(|(candidate, _)| candidate == name))
     {
         return IndexRow::RowId(entity_ref);
     }
@@ -429,16 +420,17 @@ impl EdgePropertyIndex {
         self.indexes.contains_key(prop_name)
     }
 
+    /// Pool capacity used when constructing chunked index files.
+    pub fn pool_capacity(&self) -> u64 {
+        self.pool_capacity
+    }
+
     pub fn index_names(&self) -> Vec<String> {
         self.indexes.keys().cloned().collect()
     }
 
     pub fn memory_usage(&self) -> u64 {
-        let index_mem: u64 = self
-            .indexes
-            .values()
-            .map(|idx| idx.memory_usage())
-            .sum();
+        let index_mem: u64 = self.indexes.values().map(|idx| idx.memory_usage()).sum();
         index_mem + self.deleted_filter.memory_bytes() as u64
     }
 }
@@ -514,5 +506,3 @@ mod tests {
         assert!(results.is_empty());
     }
 }
-
-

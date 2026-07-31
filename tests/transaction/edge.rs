@@ -8,7 +8,6 @@
 //! - Multiple edge types
 //! - Edge direction validation
 
-
 use graphdb::test_utils::test_scenario::TestScenario;
 
 /// Test edge creation in transaction

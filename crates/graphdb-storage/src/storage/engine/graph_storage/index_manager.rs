@@ -1,5 +1,7 @@
 use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp};
+use crate::core::types::{
+    CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp,
+};
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
@@ -401,12 +403,9 @@ fn build_vertex_index_data(
             let logical_reverse_key =
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, &vid_value, &index.name)?;
 
-            let entry = IndexRecord::new_with_columns(
-                snapshot_timestamp,
-                included_columns.clone(),
-            )
-            .with_entity_version(snapshot_timestamp)
-            .with_entity_ref(EntityRef::Vertex(vertex.vid));
+            let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
+                .with_entity_version(snapshot_timestamp)
+                .with_entity_ref(EntityRef::Vertex(vertex.vid));
 
             forward.insert(logical_forward_key.0, entry.clone());
             reverse.insert(logical_reverse_key.0, entry);
@@ -758,12 +757,9 @@ fn build_edge_index_data(
                 &index.name,
             )?;
 
-            let entry = IndexRecord::new_with_columns(
-                snapshot_timestamp,
-                included_columns.clone(),
-            )
-            .with_entity_version(snapshot_timestamp)
-            .with_entity_ref(edge_entity_ref(edge));
+            let entry = IndexRecord::new_with_columns(snapshot_timestamp, included_columns.clone())
+                .with_entity_version(snapshot_timestamp)
+                .with_entity_ref(edge_entity_ref(edge));
 
             forward.insert(logical_forward_key.0, entry.clone());
             reverse.insert(logical_reverse_key.0, entry);
@@ -1084,9 +1080,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
         let filtered = super::wal_intents_for_index(&ctx, 1, &index, CommitLsn::ZERO, barrier_lsn)
             .expect("committed intents should be readable");
@@ -1127,9 +1123,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
         storage
             .create_tag_index("test_space", &index)
@@ -1216,9 +1212,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
 
         {
@@ -1279,11 +1275,7 @@ mod tests {
             .rebuild_tag_index("test_space", "person_name_idx")
             .expect("rebuild should restart after crash recovery"));
         let indexed = storage
-            .lookup_index(
-                "test_space",
-                "person_name_idx",
-                &Value::string("Alice"),
-            )
+            .lookup_index("test_space", "person_name_idx", &Value::string("Alice"))
             .expect("rebuilt index should be readable");
         assert_eq!(indexed, vec![Value::from(VertexId::from_int64(1))]);
     }
@@ -1304,9 +1296,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
 
         super::create_tag_index(&ctx, "test_space", &index)
@@ -1334,12 +1326,7 @@ mod tests {
     #[test]
     fn test_lookup_index_on_nonexistent_space() {
         let ctx = setup_context();
-        let result = super::lookup_index(
-            &ctx,
-            "no_space",
-            "some_index",
-            &Value::string("test"),
-        );
+        let result = super::lookup_index(&ctx, "no_space", "some_index", &Value::string("test"));
         assert!(result.is_err());
     }
 
@@ -1558,9 +1545,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-        is_unique: false,
-        covering: false,
-        partial_condition: None,
+            is_unique: false,
+            covering: false,
+            partial_condition: None,
         });
 
         let vertices = vec![];

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult};
@@ -10,9 +10,9 @@ use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::vertex::ShardedVertexTable;
 
+use super::super::ops::endpoint_label_id;
 use super::helpers;
 use super::GraphStorageContext;
-use super::super::ops::endpoint_label_id;
 
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, Arc<ShardedVertexTable>>,
@@ -152,10 +152,14 @@ impl GraphStorageContext {
                     edge_type, space
                 ))
             })?;
-        let src_label = endpoint_label_id(self, space, &edge_info.src_tag_name)?
-            .ok_or_else(|| StorageError::not_found(format!("No source tag for edge {}", edge_type)))?;
-        let dst_label = endpoint_label_id(self, space, &edge_info.dst_tag_name)?
-            .ok_or_else(|| StorageError::not_found(format!("No destination tag for edge {}", edge_type)))?;
+        let src_label =
+            endpoint_label_id(self, space, &edge_info.src_tag_name)?.ok_or_else(|| {
+                StorageError::not_found(format!("No source tag for edge {}", edge_type))
+            })?;
+        let dst_label =
+            endpoint_label_id(self, space, &edge_info.dst_tag_name)?.ok_or_else(|| {
+                StorageError::not_found(format!("No destination tag for edge {}", edge_type))
+            })?;
         let key = EdgeTableKey::new(src_label, dst_label, edge_info.edge_type_id);
         self.persistent
             .data_store
@@ -198,7 +202,8 @@ impl GraphStorageContext {
 
         self.persistent.data_store.with_edge_tables(|edge_tables| {
             edge_tables.get(&key).and_then(|arc| {
-                arc.read().get_edge(src_internal, dst_internal, params.rank, ts)
+                arc.read()
+                    .get_edge(src_internal, dst_internal, params.rank, ts)
             })
         })
     }
@@ -265,17 +270,20 @@ impl GraphStorageContext {
             },
         )?;
 
-        let deleted = self
-            .persistent
-            .data_store
-            .with_single_edge_table_mut(&key, |edge_table| {
-                match (oe_offset, ie_offset) {
-                    (Some(oe), Some(ie)) => {
-                        edge_table.delete_edge_by_offset(src_internal, dst_internal, params.rank, oe, ie, ts)
-                    }
+        let deleted =
+            self.persistent
+                .data_store
+                .with_single_edge_table_mut(&key, |edge_table| match (oe_offset, ie_offset) {
+                    (Some(oe), Some(ie)) => edge_table.delete_edge_by_offset(
+                        src_internal,
+                        dst_internal,
+                        params.rank,
+                        oe,
+                        ie,
+                        ts,
+                    ),
                     _ => edge_table.delete_edge(src_internal, dst_internal, params.rank, ts),
-                }
-            })?;
+                })?;
         if deleted {
             self.mark_edge_modified(params.edge_label);
         }

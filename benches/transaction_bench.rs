@@ -59,18 +59,22 @@ fn bench_write_set_operations(c: &mut Criterion) {
     }
 
     for size in &[10, 100, 1000] {
-        group.bench_with_input(BenchmarkId::new("conflict_check", size), size, |b, &size| {
-            let mut ws1 = WriteSet::new();
-            let mut ws2 = WriteSet::new();
-            for i in 0..size {
-                ws1.record_vertex(VertexId::from_int64(i as i64));
-                ws2.record_vertex(VertexId::from_int64((i + size) as i64));
-            }
-            ws2.record_vertex(VertexId::from_int64(0));
-            b.iter(|| {
-                black_box(ws1.has_conflict_with(&ws2));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("conflict_check", size),
+            size,
+            |b, &size| {
+                let mut ws1 = WriteSet::new();
+                let mut ws2 = WriteSet::new();
+                for i in 0..size {
+                    ws1.record_vertex(VertexId::from_int64(i as i64));
+                    ws2.record_vertex(VertexId::from_int64((i + size) as i64));
+                }
+                ws2.record_vertex(VertexId::from_int64(0));
+                b.iter(|| {
+                    black_box(ws1.has_conflict_with(&ws2));
+                });
+            },
+        );
     }
 
     group.finish();

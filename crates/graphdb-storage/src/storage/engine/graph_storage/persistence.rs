@@ -382,7 +382,9 @@ pub(crate) fn compact_transactional(
 
             wal_guard
                 .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
-                .map_err(|e| StorageError::wal_error(format!("Failed to append compact WAL: {}", e)))?;
+                .map_err(|e| {
+                    StorageError::wal_error(format!("Failed to append compact WAL: {}", e))
+                })?;
         }
 
         ctx.compact(config, timestamp)

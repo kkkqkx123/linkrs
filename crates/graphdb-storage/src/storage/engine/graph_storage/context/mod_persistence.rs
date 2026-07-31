@@ -146,8 +146,7 @@ impl GraphStorageContext {
                                     parts[1].parse::<LabelId>(),
                                     parts[2].parse::<LabelId>(),
                                 ) {
-                                    let key =
-                                        EdgeTableKey::new(src_label, dst_label, edge_label);
+                                    let key = EdgeTableKey::new(src_label, dst_label, edge_label);
                                     let data_store = &self.persistent.data_store;
                                     if let Some(arc) = data_store.try_get_edge_table_mut(&key) {
                                         let mut table = arc.write();

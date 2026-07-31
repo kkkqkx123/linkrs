@@ -88,7 +88,9 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
 
         BoundExpression::ParameterRef(name, _) => Ok(Expression::Parameter(name.clone())),
 
-        BoundExpression::Cast { expr, target_type, .. } => {
+        BoundExpression::Cast {
+            expr, target_type, ..
+        } => {
             let e = convert_bound_to_expression(expr)?;
             Ok(Expression::TypeCast {
                 expression: Box::new(e),
@@ -144,9 +146,7 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         BoundExpression::Label(s) => Ok(Expression::Label(s.clone())),
 
         BoundExpression::TagProperty {
-            tag_name,
-            property,
-            ..
+            tag_name, property, ..
         } => Ok(Expression::TagProperty {
             tag_name: tag_name.clone(),
             property: property.clone(),
@@ -173,9 +173,7 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         }
 
         BoundExpression::Subscript {
-            collection,
-            index,
-            ..
+            collection, index, ..
         } => {
             let collection = convert_bound_to_expression(collection)?;
             let index = convert_bound_to_expression(index)?;
@@ -282,9 +280,7 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
         BoundExpression::Exists { .. } => {
             Err("Exists expression conversion not yet supported".to_string())
         }
-        BoundExpression::In { .. } => {
-            Err("In expression conversion not yet supported".to_string())
-        }
+        BoundExpression::In { .. } => Err("In expression conversion not yet supported".to_string()),
         BoundExpression::Pattern(_) => {
             Err("Pattern expression conversion not yet supported".to_string())
         }
@@ -302,14 +298,24 @@ fn function_name_to_aggregate(a: &BoundAggregateCall) -> Result<AggregateFunctio
 
     match name.to_uppercase().as_str() {
         "COUNT" => Ok(AggregateFunction::Count(arg_str)),
-        "SUM" => Ok(AggregateFunction::Sum(arg_str.unwrap_or_else(|| "*".to_string()))),
-        "AVG" => Ok(AggregateFunction::Avg(arg_str.unwrap_or_else(|| "*".to_string()))),
-        "MIN" => Ok(AggregateFunction::Min(arg_str.unwrap_or_else(|| "*".to_string()))),
-        "MAX" => Ok(AggregateFunction::Max(arg_str.unwrap_or_else(|| "*".to_string()))),
+        "SUM" => Ok(AggregateFunction::Sum(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
+        "AVG" => Ok(AggregateFunction::Avg(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
+        "MIN" => Ok(AggregateFunction::Min(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
+        "MAX" => Ok(AggregateFunction::Max(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
         "COLLECT" => Ok(AggregateFunction::Collect(
             arg_str.unwrap_or_else(|| "*".to_string()),
         )),
-        "STD" => Ok(AggregateFunction::Std(arg_str.unwrap_or_else(|| "*".to_string()))),
+        "STD" => Ok(AggregateFunction::Std(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
         "VARIANCE" => Ok(AggregateFunction::Variance(
             arg_str.unwrap_or_else(|| "*".to_string()),
         )),
@@ -319,7 +325,9 @@ fn function_name_to_aggregate(a: &BoundAggregateCall) -> Result<AggregateFunctio
         "MEDIAN" => Ok(AggregateFunction::Median(
             arg_str.unwrap_or_else(|| "*".to_string()),
         )),
-        "MODE" => Ok(AggregateFunction::Mode(arg_str.unwrap_or_else(|| "*".to_string()))),
+        "MODE" => Ok(AggregateFunction::Mode(
+            arg_str.unwrap_or_else(|| "*".to_string()),
+        )),
         _ => Err(format!("Unknown aggregate function: {}", name)),
     }
 }

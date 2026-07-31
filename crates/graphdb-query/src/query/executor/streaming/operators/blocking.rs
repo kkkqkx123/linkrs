@@ -32,9 +32,9 @@ pub use materialize::{DataCollectState, DistinctState, MaterializeState, RollUpA
 pub use sort::{MergeState, RunBuffer, SortState, TopNState};
 pub use window::{WindowFunctionState, WindowState};
 
+use crate::query::executor::streaming::slot::SlotLayout;
 use aggregate::{extract_field_value, value_to_partial_accumulator};
 use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
-use crate::query::executor::streaming::slot::SlotLayout;
 use window::compute_window_function;
 
 /// Reject spill for operators that do not support disk-based overflow.
@@ -1301,13 +1301,7 @@ impl BlockingOperator {
                     if state.all_rows.len() > 1 {
                         let layout = Arc::new(SlotLayout::from_names(&state.col_names));
                         state.all_rows.sort_by(|a, b| {
-                            compare_rows_for_topn(
-                                a,
-                                b,
-                                &layout,
-                                sort_expressions,
-                                sort_directions,
-                            )
+                            compare_rows_for_topn(a, b, &layout, sort_expressions, sort_directions)
                         });
                     }
 
@@ -2164,10 +2158,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::PartialAggregate {
-                state,
-                ..
-            } => {
+            Self::PartialAggregate { state, .. } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
                     return Err(QueryError::execution(
                         "Partial aggregate spill is not implemented; query memory budget exceeded"
@@ -2186,10 +2177,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::FinalAggregate {
-                state,
-                ..
-            } => {
+            Self::FinalAggregate { state, .. } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
                     return Err(QueryError::execution(
                         "Final aggregate spill is not implemented; query memory budget exceeded"

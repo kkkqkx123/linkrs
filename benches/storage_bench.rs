@@ -208,10 +208,12 @@ fn bench_real_edge_insert(c: &mut Criterion) {
 
 fn bench_edge_insert_density(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "storage_edge_insert_density");
-    for &(label, vertex_count, edges_per_vertex) in
-        &[("sparse_1k_x3", 1_000u64, 3usize), ("dense_1k_x100", 1_000, 100)]
-    {
-        let edge_count = vertex_count as usize * edges_per_vertex.min((vertex_count as usize).saturating_sub(1));
+    for &(label, vertex_count, edges_per_vertex) in &[
+        ("sparse_1k_x3", 1_000u64, 3usize),
+        ("dense_1k_x100", 1_000, 100),
+    ] {
+        let edge_count =
+            vertex_count as usize * edges_per_vertex.min((vertex_count as usize).saturating_sub(1));
         group.throughput(Throughput::Elements(edge_count as u64));
         group.bench_function(BenchmarkId::new(label, vertex_count), |b| {
             b.iter_batched(
@@ -225,8 +227,7 @@ fn bench_edge_insert_density(c: &mut Criterion) {
                                 .with_dst_tag("Node".to_string()),
                         )
                         .expect("edge type should be created");
-                    let max_edges =
-                        edges_per_vertex.min((vertex_count as usize).saturating_sub(1));
+                    let max_edges = edges_per_vertex.min((vertex_count as usize).saturating_sub(1));
                     let edges: Vec<_> = (0..vertex_count as i64)
                         .flat_map(|src| {
                             (1..=max_edges as i64).map(move |k| {
@@ -435,8 +436,7 @@ fn bench_scaled_checkpoint(c: &mut Criterion) {
                 )
                 .expect("vertex insert");
         }
-        group
-            .throughput(Throughput::Elements(vertex_count));
+        group.throughput(Throughput::Elements(vertex_count));
         group.bench_function(BenchmarkId::from_parameter(vertex_count), |b| {
             b.iter(|| {
                 black_box(
@@ -458,13 +458,17 @@ fn bench_scaled_graph_operations(c: &mut Criterion) {
         let storage = build_vertices_with_edges(vertex_count, edges_per_vertex);
         group.bench_function(format!("scan_edges_{}", label), |b| {
             b.iter(|| {
-                let edges = storage.scan_edges_by_type("bench", "Link").expect("scan edges");
+                let edges = storage
+                    .scan_edges_by_type("bench", "Link")
+                    .expect("scan edges");
                 black_box(edges.len());
             });
         });
         group.bench_function(format!("count_vertices_{}", label), |b| {
             b.iter(|| {
-                let count = storage.count_vertices_by_tag("bench", "Node").expect("count");
+                let count = storage
+                    .count_vertices_by_tag("bench", "Node")
+                    .expect("count");
                 black_box(count);
             });
         });

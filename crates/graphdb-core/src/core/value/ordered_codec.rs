@@ -1117,9 +1117,7 @@ mod tests {
 
     #[test]
     fn test_prefix_bounds_string() {
-        let (lower, upper) = codec()
-            .prefix_bounds(&Value::string("a"))
-            .unwrap();
+        let (lower, upper) = codec().prefix_bounds(&Value::string("a")).unwrap();
         // lower = [TAG_STRING, 0x61, 0x00]
         assert_eq!(lower[0], TAG_STRING);
         assert_eq!(&lower[1..lower.len() - 2], b"a");
@@ -1143,9 +1141,7 @@ mod tests {
 
     #[test]
     fn test_prefix_bounds_multi_byte() {
-        let (lower, upper) = codec()
-            .prefix_bounds(&Value::string("ab"))
-            .unwrap();
+        let (lower, upper) = codec().prefix_bounds(&Value::string("ab")).unwrap();
         assert_eq!(&lower[1..lower.len() - 2], b"ab");
         assert_eq!(upper, vec![TAG_STRING, 0x61, 0x63]);
 
@@ -1302,11 +1298,7 @@ mod tests {
         assert!(k1 < k2);
 
         let k3 = codec()
-            .encode_composite(
-                &[&Value::string("b"), &Value::Int(0)],
-                None,
-                false,
-            )
+            .encode_composite(&[&Value::string("b"), &Value::Int(0)], None, false)
             .unwrap();
         assert!(k1 < k3, "'a' prefix < 'b' prefix");
     }

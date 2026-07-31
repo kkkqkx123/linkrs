@@ -2,11 +2,11 @@
 //!
 //! Tests for SyncManager edge insert/delete/update operations
 
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::{DataType, EdgeTypeInfo, PropertyDef, TransactionId, VertexId};
 use graphdb::core::Value;
 use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};
 use graphdb::sync::{EdgeProps, EdgeRef};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::collections::HashMap;
 
 /// TC-300: Edge insert sync via SyncManager
@@ -52,16 +52,8 @@ fn test_edge_insert_sync_via_manager() {
     });
 
     // Insert vertices
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");
@@ -167,16 +159,8 @@ fn test_edge_with_fulltext_property_sync() {
             .expect("Failed to create fulltext index for edge");
     });
 
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");
@@ -266,16 +250,8 @@ fn test_edge_delete_sync_via_manager() {
             .expect("Failed to create index");
     });
 
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");
@@ -287,10 +263,7 @@ fn test_edge_delete_sync_via_manager() {
 
     // Insert an edge first (non-txn)
     let mut props = HashMap::new();
-    props.insert(
-        "description".to_string(),
-        Value::string("Alice knows Bob"),
-    );
+    props.insert("description".to_string(), Value::string("Alice knows Bob"));
     let edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
         VertexId::from_int64(2),
@@ -382,16 +355,8 @@ fn test_edge_update_sync_via_manager() {
             .expect("Failed to create index");
     });
 
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");
@@ -403,10 +368,7 @@ fn test_edge_update_sync_via_manager() {
 
     // Insert initial edge
     let mut old_props = HashMap::new();
-    old_props.insert(
-        "description".to_string(),
-        Value::string("old description"),
-    );
+    old_props.insert("description".to_string(), Value::string("old description"));
     let old_edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
         VertexId::from_int64(2),
@@ -424,10 +386,7 @@ fn test_edge_update_sync_via_manager() {
 
     // Update edge
     let mut new_props = HashMap::new();
-    new_props.insert(
-        "description".to_string(),
-        Value::string("new description"),
-    );
+    new_props.insert("description".to_string(), Value::string("new description"));
     let new_edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
         VertexId::from_int64(2),
@@ -460,14 +419,8 @@ fn test_edge_update_sync_via_manager() {
             space_id,
             EdgeRef::new(&Value::Int(1), &Value::Int(2), "KNOWS"),
             EdgeProps::new(
-                &[(
-                    "description".to_string(),
-                    Value::string("old description"),
-                )],
-                &[(
-                    "description".to_string(),
-                    Value::string("new description"),
-                )],
+                &[("description".to_string(), Value::string("old description"))],
+                &[("description".to_string(), Value::string("new description"))],
             ),
         )
         .expect("Failed to sync edge update");
@@ -520,16 +473,8 @@ fn test_edge_delete_no_index_graceful() {
         .create_edge_type("test_space", &edge_info)
         .expect("Failed to create edge type");
 
-    let vertex1 = create_test_vertex(
-        1,
-        "Person",
-        vec![("name", Value::string("Alice"))],
-    );
-    let vertex2 = create_test_vertex(
-        2,
-        "Person",
-        vec![("name", Value::string("Bob"))],
-    );
+    let vertex1 = create_test_vertex(1, "Person", vec![("name", Value::string("Alice"))]);
+    let vertex2 = create_test_vertex(2, "Person", vec![("name", Value::string("Bob"))]);
     harness
         .insert_vertex("test_space", vertex1)
         .expect("Failed to insert vertex1");

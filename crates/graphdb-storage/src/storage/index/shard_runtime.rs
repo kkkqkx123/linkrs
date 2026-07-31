@@ -3,7 +3,6 @@
 //! Each manifest generation owns independent shard maps. This makes the
 //! manifest handle a real data-generation pin instead of metadata only.
 
-use arc_swap::ArcSwap;
 use crate::core::types::{CommitLsn, IndexGeneration, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::index::chunk::chunked_index::ChunkedIndex;
@@ -17,6 +16,7 @@ use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::manifest::IndexManifest;
 use crate::storage::index::types::IndexRecord;
 use crate::storage::index::wal::{self, WalEntry};
+use arc_swap::ArcSwap;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -113,8 +113,7 @@ impl ShardRuntime {
             (fwd, rev)
         } else {
             // Legacy fallback: forward_index.bin + reverse_index.bin
-            let (forward, reverse) =
-                GenericIndexManager::<K>::load_data(&checkpoint_file)?;
+            let (forward, reverse) = GenericIndexManager::<K>::load_data(&checkpoint_file)?;
             let fwd = ChunkedIndex::from_btree(vec![], &forward, pool_capacity);
             let rev = ChunkedIndex::from_btree(vec![], &reverse, pool_capacity);
             // Install writer and loader for legacy path
@@ -268,15 +267,8 @@ impl ShardRuntime {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
         let chunked = self.base_forward.load();
         let delta = self.delta_forward.load();
-        Self::chunked_range_with_delta(
-            &chunked,
-            &delta,
-            lower_suffix,
-            upper_suffix,
-            plen,
-            &prefix,
-        )
-        .into_iter()
+        Self::chunked_range_with_delta(&chunked, &delta, lower_suffix, upper_suffix, plen, &prefix)
+            .into_iter()
     }
 
     pub(crate) fn reverse_range<'a>(
@@ -289,20 +281,21 @@ impl ShardRuntime {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
         let chunked = self.base_reverse.load();
         let delta = self.delta_reverse.load();
-        Self::chunked_range_with_delta(
-            &chunked,
-            &delta,
-            lower_suffix,
-            upper_suffix,
-            plen,
-            &prefix,
-        )
-        .into_iter()
+        Self::chunked_range_with_delta(&chunked, &delta, lower_suffix, upper_suffix, plen, &prefix)
+            .into_iter()
     }
 
-    fn strip_bounds<'s>(&self, lower: &'s [u8], upper: &'s [u8], plen: usize)
-        -> (&'s [u8], &'s [u8]) {
-        let ls = if plen > 0 && lower.len() >= plen { &lower[plen..] } else { lower };
+    fn strip_bounds<'s>(
+        &self,
+        lower: &'s [u8],
+        upper: &'s [u8],
+        plen: usize,
+    ) -> (&'s [u8], &'s [u8]) {
+        let ls = if plen > 0 && lower.len() >= plen {
+            &lower[plen..]
+        } else {
+            lower
+        };
         let us: &[u8] = if plen > 0 && upper.len() > plen {
             &upper[plen..]
         } else if plen > 0 && upper.len() == plen {
@@ -326,8 +319,10 @@ impl ShardRuntime {
         let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
         let chunked = self.base_reverse.load();
         let delta = self.delta_reverse.load();
-        let mut merged: BTreeMap<SecondaryIndexKey, IndexRecord> =
-            chunked.visible_range(lower_suffix, upper_suffix, read_ts).into_iter().collect();
+        let mut merged: BTreeMap<SecondaryIndexKey, IndexRecord> = chunked
+            .visible_range(lower_suffix, upper_suffix, read_ts)
+            .into_iter()
+            .collect();
         for (k, v) in delta.range((
             Bound::Included(lower_suffix.to_vec()),
             Bound::Excluded(upper_suffix.to_vec()),
@@ -341,8 +336,7 @@ impl ShardRuntime {
 
     /// Quick check: does this shard possibly have forward entries in [lower, upper)?
     pub(crate) fn forward_may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
-        let (lower_suffix, upper_suffix) =
-            self.strip_bounds(lower, upper, self.prefix_forward_len);
+        let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, self.prefix_forward_len);
         // Bloom pre-check on lower bound
         if !self.forward_bloom.lock().might_contain(lower_suffix) {
             let base = self.base_forward.load();
@@ -363,8 +357,7 @@ impl ShardRuntime {
 
     /// Quick check: does this shard possibly have reverse entries in [lower, upper)?
     pub(crate) fn reverse_may_have_range(&self, lower: &[u8], upper: &[u8]) -> bool {
-        let (lower_suffix, upper_suffix) =
-            self.strip_bounds(lower, upper, self.prefix_reverse_len);
+        let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, self.prefix_reverse_len);
         if !self.reverse_bloom.lock().might_contain(lower_suffix) {
             let base = self.base_reverse.load();
             if !base.range(lower_suffix, upper_suffix).is_empty() {
@@ -615,25 +608,18 @@ impl ShardRuntime {
         let rev = self.base_reverse.load();
         let delta_fwd = self.delta_forward.load_full();
         let delta_rev = self.delta_reverse.load_full();
-        fwd.memory_usage()
-            + rev.memory_usage()
-            + delta_size(&delta_fwd)
-            + delta_size(&delta_rev)
+        fwd.memory_usage() + rev.memory_usage() + delta_size(&delta_fwd) + delta_size(&delta_rev)
     }
-
 }
 
 fn delta_size(map: &BTreeMap<SecondaryIndexKey, IndexRecord>) -> u64 {
     map.iter()
         .map(|(key, record)| {
-            let included = record
-                .included_columns
-                .as_ref()
-                .map_or(0, |cols| {
-                    cols.iter()
-                        .map(|(name, value)| name.capacity() as u64 + value.estimated_size() as u64)
-                        .sum::<u64>()
-                });
+            let included = record.included_columns.as_ref().map_or(0, |cols| {
+                cols.iter()
+                    .map(|(name, value)| name.capacity() as u64 + value.estimated_size() as u64)
+                    .sum::<u64>()
+            });
             std::mem::size_of::<IndexRecord>() as u64 + key.capacity() as u64 + included
         })
         .sum()
@@ -737,25 +723,29 @@ impl GenerationRuntime {
         for shard_def in &manifest.shards {
             let (forward, reverse) = maps.get(&shard_def.shard_id).cloned().unwrap_or_default();
             let stripped_fwd = if prefix_f_len > 0 {
-                forward.into_iter().map(|(k, v)| {
-                    let suffix = k[prefix_f_len..].to_vec();
-                    (suffix, v)
-                }).collect()
+                forward
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let suffix = k[prefix_f_len..].to_vec();
+                        (suffix, v)
+                    })
+                    .collect()
             } else {
                 forward
             };
             let stripped_rev = if prefix_r_len > 0 {
-                reverse.into_iter().map(|(k, v)| {
-                    let suffix = k[prefix_r_len..].to_vec();
-                    (suffix, v)
-                }).collect()
+                reverse
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let suffix = k[prefix_r_len..].to_vec();
+                        (suffix, v)
+                    })
+                    .collect()
             } else {
                 reverse
             };
-            let mut sr = ShardRuntime::empty_with_capacity(
-                shard_def.checkpoint_file.clone(),
-                pool_capacity,
-            );
+            let mut sr =
+                ShardRuntime::empty_with_capacity(shard_def.checkpoint_file.clone(), pool_capacity);
             sr.forward_prefix = Arc::clone(&fwd_prefix);
             sr.reverse_prefix = Arc::clone(&rev_prefix);
             sr.prefix_forward_len = prefix_f_len;
@@ -831,10 +821,7 @@ impl GenerationRuntime {
     }
 
     pub(crate) fn memory_usage_bytes(&self) -> u64 {
-        self.shards
-            .values()
-            .map(|sr| sr.memory_usage_bytes())
-            .sum()
+        self.shards.values().map(|sr| sr.memory_usage_bytes()).sum()
     }
 
     /// Evict cold chunks from all shards in this generation.
@@ -853,9 +840,7 @@ impl GenerationRuntime {
     }
 
     /// Walk the generation chain from this gen backward, yielding (gen, [shards]) tuples.
-    pub(crate) fn chain_from(
-        gen: Arc<GenerationRuntime>,
-    ) -> Vec<Arc<GenerationRuntime>> {
+    pub(crate) fn chain_from(gen: Arc<GenerationRuntime>) -> Vec<Arc<GenerationRuntime>> {
         let mut chain = Vec::new();
         let mut current = Some(gen);
         while let Some(g) = current.take() {
@@ -884,7 +869,10 @@ impl IndexRuntime {
         Self {
             generations: ArcSwap::new(Arc::new(HashMap::from([(
                 manifest.generation,
-                Arc::new(GenerationRuntime::empty_with_pool_capacity(manifest, pool_capacity)),
+                Arc::new(GenerationRuntime::empty_with_pool_capacity(
+                    manifest,
+                    pool_capacity,
+                )),
             )]))),
             barrier_lsn: AtomicU64::new(0),
             barrier_wait: Mutex::new(()),
@@ -899,7 +887,10 @@ impl IndexRuntime {
         Ok(Self {
             generations: ArcSwap::new(Arc::new(HashMap::from([(
                 manifest.generation,
-                Arc::new(GenerationRuntime::load_with_pool_capacity::<K>(manifest, pool_capacity)?),
+                Arc::new(GenerationRuntime::load_with_pool_capacity::<K>(
+                    manifest,
+                    pool_capacity,
+                )?),
             )]))),
             barrier_lsn: AtomicU64::new(0),
             barrier_wait: Mutex::new(()),
@@ -956,9 +947,9 @@ impl IndexRuntime {
                     max_generation
                 ))
             })?;
-        let newest_gen = gens.get(&newest).ok_or_else(|| {
-            StorageError::not_found(format!("Generation {} not found", newest))
-        })?;
+        let newest_gen = gens
+            .get(&newest)
+            .ok_or_else(|| StorageError::not_found(format!("Generation {} not found", newest)))?;
         Ok(GenerationRuntime::chain_from(Arc::clone(newest_gen)))
     }
 
@@ -1054,7 +1045,6 @@ impl IndexRuntime {
         }
         Ok(())
     }
-
 }
 
 pub(crate) fn generation_from_maps_with_pool_capacity(

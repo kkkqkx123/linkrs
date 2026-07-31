@@ -78,6 +78,15 @@ impl Default for CompactionCoordinator {
 }
 
 impl CompactionCoordinator {
+    /// Old-to-new internal ID mapping produced by the last [`Self::execute`].
+    ///
+    /// IDs that did not move are absent. Callers that need to propagate the
+    /// remap to dependent structures (e.g. edge table CSR row indices) must
+    /// read this after `execute` returns.
+    pub fn id_mapping(&self) -> &HashMap<u32, u32> {
+        &self.id_mapping
+    }
+
     /// Execute the full compaction process on a VertexTable
     ///
     /// This is the public interface that orchestrates all steps in the correct order.
@@ -229,7 +238,6 @@ impl CompactionCoordinator {
 
         table.timestamps = new_timestamps;
     }
-
 }
 
 #[cfg(test)]
@@ -274,11 +282,7 @@ mod tests {
         let mut table = VertexTable::new(0, "test".to_string(), schema);
 
         table
-            .insert(
-                "v1",
-                &[("name".to_string(), Value::string("Alice"))],
-                100,
-            )
+            .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
             .unwrap();
 
         let mut coordinator = CompactionCoordinator::new();

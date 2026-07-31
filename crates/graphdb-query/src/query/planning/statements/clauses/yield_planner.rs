@@ -4,13 +4,13 @@
 //! Support for the YIELD ... WHERE ... syntax
 
 use crate::core::YieldColumn;
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::query::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

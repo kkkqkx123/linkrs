@@ -20,6 +20,7 @@ pub mod merge;
 pub mod mvcc;
 pub mod page_state;
 pub mod persistence;
+pub mod remap;
 pub mod residency;
 pub mod segment;
 pub mod segment_eviction;
@@ -41,6 +42,7 @@ use crate::core::types::{EdgeId, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cold::ColdSnapshot;
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
+use crate::storage::edge::edge_table::snapshot::max_edge_row;
 use crate::storage::persistence::write_header_to;
 use std::fmt;
 use std::path::Path;
@@ -263,6 +265,16 @@ impl EdgeStore {
         self.0.compact_properties(ts)
     }
 
+    /// Propagate vertex compaction internal-ID remaps (src and dst label
+    /// spaces) into CSR rows, neighbors, segments, and derived indexes.
+    pub fn remap_vertex_ids(
+        &mut self,
+        src_mapping: Option<&std::collections::HashMap<u32, u32>>,
+        dst_mapping: Option<&std::collections::HashMap<u32, u32>>,
+    ) -> StorageResult<()> {
+        self.0.remap_vertex_ids(src_mapping, dst_mapping)
+    }
+
     pub fn maybe_compact_for_flush(&mut self, ts: Timestamp, threshold: f32) {
         self.0.maybe_compact_for_flush(ts, threshold)
     }
@@ -351,7 +363,8 @@ impl EdgeStore {
         value_lower: &[u8],
         value_upper: &[u8],
     ) -> Vec<(u32, u32, i64)> {
-        self.0.lookup_edges_by_property_range(prop_name, value_lower, value_upper)
+        self.0
+            .lookup_edges_by_property_range(prop_name, value_lower, value_upper)
     }
 
     // ── Persistence ──
@@ -384,8 +397,14 @@ impl core::TimeTravelEdgeStore {
             self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
         let in_edges = self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
 
-        let out_csr = SnapshotBuilder::build_csr(out_edges, self.out_csr.vertex_capacity())?;
-        let in_csr = SnapshotBuilder::build_csr(in_edges, self.in_csr.vertex_capacity())?;
+        let out_csr = {
+            let cap = max_edge_row(&out_edges, self.out_csr.vertex_capacity());
+            SnapshotBuilder::build_csr(out_edges, cap)?
+        };
+        let in_csr = {
+            let cap = max_edge_row(&in_edges, self.in_csr.vertex_capacity());
+            SnapshotBuilder::build_csr(in_edges, cap)?
+        };
 
         Ok(ExportedEdgeSnapshot {
             snapshot_ts: ts,
@@ -793,8 +812,9 @@ impl core::TimeTravelEdgeStore {
 mod tests {
     use crate::core::types::DataType;
     use crate::core::Value;
-use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
-use crate::storage::edge::EdgeSchema;
+    use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::storage::edge::CsrBase;
+    use crate::storage::edge::EdgeSchema;
     use crate::storage::types::StoragePropertyDef;
 
     fn create_test_schema() -> EdgeSchema {
@@ -814,9 +834,39 @@ use crate::storage::edge::EdgeSchema;
     }
 
     #[test]
+    fn test_sparse_high_ids_keep_csr_rows_proportional() {
+        let schema = create_test_schema();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+        // Sparse writes with a few high internal ids. With dense internal ids
+        // this must NOT amplify CSR rows (old behavior: ~16x via per-row
+        // primary pre-allocation plus power-of-two growth).
+        table.insert_edge(0, 100_000, 0, &[], 100).unwrap();
+        table.insert_edge(50_000, 100_001, 0, &[], 100).unwrap();
+        table.insert_edge(100_002, 0, 0, &[], 100).unwrap();
+
+        let max_id = 100_002usize;
+        let out_rows = table.out_csr.vertex_capacity();
+        let in_rows = table.in_csr.vertex_capacity();
+
+        // Proportional 1.25x stepping: rows ~= vertices + 25% tail
+        assert!(out_rows <= ((max_id + 1) as f64 * 1.25).ceil() as usize);
+        assert!(in_rows <= ((max_id + 1) as f64 * 1.25).ceil() as usize);
+        assert!(out_rows > max_id);
+        assert!(in_rows > max_id);
+
+        // Zero-degree rows must hold no data slots in the CSR: wasted
+        // capacity stays tiny (was ~16x rows before lazy allocation)
+        assert!(table.out_csr.wasted_bytes_estimate() < 64 * 64);
+        assert!(table.in_csr.wasted_bytes_estimate() < 64 * 64);
+    }
+
+    #[test]
     fn test_freeze_csr_preserves_reads() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -840,7 +890,8 @@ use crate::storage::edge::EdgeSchema;
     #[test]
     fn test_delete_base_segment_uses_tombstone() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
         table.freeze_csr_only(150);

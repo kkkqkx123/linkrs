@@ -2,10 +2,10 @@
 //!
 //! Tests for DLQ recovery, retry, and the RecoveryResult struct
 
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
 use graphdb::core::types::DataType;
 use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use graphdb::sync::types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
+use graphdb::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-310: Dead letter queue recovery flow
 ///

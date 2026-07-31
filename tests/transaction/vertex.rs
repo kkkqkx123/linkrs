@@ -7,9 +7,8 @@
 //! - Batch insert performance in transaction
 //! - Property types support
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test multiple vertices insertion in single transaction
@@ -47,10 +46,7 @@ fn test_transaction_vertex_update() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         )
         .exec_dml("UPDATE 1 SET name = 'AliceUpdated', age = 31")
         .assert_success()

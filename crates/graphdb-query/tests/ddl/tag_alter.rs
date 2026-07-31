@@ -181,10 +181,7 @@ fn test_alter_tag_change_with_data() {
         .assert_success()
         .query("DESC TAG Person")
         .assert_success()
-        .assert_result_contains(vec![
-            Value::string("name"),
-            Value::string("STRING"),
-        ])
+        .assert_result_contains(vec![Value::string("name"), Value::string("STRING")])
         .exec_dml("UPDATE 1 SET name = 'Updated Alice'")
         .assert_success()
         .assert_vertex_props(

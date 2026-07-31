@@ -12,9 +12,8 @@
 
 #![allow(clippy::approx_constant)]
 
-
-use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,10 +34,7 @@ fn test_storage_vertex_insert_persistence() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         );
 }
 
@@ -55,10 +51,7 @@ fn test_storage_vertex_update_persistence() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([
-                ("name", Value::string("Alice")),
-                ("age", Value::Int(30)),
-            ]),
+            HashMap::from([("name", Value::string("Alice")), ("age", Value::Int(30))]),
         )
         .exec_dml("UPDATE 1 SET name = 'AliceUpdated', age = 31")
         .assert_success()

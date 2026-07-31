@@ -2,10 +2,10 @@
 //!
 //! Provides functions to validate data state in storage after operations
 
-use crate::test_utils::TestResult;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionResult;
 use crate::query::QueryPipelineManager;
+use crate::test_utils::TestResult;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

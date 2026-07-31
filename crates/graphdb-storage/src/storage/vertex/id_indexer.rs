@@ -210,6 +210,12 @@ impl IdManager {
         self.key_to_id.len()
     }
 
+    /// Next free index: local ids are never reused, so this equals the
+    /// highest index ever allocated plus one (gaps from deletions included).
+    pub fn next_index(&self) -> u32 {
+        self.keys.len() as u32
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.key_to_id.is_empty()
@@ -375,6 +381,12 @@ impl IdIndexer {
     pub fn len(&self) -> usize {
         let manager = self.manager.lock();
         manager.len()
+    }
+
+    /// Next free local id (see [`IdManager::next_index`]).
+    pub fn next_index(&self) -> u32 {
+        let manager = self.manager.lock();
+        manager.next_index()
     }
 
     #[cfg(test)]

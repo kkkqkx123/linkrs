@@ -198,7 +198,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        
         match parse_expression_with_context(&mut self.ctx, self.expr_context.clone()) {
             Ok(expr) => Ok(expr),
             Err(e) => {

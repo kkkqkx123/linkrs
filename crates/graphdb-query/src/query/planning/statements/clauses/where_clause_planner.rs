@@ -4,13 +4,13 @@
 //! The ClausePlanner interface has been implemented, providing comprehensive filtering capabilities.
 
 use crate::core::types::ContextualExpression;
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

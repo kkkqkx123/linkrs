@@ -82,10 +82,7 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            SourceSpec::StorageScanVertices {
-                col_names,
-                ..
-            } => SourceState::StorageScanVertices {
+            SourceSpec::StorageScanVertices { col_names, .. } => SourceState::StorageScanVertices {
                 partition_id: 0,
                 partition_range: None,
                 cursor: None,
@@ -97,10 +94,7 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            SourceSpec::StorageScanEdges {
-                col_names,
-                ..
-            } => SourceState::StorageScanEdges {
+            SourceSpec::StorageScanEdges { col_names, .. } => SourceState::StorageScanEdges {
                 partition_id: 0,
                 partition_range: None,
                 cursor: None,

@@ -47,7 +47,9 @@ impl LogicalPlan {
     /// Build a `LogicalPlan` from a `PlanNodeEnum` tree by stripping
     /// physical execution choices.  Returns `ConversionError` when the
     /// plan contains a node type not yet handled by the converter.
-    pub fn from_plan_node(plan: &crate::query::planning::plan::PlanNodeEnum) -> Result<Self, ConversionError> {
+    pub fn from_plan_node(
+        plan: &crate::query::planning::plan::PlanNodeEnum,
+    ) -> Result<Self, ConversionError> {
         let logical_root = convert_plan(plan)?;
         Ok(Self::new(logical_root))
     }

@@ -104,9 +104,7 @@ impl VertexTable {
                                  consider re-encoding",
                                 name,
                                 encoding_type,
-                                self.encoding_selector
-                                    .thresholds()
-                                    .reencode_threshold,
+                                self.encoding_selector.thresholds().reencode_threshold,
                             );
                         }
                     }
@@ -125,7 +123,11 @@ impl VertexTable {
                     *encoding_type,
                     self.encoding_selector.thresholds().fsst_max_symbols,
                 ) {
-                    log::warn!("failed to apply encoding to in-memory column {}: {}", name, e);
+                    log::warn!(
+                        "failed to apply encoding to in-memory column {}: {}",
+                        name,
+                        e
+                    );
                 }
             }
         }

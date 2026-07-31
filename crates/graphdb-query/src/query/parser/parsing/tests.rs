@@ -475,6 +475,7 @@ mod tests {
 
     #[test]
     fn test_extension_registry_register() {
+        use crate::core::types::expr::contextual::ContextualExpression;
         use crate::query::parser::core::error::ParseError;
         use crate::query::parser::core::error::ParseErrorKind;
         use crate::query::parser::parsing::parse_context::ParseContext;
@@ -482,7 +483,6 @@ mod tests {
         use crate::query::parser::parsing::ExtensionRegistry;
         use crate::query::parser::parsing::ParserExtension;
         use crate::query::parser::TokenKind;
-        use crate::core::types::expr::contextual::ContextualExpression;
 
         struct TestExtension;
 

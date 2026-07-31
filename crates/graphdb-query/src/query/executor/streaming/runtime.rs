@@ -675,7 +675,8 @@ impl ExecutionRuntime {
     /// Set the number of partition arenas (must be ≥ 1).
     pub fn set_partition_count(&mut self, count: usize) {
         let count = count.max(1);
-        self.state_arenas.resize_with(count, || Mutex::new(StateArenaSet::new()));
+        self.state_arenas
+            .resize_with(count, || Mutex::new(StateArenaSet::new()));
     }
 
     /// Record that execution has started (profile timing).
@@ -889,7 +890,12 @@ mod tests {
         let rt = ExecutionRuntime::default_budget();
         rt.profile_add_rows(10);
         rt.profile_add_rows(20);
-        assert_eq!(rt.profile().total_rows.load(std::sync::atomic::Ordering::Relaxed), 30);
+        assert_eq!(
+            rt.profile()
+                .total_rows
+                .load(std::sync::atomic::Ordering::Relaxed),
+            30
+        );
     }
 
     #[test]

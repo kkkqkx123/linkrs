@@ -370,10 +370,7 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         for i in 0..10u64 {
-            table
-                .mvcc
-                .tombstones
-                .insert(EdgeId(i), 100 + (i * 10));
+            table.mvcc.tombstones.insert(EdgeId(i), 100 + (i * 10));
         }
 
         assert_eq!(table.mvcc.tombstones.len(), 10);
@@ -523,8 +520,7 @@ mod tests {
 
         // Add 100 tombstones to cold layer, sorted by EdgeId
         for i in 0..100u64 {
-            mvcc.cold_tombstones
-                .push((EdgeId(i), 100 + i));
+            mvcc.cold_tombstones.push((EdgeId(i), 100 + i));
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
@@ -552,7 +548,8 @@ mod tests {
 
         // Add 100K tombstones to cold layer, simulating large delete set
         for i in 0..100_000 {
-            mvcc.cold_tombstones.push((EdgeId(i as u64), Timestamp::MAX - 1));
+            mvcc.cold_tombstones
+                .push((EdgeId(i as u64), Timestamp::MAX - 1));
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
@@ -583,8 +580,7 @@ mod tests {
         // Fill hot layer to trigger promotion
         // Use timestamps well above GC threshold to avoid premature cleanup
         for i in 0..200_000u64 {
-            mvcc.tombstones
-                .insert(EdgeId(i), 10_000 + (i % 1000));
+            mvcc.tombstones.insert(EdgeId(i), 10_000 + (i % 1000));
         }
 
         assert!(mvcc.tombstones.len() > HOT_TOMBSTONE_GC_THRESHOLD);

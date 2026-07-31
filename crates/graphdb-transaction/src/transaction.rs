@@ -69,15 +69,14 @@ pub use types::*;
 pub use undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo,
     PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo,
-    UndoLogConfig, UndoLogEntry,
-    UndoLogError, UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
-    UpdateVertexPropUndo,
+    UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget,
+    UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,
     InsertEdgeRedo, InsertVertexRedo, LabelId, LocalWalParser, LocalWalWriter, Timestamp,
-    UpdateEdgePropRedo, UpdateVertexPropRedo, VertexId, WalConfig, WalEntryIter, WalError, WalHeader,
-    WalOpType, WalParser, WalParserFactory, WalResult, WalWriter,
+    UpdateEdgePropRedo, UpdateVertexPropRedo, VertexId, WalConfig, WalEntryIter, WalError,
+    WalHeader, WalOpType, WalParser, WalParserFactory, WalResult, WalWriter,
 };
 
 /// Transaction Management Module Version

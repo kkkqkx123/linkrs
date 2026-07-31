@@ -272,10 +272,7 @@ mod tests {
         let estimator = ScanEstimator::new(&calculator);
 
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal(
-            "friend.rank",
-            Value::string("1"),
-        )]);
+        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", Value::string("1"))]);
         let plan_node = PlanNodeEnum::EdgeIndexScan(node);
 
         let child_estimates = vec![];
@@ -352,10 +349,7 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Prefix,
         );
-        node.set_scan_limits(vec![IndexLimit::prefix(
-            "Person.name",
-            Value::string("A"),
-        )]);
+        node.set_scan_limits(vec![IndexLimit::prefix("Person.name", Value::string("A"))]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.05);
     }
@@ -421,10 +415,7 @@ mod tests {
         let estimator = ScanEstimator::new(&calculator);
 
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal(
-            "friend.rank",
-            Value::string("1"),
-        )]);
+        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", Value::string("1"))]);
         let selectivity = estimator.estimate_edge_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.01);
     }

@@ -23,11 +23,7 @@ fn make_manage_result(
         .map(Value::string)
         .unwrap_or(Value::Null(crate::core::NullType::Null));
     DataChunk::new_with_layout(
-        vec![vec![
-            Value::string(action),
-            name_val,
-            Value::string(status),
-        ]],
+        vec![vec![Value::string(action), name_val, Value::string(status)]],
         output_layout,
     )
 }

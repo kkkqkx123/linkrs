@@ -3,11 +3,11 @@
 //! Provides fundamental edge table functionality including insertion, deletion,
 //! querying, property management, and basic maintenance operations.
 
+use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
-use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::edge::PropertyTable;
@@ -194,7 +194,7 @@ impl TimeTravelEdgeStore {
         })
     }
 
-    fn edge_endpoint_key(endpoint: u32, rank: i64) -> VertexId {
+    pub(crate) fn edge_endpoint_key(endpoint: u32, rank: i64) -> VertexId {
         let mut data = Vec::with_capacity(16);
         data.extend_from_slice(&(endpoint as i64).to_be_bytes());
         data.extend_from_slice(&rank.to_be_bytes());
@@ -695,7 +695,9 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some()
+        let nbrs = if ts == Timestamp::MAX
+            && !self.snapshot_dirty
+            && self.current_snapshot_out.is_some()
         {
             // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
             self.merged_edges_of_current(&self.out_csr, src)
@@ -746,17 +748,18 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
-            self.merged_edges_of_current_in(&self.in_csr, dst)
-        } else {
-            self.merged_edges_of(
-                &self.in_csr,
-                &self.in_segments,
-                Some(&self.sparse_vertex_index_in),
-                dst,
-                ts,
-            )
-        };
+        let nbrs =
+            if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
+                self.merged_edges_of_current_in(&self.in_csr, dst)
+            } else {
+                self.merged_edges_of(
+                    &self.in_csr,
+                    &self.in_segments,
+                    Some(&self.sparse_vertex_index_in),
+                    dst,
+                    ts,
+                )
+            };
 
         // Optimization: prefetch all properties first to improve cache locality
         let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
@@ -1261,13 +1264,15 @@ impl TimeTravelEdgeStore {
         // 1. From mutable CSR
         if let Some(iter) = delta.iter_edges_of(src, Timestamp::MAX) {
             for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
+                {
                     result.push(*nbr);
                 }
             }
         } else {
             for nbr in delta.edges_of(src, Timestamp::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
+                {
                     result.push(nbr);
                 }
             }
@@ -1276,7 +1281,9 @@ impl TimeTravelEdgeStore {
         // 2. From current snapshot (pre-merged segments, single CSR lookup)
         if let Some(ref snapshot) = self.current_snapshot_out {
             for edge in snapshot.edges_of(src).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX) && seen.insert(edge.edge_id) {
+                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
+                    && seen.insert(edge.edge_id)
+                {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,
@@ -1297,13 +1304,15 @@ impl TimeTravelEdgeStore {
 
         if let Some(iter) = delta.iter_edges_of(dst, Timestamp::MAX) {
             for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
+                {
                     result.push(*nbr);
                 }
             }
         } else {
             for nbr in delta.edges_of(dst, Timestamp::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id)
+                {
                     result.push(nbr);
                 }
             }
@@ -1311,7 +1320,9 @@ impl TimeTravelEdgeStore {
 
         if let Some(ref snapshot) = self.current_snapshot_in {
             for edge in snapshot.edges_of(dst).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX) && seen.insert(edge.edge_id) {
+                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX)
+                    && seen.insert(edge.edge_id)
+                {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,
@@ -1359,7 +1370,7 @@ impl TimeTravelEdgeStore {
     }
 
     /// Build the property index by scanning all edges.
-    fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
+    pub(crate) fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         let mut index = EdgePropertyIndex::new(pool_capacity);
         let all_ts = Timestamp::MAX;
 
@@ -1370,13 +1381,7 @@ impl TimeTravelEdgeStore {
             let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
             for (prop_name, prop_value) in &edge.properties {
                 let _ = index.insert(
-                    prop_name,
-                    prop_value,
-                    src_u32,
-                    dst_u32,
-                    edge.rank,
-                    self.label,
-                    all_ts,
+                    prop_name, prop_value, src_u32, dst_u32, edge.rank, self.label, all_ts,
                 );
             }
         }
@@ -1419,7 +1424,8 @@ impl TimeTravelEdgeStore {
         if !index.has_index(prop_name) {
             return Vec::new();
         }
-        index.lookup(prop_name, value_lower, value_upper)
+        index
+            .lookup(prop_name, value_lower, value_upper)
             .into_iter()
             .map(|((src, dst, rank), _record)| (src, dst, rank))
             .collect()
