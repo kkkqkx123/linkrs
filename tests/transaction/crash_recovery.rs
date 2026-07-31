@@ -16,10 +16,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
+type ReplayedVertices = Vec<(LabelId, VertexId, Timestamp)>;
+type ReplayedVertexProps = Vec<Vec<(String, Value)>>;
+
 #[derive(Default)]
 struct RecordingApplier {
-    replayed_vertices: Arc<Mutex<Vec<(LabelId, VertexId, Timestamp)>>>,
-    replayed_vertex_props: Arc<Mutex<Vec<Vec<(String, Value)>>>>,
+    replayed_vertices: Arc<Mutex<ReplayedVertices>>,
+    replayed_vertex_props: Arc<Mutex<ReplayedVertexProps>>,
 }
 
 impl RecordingApplier {
@@ -250,10 +253,7 @@ fn write_wal_entries(
 fn recover(
     wal_dir: &Path,
     data_dir: &Path,
-) -> (
-    Vec<(LabelId, VertexId, Timestamp)>,
-    Vec<Vec<(String, Value)>>,
-) {
+) -> (ReplayedVertices, ReplayedVertexProps) {
     let mut manager = RecoveryManager::new(RecoveryConfig {
         wal_dir: wal_dir.to_path_buf(),
         data_dir: data_dir.to_path_buf(),

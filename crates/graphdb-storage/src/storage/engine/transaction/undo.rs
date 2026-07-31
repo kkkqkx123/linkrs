@@ -186,10 +186,10 @@ impl UndoTarget for GraphStorageContext {
         prop_names: &[String],
     ) -> UndoLogResult<()> {
         let label_id = {
-            let mut catalog = self.data_store().catalog_write_set();
+            let catalog = self.data_store().catalog_write_set();
             TransactionOps::revert_delete_vertex_properties(
-                &mut catalog.vertex_tables,
-                &mut catalog.vertex_label_names,
+                &catalog.vertex_tables,
+                &catalog.vertex_label_names,
                 label_name,
                 prop_names,
             )?;
@@ -307,10 +307,10 @@ impl UndoTarget for GraphStorageContext {
         original_names: &[String],
     ) -> UndoLogResult<()> {
         let label_id = {
-            let mut catalog = self.data_store().catalog_write_set();
+            let catalog = self.data_store().catalog_write_set();
             TransactionOps::revert_rename_vertex_properties(
-                &mut catalog.vertex_tables,
-                &mut catalog.vertex_label_names,
+                &catalog.vertex_tables,
+                &catalog.vertex_label_names,
                 label,
                 current_names,
                 original_names,

@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-
 use crate::core::stats::CacheStats;
 use crate::core::types::Timestamp;
 use crate::storage::engine::resource_budget::MemoryAccounting;
@@ -154,7 +152,6 @@ impl RecordCache {
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
-        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
         self.id_index_pool
             .retain(|(k, _ts), _| k.label_id != label_id || k.external_id != external_id);
         self.id_index_stats.record_invalidation();

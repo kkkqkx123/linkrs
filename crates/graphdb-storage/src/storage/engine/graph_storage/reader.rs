@@ -169,12 +169,12 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
                 let records = table.scan(ts);
                 for chunk in records.chunks(BATCH_SIZE) {
                     for record in chunk {
-                        record_vertex_read(ctx, record.vid.clone());
+                        record_vertex_read(ctx, record.vid);
                         let entry =
                             merged
-                                .entry(record.vid.clone())
+                                .entry(record.vid)
                                 .or_insert_with(|| MergedVertex {
-                                    vid: record.vid.clone(),
+                                    vid: record.vid,
                                     internal_id: record.internal_id,
                                     tags: Vec::new(),
                                     properties: HashMap::new(),
@@ -529,6 +529,7 @@ pub(crate) fn get_node_edges(
 /// are decoded from their `(endpoint_internal, rank)` encoding before being
 /// resolved to external IDs. Dedup happens in external-ID space so edges
 /// present in both hot and cold data are not returned twice.
+#[allow(clippy::too_many_arguments)]
 fn append_cold_node_edges(
     ctx: &GraphStorageContext,
     edges: &mut Vec<Edge>,

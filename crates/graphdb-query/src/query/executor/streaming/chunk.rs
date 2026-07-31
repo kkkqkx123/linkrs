@@ -672,7 +672,7 @@ impl DataChunk {
         // Build a column cache to avoid redundant get_column calls
         // when the same variable appears in multiple sub-expressions.
         let mut col_cache: HashMap<String, Vec<Value>> = HashMap::new();
-        self.collect_variables(expression, &mut col_cache, params);
+        self.collect_variables(expression, &mut col_cache);
         self.eval_with_cache(expression, &col_cache, params)
     }
 
@@ -681,7 +681,6 @@ impl DataChunk {
         &self,
         expr: &Expression,
         col_cache: &mut HashMap<String, Vec<Value>>,
-        params: Option<&Arc<HashMap<String, Value>>>,
     ) {
         match expr {
             Expression::Variable(name) => {
@@ -694,14 +693,14 @@ impl DataChunk {
                 }
             }
             Expression::Binary { left, right, .. } => {
-                self.collect_variables(left, col_cache, params);
-                self.collect_variables(right, col_cache, params);
+                self.collect_variables(left, col_cache);
+                self.collect_variables(right, col_cache);
             }
             Expression::Unary { operand, .. } => {
-                self.collect_variables(operand, col_cache, params);
+                self.collect_variables(operand, col_cache);
             }
             Expression::TypeCast { expression, .. } => {
-                self.collect_variables(expression, col_cache, params);
+                self.collect_variables(expression, col_cache);
             }
             Expression::Property { object, .. } => {
                 if let Expression::Variable(var_name) = object.as_ref() {

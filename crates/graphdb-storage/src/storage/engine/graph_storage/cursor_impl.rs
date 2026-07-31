@@ -89,7 +89,7 @@ impl GraphVertexCursor {
         let exhausted = ctx.data_store().with_vertex_tables(|tables| {
             tags.labels
                 .iter()
-                .all(|label_id| tables.get(label_id).map_or(true, |t| t.total_count() == 0))
+                .all(|label_id| tables.get(label_id).is_none_or(|t| t.total_count() == 0))
         });
 
         Ok(Self {

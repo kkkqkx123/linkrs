@@ -277,7 +277,7 @@ impl GraphStorage {
         if let Ok(entries) = fs::read_dir(dir.as_ref()) {
             for entry in entries {
                 let path = entry?.path();
-                if path.extension().map_or(false, |e| e == "lkcs") {
+                if path.extension().is_some_and(|e| e == "lkcs") {
                     self.load_cold_snapshot(&path)?;
                     count += 1;
                 }

@@ -620,7 +620,7 @@ impl GraphDataStore {
             let guard = self.vertex_tables.read();
             guard.values().cloned().collect()
         };
-        arcs.iter().map(|arc| operation(&**arc)).collect()
+        arcs.iter().map(|arc| operation(arc)).collect()
     }
 
     pub(crate) fn edge_partition_keys(

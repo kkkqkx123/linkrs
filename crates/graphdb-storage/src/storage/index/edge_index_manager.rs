@@ -354,6 +354,7 @@ impl EdgePropertyIndex {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         prop_name: &str,

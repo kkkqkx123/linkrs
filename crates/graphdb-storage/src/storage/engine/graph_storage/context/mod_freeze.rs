@@ -3,7 +3,6 @@ use crate::core::StorageResult;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 use parking_lot::Mutex;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::GraphStorageContext;

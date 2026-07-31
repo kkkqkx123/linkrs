@@ -4,7 +4,7 @@
 
 use crate::core::types::{LabelId, Timestamp};
 use crate::storage::cache::{
-    CachedVertex, EvictionCallbackWithSize, RecordCache, RecordCacheConfig, RecordCacheStats,
+    CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats,
     SharedRecordCache, VertexCacheKey,
 };
 use crate::storage::engine::config::ResourceConfig;

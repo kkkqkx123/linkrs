@@ -8,7 +8,7 @@ use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use crate::core::types::{EdgeId, Timestamp};
-use crate::storage::edge::{CsrBase, CsrVariant};
+use crate::storage::edge::CsrVariant;
 use std::collections::HashMap;
 
 impl TimeTravelEdgeStore {

@@ -23,4 +23,4 @@ mod record_cache_test;
 pub(crate) use buffer_pool::BufferPool;
 pub use config::RecordCacheConfig;
 pub use record_cache::{RecordCache, RecordCacheStats, SharedRecordCache};
-pub use types::{CachedVertex, EvictionCallbackWithSize, VertexCacheKey};
+pub use types::{CachedVertex, VertexCacheKey};

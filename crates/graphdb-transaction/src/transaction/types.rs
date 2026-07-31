@@ -319,7 +319,7 @@ impl fmt::Display for TransactionState {
 }
 
 /// Transaction Options
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TransactionOptions {
     /// Transaction timeout duration
     pub timeout: Option<Duration>,
@@ -335,20 +335,6 @@ pub struct TransactionOptions {
     pub statement_timeout: Option<Duration>,
     /// Idle timeout duration
     pub idle_timeout: Option<Duration>,
-}
-
-impl Default for TransactionOptions {
-    fn default() -> Self {
-        Self {
-            timeout: None,
-            read_only: false,
-            durability: DurabilityLevel::default(),
-            isolation_level: IsolationLevel::default(),
-            query_timeout: None,
-            statement_timeout: None,
-            idle_timeout: None,
-        }
-    }
 }
 
 impl TransactionOptions {
