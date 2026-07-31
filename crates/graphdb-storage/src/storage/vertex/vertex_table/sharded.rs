@@ -452,6 +452,7 @@ impl ShardedVertexTable {
             let mut schema = self.schema.write();
             if !schema.properties.iter().any(|p| p.name == prop.name) {
                 schema.properties.push(prop);
+                schema.schema_version += 1;
             }
         }
         Ok(())
@@ -463,7 +464,11 @@ impl ShardedVertexTable {
         }
         {
             let mut schema = self.schema.write();
+            let before = schema.properties.len();
             schema.properties.retain(|p| p.name != prop_name);
+            if schema.properties.len() != before {
+                schema.schema_version += 1;
+            }
         }
         Ok(())
     }
@@ -476,6 +481,7 @@ impl ShardedVertexTable {
             let mut schema = self.schema.write();
             if let Some(prop) = schema.properties.iter_mut().find(|p| p.name == old_name) {
                 prop.name = new_name.to_string();
+                schema.schema_version += 1;
             }
         }
         Ok(())

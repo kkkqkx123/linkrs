@@ -46,7 +46,8 @@ fn remapped_row(id: u32, mapping: Option<&HashMap<u32, u32>>) -> u32 {
 
 /// Rebuild a mutable CSR with translated rows/neighbors and a truncated row
 /// space (max translated row + 1). Tombstoned entries are re-marked so
-/// historical visibility is preserved.
+/// historical visibility is preserved. An empty CSR is rebuilt with a single
+/// row: after a compaction remap the pre-compaction capacity must not linger.
 fn remap_variant(
     old: CsrVariant,
     row_mapping: Option<&HashMap<u32, u32>>,
@@ -61,10 +62,6 @@ fn remap_variant(
             (src_u32, nbr)
         })
         .collect();
-
-    if entries.is_empty() {
-        return Ok(old);
-    }
 
     let mut max_row = 0u32;
     let mut new_entries = Vec::with_capacity(entries.len());

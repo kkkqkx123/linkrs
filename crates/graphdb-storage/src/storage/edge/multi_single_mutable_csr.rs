@@ -27,6 +27,7 @@ use super::{
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGES_PER_VERTEX: usize = 4;
+const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 /// Multi-Single Mutable CSR: up to N edges per vertex in fixed slots.
 pub struct MultiSingleMutableCsr {
@@ -269,7 +270,10 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         ts: Timestamp,
     ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
-            self.resize((src_vid as usize + 1).max(self.vertex_capacity() * 2));
+            let min_capacity = src_vid as usize + 1;
+            let new_capacity =
+                ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
+            self.resize(new_capacity);
         }
 
         // Check if edge already exists

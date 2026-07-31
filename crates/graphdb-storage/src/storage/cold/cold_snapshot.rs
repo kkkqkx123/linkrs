@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
@@ -56,6 +56,8 @@ pub struct ColdSnapshot {
     in_csr: Csr,
     properties: PropertyTable,
     schema: EdgeSchema,
+    /// Backing `.lkcs` file when opened from or created at a path.
+    path: Option<PathBuf>,
 }
 
 impl ColdSnapshot {
@@ -66,7 +68,8 @@ impl ColdSnapshot {
             Mmap::map(&file)
                 .map_err(|e| StorageError::io_error(format!("failed to mmap snapshot: {}", e)))?
         };
-        let snapshot = Self::from_bytes(&mmap)?;
+        let mut snapshot = Self::from_bytes(&mmap)?;
+        snapshot.path = Some(path.as_ref().to_path_buf());
         drop(file);
         Ok(snapshot)
     }
@@ -143,38 +146,47 @@ impl ColdSnapshot {
             in_csr,
             properties,
             schema,
+            path: None,
         })
     }
 
     pub fn create<P: AsRef<Path>>(exported: &ExportedEdgeSnapshot, path: P) -> StorageResult<Self> {
-        let out_data = exported.out_csr.dump();
-        let in_data = exported.in_csr.dump();
-        let prop_data = exported.properties.dump();
-        let schema_json = serde_json::to_string(&exported.schema)
-            .map_err(|e| StorageError::serialize_error(e.to_string()))?;
-        let schema_bytes = schema_json.as_bytes();
-
-        let mut buf = Vec::new();
-
-        buf.extend_from_slice(&COLD_SNAPSHOT_MAGIC);
-        buf.extend_from_slice(&COLD_SNAPSHOT_VERSION.to_le_bytes());
-        buf.extend_from_slice(&exported.snapshot_ts.to_le_bytes());
-        buf.extend_from_slice(&exported.out_csr.edge_count().to_le_bytes());
-        buf.extend_from_slice(&exported.label.to_le_bytes());
-        buf.extend_from_slice(&(exported.out_csr.vertex_capacity() as u64).to_le_bytes());
-
-        write_section(&mut buf, &out_data);
-        write_section(&mut buf, &in_data);
-        write_section(&mut buf, &prop_data);
-        write_section(&mut buf, schema_bytes);
-
-        let checksum = crc32fast::hash(&buf);
-        buf.extend_from_slice(&checksum.to_le_bytes());
+        let buf = encode_snapshot(
+            &exported.out_csr,
+            &exported.in_csr,
+            &exported.properties,
+            &exported.schema,
+            exported.snapshot_ts,
+            exported.label,
+        )?;
 
         std::fs::write(path.as_ref(), &buf)
             .map_err(|e| StorageError::io_error(format!("failed to write snapshot file: {}", e)))?;
 
-        Self::from_bytes(&buf)
+        let mut snapshot = Self::from_bytes(&buf)?;
+        snapshot.path = Some(path.as_ref().to_path_buf());
+        Ok(snapshot)
+    }
+
+    /// Persist the current in-memory state back to the backing `.lkcs` file.
+    ///
+    /// Keeps the file consistent after an in-memory remap (e.g. vertex
+    /// compaction). The file is a rebuildable cache, so a failure here only
+    /// degrades to a stale file, never to incorrect queries.
+    pub fn persist(&self) -> StorageResult<()> {
+        let path = self.path.as_ref().ok_or_else(|| {
+            StorageError::io_error("cold snapshot has no backing file to persist to")
+        })?;
+        let buf = encode_snapshot(
+            &self.out_csr,
+            &self.in_csr,
+            &self.properties,
+            &self.schema,
+            self.snapshot_ts,
+            self.label,
+        )?;
+        std::fs::write(path, &buf)
+            .map_err(|e| StorageError::io_error(format!("failed to rewrite snapshot file: {}", e)))
     }
 
     pub fn snapshot_ts(&self) -> Timestamp {
@@ -353,6 +365,42 @@ fn read_section<'a>(data: &'a [u8], pos: &mut usize) -> StorageResult<&'a [u8]> 
 fn write_section(buf: &mut Vec<u8>, data: &[u8]) {
     buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
     buf.extend_from_slice(data);
+}
+
+/// Serialize CSR/property data into the `.lkcs` file layout (header + sections + CRC).
+fn encode_snapshot(
+    out_csr: &Csr,
+    in_csr: &Csr,
+    properties: &PropertyTable,
+    schema: &EdgeSchema,
+    snapshot_ts: Timestamp,
+    label: LabelId,
+) -> StorageResult<Vec<u8>> {
+    let out_data = out_csr.dump();
+    let in_data = in_csr.dump();
+    let prop_data = properties.dump();
+    let schema_json = serde_json::to_string(schema)
+        .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+    let schema_bytes = schema_json.as_bytes();
+
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(&COLD_SNAPSHOT_MAGIC);
+    buf.extend_from_slice(&COLD_SNAPSHOT_VERSION.to_le_bytes());
+    buf.extend_from_slice(&snapshot_ts.to_le_bytes());
+    buf.extend_from_slice(&out_csr.edge_count().to_le_bytes());
+    buf.extend_from_slice(&label.to_le_bytes());
+    buf.extend_from_slice(&(out_csr.vertex_capacity() as u64).to_le_bytes());
+
+    write_section(&mut buf, &out_data);
+    write_section(&mut buf, &in_data);
+    write_section(&mut buf, &prop_data);
+    write_section(&mut buf, schema_bytes);
+
+    let checksum = crc32fast::hash(&buf);
+    buf.extend_from_slice(&checksum.to_le_bytes());
+
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -629,6 +677,45 @@ mod tests {
         assert_eq!(snapshot.get_in_edges(3).len(), 2);
         assert_eq!(snapshot.get_in_edges(4).len(), 2);
         assert_eq!(snapshot.degree(3), 1);
+    }
+
+    #[test]
+    fn test_cold_snapshot_remap_persists_to_file() {
+        let mut table = make_table();
+        for (src, dst) in [(0u32, 4u32), (2, 5), (4, 5), (5, 4)] {
+            table
+                .insert_edge(
+                    src,
+                    dst,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
+                .unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let mut snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+        assert_eq!(snapshot.vertex_capacity(), 6);
+
+        let mapping: HashMap<u32, u32> = [(4, 3), (5, 4)].into_iter().collect();
+        snapshot
+            .remap_vertex_ids(Some(&mapping), Some(&mapping))
+            .unwrap();
+        snapshot.persist().unwrap();
+
+        // A reload from the rewritten file must observe the remap.
+        let reloaded = ColdSnapshot::open(&path).unwrap();
+        assert_eq!(reloaded.vertex_capacity(), 5);
+        assert_eq!(reloaded.edge_count(), 4);
+        assert_eq!(reloaded.get_out_edges(3).len(), 1);
+        assert_eq!(reloaded.get_out_edges(4).len(), 1);
+        assert_eq!(reloaded.get_out_edges(5).len(), 0);
+        assert_eq!(reloaded.get_in_edges(3).len(), 2);
+        assert_eq!(reloaded.get_in_edges(4).len(), 2);
+        assert_eq!(reloaded.degree(3), 1);
     }
 
     #[test]

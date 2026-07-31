@@ -108,24 +108,17 @@ impl TimeTravelEdgeStore {
             return merge::FreezeDeltaResult { frozen_count: 0 };
         }
 
-        let max_vid = entries
+        // Segment rows index this direction's vertex space only (out: src
+        // label, in: dst label); neighbor ids belong to the other label's
+        // space and must not inflate capacity. Truncate strictly to the
+        // highest edge-bearing row + 1 (Ladybug getMaxOffsetWithRels()+1),
+        // mirroring the merge path.
+        let max_row = entries
             .iter()
-            .map(|(src, nbr)| {
-                let nbr_id = nbr.neighbor.as_int64().unwrap_or(0) as usize;
-                std::cmp::max(*src as usize, nbr_id)
-            })
+            .map(|(src, _)| *src as usize)
             .max()
             .unwrap_or(0);
-        let vertex_capacity = delta.vertex_capacity();
-        if max_vid >= vertex_capacity {
-            log::warn!(
-                "Vertex ID {} exceeds capacity {} during freeze; using {} for segment",
-                max_vid,
-                vertex_capacity,
-                max_vid.saturating_add(1)
-            );
-        }
-        let effective_capacity = std::cmp::max(vertex_capacity, max_vid.saturating_add(1));
+        let effective_capacity = max_row.saturating_add(1);
 
         let create_ts_min = entries
             .iter()

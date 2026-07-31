@@ -1,172 +1,178 @@
-# 内部 ID 稠密化与 CSR 行空间改造设计方案
+# 内部 ID 稠密化与 CSR 行空间改造设计（阶段复盘与修订）
 
 > 前置文档：
 > - `docs/analysis/csr_vertex_id_space.md` — 问题背景、代码上下文、量化分析（问题本身）
 > - `docs/analysis/csr_vertex_id_space_ladybug_对比分析.md` — Ladybug (Kuzu) 对照与改进建议
 >
-> 本文给出最终设计决策、完整方案与分阶段落地计划。所有论断均经 linkrs 源码核实。
+> 本文为本设计的**实施后复盘**：确认阶段一~三的落地情况，评估原阶段四方向，并给出修订后的后续计划。所有论断均经 linkrs 源码核实（`git log` 至 f46938e）。
 
 ---
 
-## 1. 决策结论
+## 1. 决策结论（修订）
 
-**采用"内部 ID 完全稠密化"（方案 C）为主线，叠加"每行固定成本削减"（方案 B）；放弃"边表持稠密行映射"（方案 A）。**
+**主线决策保持不变**："内部 ID 完全稠密化"（方案 C）+ "每行固定成本削减"（方案 B），放弃"边表持稠密行映射"（方案 A）。分段编码、Lazy 主块、稀疏溢出、比例扩容均按原设计落地。
 
-依据（详见 2、3 节）：
-1. Ladybug 对照实证：业界主流是"ID 来自稠密分配器 + 稀疏性隔离在映射层"，而非在边表内做行号映射；
-2. linkrs 源码核实：内部 ID 的编码/解码函数为 `sharded.rs` 文件私有，全库将其视为不透明 u32 句柄，WAL 持久化外部 ID（重放时重新解析）——稠密化外溢面与已完成的编码翻转修复相当；
-3. 设计形态上，linkrs 可采用比"全局计数器 + 映射表"更优的**分片号段预取**编码，同时保留分片写并发、O(1) 位运算解码、零映射表开销。
-
----
-
-## 2. 关键核实结果（修正 Ladybug 文档）
-
-### 2.1 修正一：顶点压缩机制当前未接线
-
-`VertexCompactionCoordinator`（`vertex_table/compaction.rs:108` 调用 `id_indexer.compact()`）与 `optimizer.rs` 已实现但**全库无调用方**（dead code）。Ladybug 文档所称"一旦压缩被触发即破坏边表引用"的现有正确性隐患，准确表述为：**接线时的必然踩坑，当前不可触发、无风险**。该问题与内部 ID 编码方案正交，作为独立阶段处理（见阶段三）。
-
-### 2.2 修正二：稠密化无须全局映射表
-
-Ladybug 文档 3.2 阶段一第 3 点提出需补"稠密 ID → 分片"查找（全局 `Vec<u8>` 或哈希）。通过**号段预取编码**（见 4.1），分片信息直接编码在 ID 位段中，解码为纯位运算，无需任何映射表。
-
-### 2.3 其他核实结论
-
-| 主题 | 结论 |
-|---|---|
-| WAL 格式 | 存外部 ID，`recovery.rs:802-836` 重放时经 `resolve_vertex_id` 重新解析 → 稠密化零影响 |
-| 段文件 / 冷快照 .lkcs | 内部 ID 作为 CSR 行号持久化，格式不变，数值变小；无向后兼容要求（AGENTS.md） |
-| `Vertex.id` 字段 | `reader.rs:138/198`、`ops.rs:79`、`vertex.rs:48/65`、`cursor_impl.rs:182` 将 internal_id 暴露为查询结果 `id`，`query/conversion.rs:12` 转 `BigInt` → 稠密化后数值变化（测试 `ops_test.rs:385` 需更新） |
-| `TransactionOps::add_vertex` | `ops.rs:109` 返回 `VertexId::from_int64(internal_id)` → 数值变化，接口形状不变 |
-| record_cache | 键为 `(label_id, internal_id)`，重启失效，无碍 |
-| 事务撤销（undo.rs） | 内存态，无碍 |
+**修订点**：
+1. 原阶段四（行空间分组）**方向不再成立，予以否决**——其前提已被阶段一、三消除，收益上限 ≤25% 常数因子，成本是全路径间接寻址（详见第 4 节）；
+2. 以**"收尾与验证"阶段**（新阶段四）替代：补齐两处残留扩容、一处冻结段容量、一处冷快照持久化缺口，并补上原文档承诺但未做的微基准；
+3. 行空间分组**整体搁置**，记录重启触发条件，不删除设计知识。
 
 ---
 
-## 3. 目标与约束
+## 2. 阶段一~三完成情况核实
 
-1. **内部 ID 数值 ≈ 全局顶点数**（偏差为常数级），CSR 行数不再被 ID 编码放大；
-2. **保留分片写并发**：分片仍按外部 ID 哈希选择，锁域不变；
-3. **外溢面最小**：改动集中在 `sharded.rs` 一个文件（阶段一）；
-4. **无向后兼容**：旧数据文件、旧内部 ID 语义一律不兼容（开发阶段，合理架构优先）；
-5. **预留删除回收**：为顶点压缩接线与行空间回收留好结构位。
+### 2.1 阶段一：号段式编码 —— ✅ 已完成
 
----
+`crates/graphdb-storage/src/storage/vertex/vertex_table/sharded.rs`：
 
-## 4. 完整设计
-
-### 4.1 内部 ID 编码：分片号段预取（Segment Prefetch）
-
-**ID 布局**：`internal_id = (segment << K) | slot`，其中 K 为号段大小指数（建议 K=12，即每段 4096 个号）。
-
-**段号分配**：全局段计数器（`AtomicU32`）按分片轮转发段。分片 s 的第 i 个号段号为 `s + 8*i`（8 为分片数），即每个分片的号段在 ID 空间中**交错且唯一**。
-
-**解码（O(1) 位运算）**：
-- 分片号：`shard = (id >> K) % 8`
-- 片内偏移：`slot = id & (2^K - 1)`
-
-**分配器**：
-- 每分片持有本地计数器（段内取号，命中分片锁内，零原子争用）；
-- 段耗尽时向全局计数器 `fetch_add(1)` 取新段号；
-- 100 万顶点（K=12）仅约 244 次全局原子操作。
-
-**性质**：
-- ID 数值 = 最大段号 × 4096 + 偏移 ≈ 全局顶点数 + 常数（每分片至多一个未满尾段，8 分片共约 8×2^(K-1) 行固定空洞，K=12 时约 16K 行，可忽略）；
-- 分片内局部序号 = `slot`，仍为分片内稠密连续（`IdIndexer`/`columns`/`timestamps` 索引语义不变）；
-- 编码/解码仍是 `sharded.rs` 私有函数，全库其余代码继续把内部 ID 当不透明 u32。
-
-### 4.2 数据结构变化（阶段一范围）
-
-**`vertex_table/sharded.rs`**：
-- `Shard` 结构增加 `local_counter: u32`（段内偏移）与 `current_segment: u32`；
-- 新增表级 `segment_allocator: AtomicU32`；
-- `encode_id`/`decode_id` 重写为段式位运算；
-- `insert`/`insert_by_i64`：取号逻辑改为"段内有号则自增本地计数，段耗尽则取新段并重置本地计数"；
-- 其余接口（`get_internal_id*`、`get_by_internal_id`、`delete_by_internal_id`、`load`）仅依赖新的 encode/decode，签名不变。
-
-**其他文件：零改动**（边表、冻结段、冷快照、WAL、查询层均以不透明 u32 消费内部 ID）。
-
-### 4.3 影响面清单（全项目）
-
-| 位置 | 影响 | 处理 |
+| 设计项 | 实现位置 | 状态 |
 |---|---|---|
-| 边表 CSR 行号（hot/cold/段） | 数值变小 | 自动受益，零改动 |
-| `Vertex.id` 查询结果 | 数值变化 | 更新测试断言；文档化该字段不承诺稳定 |
-| `add_vertex` 返回值 | 数值变化 | 同上 |
-| WAL / 持久化格式 | 无 | — |
-| 既有测试中硬编码内部 ID（如 `ops_test.rs:193`、`core_tests.rs:40` 等） | 数值变化 | 逐处更新 |
+| ID 布局 `(segment << K) \| slot`，K=12 | `sharded.rs:30-32`（`SEGMENT_SLOTS_BITS`） | ✅ |
+| 分片交错段号 `segment = shard + ordinal × num_shards` | `encode_id`（:34-39）、`decode_id`（:41-47）纯位运算 | ✅ |
+| 每分片 `local_counter`（段内取号） | `Shard.local_counter: AtomicU32`（:53） | ✅ |
+| `current_segment` 缓存 + 全局 `segment_allocator` | :56、:70；`record_allocation`（:138-148）段耗尽 `claim_segment` | ✅ |
+| encode/decode 为文件私有 | 顶层 `fn encode_id/decode_id`，全库按不透明 u32 消费 | ✅ |
+| load 后恢复分配水位 | `load`（:570-594）刷新三组计数器 | ✅ |
+| 压缩后刷新分配水位 | `compact_with_ts_collect_mapping`（:520-543）刷新 `local_counter`/`current_segment` | ✅ |
+| 单元测试 | `test_encode_decode_id`、`test_segment_allocation_spans_boundaries`、`test_load_resumes_allocation`、`test_id_uniqueness_across_shards` | ✅ |
+
+### 2.2 阶段二：削减每行固定成本 —— ✅ 已完成（2 处残留）
+
+`crates/graphdb-storage/src/storage/edge/`：
+
+| 设计项 | 实现位置 | 状态 |
+|---|---|---|
+| 主块首边惰性分配（零度行占 0 槽） | `mutable_csr.rs:201-212`（`allocate_primary_block`）、:245-248 调用点；`test_zero_degree_rows_hold_no_slots`（:1262） | ✅ |
+| overflow 稀疏化（独立存储，仅高密度顶点持有） | `mutable_csr.rs:105`（`HashMap<u32, Vec<Vec<Nbr>>>`） | ✅ |
+| 比例步进扩容（1.25×，弃用 next_power_of_two） | `mutable_csr.rs:79/191-197`（`VERTEX_GROWTH_FACTOR`）、`single_mutable_csr.rs:78/152-158` | ✅ |
+| **残留**：Labeled/MultiSingle 变体仍 `*2` 扩容 | `labeled_mutable_csr.rs:118`、`multi_single_mutable_csr.rs:272` | ❌ |
+
+**实测每行固定成本**（Phase 1 稠密化后行数 ≈ 顶点数）：
+- `MutableCsr`：12B/行（`adj_offsets` 4B + `degrees` 4B + `primary_capacities` 4B，均为 u32），双 CSR = 24B/顶点 —— **优于原文档 36B 目标**；
+- 不可变 `Csr`（冻结段/冷快照）：4B/行（仅 `offsets` u32 数组，`csr.rs:47-51`）。
+
+### 2.3 阶段三：删除回收与顶点压缩接线 —— ✅ 已完成（1 处持久化缺口）
+
+| 设计项 | 实现位置 | 状态 |
+|---|---|---|
+| 压缩触发接线到维护路径 | `context/mod_maintenance.rs:50`（`compact_with_ts_collect_mapping`） | ✅ |
+| old→new 映射传播到边表 CSR 行号 + 邻居键 | `edge/edge_table/remap.rs:164-229`（`remap_vertex_ids`：out/in CSR、冻结段、稀疏顶点索引、快照缓存、属性索引） | ✅ |
+| 传播到冷快照 | `mod_maintenance.rs:112-124`（内存态） | ✅（见缺口） |
+| 行空间截断为"最大有边行 + 1" | `remap.rs:69-84/131-149/264-266`（对齐 Ladybug `getMaxOffsetWithRels()+1`） | ✅ |
+| 墓碑条目保留（时间旅行可见性） | `remap.rs:340-364` 测试 + `iter_all` 重建路径 | ✅ |
+| 冻结段行容量按需 | `edge_table/freeze.rs:111-128`（`max(delta_capacity, max_vid+1)`） | ⚠️ 见残留 |
+| **缺口**：冷 `.lkcs` 文件在内存 remap 后不重写 | `cold/cold_snapshot.rs:291-298` 注释自认："backing .lkcs must be re-exported" | ❌ |
+| 压缩后行空间物理回收 + 分配水位重置 | `sharded.rs:537-540` + `id_indexer.rs:250`（`compact` 返回 old→new） | ✅ |
+| 回归测试 | `remap.rs` 测试×7（行/邻居/段/墓碑/单向标签）、`core_tests.rs:419`、`cold_snapshot.rs:614-657` | ✅ |
+
+### 2.4 影响面核实（原文档 4.3）
+
+| 位置 | 结论 |
+|---|---|
+| `Vertex.id` 查询结果 / `add_vertex` 返回值 | 数值变为稠密，接口形状不变（`transaction/ops.rs:113`）；既有断言已更新，测试通过 |
+| WAL / 恢复 | 存外部 ID，重放重新解析，零影响（`recovery.rs`） |
+| 既有测试硬编码内部 ID | 已随重构提交更新（631 个 lib 测试通过） |
+
+### 2.5 测试现状
+
+`cargo test -p graphdb-storage --lib`：**631 通过 / 9 失败**，9 个失败均为**既存无关问题**：
+- `schema_engine` 版本自增断言×5（schema 版本管理模块，与 ID 无关）；
+- `index::tests::resolve_split_crash_recovery_*`×4（`tests.rs:239` 写 postcard、读时期待 "LNKF" 魔数——index generation 文件格式与测试不同步）。
 
 ---
 
-## 5. 分阶段修改方案
+## 3. 阶段四原方向评估：否决
 
-### 阶段一：号段式编码（根治 16× 放大）
+原设计：全表单一行数组按 `内部 ID >> K'` 分组、组惰性创建、组内按最大有边行截断，收益为"冻结按组、冷文件随数据收缩、为 PMA 留结构位"。
 
-- **改动文件**：`sharded.rs`（单文件）
-- **步骤**：
-  1. 实现段式 encode/decode 与分配器（4.1/4.2）；
-  2. 跑全量 `cargo test -p graphdb-storage`（预期仅内部 ID 数值断言类测试失败，逐处更新）；
-  3. 微基准：稀疏写入模式（少量高号顶点）对比修复前后 CSR 行数。
-- **验证标准**：CSR 行数 = 顶点数 × 1 + 常数；全量测试通过。
-- **预期收益**：100 万顶点单边表行数 2^25 → ~2^20，行固定成本 19.6GB → ~1.2GB（含双 CSR）。
+### 3.1 前提已被消除
 
-### 阶段二：削减每行固定成本（292B → ~36B）
+原分组的动机是"单个大 ID / 稀疏行空间拖大整表"。阶段一后最大行号 ≈ N + 8×2^K（常数），阶段三压缩后截断为"最大有边行+1"。**剩余行空间膨胀仅为常数因子**：
+- 1.25× 扩容尾部（阶段二，≤25%）；
+- 压缩间隔期内删除顶点暂留的行（有界，由压缩节奏控制）。
 
-- **改动文件**：`mutable_csr.rs`、`single_mutable_csr.rs`、`csr_variant.rs`（必要时）
-- **步骤**：
-  1. 主块预物化归零：`DEFAULT_VERTEX_DEGREE` 的"每行 4 槽"改为首条边到达时按需分配（对齐 Ladybug"零度顶点占 0 行数据"）；
-  2. `overflow_chunks: Vec<Vec<Vec<Nbr>>>` 的空 Vec（24B/行）改为稀疏化（独立溢出存储，仅高密度顶点持有）；
-  3. `ensure_vertex_capacity` 的 `next_power_of_two` 改为比例步进（如 1.25×），ID 稠密化后行数 ≈ 顶点数，尾段浪费从"数亿行"降为"顶点数的 25%"。
-- **验证标准**：每行成本 ≤ 40B；溢出路径既有测试全绿。
-- **预期收益**：~1.2GB → ~30MB（100 万顶点示例）。
+稠密 ID 下"组内按最大有边行截断"退化为无收益：每组的最高有边行 ≈ 组基址 + 组规模，组边界截断与整表截断等价。
 
-### 阶段三：删除回收与顶点压缩接线（正确性 + 空间回收）
+### 3.2 宣称收益不成立
 
-- **改动文件**：`id_indexer.rs`、`vertex_table/compaction.rs`、`optimizer.rs`、`edge_table/*`（重映射传播）、`freeze.rs`、冷导出
-- **步骤**：
-  1. **接线前置条件**：顶点压缩触发时必须把 old→new 映射传播到边表 CSR 行号（out_csr/in_csr、冻结段、冷快照行号）——压缩未接线前禁止触发，作为 gate；
-  2. 接线 `VertexCompactionCoordinator` 到 `GraphStorage::compact`/定期维护路径，补传播链；
-  3. 冻结段/冷文件行空间截断：段容量从"继承 delta 容量/单个大 ID 拖大"改为"最大有边行 + 1"（对齐 Ladybug `getMaxOffsetWithRels() + 1`）；
-  4. 顶点删除后行空间经 compact/重建物理回收（ID 本身不复用，保证边引用稳定——与 Ladybug 语义一致）。
-- **验证标准**：新增回归用例"顶点压缩触发后边表查询正确性"；删除率 50% 场景下 CSR 行数与活跃顶点数同阶。
+| 收益 | 评估 |
+|---|---|
+| 冻结按组进行 | freeze 是按时间批量 delta→段；ID 分组不提供任何冻结触发语义 |
+| 冷文件随数据收缩 | 冷快照行空间已 ≈ N（offsets 4B/行）；分组最多省 1.25× 尾部，但每行访问需组查找 + 基址偏移 |
+| PMA region 结构位 | 投机性；与现有 segment/merge/compact 架构冲突，且 linkrs 的"压缩+重映射+截断"模型已将行空间限定在常数因子内 |
 
-### 阶段四（可选）：行空间分组
+### 3.3 成本
 
-- **改动文件**：`edge_table/*`、冷快照格式
-- **内容**：全表单一行数组按 `内部 ID >> K'` 分组、组惰性创建、组内按最大有边行截断。
-- **收益**：冻结按组进行、冷文件尺寸随实际数据收缩、为 region 级 gap/重排（PMA，Ladybug 2.5 节）留结构位。
-- **依赖**：阶段一、三完成（分组依赖稠密 ID 与行截断语义）。
+分组触及每一次行访问路径（查询、remap、freeze、merge、dump/load、冷格式），引入新的组边界失败模式，换来 ≤25% 的常数因子收益。**不划算。**
+
+### 3.4 搁置触发条件（未来若满足其一再重启）
+
+1. 内部 ID 重新变得稀疏（例如引入外部 ID 保留语义的插入路径）；
+2. 冷存储迁移到 mmap/磁盘、需要按 region 粒度换页读取；
+3. 单 label 顶点数达到 10^8 量级且实测 offsets 数组成为主导成本。
 
 ---
 
-## 6. 量化预期
+## 4. 修订后的阶段四：收尾与验证
+
+### 4.1 完成阶段二残留：两种 CSR 变体比例扩容
+
+- **改动文件**：`edge/labeled_mutable_csr.rs:118`、`edge/multi_single_mutable_csr.rs:272`
+- **改动**：`resize((src_vid + 1).max(vertex_capacity * 2))` → `resize((min_capacity * 1.25).ceil())`，对齐 `VERTEX_GROWTH_FACTOR`。
+- **验证**：两变体既有测试 + 新增行容量断言（行数 ≤ 1.25 × 最大有边行）。
+
+### 4.2 冻结段严格截断
+
+- **改动文件**：`edge/edge_table/freeze.rs:111-128`
+- **改动**：段容量改为"本空间最大有边行 + 1"。当前 `max_vid` 同时取 src 与邻居（:111-118），但 out 段行空间只属于 src 空间、邻居是值——取 `max(src)` 即可，消除跨标签最大 ID 拖大段容量；同时弃用 `max(delta_capacity, …)` 继承的 1.25× 尾部。
+- **注意**：in 段同理取 dst 空间最大行。
+- **验证**：freeze/merge 既有测试 + 断言段容量 = max 有边行 + 1。
+
+### 4.3 冷快照 remap 持久化
+
+- **改动文件**：`cold/cold_snapshot.rs`、`context/mod_maintenance.rs:112-124`
+- **方案**（二选一）：
+  a. 维护路径中内存 remap 后**重写 `.lkcs`**（复用 `ColdSnapshot::create` 序列化路径）；
+  b. 若冷快照视为可重建缓存，改为 remap 后**标记失效并从边表重新导出**（当前已有 `export_snapshot_file`，`context/mod_edge_ops.rs:166`）。
+- **验证**：新增用例——压缩触发 → 冷快照查询正确 → 重启重载 `.lkcs` 后仍正确（roundtrip）。
+
+### 4.4 稠密化微基准（原文档第 7 节承诺项）
+
+- **改动文件**：`benches/storage_bench.rs`
+- **新增基准**：稀疏高号外部 ID 写入模式（少量大号 ID 顶点，修复前后差距最大的场景），指标：CSR 行数、实际 RSS、插入耗时。
+- **回归断言**（测试级）：任意写入序列后 `out/in CSR 行数 ≤ 1.25 × (最大有边行+1)`（已有雏形 `edge_table.rs:844-855`，扩展覆盖压缩与冻结路径）。
+
+### 4.5 既存失败测试（记录，不在本阶段范围）
+
+`schema_engine` 版本自增 ×5、index generation 文件格式 ×4（见 2.5）。建议单独开任务修复，与 ID 稠密化解耦。
+
+---
+
+## 5. 量化核对（实施后实测口径）
 
 以 100 万顶点、平均度 8、单边表（out+in 双 CSR）为例：
 
-| 项 | 现状 | 阶段一后 | 阶段二后 |
-|---|---|---|---|
-| CSR 行数 | ~2^25（16×+幂扩容） | ~2^20（幂扩容尾段） | ~1.25M（比例步进） |
-| 行固定成本 | 292B×行数×2 ≈ **19.6GB** | ≈ 1.2GB | ≈ 36B×1.25M×2 ≈ **90MB** |
-| 冻结段/冷文件行空间 | 同步放大 | 同步收缩 | 同步收缩 |
+| 项 | 原文档估计 | 实施后实测口径 |
+|---|---|---|
+| CSR 行数 | ~2^20 → ~1.25M | max 行号 ≈ N + 16K；行容量 = 1.25×(N+16K)（比例扩容，含尾部） |
+| 每行固定成本 | 292B → ~36B | `MutableCsr` 12B/行；双 CSR = 24B/顶点（优于目标）；不可变 Csr 4B/行 |
+| 冻结段行空间 | 同步收缩 | 冻结时继承 delta 容量（1.25× 尾部），合并/remap 后截断为 max 行 + 1 |
+| 冷快照行空间 | 同步收缩 | = 导出时 CSR 行容量，≤ 1.25×(N+16K) |
 
 ---
 
-## 7. 验证路径
+## 6. 验证路径
 
-1. **微基准**（`benches/`）：三种写入模式 × 修复前后对比——
-   - 顺序稠密（1..N 顶点）；
-   - **稀疏高号**（少量高号顶点，现状 vs 稠密化差距最大的场景，Ladybug 文档 3.4 补充）；
-   - 删除重插（度量行空间增长）。
-   指标：CSR 行数、实际 RSS、插入耗时。
-2. **回归**：全量 `cargo test -p graphdb-storage`（lib + 集成）+ `cargo clippy`；
-3. **专项**：冷快照导出/加载 roundtrip（行号数值变小后文件尺寸与正确性）；
-4. **阶段三专项**：顶点压缩触发后边表/冷查询正确性回归。
+1. `cargo test -p graphdb-storage --lib`（631 通过 / 9 既存失败，见 2.5）；
+2. 阶段四各项：4.1/4.2 新增容量断言；4.3 roundtrip 用例；4.4 微基准 + 回归断言；
+3. 全量 `cargo clippy --all-targets --all-features`。
 
 ---
 
-## 8. 风险与开放问题
+## 7. 风险与开放问题
 
-1. **跨 label ID 重叠**（既有）：不同 label 的顶点表 ID 空间独立，同一数值可能同时是 A 的 src 与 B 的 dst 行号，CSR 行空间混用——现状如此，稠密化不加剧；需评估是否在边表层引入 (label, id) 复合键或统一全局 ID 空间（超出本次范围，记录待议）；
-2. **`Vertex.id` 语义正式化**：该字段已是半公开的"内部实现泄漏"，建议后续显式定义（稳定序列号 vs 移除），避免再次依赖数值；
-3. **段式编码与顶点压缩交互**：压缩重排分片内局部号时，段式 ID 的 slot 位随之变化，必须走"重建边表行号"路径（阶段三第 1 步），不可只做片内列重排；
-4. **K 参数**：12（4096/段）为建议初值，微基准可对比 8/10/12/14 的尾段浪费与分配频率权衡；
-5. **阶段四（分组）是否推进**：取决于阶段一/三后行空间实测，若行数已与顶点数同阶且删除回收正常，可暂缓。
+1. **跨 label ID 重叠**（既有）：不同 label 顶点表 ID 空间独立，段式编码不改变该现状；边表层 (label, id) 复合键或全局 ID 空间超出本次范围，记录待议；
+2. **`Vertex.id` 语义正式化**：该字段仍为半公开"内部实现泄漏"，建议后续显式定义（稳定序列号 vs 移除），避免依赖数值；
+3. **段式编码与顶点压缩交互**：压缩重排片内局部号时 slot 随之变化，必须走"重建边表行号"路径——已由 `remap_vertex_ids` 承担并测试（`remap.rs`）；
+4. **K 参数**：12（4096/段）已落地；若未来需要微调，仅改 `SEGMENT_SLOTS_BITS` 并回归 `test_encode_decode_id`；
+5. **冷快照持久化缺口**（4.3）：在修复前，内存 remap 后 `.lkcs` 与内存态不一致，重启后行号回退到 remap 前——是当前唯一已知的持久化一致性风险，优先处理。

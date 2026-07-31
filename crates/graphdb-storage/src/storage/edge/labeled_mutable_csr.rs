@@ -26,6 +26,7 @@ use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId};
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGE_CAPACITY: usize = 4096;
+const VERTEX_GROWTH_FACTOR: f64 = 1.25;
 
 /// Label-range mapping for a vertex: label -> (offset, count)
 #[derive(Debug, Clone)]
@@ -115,7 +116,10 @@ impl LabeledMutableCsr {
         ts: Timestamp,
     ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
-            self.resize((src_vid as usize + 1).max(self.vertex_capacity() * 2));
+            let min_capacity = src_vid as usize + 1;
+            let new_capacity =
+                ((min_capacity as f64 * VERTEX_GROWTH_FACTOR).ceil() as usize).max(min_capacity);
+            self.resize(new_capacity);
         }
 
         // Find or create label range

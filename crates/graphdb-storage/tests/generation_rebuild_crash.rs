@@ -17,17 +17,36 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .insert_vertex("test_space", common::create_person_vertex(1, "Alice", 30))
         .expect("vertex should be inserted");
 
-    // Generation 2 is the first rebuild generation after index registration.
-    // A directory at the output file path makes the physical flush fail after
-    // the build state has already been persisted.
-    let blocked_output = work_dir
+    // Index registration auto-rebuilds (publishes generation-2 on disk), and
+    // insert_vertex publishes an in-memory delta generation, so the next
+    // explicit rebuild targets max on-disk generation + 2 (+ 1 if no delta).
+    // Block the output file with a directory for both candidates so the
+    // physical flush fails after the build state has already been persisted,
+    // regardless of the exact generation numbering.
+    let gen_root = work_dir
         .join("indexes")
         .join(space_id.to_string())
-        .join("1")
-        .join("generation-2")
-        .join("forward_index.bin");
-    let _ = std::fs::remove_dir_all(&blocked_output);
-    std::fs::create_dir_all(&blocked_output).expect("failure fixture should be created");
+        .join("1");
+    let max_gen = std::fs::read_dir(&gen_root)
+        .expect("index root should exist")
+        .filter_map(|entry| {
+            entry.ok().and_then(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.strip_prefix("generation-")
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+        })
+        .max()
+        .unwrap_or(0);
+    let mut blocked_outputs = Vec::new();
+    for generation in (max_gen + 1)..=(max_gen + 2) {
+        let blocked = gen_root
+            .join(format!("generation-{generation}"))
+            .join("forward_index.bin");
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::create_dir_all(&blocked).expect("failure fixture should be created");
+        blocked_outputs.push(blocked);
+    }
 
     let result = storage.rebuild_tag_index("test_space", "person_name_idx");
     assert!(
@@ -35,7 +54,9 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         "the physical output failure should abort rebuild"
     );
     drop(storage);
-    std::fs::remove_dir_all(&blocked_output).expect("failure fixture should be removed");
+    for blocked in &blocked_outputs {
+        std::fs::remove_dir_all(blocked).expect("failure fixture should be removed");
+    }
 
     let mut reopened = common::open_persistent_storage(&work_dir);
     assert!(reopened

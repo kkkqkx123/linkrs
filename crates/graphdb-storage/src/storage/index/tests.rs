@@ -13,7 +13,17 @@ use crate::storage::index::manifest::{
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity};
 use crate::storage::index::*;
+use crate::storage::persistence::write_versioned_payload;
+use crate::core::types::StorageVersion;
 use std::collections::BTreeMap;
+
+fn write_crashed_build_state(index_root: &std::path::Path, state: &GenerationBuildState) {
+    let serialized = postcard::to_allocvec(state).expect("serialize");
+    let mut versioned = Vec::new();
+    write_versioned_payload(&mut versioned, StorageVersion::CURRENT as u32, &serialized);
+    std::fs::create_dir_all(index_root).unwrap();
+    std::fs::write(index_root.join("generation_build.bin"), &versioned).unwrap();
+}
 
 fn create_tag_index(name: &str, schema_name: &str) -> Index {
     Index::new(IndexConfig {
@@ -230,9 +240,7 @@ fn resolve_split_crash_recovery_discards_building_state() {
         state: GenerationState::Building,
         terminal_reason: None,
     };
-    let bytes = postcard::to_allocvec(&crashed).expect("serialize");
-    std::fs::create_dir_all(&index_root).unwrap();
-    std::fs::write(&build_state_path, &bytes).unwrap();
+    write_crashed_build_state(&index_root, &crashed);
 
     manager
         .resolve_split_crash_recovery(&index_root)
@@ -269,9 +277,7 @@ fn resolve_split_crash_recovery_discards_catching_up_state() {
         state: GenerationState::CatchingUp,
         terminal_reason: None,
     };
-    let bytes = postcard::to_allocvec(&crashed).expect("serialize");
-    std::fs::create_dir_all(&index_root).unwrap();
-    std::fs::write(&build_state_path, &bytes).unwrap();
+    write_crashed_build_state(&index_root, &crashed);
 
     manager
         .resolve_split_crash_recovery(&index_root)
@@ -329,9 +335,7 @@ fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
         state: GenerationState::Publishing,
         terminal_reason: None,
     };
-    let bytes = postcard::to_allocvec(&publishing).expect("serialize");
-    std::fs::create_dir_all(&index_root).unwrap();
-    std::fs::write(&build_state_path, &bytes).unwrap();
+    write_crashed_build_state(&index_root, &publishing);
 
     manager
         .resolve_split_crash_recovery(&index_root)
@@ -372,9 +376,7 @@ fn resolve_split_crash_recovery_discards_publishing_without_manifest() {
         state: GenerationState::Publishing,
         terminal_reason: None,
     };
-    let bytes = postcard::to_allocvec(&publishing).expect("serialize");
-    std::fs::create_dir_all(&index_root).unwrap();
-    std::fs::write(&build_state_path, &bytes).unwrap();
+    write_crashed_build_state(&index_root, &publishing);
 
     manager
         .resolve_split_crash_recovery(&index_root)

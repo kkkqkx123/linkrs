@@ -107,8 +107,10 @@ impl GraphStorageContext {
                 .collect();
 
             // Cold snapshots hold CSR rows/neighbors in the same internal ID
-            // spaces; remap in memory so queries stay consistent (the backing
-            // .lkcs file must be re-exported to persist the change).
+            // spaces; remap in memory and rewrite the backing .lkcs file so
+            // queries stay consistent across reloads. The file is a
+            // rebuildable cache, so a persist failure only degrades to a
+            // stale file (logged, not fatal).
             let mut cold_snapshots = self.cold_snapshots().write();
             for snapshot in cold_snapshots.values_mut() {
                 let schema = snapshot.schema();
@@ -120,6 +122,13 @@ impl GraphStorageContext {
                     continue;
                 }
                 snapshot.remap_vertex_ids(src_mapping, dst_mapping)?;
+                if let Err(e) = snapshot.persist() {
+                    log::warn!(
+                        "Failed to persist cold snapshot (label={}) after remap: {}",
+                        src_label,
+                        e
+                    );
+                }
             }
             drop(cold_snapshots);
 

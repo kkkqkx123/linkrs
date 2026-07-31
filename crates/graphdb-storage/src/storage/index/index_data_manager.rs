@@ -303,6 +303,7 @@ impl IndexDataManagerImpl {
             .write()
             .insert(identity, index.clone());
         let mut catalogs = self.manifest_catalogs.write();
+        let catalog_already_loaded = catalogs.contains_key(&identity);
         if let std::collections::hash_map::Entry::Vacant(e) = catalogs.entry(identity) {
             let manifest = IndexManifest::new(
                 space_id,
@@ -325,10 +326,31 @@ impl IndexDataManagerImpl {
         let catalog = self
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found(format!("Index {index_id} has no manifest")))?;
-        self.runtimes
-            .write()
-            .entry(identity)
-            .or_insert_with(|| Arc::new(IndexRuntime::new(catalog.acquire().manifest())));
+        let manifest = catalog.acquire().manifest().clone();
+        self.runtimes.write().entry(identity).or_insert_with(|| {
+            // When the catalog was restored from disk, its manifest points to real
+            // shard checkpoint files. Load the runtime from disk so that shard data
+            // is actually available, instead of creating an empty generation that
+            // satisfies the `restore_active_generation` check without any data.
+            let has_disk_shards =
+                catalog_already_loaded && manifest.shards.iter().any(|s| s.checkpoint_file.is_dir());
+            if has_disk_shards {
+                let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
+                let runtime = match index.index_type {
+                    IndexType::TagIndex => IndexRuntime::load_with_pool_capacity::<
+                        crate::storage::index::key_codec::VertexIndexKeyGen,
+                    >(&manifest, pool_cap)
+                    .unwrap_or_else(|_| IndexRuntime::new(&manifest)),
+                    IndexType::EdgeIndex => IndexRuntime::load_with_pool_capacity::<
+                        crate::storage::index::key_codec::EdgeIndexKeyGen,
+                    >(&manifest, pool_cap)
+                    .unwrap_or_else(|_| IndexRuntime::new(&manifest)),
+                };
+                Arc::new(runtime)
+            } else {
+                Arc::new(IndexRuntime::new(&manifest))
+            }
+        });
         self.restore_active_generation(identity, index)?;
         self.sync_memory_usage();
         Ok(())

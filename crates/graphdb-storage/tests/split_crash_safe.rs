@@ -140,11 +140,17 @@ fn split_startup_reconciles_publishing_state() {
             state: GenerationState::Publishing,
             terminal_reason: None,
         };
-        std::fs::write(
-            index_root.join("generation_build.bin"),
-            postcard::to_allocvec(&build_state).expect("build state should serialize"),
-        )
-        .expect("build state should be durable");
+        let serialized = postcard::to_allocvec(&build_state).expect("build state should serialize");
+        // Versioned payload wrapper: [LNKF][version:u32 LE][postcard payload],
+        // matching storage::persistence::write_versioned_payload.
+        let mut versioned = Vec::new();
+        versioned.extend_from_slice(b"LNKF");
+        versioned.extend_from_slice(
+            &(graphdb_storage::core::types::StorageVersion::CURRENT as u32).to_le_bytes(),
+        );
+        versioned.extend_from_slice(&serialized);
+        std::fs::write(index_root.join("generation_build.bin"), &versioned)
+            .expect("build state should be durable");
     }
 
     let storage = graphdb_storage::storage::GraphStorage::open(work_dir.clone())

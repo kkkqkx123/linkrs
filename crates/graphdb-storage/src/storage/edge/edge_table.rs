@@ -863,6 +863,141 @@ mod tests {
     }
 
     #[test]
+    fn test_row_space_footprint_patterns() {
+        let schema = create_test_schema();
+        let ts = 100u64;
+        let n = 100_000u32;
+
+        // Pattern 1: dense sequential ids.
+        let mut dense = TimeTravelEdgeStore::with_config(schema.clone(), EdgeTableConfig::default())
+            .unwrap();
+        for src in 0..n {
+            dense.insert_edge(src, (src + 1) % n, 0, &[], ts).unwrap();
+        }
+
+        // Pattern 2: dense core + a few edges at very high ids (the internal
+        // id shape that sparse external ids produced before densification).
+        // Row *arrays* track the highest id by design (1.25x tail); the lazy
+        // allocation win is that edge *data* and memory stay proportional to
+        // the edge count, not the id range.
+        let mut sparse =
+            TimeTravelEdgeStore::with_config(schema.clone(), EdgeTableConfig::default()).unwrap();
+        for src in 0..n {
+            sparse.insert_edge(src, (src + 1) % n, 0, &[], ts).unwrap();
+        }
+        for high in [1_000_000u32, 2_000_000, 4_000_000] {
+            sparse.insert_edge(high, 0, 0, &[], ts).unwrap();
+        }
+
+        // Pattern 3: delete half the edges and reinsert them.
+        let mut reinsert =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        for src in 0..n {
+            reinsert.insert_edge(src, (src + 1) % n, 0, &[], ts).unwrap();
+        }
+        for src in 0..n / 2 {
+            let _ = reinsert.delete_edge(src, (src + 1) % n, 0, ts + 1);
+        }
+        for src in 0..n / 2 {
+            reinsert
+                .insert_edge(src, (src + 1) % n, 1, &[], ts + 2)
+                .unwrap();
+        }
+
+        let footprint = |table: &TimeTravelEdgeStore| {
+            let (out_rows, in_rows) = (
+                table.out_csr.vertex_capacity(),
+                table.in_csr.vertex_capacity(),
+            );
+            let mem = table.mutable_csr_memory_size();
+            println!(
+                "row footprint: out_rows={out_rows}, in_rows={in_rows}, mutable_memory={mem} B, edges={}",
+                table.edge_count()
+            );
+            (out_rows, in_rows, mem)
+        };
+
+        println!("dense_sequential:"); // prefix for pattern identification
+        let (dense_out, dense_in, dense_mem) = footprint(&dense);
+        println!("sparse_high_id:");
+        let (sparse_out, sparse_in, sparse_mem) = footprint(&sparse);
+        println!("delete_reinsert:");
+        let (reinsert_out, reinsert_in, _) = footprint(&reinsert);
+
+        let tail = |rows: usize| ((rows as f64) * 1.25).ceil() as usize;
+
+        // Rows track the highest edge-bearing id with at most the 1.25x
+        // growth tail.
+        assert!(dense_out <= tail(n as usize));
+        assert!(dense_in <= tail(n as usize));
+        assert!(sparse_out <= tail(4_000_002));
+        assert!(sparse_in <= tail(n as usize));
+
+        // Memory follows the edge count, not the id range: +3 edges in the
+        // sparse pattern must not inflate memory (pre-lazy-allocation this
+        // allocated per-row edge blocks across the whole 4M-id range).
+        assert!(
+            sparse_mem <= dense_mem + 64 * 64,
+            "sparse high ids must not inflate mutable memory: dense={dense_mem}, sparse={sparse_mem}"
+        );
+
+        // Tombstoned deletions do not expand rows; reinserts reuse slots.
+        assert!(reinsert_out <= tail(n as usize));
+        assert!(reinsert_in <= tail(n as usize));
+    }
+
+    #[test]
+    fn test_freeze_and_remap_keep_rows_truncated() {
+        let schema = create_test_schema();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+        // Sparse high ids, including a neighbor id (500_000) far above the
+        // out-space row max (100_002): neighbor ids must not inflate rows.
+        table.insert_edge(0, 500_000, 0, &[], 100).unwrap();
+        table.insert_edge(50_000, 100_001, 0, &[], 100).unwrap();
+        table.insert_edge(100_002, 0, 0, &[], 100).unwrap();
+        table.freeze_csr_only(150);
+
+        // Frozen segments truncate to the highest edge-bearing row + 1 in
+        // their own direction's vertex space (out: src ids, in: dst ids).
+        assert_eq!(table.out_segments[0].csr.read().vertex_capacity(), 100_003);
+        assert_eq!(table.in_segments[0].csr.read().vertex_capacity(), 500_001);
+
+        // Vertex compaction remaps live ids {0, 50_000, 100_000, 100_001,
+        // 100_002, 500_000} to dense {0..=5}; mutable CSR and segment rows
+        // follow and shrink.
+        let mapping: std::collections::HashMap<u32, u32> = [
+            (50_000, 1),
+            (100_000, 2),
+            (100_001, 3),
+            (100_002, 4),
+            (500_000, 5),
+        ]
+        .into_iter()
+        .collect();
+        table
+            .remap_vertex_ids(Some(&mapping), Some(&mapping))
+            .unwrap();
+
+        // Mutable deltas are empty after freeze; the remap truncates them to
+        // the single-row floor instead of keeping the pre-freeze capacity.
+        // Segment rows follow the remap and shrink.
+        assert_eq!(table.out_csr.vertex_capacity(), 1);
+        assert_eq!(table.in_csr.vertex_capacity(), 1);
+        assert_eq!(table.out_segments[0].csr.read().vertex_capacity(), 5);
+        assert_eq!(table.in_segments[0].csr.read().vertex_capacity(), 6);
+
+        // Queries resolve through the remapped rows/neighbors.
+        assert!(table.get_edge(0, 5, 0, 200).is_some());
+        assert!(table.get_edge(1, 3, 0, 200).is_some());
+        assert!(table.get_edge(4, 0, 0, 200).is_some());
+        assert_eq!(table.in_edges(5, 200).len(), 1);
+        assert_eq!(table.in_edges(3, 200).len(), 1);
+        assert_eq!(table.in_edges(0, 200).len(), 1);
+    }
+
+    #[test]
     fn test_freeze_csr_preserves_reads() {
         let schema = create_test_schema();
         let mut table =
