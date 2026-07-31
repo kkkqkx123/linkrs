@@ -1,10 +1,4 @@
-//! Cache Types
-//!
-//! Core types for cache keys, values, and eviction handling.
-
 use std::sync::Arc;
-
-use moka::notification::RemovalCause;
 
 use crate::core::types::Timestamp;
 use crate::core::Value;
@@ -22,21 +16,7 @@ pub enum EvictionCause {
     Replaced,
 }
 
-impl From<RemovalCause> for EvictionCause {
-    fn from(cause: RemovalCause) -> Self {
-        match cause {
-            RemovalCause::Size => EvictionCause::Capacity,
-            RemovalCause::Expired => EvictionCause::Expired,
-            RemovalCause::Explicit => EvictionCause::Explicit,
-            RemovalCause::Replaced => EvictionCause::Replaced,
-        }
-    }
-}
-
 /// Callback type for eviction notifications.
-///
-/// # Deadlock warning
-/// Called from within Moka's internal locks. The callback must NOT access the same Moka cache.
 pub type EvictionCallback = Arc<dyn Fn(&str, EvictionCause) + Send + Sync>;
 
 /// Memory-aware eviction callback that receives the byte size of the evicted entry.
@@ -45,9 +25,6 @@ pub type EvictionCallback = Arc<dyn Fn(&str, EvictionCause) + Send + Sync>;
 /// - `cache_type`: "vertex" or "id_index"
 /// - `cause`: why the entry was evicted
 /// - `bytes`: estimated byte size of the evicted entry
-///
-/// # Deadlock warning
-/// Called from within Moka's internal locks. The callback must NOT access the same Moka cache.
 pub type EvictionCallbackWithSize = Arc<dyn Fn(&str, EvictionCause, u64) + Send + Sync>;
 
 /// Key for vertex cache: (label_id, internal_id)

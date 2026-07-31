@@ -11,6 +11,7 @@ use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrT
 use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::edge::PropertyTable;
+use crate::storage::index::edge_index_manager::EdgePropertyIndex;
 use crate::storage::schema::{
     ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType,
 };
@@ -114,6 +115,10 @@ pub struct TimeTravelEdgeStore {
     pub current_snapshot_in: Option<Csr>,
     /// Whether the current snapshots need to be rebuilt.
     pub snapshot_dirty: bool,
+
+    /// Edge property index for efficient property-based filtering.
+    /// When set, insert/delete operations automatically maintain the index.
+    pub property_index: Option<EdgePropertyIndex>,
 }
 
 impl TimeTravelEdgeStore {
@@ -185,6 +190,7 @@ impl TimeTravelEdgeStore {
             current_snapshot_out: None,
             current_snapshot_in: None,
             snapshot_dirty: true,
+            property_index: None,
         })
     }
 
@@ -539,6 +545,13 @@ impl TimeTravelEdgeStore {
             return Err(e);
         }
 
+        // Update property index if enabled
+        if let Some(ref mut index) = self.property_index {
+            for (prop_name, prop_value) in &converted_values {
+                let _ = index.insert(prop_name, prop_value, src, dst, rank, self.label, ts);
+            }
+        }
+
         // Check write backpressure after successful insertion
         self.check_and_apply_write_backpressure(ts);
 
@@ -559,12 +572,20 @@ impl TimeTravelEdgeStore {
         let dst_key = Self::edge_endpoint_key(dst, rank);
         let src_key = Self::edge_endpoint_key(src, rank);
 
+        // Look up edge properties before deletion for index maintenance
+        let edge_properties = if self.property_index.is_some() {
+            self.get_edge(src, dst, rank, ts).map(|e| e.properties)
+        } else {
+            None
+        };
+
         if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
             let edge_id = nbr.edge_id;
 
             self.out_csr.delete_edge(src, edge_id, ts);
             self.in_csr.delete_edge_by_dst(dst, src_key, ts);
 
+            self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             return Ok(true);
         }
 
@@ -578,10 +599,28 @@ impl TimeTravelEdgeStore {
             let edge_id = nbr.edge_id;
             self.mvcc.pending_segment_deletions.insert(edge_id, ts);
             self.mvcc.tombstones.insert(edge_id, ts);
+            self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             return Ok(true);
         }
 
         Ok(false)
+    }
+
+    fn update_property_index_on_delete(
+        &mut self,
+        properties: &Option<Vec<(String, Value)>>,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) {
+        if let Some(ref mut index) = self.property_index {
+            if let Some(ref props) = properties {
+                for (prop_name, prop_value) in props {
+                    let _ = index.delete(prop_name, prop_value, src, dst, rank, ts);
+                }
+            }
+        }
     }
 
     pub fn delete_edge_by_offset(
@@ -1309,6 +1348,81 @@ impl TimeTravelEdgeStore {
     pub fn needs_background_freeze(&self) -> bool {
         self.config.max_mutable_csr_bytes > 0
             && self.estimate_memory_usage() > self.config.max_mutable_csr_bytes
+    }
+
+    // ── Edge Property Index ──
+
+    /// Enable property index with the specified pool capacity.
+    /// Builds the index from existing edge data.
+    pub fn enable_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
+        self.build_property_index(pool_capacity)
+    }
+
+    /// Build the property index by scanning all edges.
+    fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
+        let mut index = EdgePropertyIndex::new(pool_capacity);
+        let all_ts = Timestamp::MAX;
+
+        let iter = EdgeTableScanIterator::new(self, all_ts);
+        let edge_records: Vec<EdgeRecord> = iter.collect();
+        for edge in &edge_records {
+            let src_u32 = edge.src_vid.as_int64().unwrap_or(0) as u32;
+            let dst_u32 = edge.dst_vid.as_int64().unwrap_or(0) as u32;
+            for (prop_name, prop_value) in &edge.properties {
+                let _ = index.insert(
+                    prop_name,
+                    prop_value,
+                    src_u32,
+                    dst_u32,
+                    edge.rank,
+                    self.label,
+                    all_ts,
+                );
+            }
+        }
+
+        self.property_index = Some(index);
+        Ok(())
+    }
+
+    /// Check if property index is enabled.
+    pub fn has_property_index(&self) -> bool {
+        self.property_index.is_some()
+    }
+
+    /// Get a reference to the property index, if enabled.
+    pub fn property_index(&self) -> Option<&EdgePropertyIndex> {
+        self.property_index.as_ref()
+    }
+
+    /// Get a mutable reference to the property index, if enabled.
+    pub fn property_index_mut(&mut self) -> Option<&mut EdgePropertyIndex> {
+        self.property_index.as_mut()
+    }
+
+    /// Drop the property index to free memory.
+    pub fn disable_property_index(&mut self) {
+        self.property_index = None;
+    }
+
+    /// Lookup edges by a property value range using the EdgePropertyIndex.
+    /// Returns `(src, dst, rank)` tuples for matching edges.
+    pub fn lookup_edges_by_property_range(
+        &self,
+        prop_name: &str,
+        value_lower: &[u8],
+        value_upper: &[u8],
+    ) -> Vec<(u32, u32, i64)> {
+        let Some(ref index) = self.property_index else {
+            return Vec::new();
+        };
+        if !index.has_index(prop_name) {
+            return Vec::new();
+        }
+        index.lookup(prop_name, value_lower, value_upper)
+            .into_iter()
+            .map(|((src, dst, rank), _record)| (src, dst, rank))
+            .collect()
     }
 }
 

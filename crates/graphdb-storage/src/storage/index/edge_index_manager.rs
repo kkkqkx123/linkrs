@@ -1,12 +1,16 @@
+use std::collections::HashMap;
+
 use crate::core::types::{Index, Timestamp};
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
+use crate::storage::edge::bloom_filter::EdgeDeletionBloomFilter;
+use crate::storage::index::chunk::chunked_index::ChunkedIndex;
 use crate::storage::index::cursor::ChainForwardIterator;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::ManifestHandle;
-use crate::storage::index::types::StaleChecker;
+use crate::storage::index::types::{IndexRecord, StaleChecker};
 
 pub(crate) fn compute_edge_index_scan_range(
     space_id: u64,
@@ -286,6 +290,228 @@ fn value_to_vertex_id(v: &Value) -> Option<crate::core::types::storage_ids::Vert
             }
         }
         _ => None,
+    }
+}
+
+/// Per-property edge index using ChunkedIndex for efficient range filtering.
+///
+/// Each property name maps to a ChunkedIndex keyed by:
+/// `[OrderedCodec(prop_value)][OrderedCodec(BigInt(src))][OrderedCodec(BigInt(dst))][OrderedCodec(BigInt(rank))]`
+/// - The property value prefix enables range queries (e.g., weight > 100)
+/// - The edge identity suffix ensures unique keys within the same value
+pub struct EdgePropertyIndex {
+    indexes: HashMap<String, ChunkedIndex>,
+    deleted_filter: EdgeDeletionBloomFilter,
+    pool_capacity: u64,
+}
+
+impl EdgePropertyIndex {
+    pub fn new(pool_capacity: u64) -> Self {
+        Self {
+            indexes: HashMap::new(),
+            deleted_filter: EdgeDeletionBloomFilter::with_capacity(1000),
+            pool_capacity,
+        }
+    }
+
+    fn encode_edge_property_key(
+        prop_value: &Value,
+        src: u32,
+        dst: u32,
+        rank: i64,
+    ) -> StorageResult<Vec<u8>> {
+        let codec = OrderedCodec::new();
+        let mut key = codec.encode(prop_value)?;
+        key.extend_from_slice(&src.to_le_bytes());
+        key.extend_from_slice(&dst.to_le_bytes());
+        key.extend_from_slice(&rank.to_le_bytes());
+        Ok(key)
+    }
+
+    fn get_or_create_index(&mut self, prop_name: &str) -> &mut ChunkedIndex {
+        let capacity = self.pool_capacity;
+        self.indexes
+            .entry(prop_name.to_string())
+            .or_insert_with(|| ChunkedIndex::empty(prop_name.as_bytes().to_vec(), capacity))
+    }
+
+    pub fn lookup(
+        &self,
+        prop_name: &str,
+        value_lower: &[u8],
+        value_upper: &[u8],
+    ) -> Vec<((u32, u32, i64), IndexRecord)> {
+        let Some(index) = self.indexes.get(prop_name) else {
+            return Vec::new();
+        };
+        let results = index.range(value_lower, value_upper);
+        results
+            .into_iter()
+            .filter_map(|(_key, record)| {
+                let entity_ref = record.entity_ref.as_ref()?;
+                match entity_ref {
+                    EntityRef::Edge {
+                        src, dst, ranking, ..
+                    } => {
+                        let src_u32 = u32_from_vertex_id(src)?;
+                        let dst_u32 = u32_from_vertex_id(dst)?;
+                        Some(((src_u32, dst_u32, *ranking), record))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    pub fn insert(
+        &mut self,
+        prop_name: &str,
+        prop_value: &Value,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        edge_type: u32,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let key = Self::encode_edge_property_key(prop_value, src, dst, rank)?;
+        let entity_ref = EntityRef::Edge {
+            src: crate::core::types::VertexId::from_int64(src as i64),
+            dst: crate::core::types::VertexId::from_int64(dst as i64),
+            edge_type,
+            ranking: rank,
+        };
+        let record = IndexRecord::new(ts).with_entity_ref(entity_ref);
+        let pool_capacity = self.pool_capacity;
+        let index = self.get_or_create_index(prop_name);
+        let mut map = index.snapshot();
+        map.insert(key, record);
+        let prefix = prop_name.as_bytes().to_vec();
+        *index = ChunkedIndex::from_btree(prefix, &map, pool_capacity);
+        Ok(())
+    }
+
+    pub fn delete(
+        &mut self,
+        prop_name: &str,
+        prop_value: &Value,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        deleted_ts: Timestamp,
+    ) -> StorageResult<()> {
+        let key = Self::encode_edge_property_key(prop_value, src, dst, rank)?;
+        let pool_capacity = self.pool_capacity;
+        let has_index = self.indexes.contains_key(prop_name);
+        if !has_index {
+            return Ok(());
+        }
+        let prefix = prop_name.as_bytes().to_vec();
+        let mut map = {
+            let index = self.indexes.get(prop_name).unwrap();
+            index.snapshot()
+        };
+        if let Some(record) = map.get_mut(&key) {
+            record.mark_deleted(deleted_ts);
+        }
+        let new_index = ChunkedIndex::from_btree(prefix, &map, pool_capacity);
+        self.indexes.insert(prop_name.to_string(), new_index);
+        let edge_id = ((src as u64) << 32) | (dst as u64);
+        self.deleted_filter.insert(edge_id);
+        Ok(())
+    }
+
+    pub fn might_be_deleted(&self, src: u32, dst: u32) -> bool {
+        let edge_id = ((src as u64) << 32) | (dst as u64);
+        self.deleted_filter.might_contain(edge_id)
+    }
+
+    pub fn has_index(&self, prop_name: &str) -> bool {
+        self.indexes.contains_key(prop_name)
+    }
+
+    pub fn index_names(&self) -> Vec<String> {
+        self.indexes.keys().cloned().collect()
+    }
+
+    pub fn memory_usage(&self) -> u64 {
+        let index_mem: u64 = self
+            .indexes
+            .values()
+            .map(|idx| idx.memory_usage())
+            .sum();
+        index_mem + self.deleted_filter.memory_bytes() as u64
+    }
+}
+
+fn u32_from_vertex_id(v: &crate::core::types::VertexId) -> Option<u32> {
+    let bytes = v.as_bytes();
+    if bytes.len() == 8 {
+        let val = i64::from_be_bytes(bytes.try_into().ok()?);
+        Some(val as u32)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::MAX_TIMESTAMP;
+
+    #[test]
+    fn test_edge_property_index_insert_lookup() {
+        let mut index = EdgePropertyIndex::new(u64::MAX);
+        let codec = OrderedCodec::new();
+
+        // Insert two edges with different weights
+        index
+            .insert("weight", &Value::BigInt(100), 0, 1, 0, 0, 100)
+            .unwrap();
+        index
+            .insert("weight", &Value::BigInt(50), 0, 2, 0, 0, 200)
+            .unwrap();
+
+        // Lookup all entries with weight >= 0
+        let lower = codec.encode(&Value::BigInt(0)).unwrap();
+        let upper = Vec::new(); // unbounded
+        let results = index.lookup("weight", &lower, &upper);
+        assert_eq!(results.len(), 2);
+
+        // Lookup weight > 80
+        let lower = codec.encode(&Value::BigInt(81)).unwrap();
+        let results = index.lookup("weight", &lower, &upper);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, (0, 1, 0));
+    }
+
+    #[test]
+    fn test_edge_property_index_delete() {
+        let mut index = EdgePropertyIndex::new(u64::MAX);
+        let codec = OrderedCodec::new();
+
+        index
+            .insert("weight", &Value::BigInt(100), 0, 1, 0, 0, 100)
+            .unwrap();
+        index
+            .delete("weight", &Value::BigInt(100), 0, 1, 0, 150)
+            .unwrap();
+
+        let lower = codec.encode(&Value::BigInt(0)).unwrap();
+        let upper = Vec::new();
+        let results = index.lookup("weight", &lower, &upper);
+        // Entry should still exist in index (marked deleted, not removed)
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1.deleted_ts.is_some());
+
+        // Bloom filter should indicate possible deletion
+        assert!(index.might_be_deleted(0, 1));
+    }
+
+    #[test]
+    fn test_edge_property_index_nonexistent_property() {
+        let index = EdgePropertyIndex::new(u64::MAX);
+        let results = index.lookup("nonexistent", &[], &[]);
+        assert!(results.is_empty());
     }
 }
 

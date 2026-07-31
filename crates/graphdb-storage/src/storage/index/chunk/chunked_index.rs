@@ -21,7 +21,7 @@ pub(crate) struct ChunkedIndex {
     /// Chunk descriptors sorted by min_key: (chunk_id, min_key, max_key).
     chunks: Vec<(ChunkId, SecondaryIndexKey, SecondaryIndexKey)>,
     /// The buffer pool owning all chunk data.
-    pool: Arc<BufferPool<Chunk>>,
+    pool: Arc<BufferPool<ChunkId, Chunk>>,
 }
 
 impl ChunkedIndex {
@@ -59,7 +59,7 @@ impl ChunkedIndex {
 
     pub(crate) fn with_capacity(
         prefix: Vec<u8>,
-        pool: Arc<BufferPool<Chunk>>,
+        pool: Arc<BufferPool<ChunkId, Chunk>>,
         chunk_descs: Vec<(ChunkId, SecondaryIndexKey, SecondaryIndexKey)>,
     ) -> Self {
         Self {
@@ -110,7 +110,7 @@ impl ChunkedIndex {
         }
         let mut results = Vec::new();
         for chunk_id in chunk_ids {
-            if let Some(cached) = self.pool.get_or_load(chunk_id) {
+            if let Some(cached) = self.pool.get_or_load(&chunk_id) {
                 cached.pin();
                 let entries = cached.item.range(lower, upper);
                 results.extend(entries);
@@ -134,7 +134,7 @@ impl ChunkedIndex {
         }
         let mut results = Vec::new();
         for chunk_id in chunk_ids {
-            if let Some(cached) = self.pool.get_or_load(chunk_id) {
+            if let Some(cached) = self.pool.get_or_load(&chunk_id) {
                 if cached.item.live_count == 0 {
                     continue;
                 }
@@ -156,7 +156,7 @@ impl ChunkedIndex {
     pub(crate) fn snapshot(&self) -> BTreeMap<SecondaryIndexKey, IndexRecord> {
         let mut map = BTreeMap::new();
         for (chunk_id, _, _) in &self.chunks {
-            if let Some(cached) = self.pool.get_or_load(*chunk_id) {
+            if let Some(cached) = self.pool.get_or_load(chunk_id) {
                 cached.pin();
                 for (k, v) in &cached.item.entries {
                     map.insert(k.clone(), v.clone());
@@ -171,7 +171,7 @@ impl ChunkedIndex {
         self.chunks.len()
     }
 
-    pub(crate) fn pool(&self) -> &Arc<BufferPool<Chunk>> {
+    pub(crate) fn pool(&self) -> &Arc<BufferPool<ChunkId, Chunk>> {
         &self.pool
     }
 

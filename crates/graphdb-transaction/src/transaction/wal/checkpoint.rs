@@ -56,6 +56,9 @@ pub struct CheckpointResult {
     pub success: bool,
 }
 
+/// Current checkpoint format version for compatibility checks.
+const CHECKPOINT_FORMAT_VERSION: &str = "1";
+
 /// Checkpoint manager
 pub struct CheckpointManager {
     /// WAL directory path
@@ -121,9 +124,20 @@ impl CheckpointManager {
         let content = fs::read_to_string(&self.checkpoint_file)
             .map_err(|e| WalError::IoError(e.to_string()))?;
 
+        let mut version_validated = false;
         for line in content.lines() {
             if let Some((key, value)) = line.split_once('=') {
                 match key.trim() {
+                    "format_version" => {
+                        if value.trim() != CHECKPOINT_FORMAT_VERSION {
+                            return Err(WalError::IoError(format!(
+                                "unsupported checkpoint format version: {}, expected {}",
+                                value.trim(),
+                                CHECKPOINT_FORMAT_VERSION
+                            )));
+                        }
+                        version_validated = true;
+                    }
                     "seq" => {
                         self.current_seq = value.trim().parse().map_err(|error| {
                             WalError::IoError(format!("invalid checkpoint sequence: {}", error))
@@ -145,13 +159,20 @@ impl CheckpointManager {
             }
         }
 
+        if content.lines().any(|l| l.contains('=')) && !version_validated {
+            return Err(WalError::IoError(
+                "checkpoint meta file is missing format_version".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
     /// Save checkpoint metadata to file
     fn save_checkpoint_meta(&self) -> WalResult<()> {
         let content = format!(
-            "seq={}\ntimestamp={}\nlsn={}\n",
+            "format_version={}\nseq={}\ntimestamp={}\nlsn={}\n",
+            CHECKPOINT_FORMAT_VERSION,
             self.current_seq,
             self.last_checkpoint_ts,
             self.last_checkpoint_lsn.as_u64()

@@ -39,9 +39,11 @@ pub use super::{CsrBase, CsrVariant, Nbr};
 use crate::core::types::CompactConfig;
 use crate::core::types::{EdgeId, Timestamp};
 use crate::core::{StorageError, StorageResult};
+use crate::storage::cold::ColdSnapshot;
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
 use crate::storage::persistence::write_header_to;
 use std::fmt;
+use std::path::Path;
 use std::time::Instant;
 
 /// Edge store with full MVCC + freeze/merge/segment.
@@ -322,6 +324,36 @@ impl EdgeStore {
         self.0.export_snapshot(ts)
     }
 
+    pub fn export_snapshot_file<P: AsRef<Path>>(
+        &self,
+        ts: Timestamp,
+        path: P,
+    ) -> StorageResult<ColdSnapshot> {
+        self.0.export_snapshot_file(ts, path)
+    }
+
+    // ── Edge Property Index ──
+    pub fn enable_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
+        self.0.enable_property_index(pool_capacity)
+    }
+
+    pub fn has_property_index(&self) -> bool {
+        self.0.has_property_index()
+    }
+
+    pub fn disable_property_index(&mut self) {
+        self.0.disable_property_index();
+    }
+
+    pub fn lookup_edges_by_property_range(
+        &self,
+        prop_name: &str,
+        value_lower: &[u8],
+        value_upper: &[u8],
+    ) -> Vec<(u32, u32, i64)> {
+        self.0.lookup_edges_by_property_range(prop_name, value_lower, value_upper)
+    }
+
     // ── Persistence ──
     pub fn flush<P: AsRef<std::path::Path>>(
         &mut self,
@@ -363,6 +395,15 @@ impl core::TimeTravelEdgeStore {
             properties: self.properties.clone(),
             schema: self.schema.clone(),
         })
+    }
+
+    pub fn export_snapshot_file<P: AsRef<Path>>(
+        &self,
+        ts: Timestamp,
+        path: P,
+    ) -> StorageResult<ColdSnapshot> {
+        let exported = self.export_snapshot(ts)?;
+        ColdSnapshot::create(&exported, path)
     }
 
     fn collect_edges_for_snapshot_mvcc(

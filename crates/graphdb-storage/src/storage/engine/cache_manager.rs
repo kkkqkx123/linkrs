@@ -34,14 +34,7 @@ impl CacheManager {
             let cache = SharedRecordCache::new(RecordCache::with_config(config));
 
             if resources.cache_eviction_sync {
-                let accounting_weak = Arc::downgrade(&accounting);
-                let callback: EvictionCallbackWithSize =
-                    Arc::new(move |_cache_type, _cause, bytes| {
-                        if let Some(acc) = accounting_weak.upgrade() {
-                            acc.release_category(MemoryCategory::Cache, bytes);
-                        }
-                    });
-                cache.set_eviction_callback_with_size(callback);
+                cache.set_memory_accounting(Some(accounting.clone()));
             }
 
             Some(cache)

@@ -18,6 +18,7 @@ use crate::storage::index::shard_runtime::{
     generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps, IndexRuntime,
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
+use crate::storage::persistence::{read_versioned_payload, write_versioned_payload};
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -852,9 +853,11 @@ impl IndexDataManagerImpl {
         let temporary = path.with_extension("tmp");
         let serialized = postcard::to_allocvec(state)
             .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+        let mut versioned = Vec::new();
+        write_versioned_payload(&mut versioned, crate::core::types::StorageVersion::CURRENT as u32, &serialized);
         {
             let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&serialized)?;
+            file.write_all(&versioned)?;
             file.sync_all()?;
         }
         std::fs::rename(&temporary, &path)?;
@@ -872,8 +875,12 @@ impl IndexDataManagerImpl {
         if !path.exists() {
             return Ok(None);
         }
-        let bytes = std::fs::read(&path)?;
-        let state: GenerationBuildState = postcard::from_bytes(&bytes)
+        let mut file = std::fs::File::open(&path)?;
+        let (_version, payload) = read_versioned_payload(
+            &mut file,
+            "generation_build.bin",
+        )?;
+        let state: GenerationBuildState = postcard::from_bytes(&payload)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         Ok(Some(state))
     }

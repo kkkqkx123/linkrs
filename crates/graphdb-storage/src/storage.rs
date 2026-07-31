@@ -8,6 +8,7 @@
 
 pub(crate) mod cache;
 pub(crate) mod client;
+pub(crate) mod cold;
 pub(crate) mod column_stats;
 pub(crate) mod compression;
 pub(crate) mod cursor;
@@ -62,6 +63,7 @@ pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use types::StoragePropertyDef;
 
+pub use cold::cold_snapshot::ColdSnapshot;
 pub use crate::core::StorageError;
 
 #[cfg(any(test, feature = "test-support"))]

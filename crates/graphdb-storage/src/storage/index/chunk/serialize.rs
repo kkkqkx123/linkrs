@@ -12,13 +12,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 const CHUNK_MAGIC: [u8; 4] = *b"CHNK";
+const CHUNK_VERSION: u32 = 1;
 const CHIX_MAGIC: [u8; 4] = *b"CHIX";
+const CHIX_VERSION: u32 = 1;
 
 pub(crate) fn serialize_chunk<W: Write>(
     writer: &mut W,
     chunk: &Chunk,
 ) -> std::io::Result<()> {
     writer.write_all(&CHUNK_MAGIC)?;
+    writer.write_all(&CHUNK_VERSION.to_le_bytes())?;
     writer.write_all(&chunk.id.to_le_bytes())?;
     writer.write_all(&(chunk.entries.len() as u32).to_le_bytes())?;
 
@@ -67,6 +70,7 @@ pub(crate) fn serialize_chunk<W: Write>(
 
 fn serialize_chunk_raw<W: Write>(writer: &mut W, chunk: &Chunk) -> std::io::Result<()> {
     writer.write_all(&CHUNK_MAGIC)?;
+    writer.write_all(&CHUNK_VERSION.to_le_bytes())?;
     writer.write_all(&chunk.id.to_le_bytes())?;
     writer.write_all(&(chunk.entries.len() as u32).to_le_bytes())?;
     for (key, record) in &chunk.entries {
@@ -111,6 +115,16 @@ pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chun
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Chunk magic mismatch: got {magic:?}, expected {CHUNK_MAGIC:?}"),
+        ));
+    }
+
+    let mut version_bytes = [0u8; 4];
+    reader.read_exact(&mut version_bytes)?;
+    let version = u32::from_le_bytes(version_bytes);
+    if version != CHUNK_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Unsupported chunk version: {version}, expected {CHUNK_VERSION}"),
         ));
     }
 
@@ -207,6 +221,7 @@ pub(crate) fn serialize_chunk_index<W: Write>(
     chunk_offsets: &[(ChunkId, u64, u32)],
 ) -> std::io::Result<()> {
     writer.write_all(&CHIX_MAGIC)?;
+    writer.write_all(&CHIX_VERSION.to_le_bytes())?;
     writer.write_all(&(chunk_descs.len() as u32).to_le_bytes())?;
     for (i, (cid, min_key, max_key)) in chunk_descs.iter().enumerate() {
         writer.write_all(&cid.to_le_bytes())?;
@@ -234,6 +249,16 @@ pub(crate) fn deserialize_chunk_index<R: Read>(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("Chunk index magic mismatch: got {magic:?}"),
+        ));
+    }
+
+    let mut version_bytes = [0u8; 4];
+    reader.read_exact(&mut version_bytes)?;
+    let version = u32::from_le_bytes(version_bytes);
+    if version != CHIX_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Unsupported chunk index version: {version}, expected {CHIX_VERSION}"),
         ));
     }
 
@@ -303,7 +328,7 @@ pub(crate) fn write_chunked_index_checkpoint<P: AsRef<Path>>(
     let mut current_offset = 0u64;
 
     for (cid, _, _) in &descriptors {
-        if let Some(cached) = pool.get(*cid) {
+        if let Some(cached) = pool.get(cid) {
             let chunk_path = dir.join(format!("chunk_{}.bin", cid));
             let serialized = {
                 let mut buf = Vec::new();
@@ -350,7 +375,7 @@ pub(crate) fn read_chunked_index_checkpoint_lazy<P: AsRef<Path>>(
     let descriptors = deserialize_chunk_index(&mut file)
         .map_err(|e| StorageError::io_error(format!("Failed to read chunk index: {e}")))?;
 
-    let pool = Arc::new(BufferPool::new(pool_capacity));
+    let pool = Arc::new(BufferPool::<ChunkId, Chunk>::new(pool_capacity));
 
     // Install lazy loader: reads chunk file on demand
     let dir_clone = dir.to_path_buf();

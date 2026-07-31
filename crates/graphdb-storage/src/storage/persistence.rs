@@ -81,12 +81,54 @@ pub fn write_header_to<W: std::io::Write>(writer: &mut W, section_id: u32) -> st
 
 /// Validate that the persistence version matches the expected version.
 /// Returns `StorageError::UnsupportedVersion` on mismatch.
-#[cfg(test)]
 pub fn check_version(version: u32) -> StorageResult<()> {
     if version != CURRENT_VERSION {
         return Err(StorageError::unsupported_version(version, CURRENT_VERSION));
     }
     Ok(())
+}
+
+/// Magic bytes for versioned payload wrapper (LNKF = LinkRs File)
+pub const VERSIONED_PAYLOAD_MAGIC: [u8; 4] = *b"LNKF";
+
+/// Versioned payload header size: magic(4) + version(4) = 8
+pub const VERSIONED_PAYLOAD_HEADER_SIZE: usize = 8;
+
+/// Write a versioned payload wrapper: [LNKF][version:u32][payload]
+pub fn write_versioned_payload(buf: &mut Vec<u8>, version: u32, payload: &[u8]) {
+    buf.extend_from_slice(&VERSIONED_PAYLOAD_MAGIC);
+    buf.extend_from_slice(&version.to_le_bytes());
+    buf.extend_from_slice(payload);
+}
+
+/// Read and validate a versioned payload from a reader.
+/// Returns the version and remaining payload bytes on success.
+pub fn read_versioned_payload<R: std::io::Read>(reader: &mut R, file_name: &str) -> StorageResult<(u32, Vec<u8>)> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).map_err(|e| {
+        StorageError::deserialize_error(format!("{file_name}: failed to read magic: {e}"))
+    })?;
+    if magic != VERSIONED_PAYLOAD_MAGIC {
+        return Err(StorageError::deserialize_error(
+            format!("{file_name}: invalid magic bytes {magic:02x?}, expected LNKF"),
+        ));
+    }
+    let mut version_buf = [0u8; 4];
+    reader.read_exact(&mut version_buf).map_err(|e| {
+        StorageError::deserialize_error(format!("{file_name}: failed to read version: {e}"))
+    })?;
+    let version = u32::from_le_bytes(version_buf);
+    if version < crate::core::types::StorageVersion::MIN_SUPPORTED as u32 {
+        return Err(StorageError::unsupported_version(
+            version,
+            crate::core::types::StorageVersion::CURRENT as u32,
+        ));
+    }
+    let mut payload = Vec::new();
+    reader.read_to_end(&mut payload).map_err(|e| {
+        StorageError::deserialize_error(format!("{file_name}: failed to read payload: {e}"))
+    })?;
+    Ok((version, payload))
 }
 
 /// Read a u64 from data at offset (little-endian), advancing offset
@@ -182,5 +224,36 @@ mod tests {
         let data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
         let mut offset = 0;
         assert!(read_u64_le(&data, &mut offset).is_err());
+    }
+
+    #[test]
+    fn test_write_versioned_payload_roundtrip() {
+        let payload = b"hello world";
+        let mut buf = Vec::new();
+        write_versioned_payload(&mut buf, 1, payload);
+        let mut reader = std::io::Cursor::new(buf);
+        let (version, result) = read_versioned_payload(&mut reader, "test").unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(result, payload);
+    }
+
+    #[test]
+    fn test_read_versioned_payload_rejects_bad_magic() {
+        let mut buf = b"BADM".to_vec();
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        let mut reader = std::io::Cursor::new(buf);
+        assert!(read_versioned_payload(&mut reader, "test").is_err());
+    }
+
+    #[test]
+    fn test_read_versioned_payload_rejects_unsupported_version() {
+        let mut buf = Vec::new();
+        write_versioned_payload(&mut buf, 0, b"data");
+        let mut reader = std::io::Cursor::new(buf);
+        let err = read_versioned_payload(&mut reader, "test").unwrap_err();
+        assert_eq!(
+            err.kind(),
+            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
+        );
     }
 }

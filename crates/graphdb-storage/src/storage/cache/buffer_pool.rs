@@ -1,13 +1,15 @@
-use crate::storage::index::chunk::data::ChunkId;
+use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::error::Error;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-type LoaderFn<T> = Arc<dyn Fn(ChunkId) -> Option<(T, usize)> + Send + Sync>;
-type WriterFn<T> = Arc<dyn Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
+type LoaderFn<K, T> = Arc<dyn Fn(K) -> Option<(T, usize)> + Send + Sync>;
+type WriterFn<K, T> =
+    Arc<dyn Fn(K, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct CachedItem<T: Clone + Send + Sync> {
@@ -43,33 +45,34 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
     pub(crate) fn is_pinned(&self) -> bool {
         self.pin_count.load(Ordering::Acquire) > 0
     }
-
 }
 
 #[derive(Clone)]
-pub(crate) struct BufferPool<T: Clone + Send + Sync> {
-    inner: Arc<BufferPoolInner<T>>,
+pub(crate) struct BufferPool<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> {
+    inner: Arc<BufferPoolInner<K, T>>,
 }
 
-struct BufferPoolInner<T: Clone + Send + Sync> {
+struct BufferPoolInner<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> {
     capacity: AtomicU64,
-    chunks: Mutex<HashMap<ChunkId, CachedItem<T>>>,
+    items: Mutex<HashMap<K, CachedItem<T>>>,
     clock_hand: Mutex<usize>,
-    cached_ids: Mutex<Vec<ChunkId>>,
-    loader: Mutex<Option<LoaderFn<T>>>,
-    writer: Mutex<Option<WriterFn<T>>>,
+    cached_ids: Mutex<Vec<K>>,
+    loader: Mutex<Option<LoaderFn<K, T>>>,
+    writer: Mutex<Option<WriterFn<K, T>>>,
+    memory_accounting: Mutex<Option<Arc<MemoryAccounting>>>,
 }
 
-impl<T: Clone + Send + Sync> BufferPool<T> {
+impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T> {
     pub(crate) fn new(capacity_bytes: u64) -> Self {
         Self {
             inner: Arc::new(BufferPoolInner {
                 capacity: AtomicU64::new(capacity_bytes),
-                chunks: Mutex::new(HashMap::new()),
+                items: Mutex::new(HashMap::new()),
                 clock_hand: Mutex::new(0),
                 cached_ids: Mutex::new(Vec::new()),
                 loader: Mutex::new(None),
                 writer: Mutex::new(None),
+                memory_accounting: Mutex::new(None),
             }),
         }
     }
@@ -78,58 +81,81 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
         self.inner.capacity.load(Ordering::Acquire)
     }
 
-    pub(crate) fn get(&self, id: ChunkId) -> Option<CachedItem<T>> {
-        let chunks = self.inner.chunks.lock();
-        chunks.get(&id).cloned()
+    pub(crate) fn get(&self, key: &K) -> Option<CachedItem<T>> {
+        let items = self.inner.items.lock();
+        items.get(key).cloned()
     }
 
     pub(crate) fn set_loader<F>(&self, loader: F)
     where
-        F: Fn(ChunkId) -> Option<(T, usize)> + Send + Sync + 'static,
+        F: Fn(K) -> Option<(T, usize)> + Send + Sync + 'static,
     {
         *self.inner.loader.lock() = Some(Arc::new(loader));
     }
 
+    pub(crate) fn set_memory_accounting(&self, accounting: Option<Arc<MemoryAccounting>>) {
+        *self.inner.memory_accounting.lock() = accounting;
+    }
+
     pub(crate) fn set_writer<F>(&self, writer: F)
     where
-        F: Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
+        F: Fn(K, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
     {
         *self.inner.writer.lock() = Some(Arc::new(writer));
     }
 
-    /// Get chunk from pool, loading from disk via loader callback if not cached.
-    pub(crate) fn get_or_load(&self, id: ChunkId) -> Option<CachedItem<T>> {
-        // Fast path: already cached
-        if let Some(item) = self.get(id) {
+    pub(crate) fn get_or_load(&self, key: &K) -> Option<CachedItem<T>> {
+        if let Some(item) = self.get(key) {
             return Some(item);
         }
-        // Slow path: invoke loader
         let loader = self.inner.loader.lock().clone()?;
-        let (item, size) = loader(id)?;
-        self.insert(id, item.clone(), size);
-        self.get(id)
+        let (item, size) = loader(key.clone())?;
+        self.insert(key.clone(), item.clone(), size);
+        self.get(key)
     }
 
-    pub(crate) fn insert(&self, id: ChunkId, item: T, size: usize) {
+    pub(crate) fn insert(&self, key: K, item: T, size: usize) {
+        let size_u64 = size as u64;
+        let usage = self.current_usage();
+
+        if usage.saturating_add(size_u64) > self.inner.capacity.load(Ordering::Acquire) {
+            let excess = usage.saturating_add(size_u64) - self.inner.capacity.load(Ordering::Acquire);
+            self.evict(excess + 1);
+        }
+
         let cached = CachedItem::new(item, size);
-        let mut chunks = self.inner.chunks.lock();
-        chunks.insert(id, cached);
+        let mut items = self.inner.items.lock();
+        items.insert(key.clone(), cached);
         let mut ids = self.inner.cached_ids.lock();
-        if !ids.contains(&id) {
-            ids.push(id);
+        if !ids.contains(&key) {
+            ids.push(key);
+        }
+        drop(ids);
+        drop(items);
+
+        if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+            accounting.report_usage(MemoryCategory::Cache, self.current_usage());
+        }
+    }
+
+    pub(crate) fn set_capacity(&self, new_capacity: u64) {
+        self.inner.capacity.store(new_capacity, Ordering::Release);
+        let usage = self.current_usage();
+        if usage > new_capacity {
+            self.evict(usage - new_capacity);
         }
     }
 
     pub(crate) fn current_usage(&self) -> u64 {
-        let chunks = self.inner.chunks.lock();
-        chunks.values().map(|c| c.size as u64).sum()
+        let items = self.inner.items.lock();
+        items.values().map(|c| c.size as u64).sum()
     }
 
     pub(crate) fn evict(&self, target_bytes: u64) -> u64 {
-        let mut chunks = self.inner.chunks.lock();
+        let mut items = self.inner.items.lock();
         let mut ids = self.inner.cached_ids.lock();
 
-        if chunks.is_empty() {
+        if items.is_empty() {
             return 0;
         }
 
@@ -138,7 +164,7 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
         let max_attempts = ids.len() as u64 * 2;
 
         if ids.is_empty() {
-            ids.extend(chunks.keys().copied());
+            ids.extend(items.keys().cloned());
         }
 
         let mut hand = self.inner.clock_hand.lock().wrapping_rem(ids.len().max(1));
@@ -150,8 +176,8 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
             if hand >= ids.len() {
                 hand = 0;
             }
-            let id = ids[hand];
-            if let Some(cached) = chunks.get(&id) {
+            let id = ids[hand].clone();
+            if let Some(cached) = items.get(&id) {
                 if cached.is_pinned() {
                     hand = (hand + 1) % ids.len().max(1);
                     attempts += 1;
@@ -164,17 +190,20 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
                     attempts += 1;
                     continue;
                 }
-                let item = chunks.remove(&id);
+                let item = items.remove(&id);
                 if let Some(item) = item {
-                    // Write back dirty chunk before eviction
                     if item.dirty.load(Ordering::Acquire) {
                         if let Some(writer) = self.inner.writer.lock().as_ref() {
-                            if let Err(e) = writer(id, &item.item) {
-                                tracing::warn!("Failed to write back chunk {id} during eviction: {e}");
+                            if let Err(e) = writer(id.clone(), &item.item) {
+                                tracing::warn!("Failed to write back key during eviction: {e}");
                             }
                         }
                     }
-                    evicted += item.size as u64;
+                    let item_size = item.size as u64;
+                    evicted += item_size;
+                    if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+                        accounting.release_category(MemoryCategory::Cache, item_size);
+                    }
                     ids.retain(|i| *i != id);
                     if ids.is_empty() {
                         break;
@@ -185,7 +214,7 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
                 }
                 hand %= ids.len().max(1);
             } else {
-                ids.retain(|i| chunks.contains_key(i));
+                ids.retain(|i| items.contains_key(i));
                 if ids.is_empty() {
                     break;
                 }
@@ -199,18 +228,43 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        let chunks = self.inner.chunks.lock();
-        chunks.len()
+        let items = self.inner.items.lock();
+        items.len()
     }
 
+    pub(crate) fn remove(&self, key: &K) {
+        let mut items = self.inner.items.lock();
+        items.remove(key);
+        let mut ids = self.inner.cached_ids.lock();
+        ids.retain(|i| i != key);
+    }
+
+    /// Remove all entries satisfying a predicate.
+    /// Returns the number of entries removed.
+    pub(crate) fn retain<F>(&self, mut f: F) -> usize
+    where
+        F: FnMut(&K, &T) -> bool,
+    {
+        let mut items = self.inner.items.lock();
+        let before = items.len();
+        items.retain(|k, v| f(k, &v.item));
+        let removed = before - items.len();
+        if removed > 0 {
+            let mut ids = self.inner.cached_ids.lock();
+            ids.retain(|i| items.contains_key(i));
+        }
+        removed
+    }
 }
 
-impl<T: Clone + Send + Sync> std::fmt::Debug for BufferPool<T> {
+impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> std::fmt::Debug
+    for BufferPool<K, T>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BufferPool")
             .field("capacity", &self.capacity())
             .field("usage", &self.current_usage())
-            .field("chunks", &self.len())
+            .field("items", &self.len())
             .finish()
     }
 }
@@ -225,7 +279,8 @@ fn timestamp_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn make_pool() -> BufferPool<&'static str> {
+
+    fn make_pool() -> BufferPool<u32, &'static str> {
         BufferPool::new(1024)
     }
 
@@ -233,7 +288,7 @@ mod tests {
     fn insert_and_get() {
         let pool = make_pool();
         pool.insert(1, "hello", 8);
-        let item = pool.get(1);
+        let item = pool.get(&1);
         assert!(item.is_some());
         assert_eq!(item.unwrap().item, "hello");
     }
@@ -241,12 +296,12 @@ mod tests {
     #[test]
     fn get_missing_returns_none() {
         let pool = make_pool();
-        assert!(pool.get(99).is_none());
+        assert!(pool.get(&99).is_none());
     }
 
     #[test]
     fn current_usage_sums_sizes() {
-        let pool = BufferPool::new(8192);
+        let pool = BufferPool::<u32, &str>::new(8192);
         pool.insert(1, "a", 100);
         pool.insert(2, "b", 200);
         assert_eq!(pool.current_usage(), 300);
@@ -254,7 +309,7 @@ mod tests {
 
     #[test]
     fn evict_removes_items_under_pressure() {
-        let pool = BufferPool::new(512);
+        let pool = BufferPool::<u32, &str>::new(1024);
         pool.insert(1, "entry1", 200);
         pool.insert(2, "entry2", 200);
         pool.insert(3, "entry3", 200);
@@ -265,18 +320,34 @@ mod tests {
     }
 
     #[test]
+    fn insert_evicts_when_over_capacity() {
+        let pool = BufferPool::<u32, &str>::new(300);
+        pool.insert(1, "entry1", 200);
+        assert_eq!(pool.len(), 1);
+        pool.insert(2, "entry2", 200);
+        assert_eq!(pool.len(), 1, "should evict to stay under capacity");
+    }
+
+    #[test]
+    fn set_capacity_triggers_eviction() {
+        let pool = BufferPool::<u32, &str>::new(1024);
+        pool.insert(1, "entry1", 200);
+        pool.insert(2, "entry2", 200);
+        assert_eq!(pool.len(), 2);
+        pool.set_capacity(100);
+        assert!(pool.len() < 2, "set_capacity should evict items");
+    }
+
+    #[test]
     fn pinned_items_are_not_evicted() {
-        let pool = BufferPool::new(256);
+        let pool = BufferPool::<u32, &str>::new(256);
         pool.insert(1, "pinned", 200);
-        if let Some(item) = pool.get(1) {
+        if let Some(item) = pool.get(&1) {
             item.pin();
         }
         pool.insert(2, "evictable", 200);
         pool.evict(400);
-        if pool.get(1).is_some() {
-            // pinned item should survive eviction
-        }
-        pool.get(1).map(|i| i.unpin());
+        pool.get(&1).map(|i| i.unpin());
     }
 
     #[test]
@@ -291,5 +362,15 @@ mod tests {
         assert_eq!(pool.len(), 0);
         pool.insert(1, "x", 1);
         assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn remove_clears_item() {
+        let pool = BufferPool::<u32, &str>::new(1024);
+        pool.insert(1, "data", 10);
+        assert_eq!(pool.len(), 1);
+        pool.remove(&1);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.get(&1).is_none());
     }
 }

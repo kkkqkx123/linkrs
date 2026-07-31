@@ -359,14 +359,20 @@ impl IndexManifest {
         })?;
         std::fs::create_dir_all(parent)?;
         let with_checksums = self.with_checksums()?;
-        let temporary = path.with_extension("tmp");
         let bytes = postcard::to_allocvec(&with_checksums).map_err(|error| {
             StorageError::db_error(format!("Serialize index manifest: {error}"))
         })?;
+        let mut versioned = Vec::new();
+        crate::storage::persistence::write_versioned_payload(
+            &mut versioned,
+            crate::core::types::StorageVersion::CURRENT as u32,
+            &bytes,
+        );
+        let temporary = path.with_extension("tmp");
         {
             use std::io::Write;
             let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&bytes)?;
+            file.write_all(&versioned)?;
             file.sync_all()?;
         }
         std::fs::rename(&temporary, path)?;
@@ -375,8 +381,12 @@ impl IndexManifest {
     }
 
     pub fn load(path: &Path) -> StorageResult<Self> {
-        let bytes = std::fs::read(path)?;
-        let manifest: Self = postcard::from_bytes(&bytes)
+        let mut file = std::fs::File::open(path)?;
+        let (_version, payload) = crate::storage::persistence::read_versioned_payload(
+            &mut file,
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("manifest.bin"),
+        )?;
+        let manifest: Self = postcard::from_bytes(&payload)
             .map_err(|error| StorageError::db_error(format!("Read index manifest: {error}")))?;
         manifest.validate().map_err(StorageError::db_error)?;
         for shard in &manifest.shards {

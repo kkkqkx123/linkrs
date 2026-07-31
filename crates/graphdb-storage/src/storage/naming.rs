@@ -87,8 +87,8 @@ mod tests {
     fn test_register_and_lookup() {
         let mut indexer = NameIndexer::new();
 
-        let id1 = indexer.register("weight".to_string());
-        let id2 = indexer.register("since".to_string());
+        let id1 = indexer.register("weight".to_string()).unwrap();
+        let id2 = indexer.register("since".to_string()).unwrap();
 
         assert_eq!(id1.as_u16(), 0);
         assert_eq!(id2.as_u16(), 1);
@@ -101,8 +101,8 @@ mod tests {
     fn test_duplicate_register() {
         let mut indexer = NameIndexer::new();
 
-        let id1 = indexer.register("weight".to_string());
-        let id2 = indexer.register("weight".to_string());
+        let id1 = indexer.register("weight".to_string()).unwrap();
+        let id2 = indexer.register("weight".to_string()).unwrap();
 
         assert_eq!(id1, id2);
     }

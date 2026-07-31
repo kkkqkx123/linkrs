@@ -28,6 +28,7 @@ pub mod transaction_context;
 pub mod undo;
 pub mod user;
 pub mod user_storage;
+pub mod version;
 // Full-text search types
 pub mod fulltext_query;
 pub mod memory_estimation;
@@ -216,6 +217,8 @@ pub use self::tag::TagInfo;
 
 // Exporting version types from metadata_version
 pub use self::metadata_version::{MetadataVersion, SchemaHistory, SchemaVersion};
+// Exporting storage version type
+pub use self::version::StorageVersion;
 
 // Exporting types from split submodules
 pub use self::cluster::ClusterInfo;
