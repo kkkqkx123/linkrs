@@ -8,7 +8,6 @@ use crate::storage::schema::ChangeDetails;
 use crate::storage::types::StoragePropertyDef;
 
 // Type alias for backward compatibility with existing tests
-#[allow(dead_code)]
 type EdgeTable = TimeTravelEdgeStore;
 
 fn create_test_schema() -> EdgeSchema {

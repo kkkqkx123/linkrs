@@ -595,34 +595,6 @@ impl GraphDataStore {
         operation(table)
     }
 
-    /// Scatter-gather: acquire catalog lock briefly to clone the Arc,
-    /// then operate on the ShardedVertexTable without holding the catalog lock.
-    pub(crate) fn with_vertex_table<R>(
-        &self,
-        label: LabelId,
-        operation: impl FnOnce(&ShardedVertexTable) -> StorageResult<R>,
-    ) -> StorageResult<R> {
-        let arc = {
-            let guard = self.vertex_tables.read();
-            guard
-                .get(&label)
-                .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?
-                .clone()
-        };
-        operation(&arc)
-    }
-
-    pub(crate) fn with_all_vertex_tables<R>(
-        &self,
-        operation: impl Fn(&ShardedVertexTable) -> StorageResult<R>,
-    ) -> StorageResult<Vec<R>> {
-        let arcs: Vec<Arc<ShardedVertexTable>> = {
-            let guard = self.vertex_tables.read();
-            guard.values().cloned().collect()
-        };
-        arcs.iter().map(|arc| operation(arc)).collect()
-    }
-
     pub(crate) fn edge_partition_keys(
         &self,
         edge_label: LabelId,
@@ -985,6 +957,9 @@ impl GraphDataStore {
                     key
                 )));
             }
+        }
+        for table in vertex_tables.values() {
+            table.verify_invariants()?;
         }
         if vertex_tables.keys().any(|label| *label >= *vertex_counter)
             || edge_index.keys().any(|label| *label >= *edge_counter)

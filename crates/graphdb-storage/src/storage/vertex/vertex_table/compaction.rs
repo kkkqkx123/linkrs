@@ -42,7 +42,7 @@ use std::collections::HashMap;
 /// # Usage
 ///
 /// ```ignore
-/// let mut table = VertexTable::new(...);
+/// let mut table = VertexTable::with_config(...);
 /// // ... insert/delete vertices ...
 /// table.compact_coordinated()?;  // Uses CompactionCoordinator internally
 /// ```
@@ -245,6 +245,7 @@ mod tests {
     use super::*;
     use crate::core::{DataType, Value};
     use crate::storage::types::StoragePropertyDef;
+    use crate::storage::vertex::vertex_table::core::VertexTableConfig;
     use crate::storage::vertex::{VertexSchema, VertexTable};
 
     fn create_test_schema() -> VertexSchema {
@@ -268,7 +269,7 @@ mod tests {
     #[test]
     fn test_coordinator_empty_table() {
         let schema = create_test_schema();
-        let mut table = VertexTable::new(0, "test".to_string(), schema);
+        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
         let mut coordinator = CompactionCoordinator::new();
 
         // Empty table should compact without error
@@ -279,7 +280,7 @@ mod tests {
     #[test]
     fn test_coordinator_single_vertex() {
         let schema = create_test_schema();
-        let mut table = VertexTable::new(0, "test".to_string(), schema);
+        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
 
         table
             .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -296,7 +297,7 @@ mod tests {
     #[test]
     fn test_coordinator_remapping() {
         let schema = create_test_schema();
-        let mut table = VertexTable::new(0, "test".to_string(), schema);
+        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
 
         // Insert 5 vertices to allocate space
         for i in 0..5 {

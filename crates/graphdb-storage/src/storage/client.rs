@@ -95,6 +95,67 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         index: &str,
         value: &Value,
     ) -> Result<Vec<Value>, StorageError>;
+
+    /// Enable the per-table edge property index for `edge_type`, building it
+    /// from existing edge data. Returns `true` if the index was enabled.
+    fn enable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+        pool_capacity: u64,
+    ) -> Result<bool, StorageError> {
+        let _ = (space, edge_type, pool_capacity);
+        Err(StorageError::not_supported(
+            "Edge property index management is not supported by this storage implementation",
+        ))
+    }
+
+    /// Whether the per-table edge property index is enabled for `edge_type`.
+    fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        let _ = (space, edge_type);
+        Err(StorageError::not_supported(
+            "Edge property index management is not supported by this storage implementation",
+        ))
+    }
+
+    /// Drop the per-table edge property index for `edge_type`.
+    fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError> {
+        let _ = (space, edge_type);
+        Err(StorageError::not_supported(
+            "Edge property index management is not supported by this storage implementation",
+        ))
+    }
+
+    /// Look up edges of `edge_type` whose `prop_name` value falls within
+    /// `[lower, upper)` using the per-table edge property index.
+    ///
+    /// Bounds are `Value`-typed; the storage layer encodes them with the
+    /// ordered codec and applies the inclusion flags. Unbounded side = `None`.
+    #[allow(clippy::too_many_arguments)]
+    fn lookup_edges_by_property_range(
+        &self,
+        space: &str,
+        edge_type: &str,
+        prop_name: &str,
+        lower: Option<&Value>,
+        upper: Option<&Value>,
+        include_lower: bool,
+        include_upper: bool,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let _ = (
+            space,
+            edge_type,
+            prop_name,
+            lower,
+            upper,
+            include_lower,
+            include_upper,
+        );
+        Err(StorageError::not_supported(
+            "Edge property range lookup is not supported by this storage implementation",
+        ))
+    }
+
     fn get_vertex_with_schema(
         &self,
         space: &str,

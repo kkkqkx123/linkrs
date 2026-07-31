@@ -1008,6 +1008,100 @@ mod tests {
     }
 
     #[test]
+    fn test_edge_property_index_range_lookup() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let edge_type = crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string())
+            .with_properties(vec![PropertyDef::new("weight".to_string(), DataType::BigInt)]);
+        storage
+            .create_edge_type("test_space", &edge_type)
+            .expect("Failed to create edge type");
+
+        insert_test_vertex(&mut storage, 1, "Alice");
+        insert_test_vertex(&mut storage, 2, "Bob");
+        insert_test_vertex(&mut storage, 3, "Carol");
+
+        let make_edge = |src: i64, dst: i64, weight: i64| {
+            Edge::new(
+                VertexId::from_int64(src),
+                VertexId::from_int64(dst),
+                "WEIGHTED".to_string(),
+                0,
+                [("weight".to_string(), Value::BigInt(weight))]
+                    .into_iter()
+                    .collect(),
+            )
+        };
+        storage.insert_edge("test_space", make_edge(1, 2, 10)).unwrap();
+        storage.insert_edge("test_space", make_edge(1, 3, 25)).unwrap();
+        storage.insert_edge("test_space", make_edge(2, 3, 5)).unwrap();
+
+        // Enable after inserts: build path indexes existing edges.
+        assert!(!storage
+            .has_edge_property_index("test_space", "WEIGHTED")
+            .unwrap());
+        storage
+            .enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024)
+            .unwrap();
+        assert!(storage
+            .has_edge_property_index("test_space", "WEIGHTED")
+            .unwrap());
+
+        // weight >= 20
+        let edges = storage
+            .lookup_edges_by_property_range(
+                "test_space",
+                "WEIGHTED",
+                "weight",
+                Some(&Value::BigInt(20)),
+                None,
+                true,
+                false,
+            )
+            .unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].src, VertexId::from_int64(1));
+        assert_eq!(edges[0].dst, VertexId::from_int64(3));
+        assert_eq!(edges[0].props.get("weight"), Some(&Value::BigInt(25)));
+
+        // 5 <= weight < 25
+        let edges = storage
+            .lookup_edges_by_property_range(
+                "test_space",
+                "WEIGHTED",
+                "weight",
+                Some(&Value::BigInt(5)),
+                Some(&Value::BigInt(25)),
+                true,
+                false,
+            )
+            .unwrap();
+        assert_eq!(edges.len(), 2);
+
+        // Disable frees the index.
+        storage
+            .disable_edge_property_index("test_space", "WEIGHTED")
+            .unwrap();
+        assert!(!storage
+            .has_edge_property_index("test_space", "WEIGHTED")
+            .unwrap());
+        let edges = storage
+            .lookup_edges_by_property_range(
+                "test_space",
+                "WEIGHTED",
+                "weight",
+                Some(&Value::BigInt(20)),
+                None,
+                true,
+                false,
+            )
+            .unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
     fn test_insert_and_get_edge() {
         let mut storage = create_test_storage();
         setup_space(&mut storage);
@@ -1881,5 +1975,84 @@ mod tests {
             .unwrap();
         assert_eq!(in_edges.len(), 1);
         assert_eq!(in_edges[0].src, VertexId::from_int64(77));
+    }
+
+    #[test]
+    fn debug_edge_property_index() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        let edge_type = crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string())
+            .with_properties(vec![PropertyDef::new("weight".to_string(), DataType::BigInt)]);
+        storage.create_edge_type("test_space", &edge_type).unwrap();
+        insert_test_vertex(&mut storage, 1, "Alice");
+        insert_test_vertex(&mut storage, 2, "Bob");
+        insert_test_vertex(&mut storage, 3, "Carol");
+        let make_edge = |src: i64, dst: i64, weight: i64| {
+            Edge::new(
+                VertexId::from_int64(src),
+                VertexId::from_int64(dst),
+                "WEIGHTED".to_string(),
+                0,
+                [("weight".to_string(), Value::BigInt(weight))]
+                    .into_iter()
+                    .collect(),
+            )
+        };
+        storage.insert_edge("test_space", make_edge(1, 2, 10)).unwrap();
+        storage.insert_edge("test_space", make_edge(1, 3, 25)).unwrap();
+        storage.insert_edge("test_space", make_edge(2, 3, 5)).unwrap();
+        let all = storage.scan_edges_by_type("test_space", "WEIGHTED").unwrap();
+        eprintln!("scan_edges_by_type count = {}", all.len());
+        for e in &all { eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props); }
+        storage.enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024).unwrap();
+        eprintln!("has_index = {:?}", storage.has_edge_property_index("test_space", "WEIGHTED"));
+        let edges = storage.lookup_edges_by_property_range(
+            "test_space", "WEIGHTED", "weight", Some(&Value::BigInt(20)), None, true, false,
+        ).unwrap();
+        eprintln!("lookup >=20 count = {}", edges.len());
+        for e in &edges { eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props); }
+    }
+
+    #[test]
+    fn test_get_vertex_projected() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let vertex = Vertex::new(
+            VertexId::from_int64(1),
+            vec![Tag::new(
+                "Person".to_string(),
+                vec![
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::BigInt(30)),
+                ]
+                .into_iter()
+                .collect(),
+            )],
+        );
+        storage.insert_vertex("test_space", vertex).unwrap();
+
+        let full = storage
+            .get_vertex("test_space", &VertexId::from_int64(1))
+            .unwrap()
+            .expect("vertex exists");
+        assert_eq!(full.properties.len(), 2);
+
+        let projected = storage
+            .get_vertex_projected("test_space", &VertexId::from_int64(1), &["age".to_string()])
+            .unwrap()
+            .expect("vertex exists");
+        assert_eq!(projected.properties.len(), 1);
+        assert_eq!(projected.properties.get("age"), Some(&Value::BigInt(30)));
+        assert!(projected.properties.get("name").is_none());
+
+        // Full read must not be poisoned by the projected read (cache bypass).
+        let full_again = storage
+            .get_vertex("test_space", &VertexId::from_int64(1))
+            .unwrap()
+            .expect("vertex exists");
+        assert_eq!(full_again.properties.len(), 2);
     }
 }

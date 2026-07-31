@@ -3,7 +3,7 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::cache::BufferPool;
 use crate::storage::index::chunk::chunked_index::ChunkedIndex;
 use crate::storage::index::chunk::data::{Chunk, ChunkId};
-use crate::storage::index::generic_index_manager::{write_entity_ref, EntityRefReader};
+use crate::storage::index::entity_ref_codec::{write_entity_ref, EntityRefReader};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::types::IndexRecord;
 use std::error::Error;

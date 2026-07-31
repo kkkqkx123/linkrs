@@ -81,13 +81,6 @@ impl RecordCache {
         }
     }
 
-    /// Install a memory-aware eviction callback.
-    /// With BufferPool-based implementation, this is a no-op since
-    /// eviction is managed internally by the CLOCK algorithm.
-    pub fn set_eviction_callback_with_size(&self, _callback: EvictionCallbackWithSize) {
-        // No-op: BufferPool manages eviction internally
-    }
-
     /// Wire up MemoryAccounting for automatic memory tracking during eviction.
     pub fn set_memory_accounting(&self, accounting: Option<Arc<MemoryAccounting>>) {
         self.vertex_pool.set_memory_accounting(accounting.clone());
@@ -101,14 +94,8 @@ impl RecordCache {
             new_max_memory * self.config.memory_ratio.0 as u64 / total_ratio as u64;
         let base_id_index_memory =
             new_max_memory * self.config.memory_ratio.1 as u64 / total_ratio as u64;
-        // BufferPool capacity is used for eviction target; set via the pool's capacity field
-        // Note: BufferPool doesn't expose set_capacity - the eviction threshold is read from capacity
-        // For dynamic resizing, we recreate pools with new capacities
-        log::info!(
-            "RecordCache capacity update requested: vertex={}, id_index={} (dynamic resize not fully supported yet)",
-            base_vertex_memory,
-            base_id_index_memory
-        );
+        self.vertex_pool.set_capacity(base_vertex_memory);
+        self.id_index_pool.set_capacity(base_id_index_memory);
     }
 
     // ==================== ID Index Operations ====================

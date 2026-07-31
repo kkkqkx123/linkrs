@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::core::types::Timestamp;
@@ -70,7 +70,6 @@ pub struct ShardedVertexTable {
     segment_allocator: AtomicU32,
     label: crate::core::types::LabelId,
     label_name: String,
-    schema: RwLock<crate::storage::vertex::VertexSchema>,
 }
 
 impl ShardedVertexTable {
@@ -108,7 +107,6 @@ impl ShardedVertexTable {
             segment_allocator: AtomicU32::new(0),
             label,
             label_name,
-            schema: RwLock::new(schema),
         }
     }
 
@@ -294,25 +292,15 @@ impl ShardedVertexTable {
     // ==================== Schema ====================
 
     pub fn schema(&self) -> crate::storage::vertex::VertexSchema {
-        self.schema.read().clone()
-    }
-
-    pub fn set_schema(&self, schema: crate::storage::vertex::VertexSchema) {
-        for shard in &self.shards {
-            shard.table.lock().set_schema(schema.clone());
-        }
-        *self.schema.write() = schema;
-    }
-
-    pub fn schema_mut(&self) -> crate::storage::vertex::VertexSchema {
-        self.schema.read().clone()
+        // Shard 0 is the schema authority: every shard holds the same schema
+        // and all schema mutations are applied to each shard in order.
+        self.shards[0].table.lock().schema().clone()
     }
 
     pub fn apply_schema(&self, schema: crate::storage::vertex::VertexSchema) {
         for shard in &self.shards {
             shard.table.lock().set_schema(schema.clone());
         }
-        *self.schema.write() = schema;
     }
 
     pub fn label(&self) -> crate::core::types::LabelId {
@@ -401,20 +389,30 @@ impl ShardedVertexTable {
     }
 
     pub fn batch_delete(&self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
-        let mut total = 0;
+        // Route ids to their owning shard and delete each shard's batch under
+        // a single lock, instead of locking per id.
+        let mut by_shard: Vec<Vec<&str>> = vec![Vec::new(); self.num_shards];
         for id in external_ids {
-            if self.delete(id, ts).is_ok() {
-                total += 1;
+            by_shard[self.shard_index_by_str(id)].push(id);
+        }
+        let mut total = 0;
+        for (idx, ids) in by_shard.iter().enumerate() {
+            if !ids.is_empty() {
+                total += self.shards[idx].table.lock().batch_delete(ids, ts)?;
             }
         }
         Ok(total)
     }
 
     pub fn batch_delete_i64(&self, external_ids: &[i64], ts: Timestamp) -> StorageResult<usize> {
-        let mut total = 0;
+        let mut by_shard: Vec<Vec<i64>> = vec![Vec::new(); self.num_shards];
         for id in external_ids {
-            if self.delete_by_i64(*id, ts).is_ok() {
-                total += 1;
+            by_shard[self.shard_index_by_i64(*id)].push(*id);
+        }
+        let mut total = 0;
+        for (idx, ids) in by_shard.iter().enumerate() {
+            if !ids.is_empty() {
+                total += self.shards[idx].table.lock().batch_delete_i64(ids, ts)?;
             }
         }
         Ok(total)
@@ -448,13 +446,6 @@ impl ShardedVertexTable {
         for shard in &self.shards {
             shard.table.lock().add_property(prop.clone())?;
         }
-        {
-            let mut schema = self.schema.write();
-            if !schema.properties.iter().any(|p| p.name == prop.name) {
-                schema.properties.push(prop);
-                schema.schema_version += 1;
-            }
-        }
         Ok(())
     }
 
@@ -462,27 +453,12 @@ impl ShardedVertexTable {
         for shard in &self.shards {
             shard.table.lock().remove_property(prop_name)?;
         }
-        {
-            let mut schema = self.schema.write();
-            let before = schema.properties.len();
-            schema.properties.retain(|p| p.name != prop_name);
-            if schema.properties.len() != before {
-                schema.schema_version += 1;
-            }
-        }
         Ok(())
     }
 
     pub fn rename_property(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
         for shard in &self.shards {
             shard.table.lock().rename_property(old_name, new_name)?;
-        }
-        {
-            let mut schema = self.schema.write();
-            if let Some(prop) = schema.properties.iter_mut().find(|p| p.name == old_name) {
-                prop.name = new_name.to_string();
-                schema.schema_version += 1;
-            }
         }
         Ok(())
     }
@@ -498,22 +474,6 @@ impl ShardedVertexTable {
     }
 
     // ==================== Compaction ====================
-
-    pub fn compact_coordinated(&self) -> StorageResult<()> {
-        for shard in &self.shards {
-            shard.table.lock().compact_coordinated()?;
-        }
-        Ok(())
-    }
-
-    pub fn compact_timestamps(&self) -> std::collections::HashMap<u32, u32> {
-        let mut combined = std::collections::HashMap::new();
-        for shard in &self.shards {
-            let map = shard.table.lock().compact_timestamps();
-            combined.extend(map);
-        }
-        combined
-    }
 
     /// Compact vertices deleted at or before `ts` across all shards.
     ///

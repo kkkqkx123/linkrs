@@ -1140,6 +1140,11 @@ impl TimeTravelEdgeStore {
         total += self.property_index_cache.len()
             * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
 
+        // Account for the edge property index (if enabled)
+        if let Some(ref index) = self.property_index {
+            total += index.memory_usage() as usize;
+        }
+
         total
     }
 
@@ -1372,7 +1377,9 @@ impl TimeTravelEdgeStore {
     /// Build the property index by scanning all edges.
     pub(crate) fn build_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         let mut index = EdgePropertyIndex::new(pool_capacity);
-        let all_ts = Timestamp::MAX;
+        // MAX_TIMESTAMP (not INVALID_TIMESTAMP) satisfies `create_ts <= ts < delete_ts`
+        // for live edges, so all non-tombstoned edges are scanned.
+        let all_ts = crate::core::types::MAX_TIMESTAMP;
 
         let iter = EdgeTableScanIterator::new(self, all_ts);
         let edge_records: Vec<EdgeRecord> = iter.collect();
@@ -1393,16 +1400,6 @@ impl TimeTravelEdgeStore {
     /// Check if property index is enabled.
     pub fn has_property_index(&self) -> bool {
         self.property_index.is_some()
-    }
-
-    /// Get a reference to the property index, if enabled.
-    pub fn property_index(&self) -> Option<&EdgePropertyIndex> {
-        self.property_index.as_ref()
-    }
-
-    /// Get a mutable reference to the property index, if enabled.
-    pub fn property_index_mut(&mut self) -> Option<&mut EdgePropertyIndex> {
-        self.property_index.as_mut()
     }
 
     /// Drop the property index to free memory.

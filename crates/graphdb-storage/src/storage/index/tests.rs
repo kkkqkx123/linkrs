@@ -6,8 +6,7 @@ use crate::core::Value;
 use crate::storage::cursor::{
     IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
 };
-use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::key_codec::{KeyBuilder, VertexIndexKeyGen};
+use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard,
 };
@@ -199,9 +198,12 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let (forward, _) =
-            GenericIndexManager::<VertexIndexKeyGen>::load_data(&shard.checkpoint_file)
-                .expect("load split shard");
+        let shard_runtime = crate::storage::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
+            shard.checkpoint_file.clone(),
+            64 * 1024 * 1024,
+        )
+        .expect("load split shard");
+        let forward = shard_runtime.read_forward().snapshot();
         shard_entries += forward.len();
         assert!(forward.keys().all(|key| key.starts_with(&first_prefix)));
         assert!(forward.keys().all(|key| !key.starts_with(&second_prefix)));
@@ -620,12 +622,26 @@ fn included_columns_survive_rebuild_from_snapshot() {
         .join("1")
         .join(format!("generation-{}", next_gen.get()))
         .join("shard-0");
-    GenericIndexManager::<crate::storage::index::key_codec::EdgeIndexKeyGen>::flush_data(
-        &checkpoint_dir,
+    let fwd_idx = crate::storage::index::chunk::chunked_index::ChunkedIndex::from_btree(
+        vec![],
         &forward,
+        64 * 1024 * 1024,
+    );
+    let rev_idx = crate::storage::index::chunk::chunked_index::ChunkedIndex::from_btree(
+        vec![],
         &reverse,
+        64 * 1024 * 1024,
+    );
+    crate::storage::index::chunk::serialize::write_chunked_index_checkpoint(
+        &checkpoint_dir.join("forward_chunks"),
+        &fwd_idx,
     )
-    .expect("flush checkpoint");
+    .expect("flush forward checkpoint");
+    crate::storage::index::chunk::serialize::write_chunked_index_checkpoint(
+        &checkpoint_dir.join("reverse_chunks"),
+        &rev_idx,
+    )
+    .expect("flush reverse checkpoint");
 
     let next_manifest = IndexManifest::new(
         1,
@@ -711,11 +727,9 @@ fn wal_recovers_data_after_checkpoint() {
     assert!(wal_path.exists(), "WAL file should exist after flush_wal");
 
     // Load a new shard from the same checkpoint - should replay WAL
-    let loaded_shard = ShardRuntime::load_with_pool_capacity::<VertexIndexKeyGen>(
-        checkpoint_file.clone(),
-        128 * 1024 * 1024,
-    )
-    .unwrap();
+    let loaded_shard =
+        ShardRuntime::load_with_pool_capacity(checkpoint_file.clone(), 128 * 1024 * 1024)
+            .unwrap();
 
     let fwd = loaded_shard.read_forward();
     let rev = loaded_shard.read_reverse();
@@ -757,7 +771,7 @@ fn checkpoint_clears_wal() {
     assert!(wal_path.exists());
 
     // Checkpoint - should clear WAL
-    shard.checkpoint::<VertexIndexKeyGen>().unwrap();
+    shard.checkpoint().unwrap();
     assert!(
         !wal_path.exists(),
         "WAL file should be removed after checkpoint"

@@ -406,6 +406,15 @@ impl StorageReader for GraphStorage {
         reader::get_vertex(&self.ctx, space, id)
     }
 
+    fn get_vertex_projected(
+        &self,
+        space: &str,
+        id: &VertexId,
+        projection: &[String],
+    ) -> Result<Option<Vertex>, StorageError> {
+        reader::get_vertex_projected(&self.ctx, space, id, projection)
+    }
+
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError> {
         reader::scan_vertices(&self.ctx, space)
     }
@@ -477,6 +486,45 @@ impl StorageReader for GraphStorage {
         value: &Value,
     ) -> Result<Vec<Value>, StorageError> {
         index_manager::lookup_index(&self.ctx, space, index_name, value)
+    }
+
+    fn enable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+        pool_capacity: u64,
+    ) -> Result<bool, StorageError> {
+        reader::enable_edge_property_index(&self.ctx, space, edge_type, pool_capacity)
+    }
+
+    fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        reader::has_edge_property_index(&self.ctx, space, edge_type)
+    }
+
+    fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError> {
+        reader::disable_edge_property_index(&self.ctx, space, edge_type)
+    }
+
+    fn lookup_edges_by_property_range(
+        &self,
+        space: &str,
+        edge_type: &str,
+        prop_name: &str,
+        lower: Option<&Value>,
+        upper: Option<&Value>,
+        include_lower: bool,
+        include_upper: bool,
+    ) -> Result<Vec<Edge>, StorageError> {
+        reader::lookup_edges_by_property_range(
+            &self.ctx,
+            space,
+            edge_type,
+            prop_name,
+            lower,
+            upper,
+            include_lower,
+            include_upper,
+        )
     }
 
     fn get_vertex_with_schema(

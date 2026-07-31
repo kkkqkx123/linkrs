@@ -115,6 +115,8 @@ pub enum SourceSpec {
     EdgeIndexScan {
         space_name: String,
         edge_type: Option<String>,
+        index_name: String,
+        predicate: Option<BoundIndexPredicate>,
     },
     /// Index scan with typed predicate and projection.
     ///

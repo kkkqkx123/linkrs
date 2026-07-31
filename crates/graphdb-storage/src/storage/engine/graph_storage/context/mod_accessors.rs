@@ -288,6 +288,10 @@ impl GraphStorageContext {
             .cleanup_threshold();
         snapshot.tombstone_count = tombstone_count;
         snapshot.tombstone_memory_bytes = tombstone_memory_bytes;
+        snapshot.vertex_shard_count = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| tables.values().map(|table| table.num_shards()).sum());
         // Keep spiller accessors exercised.
         let _spill_ratio = self.spiller().spill_threshold_ratio();
         let _spill_dir = self.spiller().spill_dir();

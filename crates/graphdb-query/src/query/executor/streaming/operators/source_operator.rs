@@ -154,6 +154,8 @@ pub enum SourceOperator {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_type: Option<String>,
+        index_name: String,
+        predicate: Option<BoundIndexPredicate>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     /// Index scan with typed predicate and projection.
@@ -283,10 +285,14 @@ impl SourceOperator {
             super::spec::SourceSpec::EdgeIndexScan {
                 space_name,
                 edge_type,
+                index_name,
+                predicate,
             } => Self::EdgeIndexScan {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_type: edge_type.clone(),
+                index_name: index_name.clone(),
+                predicate: predicate.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::IndexScan {
@@ -519,11 +525,34 @@ impl SourceOperator {
                     state: NeighborScanState::Init,
                 }));
             }
-            Self::EdgeIndexScan { space_name, .. } => {
-                return Err(QueryError::execution(format!(
-                    "EdgeIndexScan is not supported by storage for space '{}'",
-                    space_name
-                )));
+            Self::EdgeIndexScan {
+                storage,
+                space_name,
+                edge_type,
+                index_name,
+                predicate,
+                cursor,
+                ..
+            } => {
+                let storage_ref = storage.as_ref().ok_or_else(|| {
+                    QueryError::execution("EdgeIndexScan requires storage".to_string())
+                })?;
+                let guard = storage_ref.read();
+                let edges = lookup_edges_via_property_index(
+                    &*guard,
+                    space_name,
+                    edge_type.as_deref(),
+                    index_name,
+                    predicate.as_ref(),
+                )
+                .map_err(|error| {
+                    storage_error("EdgeIndexScan", "open cursor", space_name, error)
+                })?;
+                drop(guard);
+                *cursor = Some(Box::new(VecEdgeCursor::new(edges)));
+                base.insert_state(GlobalState::Source(SourceState::EdgeIndexScan {
+                    cursor: None,
+                }));
             }
             Self::IndexScan {
                 storage,
@@ -1012,10 +1041,35 @@ impl SourceOperator {
                     &vertex_projection,
                 )
             }
-            Self::EdgeIndexScan { space_name, .. } => Err(QueryError::execution(format!(
-                "EdgeIndexScan is not supported by storage for space '{}'",
-                space_name
-            ))),
+            Self::EdgeIndexScan {
+                space_name, cursor, ..
+            } => {
+                let mut cur = match cursor.take() {
+                    Some(c) => c,
+                    None => return Ok(None),
+                };
+                let batch = cur
+                    .next_batch(base.chunk_size)
+                    .map_err(|error| {
+                        storage_error("EdgeIndexScan", "read cursor", space_name, error)
+                    })?;
+                if batch.is_empty() {
+                    return Ok(None);
+                }
+                let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
+                if !rows.is_empty() {
+                    let reservation = reserve_memory(base, &rows)?;
+                    let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                    chunk.materialize_columns();
+                    if let Some(r) = reservation {
+                        chunk = chunk.with_memory_reservation(r);
+                    }
+                    *cursor = Some(cur);
+                    return Ok(Some(chunk));
+                }
+                *cursor = Some(cur);
+                Ok(None)
+            }
             Self::IndexScan {
                 storage,
                 space_name,
@@ -1083,6 +1137,76 @@ impl SourceOperator {
         base.lifecycle.mark_closed();
         Ok(())
     }
+}
+
+/// Resolve an edge index definition to its indexed property and execute a
+/// value-range lookup via the per-table edge property index.
+fn lookup_edges_via_property_index(
+    storage: &dyn QueryStorage,
+    space_name: &str,
+    edge_type: Option<&str>,
+    index_name: &str,
+    predicate: Option<&BoundIndexPredicate>,
+) -> Result<Vec<crate::core::Edge>, QueryError> {
+    let edge_type = edge_type.ok_or_else(|| {
+        QueryError::execution("EdgeIndexScan requires an edge type".to_string())
+    })?;
+    let index = storage
+        .get_edge_index(space_name, index_name)
+        .map_err(|error| {
+            QueryError::execution(format!(
+                "EdgeIndexScan: failed to load index {} in space {}: {}",
+                index_name, space_name, error
+            ))
+        })?
+        .ok_or_else(|| {
+            QueryError::execution(format!(
+                "EdgeIndexScan: edge index {} not found in space {}",
+                index_name, space_name
+            ))
+        })?;
+    let prop_name = index
+        .fields
+        .first()
+        .map(|field| field.name.clone())
+        .ok_or_else(|| {
+            QueryError::execution(format!(
+                "EdgeIndexScan: index {} has no indexed fields",
+                index_name
+            ))
+        })?;
+    let (lower, upper, include_lower, include_upper) = match predicate {
+        Some(BoundIndexPredicate::Equal { value, .. }) => {
+            (Some(value.clone()), Some(value.clone()), true, false)
+        }
+        Some(BoundIndexPredicate::Range {
+            begin,
+            end,
+            include_begin,
+            include_end,
+            ..
+        }) => (begin.clone(), end.clone(), *include_begin, *include_end),
+        Some(BoundIndexPredicate::Prefix { prefix, .. }) => {
+            (Some(prefix.clone()), Some(prefix.clone()), true, false)
+        }
+        _ => (None, None, true, false),
+    };
+    storage
+        .lookup_edges_by_property_range(
+            space_name,
+            edge_type,
+            &prop_name,
+            lower.as_ref(),
+            upper.as_ref(),
+            include_lower,
+            include_upper,
+        )
+        .map_err(|error| {
+            QueryError::execution(format!(
+                "EdgeIndexScan: property range lookup failed in space {}: {}",
+                space_name, error
+            ))
+        })
 }
 
 fn build_index_scan_plan(

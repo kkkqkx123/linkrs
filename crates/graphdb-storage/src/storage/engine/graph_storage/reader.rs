@@ -94,6 +94,24 @@ pub(crate) fn get_vertex(
     space: &str,
     id: &VertexId,
 ) -> StorageResult<Option<Vertex>> {
+    get_vertex_impl(ctx, space, id, None)
+}
+
+pub(crate) fn get_vertex_projected(
+    ctx: &GraphStorageContext,
+    space: &str,
+    id: &VertexId,
+    projection: &[String],
+) -> StorageResult<Option<Vertex>> {
+    get_vertex_impl(ctx, space, id, Some(projection))
+}
+
+fn get_vertex_impl(
+    ctx: &GraphStorageContext,
+    space: &str,
+    id: &VertexId,
+    projection: Option<&[String]>,
+) -> StorageResult<Option<Vertex>> {
     record_vertex_read(ctx, *id);
     record_schema_read(ctx, space);
     let _space_info = ctx
@@ -114,12 +132,21 @@ pub(crate) fn get_vertex(
     for tag in &tags {
         let label_id = tag.tag_id;
         let record = if let Some(id_int) = id.as_int64() {
-            ctx.get_vertex_by_i64(label_id, id_int, ts)
+            match projection {
+                Some(proj) => ctx.get_vertex_by_i64_projected(label_id, id_int, proj, ts),
+                None => ctx.get_vertex_by_i64(label_id, id_int, ts),
+            }
         } else if let Some(id_str) = id.as_str() {
-            ctx.get_vertex(label_id, id_str, ts)
+            match projection {
+                Some(proj) => ctx.get_vertex_projected(label_id, id_str, proj, ts),
+                None => ctx.get_vertex(label_id, id_str, ts),
+            }
         } else {
             let id_str = id.to_string();
-            ctx.get_vertex(label_id, &id_str, ts)
+            match projection {
+                Some(proj) => ctx.get_vertex_projected(label_id, &id_str, proj, ts),
+                None => ctx.get_vertex(label_id, &id_str, ts),
+            }
         };
 
         if let Some(record) = record {
@@ -780,6 +807,205 @@ pub(crate) fn scan_edges_by_type(
         dst_label_id,
         ts,
     );
+    Ok(edges)
+}
+
+/// Resolve the edge table labels for a named edge type.
+fn resolve_edge_table_labels(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<(LabelId, LabelId, LabelId)> {
+    let edge_info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!("Edge type {} not found in space {}", edge_type, space))
+        })?;
+    let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?.unwrap_or(0);
+    let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?.unwrap_or(0);
+    Ok((src_label, dst_label, edge_info.edge_type_id))
+}
+
+/// Enable the per-table edge property index for `edge_type`.
+pub(crate) fn enable_edge_property_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+    pool_capacity: u64,
+) -> StorageResult<bool> {
+    record_schema_read(ctx, space);
+    let (src_label, dst_label, edge_label) = resolve_edge_table_labels(ctx, space, edge_type)?;
+    if src_label != 0 && dst_label != 0 {
+        ctx.enable_edge_property_index(src_label, dst_label, edge_label, pool_capacity)?;
+    } else {
+        // Unconstrained endpoint tags: enable on every table of this edge type.
+        ctx.data_store().with_edge_tables(|tables| -> StorageResult<()> {
+            let matching: Vec<_> = tables
+                .values()
+                .filter(|arc| arc.read().0.label() == edge_label)
+                .cloned()
+                .collect();
+            for arc in matching {
+                arc.write().0.enable_property_index(pool_capacity)?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(true)
+}
+
+/// Whether the per-table edge property index is enabled for `edge_type`.
+pub(crate) fn has_edge_property_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<bool> {
+    record_schema_read(ctx, space);
+    let (src_label, dst_label, edge_label) = resolve_edge_table_labels(ctx, space, edge_type)?;
+    if src_label != 0 && dst_label != 0 {
+        Ok(ctx.has_edge_property_index(src_label, dst_label, edge_label))
+    } else {
+        Ok(ctx.data_store().with_edge_tables(|tables| {
+            tables
+                .values()
+                .filter(|arc| arc.read().0.label() == edge_label)
+                .any(|arc| arc.read().0.has_property_index())
+        }))
+    }
+}
+
+/// Drop the per-table edge property index for `edge_type`.
+pub(crate) fn disable_edge_property_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<()> {
+    record_schema_read(ctx, space);
+    let (src_label, dst_label, edge_label) = resolve_edge_table_labels(ctx, space, edge_type)?;
+    if src_label != 0 && dst_label != 0 {
+        ctx.disable_edge_property_index(src_label, dst_label, edge_label)?;
+    } else {
+        ctx.data_store().with_edge_tables(|tables| -> StorageResult<()> {
+            for arc in tables
+                .values()
+                .filter(|arc| arc.read().0.label() == edge_label)
+            {
+                arc.write().0.disable_property_index();
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+/// Look up edges of `edge_type` whose `prop_name` value falls in `[lower, upper)`.
+///
+/// Bounds are encoded with the ordered codec; the inclusion flags control
+/// whether the boundary values themselves are part of the range.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lookup_edges_by_property_range(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+    prop_name: &str,
+    lower: Option<&Value>,
+    upper: Option<&Value>,
+    include_lower: bool,
+    include_upper: bool,
+) -> StorageResult<Vec<Edge>> {
+    record_schema_read(ctx, space);
+    let (src_label, dst_label, edge_label) = resolve_edge_table_labels(ctx, space, edge_type)?;
+    let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+    // Degenerate range [v, v) with an exclusive upper bound is interpreted as
+    // a prefix/equality bound: everything from v up to the next value boundary.
+    let prefix_bounds = include_lower && !include_upper && lower.is_some() && upper == lower;
+    let value_lower = match lower {
+        Some(value) => {
+            let encoded = codec.encode(value)?;
+            if include_lower {
+                encoded
+            } else {
+                crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+            }
+        }
+        None => Vec::new(),
+    };
+    let value_upper = match upper {
+        Some(value) => {
+            let encoded = codec.encode(value)?;
+            if prefix_bounds || include_upper {
+                crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+            } else {
+                encoded
+            }
+        }
+        None => Vec::new(),
+    };
+
+    let ts = ctx.get_read_timestamp();
+    let mut edges = Vec::new();
+
+    let records = if src_label != 0 && dst_label != 0 {
+        ctx.lookup_edges_by_property_range(
+            src_label,
+            dst_label,
+            edge_label,
+            prop_name,
+            &value_lower,
+            &value_upper,
+            ts,
+        )
+    } else {
+        ctx.data_store().with_edge_tables(|tables| {
+            let matching: Vec<_> = tables
+                .values()
+                .filter(|arc| arc.read().0.label() == edge_label)
+                .cloned()
+                .collect();
+            let mut records = Vec::new();
+            for arc in matching {
+                let table = arc.read();
+                records.extend(table.0.lookup_edges_by_property_range(
+                    prop_name,
+                    &value_lower,
+                    &value_upper,
+                ).into_iter().filter_map(|(src, dst, rank)| {
+                    table.0.get_edge(src, dst, rank, ts)
+                }));
+            }
+            records
+        })
+    };
+
+    for record in records {
+        let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
+        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
+        let src_external = if src_label != 0 {
+            ctx.get_external_id(src_label, src_internal, ts)
+                .or_else(|| {
+                    ctx.get_external_id_by_internal_id(src_label, src_internal)
+                        .map(|v| vid_to_string(&v))
+                })
+                .unwrap_or_else(|| format!("{}", record.src_vid))
+        } else {
+            ctx.get_external_id_any(src_internal, ts)
+                .unwrap_or_else(|| format!("{}", record.src_vid))
+        };
+        let dst_external = if dst_label != 0 {
+            ctx.get_external_id(dst_label, dst_internal, ts)
+                .or_else(|| {
+                    ctx.get_external_id_by_internal_id(dst_label, dst_internal)
+                        .map(|v| vid_to_string(&v))
+                })
+                .unwrap_or_else(|| format!("{}", record.dst_vid))
+        } else {
+            ctx.get_external_id_any(dst_internal, ts)
+                .unwrap_or_else(|| format!("{}", record.dst_vid))
+        };
+        edges.push(edge_record_to_edge(&record, edge_type, &src_external, &dst_external));
+    }
+
     Ok(edges)
 }
 

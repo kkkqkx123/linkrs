@@ -412,11 +412,6 @@ impl EdgePropertyIndex {
         Ok(())
     }
 
-    pub fn might_be_deleted(&self, src: u32, dst: u32) -> bool {
-        let edge_id = ((src as u64) << 32) | (dst as u64);
-        self.deleted_filter.might_contain(edge_id)
-    }
-
     pub fn has_index(&self, prop_name: &str) -> bool {
         self.indexes.contains_key(prop_name)
     }
@@ -424,10 +419,6 @@ impl EdgePropertyIndex {
     /// Pool capacity used when constructing chunked index files.
     pub fn pool_capacity(&self) -> u64 {
         self.pool_capacity
-    }
-
-    pub fn index_names(&self) -> Vec<String> {
-        self.indexes.keys().cloned().collect()
     }
 
     pub fn memory_usage(&self) -> u64 {
@@ -449,7 +440,6 @@ fn u32_from_vertex_id(v: &crate::core::types::VertexId) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::MAX_TIMESTAMP;
 
     #[test]
     fn test_edge_property_index_insert_lookup() {
@@ -495,9 +485,6 @@ mod tests {
         // Entry should still exist in index (marked deleted, not removed)
         assert_eq!(results.len(), 1);
         assert!(results[0].1.deleted_ts.is_some());
-
-        // Bloom filter should indicate possible deletion
-        assert!(index.might_be_deleted(0, 1));
     }
 
     #[test]

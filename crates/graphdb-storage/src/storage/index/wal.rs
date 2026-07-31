@@ -6,7 +6,7 @@
 
 use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::index::generic_index_manager::{write_entity_ref, EntityRefReader};
+use crate::storage::index::entity_ref_codec::{write_entity_ref, EntityRefReader};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::types::IndexRecord;
 use std::io::Write;

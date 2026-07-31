@@ -79,20 +79,8 @@ pub fn write_header_to<W: std::io::Write>(writer: &mut W, section_id: u32) -> st
     Ok(())
 }
 
-/// Validate that the persistence version matches the expected version.
-/// Returns `StorageError::UnsupportedVersion` on mismatch.
-pub fn check_version(version: u32) -> StorageResult<()> {
-    if version != CURRENT_VERSION {
-        return Err(StorageError::unsupported_version(version, CURRENT_VERSION));
-    }
-    Ok(())
-}
-
 /// Magic bytes for versioned payload wrapper (LNKF = LinkRs File)
 pub const VERSIONED_PAYLOAD_MAGIC: [u8; 4] = *b"LNKF";
-
-/// Versioned payload header size: magic(4) + version(4) = 8
-pub const VERSIONED_PAYLOAD_HEADER_SIZE: usize = 8;
 
 /// Write a versioned payload wrapper: [LNKF][version:u32][payload]
 pub fn write_versioned_payload(buf: &mut Vec<u8>, version: u32, payload: &[u8]) {
@@ -198,21 +186,6 @@ mod tests {
         let buf = b"GR";
         let mut slice = &buf[..];
         assert!(read_header(&mut slice).is_err());
-    }
-
-    #[test]
-    fn test_check_version_accepts_current() {
-        check_version(CURRENT_VERSION).unwrap();
-    }
-
-    #[test]
-    fn test_check_version_rejects_unknown() {
-        let result = check_version(999);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
-        );
     }
 
     #[test]

@@ -144,6 +144,7 @@ pub struct ResourceSnapshot {
     pub oldest_snapshot_ts: Timestamp,
     pub tombstone_count: usize,
     pub tombstone_memory_bytes: u64,
+    pub vertex_shard_count: usize,
 }
 
 impl ResourceSnapshot {
@@ -325,6 +326,7 @@ impl MemoryAccounting {
             oldest_snapshot_ts: Timestamp::MAX,
             tombstone_count: 0,
             tombstone_memory_bytes: 0,
+            vertex_shard_count: 0,
         }
     }
 

@@ -1,31 +1,5 @@
-use std::sync::Arc;
-
 use crate::core::types::Timestamp;
 use crate::core::Value;
-
-/// Eviction cause for cache entries
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvictionCause {
-    /// Entry was evicted due to capacity constraints
-    Capacity,
-    /// Entry expired due to TTL or TTI
-    Expired,
-    /// Entry was explicitly removed
-    Explicit,
-    /// Entry was replaced by a new value
-    Replaced,
-}
-
-/// Callback type for eviction notifications.
-pub type EvictionCallback = Arc<dyn Fn(&str, EvictionCause) + Send + Sync>;
-
-/// Memory-aware eviction callback that receives the byte size of the evicted entry.
-///
-/// # Arguments
-/// - `cache_type`: "vertex" or "id_index"
-/// - `cause`: why the entry was evicted
-/// - `bytes`: estimated byte size of the evicted entry
-pub type EvictionCallbackWithSize = Arc<dyn Fn(&str, EvictionCause, u64) + Send + Sync>;
 
 /// Key for vertex cache: (label_id, internal_id)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

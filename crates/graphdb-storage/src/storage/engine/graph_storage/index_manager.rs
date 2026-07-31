@@ -4,8 +4,9 @@ use crate::core::types::{
 };
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
-use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser, VertexIndexKeyGen};
+use crate::storage::index::chunk::chunked_index::ChunkedIndex;
+use crate::storage::index::chunk::serialize::write_chunked_index_checkpoint;
+use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard,
 };
@@ -22,6 +23,22 @@ type IndexDataMaps = (
     BTreeMap<Vec<u8>, IndexRecord>,
     BTreeMap<Vec<u8>, IndexRecord>,
 );
+
+/// Write a generation checkpoint using the chunked index format.
+fn write_generation_checkpoint(
+    gen_dir: &std::path::Path,
+    forward: &BTreeMap<Vec<u8>, IndexRecord>,
+    reverse: &BTreeMap<Vec<u8>, IndexRecord>,
+) -> StorageResult<()> {
+    const POOL_CAPACITY: u64 = 64 * 1024 * 1024;
+    let fwd_dir = gen_dir.join("forward_chunks");
+    let rev_dir = gen_dir.join("reverse_chunks");
+    let fwd = ChunkedIndex::from_btree(vec![], forward, POOL_CAPACITY);
+    let rev = ChunkedIndex::from_btree(vec![], reverse, POOL_CAPACITY);
+    write_chunked_index_checkpoint(&fwd_dir, &fwd)?;
+    write_chunked_index_checkpoint(&rev_dir, &rev)?;
+    Ok(())
+}
 
 use crate::transaction::wal::{
     collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
@@ -579,11 +596,7 @@ pub(crate) fn rebuild_tag_index(
         .collect();
     if manifest_path.is_some() {
         std::fs::create_dir_all(&gen_dir)?;
-        GenericIndexManager::<VertexIndexKeyGen>::flush_data(
-            &gen_dir,
-            &persisted_forward,
-            &persisted_reverse,
-        )?;
+        write_generation_checkpoint(&gen_dir, &persisted_forward, &persisted_reverse)?;
     }
     fail_if_generation_fault_is_injected(GenerationFaultPoint::GenerationFsync)?;
 
@@ -869,11 +882,7 @@ pub(crate) fn rebuild_edge_index(
         .collect();
     if manifest_path.is_some() {
         std::fs::create_dir_all(&gen_dir)?;
-        GenericIndexManager::<EdgeIndexKeyGen>::flush_data(
-            &gen_dir,
-            &persisted_forward,
-            &persisted_reverse,
-        )?;
+        write_generation_checkpoint(&gen_dir, &persisted_forward, &persisted_reverse)?;
     }
     fail_if_generation_fault_is_injected(GenerationFaultPoint::GenerationFsync)?;
 
@@ -1561,8 +1570,6 @@ mod tests {
     #[test]
     fn test_flush_index_data_writes_valid_files() {
         use crate::core::types::MAX_TIMESTAMP;
-        use crate::storage::index::generic_index_manager::GenericIndexManager;
-        use crate::storage::index::key_codec::VertexIndexKeyGen;
         use crate::storage::index::types::IndexRecord;
         use std::collections::BTreeMap;
         use std::fs;
@@ -1576,16 +1583,16 @@ mod tests {
         let mut reverse = BTreeMap::new();
         reverse.insert(vec![3, 4, 5], IndexRecord::new(MAX_TIMESTAMP));
 
-        GenericIndexManager::<VertexIndexKeyGen>::flush_data(&gen_dir, &forward, &reverse)
+        super::write_generation_checkpoint(&gen_dir, &forward, &reverse)
             .expect("flush should succeed");
 
         assert!(
-            gen_dir.join("forward_index.bin").exists(),
-            "forward file should exist"
+            gen_dir.join("forward_chunks/chunk_index.bin").exists(),
+            "forward chunk index should exist"
         );
         assert!(
-            gen_dir.join("reverse_index.bin").exists(),
-            "reverse file should exist"
+            gen_dir.join("reverse_chunks/chunk_index.bin").exists(),
+            "reverse chunk index should exist"
         );
     }
 }

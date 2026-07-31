@@ -286,7 +286,6 @@ impl PageWriter {
 }
 
 pub struct PageReader {
-    #[allow(dead_code)]
     page_size: usize,
 }
 

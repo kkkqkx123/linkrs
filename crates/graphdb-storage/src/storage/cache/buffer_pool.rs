@@ -232,13 +232,6 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         items.len()
     }
 
-    pub(crate) fn remove(&self, key: &K) {
-        let mut items = self.inner.items.lock();
-        items.remove(key);
-        let mut ids = self.inner.cached_ids.lock();
-        ids.retain(|i| i != key);
-    }
-
     /// Remove all entries satisfying a predicate.
     /// Returns the number of entries removed.
     pub(crate) fn retain<F>(&self, mut f: F) -> usize
@@ -362,15 +355,5 @@ mod tests {
         assert_eq!(pool.len(), 0);
         pool.insert(1, "x", 1);
         assert_eq!(pool.len(), 1);
-    }
-
-    #[test]
-    fn remove_clears_item() {
-        let pool = BufferPool::<u32, &str>::new(1024);
-        pool.insert(1, "data", 10);
-        assert_eq!(pool.len(), 1);
-        pool.remove(&1);
-        assert_eq!(pool.len(), 0);
-        assert!(pool.get(&1).is_none());
     }
 }

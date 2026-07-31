@@ -3,6 +3,15 @@ use crate::core::types::Timestamp;
 use crate::core::DataType;
 use crate::storage::types::StoragePropertyDef;
 
+fn new_table(label: LabelId, label_name: &str, schema: VertexSchema) -> VertexTable {
+    VertexTable::with_config(
+        label,
+        label_name.to_string(),
+        schema,
+        VertexTableConfig::default(),
+    )
+}
+
 fn create_test_schema() -> VertexSchema {
     VertexSchema {
         label_id: 0,
@@ -24,7 +33,7 @@ fn create_test_schema() -> VertexSchema {
 #[test]
 fn test_insert_and_get() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let internal_id = table
         .insert(
@@ -47,7 +56,7 @@ fn test_insert_and_get() {
 #[test]
 fn test_delete() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -63,7 +72,7 @@ fn test_delete() {
 #[test]
 fn test_iterator() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -82,7 +91,7 @@ fn test_iterator() {
 #[test]
 fn test_rename_and_remove_property() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .add_property(StoragePropertyDef::new(
@@ -138,7 +147,7 @@ fn test_rename_and_remove_property() {
 #[test]
 fn test_batch_insert() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let vertices = vec![
         (
@@ -190,7 +199,7 @@ fn test_batch_insert() {
 #[test]
 fn test_batch_delete() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -218,7 +227,7 @@ fn test_batch_delete() {
 #[test]
 fn test_add_property_increments_version() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let v1 = table.schema().schema_version;
     assert_eq!(v1, 1, "Initial version should be 1");
@@ -241,7 +250,7 @@ fn test_remove_property_increments_version() {
         "email".to_string(),
         DataType::String,
     ));
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let v1 = table.schema().schema_version;
 
@@ -256,7 +265,7 @@ fn test_remove_property_increments_version() {
 #[test]
 fn test_rename_property_increments_version() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let v1 = table.schema().schema_version;
 
@@ -271,7 +280,7 @@ fn test_rename_property_increments_version() {
 #[test]
 fn test_sequential_property_modifications() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     assert_eq!(table.schema().schema_version, 1);
 
@@ -307,7 +316,7 @@ fn test_version_history_add_property() {
     use crate::storage::schema::ChangeDetails;
 
     let schema = create_test_schema();
-    let mut table = VertexTable::new(1, "User".to_string(), schema);
+    let mut table = new_table(1, "User", schema);
 
     table
         .add_property(StoragePropertyDef::new(
@@ -342,7 +351,7 @@ fn test_version_history_remove_property() {
         DataType::String,
     ));
 
-    let mut table = VertexTable::new(1, "User".to_string(), schema);
+    let mut table = new_table(1, "User", schema);
 
     table
         .remove_property("email")
@@ -369,7 +378,7 @@ fn test_version_history_rename_property() {
     use crate::storage::schema::ChangeDetails;
 
     let schema = create_test_schema();
-    let mut table = VertexTable::new(1, "User".to_string(), schema);
+    let mut table = new_table(1, "User", schema);
 
     table
         .rename_property("name", "full_name")
@@ -395,7 +404,7 @@ fn test_version_history_rename_property() {
 #[test]
 fn test_compact_delete_all() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     for i in 0..5 {
         table
@@ -437,7 +446,7 @@ fn test_compact_delete_all() {
 #[test]
 fn test_compact_multiple_cycles() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     for cycle in 0..3 {
         let ts_insert = cycle * 100;
@@ -507,7 +516,7 @@ fn test_compact_multiple_cycles() {
 #[test]
 fn test_compact_id_consistency() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     let _ids = [
         table
@@ -579,7 +588,7 @@ fn test_compact_id_consistency() {
 #[test]
 fn test_vertex_snapshot_isolation() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -606,7 +615,7 @@ fn test_vertex_snapshot_isolation() {
 #[test]
 fn test_vertex_multiple_snapshots() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -645,7 +654,7 @@ fn test_vertex_multiple_snapshots() {
 #[test]
 fn test_vertex_concurrent_snapshots_same_timestamp() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -672,7 +681,7 @@ fn test_vertex_concurrent_snapshots_same_timestamp() {
 #[test]
 fn test_vertex_gc_placeholder() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -687,7 +696,7 @@ fn test_vertex_gc_placeholder() {
 #[test]
 fn test_vertex_mvcc_table_ops() {
     let schema = create_test_schema();
-    let mut table = VertexTable::new(0, "person".to_string(), schema);
+    let mut table = new_table(0, "person", schema);
 
     table
         .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)

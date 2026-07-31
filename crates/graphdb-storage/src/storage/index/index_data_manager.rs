@@ -336,31 +336,19 @@ impl IndexDataManagerImpl {
                 catalog_already_loaded && manifest.shards.iter().any(|s| s.checkpoint_file.is_dir());
             if has_disk_shards {
                 let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
-                let runtime = match index.index_type {
-                    IndexType::TagIndex => IndexRuntime::load_with_pool_capacity::<
-                        crate::storage::index::key_codec::VertexIndexKeyGen,
-                    >(&manifest, pool_cap)
-                    .unwrap_or_else(|_| IndexRuntime::new(&manifest)),
-                    IndexType::EdgeIndex => IndexRuntime::load_with_pool_capacity::<
-                        crate::storage::index::key_codec::EdgeIndexKeyGen,
-                    >(&manifest, pool_cap)
-                    .unwrap_or_else(|_| IndexRuntime::new(&manifest)),
-                };
+                let runtime = IndexRuntime::load_with_pool_capacity(&manifest, pool_cap)
+                    .unwrap_or_else(|_| IndexRuntime::new(&manifest));
                 Arc::new(runtime)
             } else {
                 Arc::new(IndexRuntime::new(&manifest))
             }
         });
-        self.restore_active_generation(identity, index)?;
+        self.restore_active_generation(identity)?;
         self.sync_memory_usage();
         Ok(())
     }
 
-    fn restore_active_generation(
-        &self,
-        identity: IndexIdentity,
-        index: &Index,
-    ) -> StorageResult<()> {
+    fn restore_active_generation(&self, identity: IndexIdentity) -> StorageResult<()> {
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
             .ok_or_else(|| {
@@ -385,14 +373,8 @@ impl IndexDataManagerImpl {
             }
         }
         let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
-        let runtime = match index.index_type {
-            IndexType::TagIndex => IndexRuntime::load_with_pool_capacity::<
-                crate::storage::index::key_codec::VertexIndexKeyGen,
-            >(handle.manifest(), pool_cap)?,
-            IndexType::EdgeIndex => IndexRuntime::load_with_pool_capacity::<
-                crate::storage::index::key_codec::EdgeIndexKeyGen,
-            >(handle.manifest(), pool_cap)?,
-        };
+        let runtime =
+            IndexRuntime::load_with_pool_capacity(handle.manifest(), pool_cap)?;
         self.runtimes.write().insert(identity, Arc::new(runtime));
         self.restored_generations
             .write()
@@ -811,16 +793,8 @@ impl IndexDataManagerImpl {
             pool_cap,
         );
         let index_type = self.index_types.read().get(&identity).cloned();
-        if self.index_root.is_some() {
-            match index_type {
-                Some(IndexType::TagIndex) => flush_split_generation::<
-                    crate::storage::index::key_codec::VertexIndexKeyGen,
-                >(&next_manifest, &next_runtime)?,
-                Some(IndexType::EdgeIndex) => flush_split_generation::<
-                    crate::storage::index::key_codec::EdgeIndexKeyGen,
-                >(&next_manifest, &next_runtime)?,
-                None => {}
-            }
+        if self.index_root.is_some() && index_type.is_some() {
+            flush_split_generation(&next_manifest, &next_runtime)?;
         }
 
         // Step 4: Publish
@@ -1243,14 +1217,7 @@ impl IndexDataManagerImpl {
             rev_prefix,
             pool_cap,
         );
-        match index_type {
-            IndexType::TagIndex => flush_split_generation::<
-                crate::storage::index::key_codec::VertexIndexKeyGen,
-            >(&next, &next_runtime)?,
-            IndexType::EdgeIndex => flush_split_generation::<
-                crate::storage::index::key_codec::EdgeIndexKeyGen,
-            >(&next, &next_runtime)?,
-        }
+        flush_split_generation(&next, &next_runtime)?;
 
         next.store(&index_root.join("manifest.bin"))?;
         runtime.install_generation(next_runtime);
@@ -1282,16 +1249,8 @@ impl IndexDataManagerImpl {
         for (identity, catalog) in self.manifest_catalogs.read().iter() {
             let manifest = catalog.acquire();
             let runtime = self.runtime(identity.space_id, identity.index_id)?;
-            match self.index_types.read().get(identity) {
-                Some(IndexType::TagIndex) => runtime
-                    .flush_generation::<crate::storage::index::key_codec::VertexIndexKeyGen>(
-                    manifest.manifest(),
-                )?,
-                Some(IndexType::EdgeIndex) => runtime
-                    .flush_generation::<crate::storage::index::key_codec::EdgeIndexKeyGen>(
-                    manifest.manifest(),
-                )?,
-                None => continue,
+            if self.index_types.read().get(identity).is_some() {
+                runtime.flush_generation(manifest.manifest())?;
             }
             manifest.manifest().store(
                 &manifest_dir.join(format!("{}-{}.bin", identity.space_id, identity.index_id)),

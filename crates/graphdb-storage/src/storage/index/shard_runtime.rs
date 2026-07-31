@@ -10,9 +10,7 @@ use crate::storage::index::chunk::serialize::{
     make_chunk_loader, make_chunk_writer, read_chunked_index_checkpoint_lazy,
     write_chunked_index_checkpoint,
 };
-use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
-use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::manifest::IndexManifest;
 use crate::storage::index::types::IndexRecord;
 use crate::storage::index::wal::{self, WalEntry};
@@ -95,40 +93,26 @@ impl ShardRuntime {
         self.base_reverse.store(Arc::new(idx));
     }
 
-    pub(crate) fn load_with_pool_capacity<K: IndexKeyGenerator>(
+    pub(crate) fn load_with_pool_capacity(
         checkpoint_file: PathBuf,
         pool_capacity: u64,
     ) -> StorageResult<Self> {
-        // Try chunk checkpoint format first
+        // Load chunk checkpoint format
         let fwd_dir = checkpoint_file.join("forward_chunks");
         let rev_dir = checkpoint_file.join("reverse_chunks");
-        let (fwd_index, rev_index) = if fwd_dir.join("chunk_index.bin").exists() {
-            let fwd = read_chunked_index_checkpoint_lazy(&fwd_dir, pool_capacity)?
-                .unwrap_or_else(|| ChunkedIndex::empty(vec![], pool_capacity));
-            let rev = read_chunked_index_checkpoint_lazy(&rev_dir, pool_capacity)?
-                .unwrap_or_else(|| ChunkedIndex::empty(vec![], pool_capacity));
-            // Install writer for dirty chunk write-back
-            fwd.set_writer(make_chunk_writer(fwd_dir.clone()));
-            rev.set_writer(make_chunk_writer(rev_dir.clone()));
-            (fwd, rev)
-        } else {
-            // Legacy fallback: forward_index.bin + reverse_index.bin
-            let (forward, reverse) = GenericIndexManager::<K>::load_data(&checkpoint_file)?;
-            let fwd = ChunkedIndex::from_btree(vec![], &forward, pool_capacity);
-            let rev = ChunkedIndex::from_btree(vec![], &reverse, pool_capacity);
-            // Install writer and loader for legacy path
-            fwd.set_loader(make_chunk_loader(fwd_dir.clone()));
-            fwd.set_writer(make_chunk_writer(fwd_dir));
-            rev.set_loader(make_chunk_loader(rev_dir.clone()));
-            rev.set_writer(make_chunk_writer(rev_dir));
-            (fwd, rev)
-        };
+        let fwd = read_chunked_index_checkpoint_lazy(&fwd_dir, pool_capacity)?
+            .unwrap_or_else(|| ChunkedIndex::empty(vec![], pool_capacity));
+        let rev = read_chunked_index_checkpoint_lazy(&rev_dir, pool_capacity)?
+            .unwrap_or_else(|| ChunkedIndex::empty(vec![], pool_capacity));
+        // Install writer for dirty chunk write-back
+        fwd.set_writer(make_chunk_writer(fwd_dir));
+        rev.set_writer(make_chunk_writer(rev_dir));
 
         let mut sr = Self {
             checkpoint_file,
             pool_capacity,
-            base_forward: ArcSwap::new(Arc::new(fwd_index)),
-            base_reverse: ArcSwap::new(Arc::new(rev_index)),
+            base_forward: ArcSwap::new(Arc::new(fwd)),
+            base_reverse: ArcSwap::new(Arc::new(rev)),
             delta_forward: ArcSwap::new(Arc::new(BTreeMap::new())),
             delta_reverse: ArcSwap::new(Arc::new(BTreeMap::new())),
             dirty: AtomicBool::new(false),
@@ -472,8 +456,8 @@ impl ShardRuntime {
     }
 
     /// Checkpoint: write full state to data files and clear WAL.
-    pub(crate) fn checkpoint<K: IndexKeyGenerator>(&self) -> StorageResult<()> {
-        self.full_flush::<K>()?;
+    pub(crate) fn checkpoint(&self) -> StorageResult<()> {
+        self.full_flush()?;
         self.wal_entries.lock().clear();
         self.wal_size_bytes.store(0, Ordering::Relaxed);
         wal::truncate_wal(&self.wal_file)?;
@@ -567,7 +551,7 @@ impl ShardRuntime {
 
     /// Flush to disk. If WAL size is below threshold, only appends WAL entries.
     /// Otherwise performs a full checkpoint.
-    pub(crate) fn flush<K: IndexKeyGenerator>(&self) -> StorageResult<()> {
+    pub(crate) fn flush(&self) -> StorageResult<()> {
         if !self.dirty.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -578,11 +562,11 @@ impl ShardRuntime {
             self.dirty.store(false, Ordering::Release);
             Ok(())
         } else {
-            self.checkpoint::<K>()
+            self.checkpoint()
         }
     }
 
-    fn full_flush<K: IndexKeyGenerator>(&self) -> StorageResult<()> {
+    fn full_flush(&self) -> StorageResult<()> {
         self.merge_delta_into_base();
 
         // Write forward chunks
@@ -774,14 +758,11 @@ impl GenerationRuntime {
         gen
     }
 
-    fn load_with_pool_capacity<K: IndexKeyGenerator>(
-        manifest: &IndexManifest,
-        pool_capacity: u64,
-    ) -> StorageResult<Self> {
+    fn load_with_pool_capacity(manifest: &IndexManifest, pool_capacity: u64) -> StorageResult<Self> {
         let mut shards = HashMap::new();
         for shard in &manifest.shards {
             let data = if shard.checkpoint_file.is_dir() {
-                Arc::new(ShardRuntime::load_with_pool_capacity::<K>(
+                Arc::new(ShardRuntime::load_with_pool_capacity(
                     shard.checkpoint_file.clone(),
                     pool_capacity,
                 )?)
@@ -880,14 +861,14 @@ impl IndexRuntime {
         }
     }
 
-    pub(crate) fn load_with_pool_capacity<K: IndexKeyGenerator>(
+    pub(crate) fn load_with_pool_capacity(
         manifest: &IndexManifest,
         pool_capacity: u64,
     ) -> StorageResult<Self> {
         Ok(Self {
             generations: ArcSwap::new(Arc::new(HashMap::from([(
                 manifest.generation,
-                Arc::new(GenerationRuntime::load_with_pool_capacity::<K>(
+                Arc::new(GenerationRuntime::load_with_pool_capacity(
                     manifest,
                     pool_capacity,
                 )?),
@@ -1025,10 +1006,7 @@ impl IndexRuntime {
         }
     }
 
-    pub(crate) fn flush_generation<K: IndexKeyGenerator>(
-        &self,
-        manifest: &IndexManifest,
-    ) -> StorageResult<()> {
+    pub(crate) fn flush_generation(&self, manifest: &IndexManifest) -> StorageResult<()> {
         let generation = self.generation(manifest.generation).ok_or_else(|| {
             StorageError::not_found(format!(
                 "Missing runtime generation {}",
@@ -1041,7 +1019,7 @@ impl IndexRuntime {
                 .ok_or_else(|| {
                     StorageError::not_found(format!("Missing runtime shard {}", shard.shard_id))
                 })?
-                .flush::<K>()?;
+                .flush()?;
         }
         Ok(())
     }

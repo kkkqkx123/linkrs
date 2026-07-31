@@ -73,10 +73,6 @@ pub struct VertexTable {
 }
 
 impl VertexTable {
-    pub fn new(label: LabelId, label_name: String, schema: VertexSchema) -> Self {
-        Self::with_config(label, label_name, schema, VertexTableConfig::default())
-    }
-
     pub fn with_config(
         label: LabelId,
         label_name: String,
@@ -484,20 +480,8 @@ impl VertexTable {
         records
     }
 
-    pub fn label(&self) -> LabelId {
-        self.label
-    }
-
-    pub fn label_name(&self) -> &str {
-        &self.label_name
-    }
-
     pub fn schema(&self) -> &VertexSchema {
         &self.schema
-    }
-
-    pub(crate) fn schema_mut(&mut self) -> &mut VertexSchema {
-        &mut self.schema
     }
 
     pub fn set_schema(&mut self, schema: VertexSchema) {
@@ -552,50 +536,6 @@ impl VertexTable {
         total += self.property_index_cache.len() * (24 + std::mem::size_of::<usize>()); // String overhead + usize
 
         total
-    }
-
-    /// Apply column encoding to in-memory data without flushing to disk.
-    ///
-    /// Encodes each column using `EncodingSelector` and applies the chosen
-    /// encoding in-place to reduce memory usage. This can be called before
-    /// the first flush (when data is still in raw format) or triggered by
-    /// `MemoryAccounting` under memory pressure.
-    ///
-    /// Columns with `EncodingType::None` (short columns, booleans, unknown types)
-    /// are skipped. Already-encoded columns are skipped. Call is idempotent.
-    pub fn compress_columns(&mut self) -> StorageResult<()> {
-        use crate::storage::encoding::EncodingType;
-
-        let selections = self
-            .columns
-            .columns()
-            .iter()
-            .map(|col| {
-                if col.encoding_type() != EncodingType::None {
-                    return (col.name.clone(), EncodingType::None);
-                }
-                let values = (0..col.len())
-                    .map(|row_idx| col.get(row_idx))
-                    .collect::<Vec<_>>();
-                (
-                    col.name.clone(),
-                    self.encoding_selector
-                        .select_for_column(&col.data_type, &values),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        for (name, encoding_type) in &selections {
-            if *encoding_type != EncodingType::None {
-                self.columns.apply_encoding_to_column(
-                    name,
-                    *encoding_type,
-                    self.encoding_selector.thresholds().fsst_max_symbols,
-                )?;
-            }
-        }
-
-        Ok(())
     }
 
     /// Verify internal consistency after compaction.

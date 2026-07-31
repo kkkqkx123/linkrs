@@ -63,6 +63,17 @@ impl CacheManager {
         }
     }
 
+    /// Halve the cache capacity under memory pressure, evicting cold entries.
+    pub fn shrink_cache(&self) {
+        if let Some(ref record_cache) = self.record_cache {
+            let stats = record_cache.stats();
+            let current = stats
+                .vertex_weighted_size
+                .saturating_add(stats.id_index_weighted_size);
+            record_cache.set_capacity(current / 2);
+        }
+    }
+
     // ==================== ID Index Cache Operations ====================
 
     pub fn get_cached_vertex_id(

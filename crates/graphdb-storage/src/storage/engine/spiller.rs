@@ -119,14 +119,23 @@ impl Spiller {
         let snapshot = self.accounting.snapshot();
         let cache_bytes = snapshot.categories[MemoryCategory::Cache as usize].current_bytes;
         if cache_bytes > 0 {
-            self.cache_manager.clear_cache();
-            self.active_spills.write().push(SpillFile {
-                path: self.spill_dir.join("cache_eviction.spill"),
-                category: MemoryCategory::Cache,
-                spilled_bytes: cache_bytes,
-            });
-            self.accounting.release(MemoryCategory::Cache, cache_bytes);
-            total_freed += cache_bytes;
+            // Shrink cache capacity to evict cold entries; BufferPool eviction
+            // reports freed bytes back to the accounting, so re-report the
+            // remaining usage for an accurate freed delta.
+            self.cache_manager.shrink_cache();
+            self.cache_manager.refresh_memory_usage();
+            let after = self.accounting.snapshot();
+            let freed = cache_bytes.saturating_sub(
+                after.categories[MemoryCategory::Cache as usize].current_bytes,
+            );
+            if freed > 0 {
+                self.active_spills.write().push(SpillFile {
+                    path: self.spill_dir.join("cache_eviction.spill"),
+                    category: MemoryCategory::Cache,
+                    spilled_bytes: freed,
+                });
+                total_freed += freed;
+            }
         }
 
         if total_freed > 0 {

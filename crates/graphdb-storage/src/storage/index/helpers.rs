@@ -3,7 +3,8 @@ use crate::core::types::IndexType;
 use crate::core::types::{Index, Timestamp};
 use crate::core::wal::{EntityRef, OutboxIntent};
 use crate::core::{StorageError, StorageResult, Value};
-use crate::storage::index::generic_index_manager::GenericIndexManager;
+use crate::storage::index::chunk::chunked_index::ChunkedIndex;
+use crate::storage::index::chunk::serialize::write_chunked_index_checkpoint;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::manifest::IndexManifest;
 use crate::storage::index::shard_runtime::{GenerationRuntime, IndexMaps};
@@ -123,7 +124,7 @@ fn entity_ref_from_intent(intent: &OutboxIntent) -> Option<EntityRef> {
     Some(intent.mutation.entity_ref.clone())
 }
 
-pub(crate) fn flush_split_generation<K: crate::storage::index::key_codec::IndexKeyGenerator>(
+pub(crate) fn flush_split_generation(
     manifest: &IndexManifest,
     runtime: &GenerationRuntime,
 ) -> StorageResult<()> {
@@ -132,7 +133,12 @@ pub(crate) fn flush_split_generation<K: crate::storage::index::key_codec::IndexK
             .shard(entry.shard_id)
             .ok_or_else(|| StorageError::not_found("Split generation shard is unavailable"))?;
         let (forward, reverse) = data.snapshot();
-        GenericIndexManager::<K>::flush_data(&entry.checkpoint_file, &forward, &reverse)?;
+        let fwd_dir = entry.checkpoint_file.join("forward_chunks");
+        let rev_dir = entry.checkpoint_file.join("reverse_chunks");
+        let fwd = ChunkedIndex::from_btree(vec![], &forward, data.pool_capacity);
+        let rev = ChunkedIndex::from_btree(vec![], &reverse, data.pool_capacity);
+        write_chunked_index_checkpoint(&fwd_dir, &fwd)?;
+        write_chunked_index_checkpoint(&rev_dir, &rev)?;
     }
     Ok(())
 }

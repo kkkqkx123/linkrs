@@ -126,13 +126,7 @@ impl GraphStorageContext {
             });
         }
 
-        let record = self.persistent.data_store.with_vertex_tables(
-            |vertex_tables| -> Option<VertexRecord> {
-                vertex_tables
-                    .get(&label)?
-                    .get_by_internal_id(internal_id, ts)
-            },
-        )?;
+        let record = self.read_record(label, internal_id, None, ts)?;
 
         self.persistent.cache_manager.cache_vertex(
             label,
@@ -143,6 +137,100 @@ impl GraphStorageContext {
         );
 
         Some(record)
+    }
+
+    /// Read a vertex record by internal ID, optionally restricted to a
+    /// property projection. Never consults or populates the full-record cache
+    /// (a projected read must not poison it with partial properties).
+    fn read_record(
+        &self,
+        label: LabelId,
+        internal_id: u32,
+        projection: Option<&[String]>,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        self.persistent.data_store.with_vertex_tables(
+            |vertex_tables| -> Option<VertexRecord> {
+                let table = vertex_tables.get(&label)?;
+                match projection {
+                    Some(proj) => {
+                        table.get_projected_by_internal_id(internal_id, ts, Some(proj))
+                    }
+                    None => table.get_by_internal_id(internal_id, ts),
+                }
+            },
+        )
+    }
+
+    /// Fetch a vertex restricted to the given property projection, skipping
+    /// the full-record cache so partial results never replace cached vertices.
+    pub fn get_vertex_projected(
+        &self,
+        label: LabelId,
+        external_id: &str,
+        projection: &[String],
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let internal_id = self
+            .persistent
+            .cache_manager
+            .get_cached_vertex_id(label, external_id, ts)
+            .or_else(|| {
+                let id = self
+                    .persistent
+                    .data_store
+                    .with_vertex_tables(|vertex_tables| {
+                        vertex_tables.get(&label)?.get_internal_id(external_id, ts)
+                    });
+                if let Some(id) = id {
+                    self.persistent
+                        .cache_manager
+                        .cache_vertex_id(label, external_id, id, ts);
+                }
+                id
+            })?;
+
+        self.read_record(label, internal_id, Some(projection), ts)
+    }
+
+    pub fn get_vertex_by_i64_projected(
+        &self,
+        label: LabelId,
+        external_id: i64,
+        projection: &[String],
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let external_id_str = external_id.to_string();
+        let internal_id = self
+            .persistent
+            .cache_manager
+            .get_cached_vertex_id(label, &external_id_str, ts)
+            .or_else(|| {
+                let id = self
+                    .persistent
+                    .data_store
+                    .with_vertex_tables(|vertex_tables| {
+                        vertex_tables
+                            .get(&label)?
+                            .get_internal_id_by_i64(external_id, ts)
+                    });
+                if let Some(id) = id {
+                    self.persistent
+                        .cache_manager
+                        .cache_vertex_id(label, &external_id_str, id, ts);
+                }
+                id
+            })?;
+
+        self.read_record(label, internal_id, Some(projection), ts)
     }
 
     pub fn get_vertex_by_i64(
