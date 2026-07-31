@@ -416,11 +416,6 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         self.db.storage.write()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn storage(&self) -> S {
-        self.db.storage.read().clone()
-    }
-
     /// Get current space name (for internal use)
     pub(crate) fn space_name(&self) -> Option<String> {
         self.space_name.read().clone()

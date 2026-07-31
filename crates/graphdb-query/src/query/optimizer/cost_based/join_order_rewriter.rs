@@ -634,7 +634,7 @@ mod tests {
     use crate::query::optimizer::cost::CostCalculator;
     use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
 
-    fn make_scan(id: &str, rows: u64) -> PlanNodeEnum {
+    fn make_scan(id: &str, _rows: u64) -> PlanNodeEnum {
         // Use a StartNode as a stand-in leaf for testing
         let mut node =
             crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
@@ -742,7 +742,7 @@ mod tests {
         let inner = make_hash_join(a.clone(), b, vec!["a.id"], vec!["b.id"]);
         // LeftJoin with an inner join on the left and a scan on the right
         let c = make_scan("c", 100);
-        let ctx = std::sync::Arc::new(
+        let _ctx = std::sync::Arc::new(
             crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
         use crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode;

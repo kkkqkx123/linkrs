@@ -950,13 +950,13 @@ mod tests {
         let tag1 = Tag::new(
             "person".to_string(),
             HashMap::from([
-                ("name".to_string(), Value::string("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::Int(30)),
             ]),
         );
         let tag2 = Tag::new(
             "employee".to_string(),
-            HashMap::from([("dept".to_string(), Value::string("Engineering".to_string()))]),
+            HashMap::from([("dept".to_string(), Value::string("Engineering"))]),
         );
         Vertex::new(VertexId::from_int64(1), vec![tag1, tag2])
     }
@@ -1014,7 +1014,7 @@ mod tests {
         let result = GraphFunction::EdgeType
             .execute(&[Value::Edge(Box::new(edge))])
             .expect("The type function execution should succeed");
-        assert_eq!(result, Value::string("knows".to_string()));
+        assert_eq!(result, Value::string("knows"));
     }
 
     #[test]

@@ -325,7 +325,7 @@ mod tests {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
             right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test".to_string(),
+                "test",
             ))),
         };
 
@@ -362,7 +362,7 @@ mod tests {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
             right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test".to_string(),
+                "test",
             ))),
         };
 
@@ -392,7 +392,7 @@ mod tests {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("category".to_string())),
             right: Box::new(Expression::Literal(crate::core::Value::string(
-                "A".to_string(),
+                "A",
             ))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -466,7 +466,7 @@ mod tests {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
             right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test".to_string(),
+                "test",
             ))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());

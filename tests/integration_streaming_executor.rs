@@ -18,7 +18,6 @@ use graphdb::query::executor::streaming::operators::source_operator::SourceOpera
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperator;
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperatorState;
 
-#[allow(dead_code)]
 fn unary_state() -> UnaryOperatorState {
     UnaryOperatorState { parameters: None }
 }

@@ -14,5 +14,4 @@ pub mod persistence;
 pub mod schema;
 pub mod sharded;
 
-pub use core::VertexTable;
 pub use sharded::ShardedVertexTable;

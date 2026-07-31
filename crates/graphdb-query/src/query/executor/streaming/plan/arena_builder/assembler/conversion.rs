@@ -91,7 +91,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Filter",
                 )
             }
             PlanNodeEnum::Project(project_node) => {
@@ -111,7 +110,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Project",
                 )
             }
             PlanNodeEnum::Limit(limit_node) => {
@@ -131,7 +129,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Limit",
                 )
             }
             PlanNodeEnum::Sample(sample_node) => {
@@ -151,7 +148,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Sample",
                 )
             }
             PlanNodeEnum::Remove(remove_node) => {
@@ -171,7 +167,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Remove",
                 )
             }
             PlanNodeEnum::Assign(assign_node) => {
@@ -191,7 +186,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Assign",
                 )
             }
             PlanNodeEnum::Unwind(unwind_node) => {
@@ -211,7 +205,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Unwind",
                 )
             }
 
@@ -235,7 +228,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Sort",
                     PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD),
                 )
             }
@@ -258,7 +250,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "Aggregate",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -280,7 +271,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     BlockingSpec::Distinct,
-                    "Distinct",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -303,7 +293,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "TopN",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -326,7 +315,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     spec,
-                    "WindowFunction",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -348,7 +336,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     BlockingSpec::DataCollect,
-                    "DataCollect",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -370,7 +357,6 @@ impl ArenaPlanAssembler {
                     child_fid,
                     node.id(),
                     BlockingSpec::Materialize,
-                    "Materialize",
                     PhysicalProperties::single_blocking_with_budget(),
                 )
             }
@@ -603,7 +589,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "InnerJoin",
                 )
             }
             PlanNodeEnum::HashInnerJoin(join_node) => {
@@ -635,7 +620,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "InnerJoin",
                 )
             }
             PlanNodeEnum::LeftJoin(join_node) => {
@@ -667,7 +651,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "LeftJoin",
                 )
             }
             PlanNodeEnum::HashLeftJoin(join_node) => {
@@ -699,7 +682,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "LeftJoin",
                 )
             }
             PlanNodeEnum::CrossJoin(join_node) => {
@@ -730,7 +712,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     JoinSpec::CrossJoin,
-                    "CrossJoin",
                 )
             }
             PlanNodeEnum::RightJoin(join_node) => {
@@ -762,7 +743,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "RightJoin",
                 )
             }
             PlanNodeEnum::FullOuterJoin(join_node) => {
@@ -794,7 +774,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "FullOuterJoin",
                 )
             }
             PlanNodeEnum::SemiJoin(join_node) => {
@@ -826,7 +805,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "SemiJoin",
                 )
             }
 
@@ -859,7 +837,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     SetSpec::Union,
-                    "Union",
                 )
             }
             PlanNodeEnum::Minus(minus_node) => {
@@ -890,7 +867,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     SetSpec::Minus,
-                    "Minus",
                 )
             }
             PlanNodeEnum::Intersect(intersect_node) => {
@@ -921,7 +897,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     SetSpec::Intersect,
-                    "Intersect",
                 )
             }
             PlanNodeEnum::PatternApply(pa_node) => {
@@ -953,7 +928,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "PatternApply",
                 )
             }
             PlanNodeEnum::RollUpApply(rua_node) => {
@@ -985,7 +959,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "RollUpApply",
                 )
             }
             PlanNodeEnum::Apply(apply_node) => {
@@ -1017,7 +990,6 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                    "Apply",
                 )
             }
 

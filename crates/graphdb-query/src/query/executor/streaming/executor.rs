@@ -789,9 +789,11 @@ impl Spillable for StreamingExecutor {
 }
 
 #[cfg(test)]
-#[allow(unused_imports)]
 mod tests {
-    use super::*;
+    use super::{
+        BlockingOperator, ExecutionRuntime, OperatorBase, OperatorProfileKey, SetOperator,
+        SortDirection, SourceOperator, StreamingExecutor, UnaryOperator,
+    };
     use crate::core::Value;
 
     fn create_test_buffer() -> Vec<Vec<Value>> {
@@ -892,25 +894,25 @@ mod tests {
         let buffer: Vec<Vec<Value>> = vec![
             vec![
                 Value::BigInt(1),
-                Value::string("a".to_string()),
-                Value::string("b".to_string()),
-                Value::string("c".to_string()),
-                Value::string("d".to_string()),
-                Value::string("e".to_string()),
-                Value::string("f".to_string()),
-                Value::string("g".to_string()),
-                Value::string("h".to_string()),
+                Value::string("a"),
+                Value::string("b"),
+                Value::string("c"),
+                Value::string("d"),
+                Value::string("e"),
+                Value::string("f"),
+                Value::string("g"),
+                Value::string("h"),
             ],
             vec![
                 Value::BigInt(2),
-                Value::string("i".to_string()),
-                Value::string("j".to_string()),
-                Value::string("k".to_string()),
-                Value::string("l".to_string()),
-                Value::string("m".to_string()),
-                Value::string("n".to_string()),
-                Value::string("o".to_string()),
-                Value::string("p".to_string()),
+                Value::string("i"),
+                Value::string("j"),
+                Value::string("k"),
+                Value::string("l"),
+                Value::string("m"),
+                Value::string("n"),
+                Value::string("o"),
+                Value::string("p"),
             ],
         ];
 

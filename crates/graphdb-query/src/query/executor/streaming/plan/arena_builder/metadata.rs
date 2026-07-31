@@ -8,11 +8,10 @@ use super::super::super::operators::spec::{
     RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::super::slot::{combine_layouts, SlotLayout};
-use super::super::properties::{PhysicalProperties, PipelineKind, SPILL_DEFAULT_THRESHOLD};
+use super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::types::{
-    CapabilitySet, FragmentInput, FragmentKind, FragmentSpec, InputContract, OperatorKindSpec,
-    OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec,
-    StateOwnership,
+    CapabilitySet, FragmentInput, FragmentSpec, InputContract, OperatorKindSpec, OutputContract,
+    PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec, StateOwnership,
 };
 use crate::query::executor::build_error::PlanBuildError;
 
@@ -471,7 +470,6 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
     match spec {
         SourceSpec::Start => "Start",
@@ -490,7 +488,6 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
     match spec {
         UnarySpec::Filter { .. } => "Filter",
@@ -504,7 +501,6 @@ pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
     match spec {
         BlockingSpec::Sort { .. } => "Sort",
@@ -522,7 +518,6 @@ pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
     match spec {
         JoinSpec::InnerJoin { .. } => "InnerJoin",
@@ -537,7 +532,6 @@ pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
     match spec {
         GraphSpec::Expand { .. } => "Expand",
@@ -552,7 +546,6 @@ pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &'static str {
     match spec {
         RecursiveFragmentSpec::ShortestPath { .. } => "RecursiveShortestPath",
@@ -562,7 +555,6 @@ pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
     match spec {
         SinkSpec::InsertVertices { .. } => "InsertVertices",
@@ -577,7 +569,6 @@ pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn set_explain_name(spec: &SetSpec) -> &'static str {
     match spec {
         SetSpec::Union => "Union",
@@ -588,7 +579,6 @@ pub(super) fn set_explain_name(spec: &SetSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn apply_explain_name(spec: &ApplySpec) -> &'static str {
     match spec {
         ApplySpec::Apply { .. } => "Apply",
@@ -597,19 +587,6 @@ pub(super) fn apply_explain_name(spec: &ApplySpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn exchange_explain_name(spec: &ExchangeSpec) -> &'static str {
-    match spec {
-        ExchangeSpec::Concatenate { .. } => "Concatenate",
-        ExchangeSpec::MergeSort { .. } => "MergeSort",
-        ExchangeSpec::RepartitionHash { .. } => "RepartitionHash",
-        ExchangeSpec::Broadcast { .. } => "Broadcast",
-        ExchangeSpec::Barrier => "Barrier",
-        ExchangeSpec::Materialize { .. } => "Materialize",
-    }
-}
-
-#[allow(dead_code)]
 pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
     match spec {
         DdlSpec::SpaceManage { .. } => "SpaceManage",
@@ -624,7 +601,6 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn fulltext_explain_name(spec: &FulltextSpec) -> &'static str {
     match spec {
         FulltextSpec::FulltextManage { .. } => "FulltextManage",
@@ -634,7 +610,6 @@ pub(super) fn fulltext_explain_name(spec: &FulltextSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn vector_explain_name(spec: &VectorSpec) -> &'static str {
     match spec {
         VectorSpec::VectorManage { .. } => "VectorManage",
@@ -644,7 +619,6 @@ pub(super) fn vector_explain_name(spec: &VectorSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
     match spec {
         TxnSpec::BeginTransaction => "BeginTransaction",
@@ -653,13 +627,3 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn fragment_kind_for_spec(
-    _spec: &SourceSpec,
-    props: &PhysicalProperties,
-) -> FragmentKind {
-    match props.pipeline_kind {
-        PipelineKind::Blocking => FragmentKind::Blocking,
-        _ => FragmentKind::Source,
-    }
-}

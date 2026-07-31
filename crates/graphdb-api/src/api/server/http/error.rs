@@ -91,6 +91,24 @@ impl HttpError {
     }
 }
 
+impl From<crate::api::core::CoreError> for HttpError {
+    fn from(err: crate::api::core::CoreError) -> Self {
+        use crate::api::core::CoreError;
+        match err {
+            CoreError::NotFound(msg) => HttpError::NotFound(msg),
+            CoreError::InvalidParameter(msg) => HttpError::BadRequest(msg),
+            CoreError::QueryExecutionFailed(msg) => HttpError::InternalError(msg),
+            CoreError::TransactionFailed(msg) => HttpError::transaction_message(msg),
+            CoreError::SchemaOperationFailed(msg) => HttpError::InternalError(msg),
+            CoreError::StorageError(msg) => HttpError::InternalError(msg),
+            CoreError::Internal(msg) => HttpError::InternalError(msg),
+            CoreError::DetailedQueryError { message, .. } => HttpError::InternalError(message),
+            CoreError::SyncError(msg) => HttpError::InternalError(msg),
+            CoreError::VectorError(msg) => HttpError::InternalError(msg),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::HttpError;
@@ -109,23 +127,5 @@ mod tests {
             HttpError::transaction_message("Failed to commit: [transaction_timeout]"),
             HttpError::BadRequest(_)
         ));
-    }
-}
-
-impl From<crate::api::core::CoreError> for HttpError {
-    fn from(err: crate::api::core::CoreError) -> Self {
-        use crate::api::core::CoreError;
-        match err {
-            CoreError::NotFound(msg) => HttpError::NotFound(msg),
-            CoreError::InvalidParameter(msg) => HttpError::BadRequest(msg),
-            CoreError::QueryExecutionFailed(msg) => HttpError::InternalError(msg),
-            CoreError::TransactionFailed(msg) => HttpError::transaction_message(msg),
-            CoreError::SchemaOperationFailed(msg) => HttpError::InternalError(msg),
-            CoreError::StorageError(msg) => HttpError::InternalError(msg),
-            CoreError::Internal(msg) => HttpError::InternalError(msg),
-            CoreError::DetailedQueryError { message, .. } => HttpError::InternalError(message),
-            CoreError::SyncError(msg) => HttpError::InternalError(msg),
-            CoreError::VectorError(msg) => HttpError::InternalError(msg),
-        }
     }
 }

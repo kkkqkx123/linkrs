@@ -90,8 +90,8 @@ mod tests {
     #[test]
     fn test_single_chunk() {
         let rows = vec![
-            vec![Value::Int(1), Value::string("a".to_string())],
-            vec![Value::Int(2), Value::string("b".to_string())],
+            vec![Value::Int(1), Value::string("a")],
+            vec![Value::Int(2), Value::string("b")],
         ];
         let chunk = create_test_chunk(rows);
         let result = convert_chunks_to_dataset(vec![chunk], None);
@@ -104,12 +104,12 @@ mod tests {
     #[test]
     fn test_multiple_chunks() {
         let chunk1 = create_test_chunk(vec![
-            vec![Value::Int(1), Value::string("a".to_string())],
-            vec![Value::Int(2), Value::string("b".to_string())],
+            vec![Value::Int(1), Value::string("a")],
+            vec![Value::Int(2), Value::string("b")],
         ]);
         let chunk2 = create_test_chunk(vec![
-            vec![Value::Int(3), Value::string("c".to_string())],
-            vec![Value::Int(4), Value::string("d".to_string())],
+            vec![Value::Int(3), Value::string("c")],
+            vec![Value::Int(4), Value::string("d")],
         ]);
 
         let result = convert_chunks_to_dataset(vec![chunk1, chunk2], None);
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_custom_col_names() {
-        let rows = vec![vec![Value::Int(1), Value::string("test".to_string())]];
+        let rows = vec![vec![Value::Int(1), Value::string("test")]];
         let chunk = create_test_chunk(rows);
         let col_names = vec!["id".to_string(), "name".to_string()];
         let result = convert_chunks_to_dataset(vec![chunk], Some(col_names.clone()));

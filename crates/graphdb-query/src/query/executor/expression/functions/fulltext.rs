@@ -545,12 +545,12 @@ mod tests {
         let mut source = HashMap::new();
         source.insert(
             "title".to_string(),
-            Value::string("Database Optimization".to_string()),
+            Value::string("Database Optimization"),
         );
         source.insert(
             "content".to_string(),
             Value::string(
-                "This is a test article about database optimization techniques.".to_string(),
+                "This is a test article about database optimization techniques.",
             ),
         );
 
@@ -586,7 +586,7 @@ mod tests {
         let context = create_test_context();
 
         let result = func
-            .execute(&[Value::string("content".to_string())], &context)
+            .execute(&[Value::string("content")], &context)
             .unwrap();
 
         assert!(matches!(result, Value::String(_)));
@@ -606,8 +606,8 @@ mod tests {
 
         if let Value::List(fields) = result {
             assert_eq!(fields.len(), 2);
-            assert!(fields.contains(&Value::string("title".to_string())));
-            assert!(fields.contains(&Value::string("content".to_string())));
+            assert!(fields.contains(&Value::string("title")));
+            assert!(fields.contains(&Value::string("content")));
         }
     }
 
@@ -618,7 +618,7 @@ mod tests {
 
         let result = func
             .execute(
-                &[Value::string("content".to_string()), Value::Int(50)],
+                &[Value::string("content"), Value::Int(50)],
                 &context,
             )
             .unwrap();

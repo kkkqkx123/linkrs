@@ -706,7 +706,7 @@ mod tests {
     fn test_hash() {
         let func = UtilityFunction::Hash;
         let result = func
-            .execute(&[Value::string("test".to_string())])
+            .execute(&[Value::string("test")])
             .expect("Execution should succeed");
         assert!(matches!(result, Value::BigInt(_)));
     }
@@ -731,25 +731,25 @@ mod tests {
     fn test_typeof() {
         assert_eq!(
             UtilityFunction::TypeOf.execute(&[Value::Int(1)]).unwrap(),
-            Value::string("int".to_string())
+            Value::string("int")
         );
         assert_eq!(
             UtilityFunction::TypeOf
-                .execute(&[Value::string("hello".to_string())])
+                .execute(&[Value::string("hello")])
                 .unwrap(),
-            Value::string("string".to_string())
+            Value::string("string")
         );
         assert_eq!(
             UtilityFunction::TypeOf
                 .execute(&[Value::Bool(true)])
                 .unwrap(),
-            Value::string("bool".to_string())
+            Value::string("bool")
         );
         assert_eq!(
             UtilityFunction::TypeOf
                 .execute(&[Value::Null(NullType::Null)])
                 .unwrap(),
-            Value::string("null".to_string())
+            Value::string("null")
         );
     }
 

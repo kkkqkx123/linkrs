@@ -852,8 +852,8 @@ mod tests {
     #[test]
     fn test_data_chunk_creation() {
         let rows = vec![vec![
-            Value::string("a".to_string()),
-            Value::string("b".to_string()),
+            Value::string("a"),
+            Value::string("b"),
         ]];
         let chunk = DataChunk::from_rows(rows);
         assert_eq!(chunk.len(), 1);
@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn test_data_chunk_type_inference() {
-        let rows = vec![vec![Value::BigInt(42), Value::string("hello".to_string())]];
+        let rows = vec![vec![Value::BigInt(42), Value::string("hello")]];
         let chunk = DataChunk::from_rows(rows);
         assert_eq!(chunk.schema.columns[0].data_type, "bigint");
         assert_eq!(chunk.schema.columns[1].data_type, "string");

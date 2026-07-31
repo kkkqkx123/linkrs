@@ -245,8 +245,8 @@ mod tests {
     use super::*;
     use crate::core::{DataType, Value};
     use crate::storage::types::StoragePropertyDef;
-    use crate::storage::vertex::vertex_table::core::VertexTableConfig;
-    use crate::storage::vertex::{VertexSchema, VertexTable};
+    use crate::storage::vertex::vertex_table::core::{VertexTable, VertexTableConfig};
+    use crate::storage::vertex::VertexSchema;
 
     fn create_test_schema() -> VertexSchema {
         VertexSchema {

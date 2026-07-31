@@ -45,14 +45,14 @@ fn test_null_handling() {
 #[test]
 fn test_st_linestring() {
     let wkt = "LINESTRING(116.4 39.9, 121.5 31.2)";
-    let result = execute_st_geogfromtext(&[Value::string(wkt.to_string())]).unwrap();
+    let result = execute_st_geogfromtext(&[Value::string(wkt)]).unwrap();
     assert!(matches!(result, Value::Geography(Geography::LineString(_))));
 }
 
 #[test]
 fn test_st_polygon() {
     let wkt = "POLYGON((116.0 40.0, 117.0 40.0, 117.0 39.0, 116.0 39.0, 116.0 40.0))";
-    let result = execute_st_geogfromtext(&[Value::string(wkt.to_string())]).unwrap();
+    let result = execute_st_geogfromtext(&[Value::string(wkt)]).unwrap();
     assert!(matches!(result, Value::Geography(Geography::Polygon(_))));
 }
 
@@ -100,14 +100,14 @@ fn test_st_contains() {
 fn test_st_geometrytype() {
     let point = Geography::Point(GeographyValue::new(39.9, 116.4));
     let result = execute_st_geometrytype(&[Value::Geography(point)]).unwrap();
-    assert_eq!(result, Value::string("Point".to_string()));
+    assert_eq!(result, Value::string("Point"));
 
     let ls = Geography::LineString(LineStringValue::new(vec![
         GeographyValue::new(39.9, 116.4),
         GeographyValue::new(31.2, 121.5),
     ]));
     let result = execute_st_geometrytype(&[Value::Geography(ls)]).unwrap();
-    assert_eq!(result, Value::string("LineString".to_string()));
+    assert_eq!(result, Value::string("LineString"));
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn test_st_asgeojson() {
 #[test]
 fn test_st_geomfromgeojson() {
     let json = r#"{"type":"Point","coordinates":[116.4,39.9]}"#;
-    let result = execute_st_geomfromgeojson(&[Value::string(json.to_string())]).unwrap();
+    let result = execute_st_geomfromgeojson(&[Value::string(json)]).unwrap();
     assert!(matches!(result, Value::Geography(Geography::Point(_))));
 }
 

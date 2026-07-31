@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_add_vertex_label_not_found() {
-        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
+        let vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
 
         let vid = VertexId::from_int64(1);
         let result = TransactionOps::add_vertex(&vertex_tables, 99, vid, &[], 1);

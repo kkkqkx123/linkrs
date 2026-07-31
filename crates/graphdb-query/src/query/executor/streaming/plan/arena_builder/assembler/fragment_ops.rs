@@ -65,9 +65,9 @@ impl ArenaPlanAssembler {
         child_fid: FragmentId,
         node_id: i64,
         spec: UnarySpec,
-        explain_name: &'static str,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
+        let explain_name = super::super::metadata::unary_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -93,10 +93,10 @@ impl ArenaPlanAssembler {
         child_fid: FragmentId,
         node_id: i64,
         spec: BlockingSpec,
-        explain_name: &'static str,
         properties: PhysicalProperties,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = ctx.op_alloc.allocate();
+        let explain_name = super::super::metadata::blocking_explain_name(&spec);
         ctx.operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -129,6 +129,7 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::graph_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -139,7 +140,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "Graph",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -164,6 +165,7 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::recursive_fragment_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -174,7 +176,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "RecursiveFragment",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -195,11 +197,16 @@ impl ArenaPlanAssembler {
         right_fid: FragmentId,
         node_id: i64,
         spec: impl Into<BinaryOperatorSpec>,
-        explain_name: &'static str,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = ctx.op_alloc.allocate();
         let fid = frag_alloc.allocate();
-        let (op_spec, fragment_kind) = spec.into().into_parts();
+        let binary_spec: BinaryOperatorSpec = spec.into();
+        let explain_name = match &binary_spec {
+            BinaryOperatorSpec::Join(spec) => super::super::metadata::join_explain_name(spec),
+            BinaryOperatorSpec::Set(spec) => super::super::metadata::set_explain_name(spec),
+            BinaryOperatorSpec::Apply(spec) => super::super::metadata::apply_explain_name(spec),
+        };
+        let (op_spec, fragment_kind) = binary_spec.into_parts();
         ctx.operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -235,6 +242,7 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::sink_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -245,7 +253,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "Sink",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -277,6 +285,7 @@ impl ArenaPlanAssembler {
         );
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::ddl_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -287,7 +296,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "DDL",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -312,6 +321,7 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::fulltext_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -322,7 +332,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "Fulltext",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -347,6 +357,7 @@ impl ArenaPlanAssembler {
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::vector_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -357,7 +368,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "Vector",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,
@@ -389,6 +400,7 @@ impl ArenaPlanAssembler {
         );
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::txn_explain_name(&spec);
         operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
@@ -399,7 +411,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
-            explain_name: "Txn",
+            explain_name,
         });
         fragments.push(FragmentSpec {
             id: fid,

@@ -118,7 +118,7 @@ mod tests {
 
         // Verify row structure: src, dst, edge_type, ranking, + at least 1 property
         assert!(row.len() >= 5);
-        assert_eq!(row[2], Value::string("follows".to_string()));
+        assert_eq!(row[2], Value::string("follows"));
         assert_eq!(row[3], Value::BigInt(42));
     }
 

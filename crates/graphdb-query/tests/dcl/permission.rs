@@ -13,13 +13,6 @@ fn new_scenario() -> TestScenario {
     TestScenario::new().expect("Failed to create test scenario")
 }
 
-#[allow(dead_code)]
-fn with_space(scenario: TestScenario, space: &str) -> TestScenario {
-    scenario
-        .exec_dcl(&format!("CREATE SPACE {} WITH DIMENSION=128", space))
-        .assert_success()
-}
-
 // ==================== GRANT Parser Tests ====================
 
 #[test]

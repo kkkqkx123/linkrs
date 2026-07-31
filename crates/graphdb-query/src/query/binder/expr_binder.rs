@@ -9,7 +9,6 @@
 
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::semantic::ValueType;
 use crate::core::DataType;
 use crate::query::binder::scope::BinderScope;
 
@@ -233,10 +232,4 @@ impl<'a> ExpressionBinder<'a> {
             AggregateFunction::VecAvg(_) => DataType::Vector,
         }
     }
-}
-
-/// Convert ValueType to DataType for use in expression binding.
-#[allow(dead_code)]
-pub(crate) fn value_type_to_data_type(vt: &ValueType) -> DataType {
-    vt.to_data_type()
 }

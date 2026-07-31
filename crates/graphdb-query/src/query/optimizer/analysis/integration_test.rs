@@ -263,7 +263,7 @@ fn test_expression_analyzer_with_case_expression() {
                     op: crate::core::types::BinaryOperator::GreaterThan,
                     right: Box::new(Expression::Literal(Value::Int(10))),
                 },
-                Expression::Literal(Value::string("large".to_string())),
+                Expression::Literal(Value::string("large")),
             ),
             (
                 Expression::Binary {
@@ -271,11 +271,11 @@ fn test_expression_analyzer_with_case_expression() {
                     op: crate::core::types::BinaryOperator::GreaterThan,
                     right: Box::new(Expression::Literal(Value::Int(5))),
                 },
-                Expression::Literal(Value::string("medium".to_string())),
+                Expression::Literal(Value::string("medium")),
             ),
         ],
         default: Some(Box::new(Expression::Literal(Value::string(
-            "small".to_string(),
+            "small",
         )))),
     };
 
@@ -383,7 +383,7 @@ fn test_expression_analyzer_with_map_expression() {
         ("key1".to_string(), Expression::Literal(Value::Int(1))),
         (
             "key2".to_string(),
-            Expression::Literal(Value::string("value".to_string())),
+            Expression::Literal(Value::string("value")),
         ),
     ]);
 
@@ -400,7 +400,7 @@ fn test_expression_analyzer_with_type_cast() {
 
     // Type conversion expressions
     let cast_expr = Expression::TypeCast {
-        expression: Box::new(Expression::Literal(Value::string("123".to_string()))),
+        expression: Box::new(Expression::Literal(Value::string("123"))),
         target_type: crate::core::types::DataType::Int,
     };
 

@@ -106,14 +106,14 @@ mod tests {
         let result = func
             .execute(&[Value::Int(42)])
             .expect("Implementation should not fail");
-        assert_eq!(result, Value::string("42".to_string()));
+        assert_eq!(result, Value::string("42"));
     }
 
     #[test]
     fn test_to_int() {
         let func = ConversionFunction::ToInt;
         let result = func
-            .execute(&[Value::string("42".to_string())])
+            .execute(&[Value::string("42")])
             .expect("Implementation should not fail");
         assert_eq!(result, Value::Int(42));
     }

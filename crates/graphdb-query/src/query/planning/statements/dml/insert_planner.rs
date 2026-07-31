@@ -260,7 +260,7 @@ mod tests {
             values: vec![VertexRow {
                 vid: lit(Value::Int(1)),
                 tag_values: vec![vec![
-                    lit(Value::string("Alice".to_string())),
+                    lit(Value::string("Alice")),
                     lit(Value::Int(30)),
                 ]],
             }],
@@ -337,7 +337,7 @@ mod tests {
                 vec![VertexRow {
                     vid: lit(Value::Int(1)),
                     tag_values: vec![vec![
-                        lit(Value::string("Alice".to_string())),
+                        lit(Value::string("Alice")),
                         lit(Value::Int(30)),
                     ]],
                 }],
@@ -362,7 +362,7 @@ mod tests {
                 lit(Value::Int(1)),
                 lit(Value::Int(2)),
                 Some(lit(Value::Int(0))),
-                vec![lit(Value::string("2023".to_string()))],
+                vec![lit(Value::string("2023"))],
             )],
             false,
         );
@@ -393,11 +393,11 @@ mod tests {
             values: vec![
                 VertexRow {
                     vid: lit(Value::Int(1)),
-                    tag_values: vec![vec![lit(Value::string("Alice".to_string()))]],
+                    tag_values: vec![vec![lit(Value::string("Alice"))]],
                 },
                 VertexRow {
                     vid: lit(Value::Int(2)),
-                    tag_values: vec![vec![lit(Value::string("Bob".to_string()))]],
+                    tag_values: vec![vec![lit(Value::string("Bob"))]],
                 },
             ],
         };
@@ -424,7 +424,7 @@ mod tests {
                 lit(Value::Int(1)),
                 lit(Value::Int(2)),
                 Some(lit(Value::Int(0))),
-                vec![lit(Value::string("2023".to_string()))],
+                vec![lit(Value::string("2023"))],
             )],
         };
         let ast = create_test_stmt_with_insert(target);

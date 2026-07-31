@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_size_string() {
         let result = ContainerFunction::Size
-            .execute(&[Value::string("hello".to_string())])
+            .execute(&[Value::string("hello")])
             .expect("size function should succeed");
         assert_eq!(result, Value::Int(5));
     }

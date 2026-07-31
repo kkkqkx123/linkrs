@@ -150,7 +150,7 @@ mod tests {
         let context = SeekStrategyContext::new(
             1,
             NodePattern {
-                vid: Some(Value::string("test_vid".to_string())),
+                vid: Some(Value::string("test_vid")),
                 labels: vec![],
                 properties: vec![],
             },
