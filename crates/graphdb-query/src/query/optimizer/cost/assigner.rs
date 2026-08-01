@@ -6,15 +6,16 @@
 //!
 //! ```rust
 //! use graphdb::query::optimizer::cost::CostAssigner;
-//! use graphdb::query::optimizer::stats::StatisticsManager;
+//! use graphdb::query::optimizer::stats::{StatisticsManager, StatsView};
 //! use graphdb::query::planner::plan::ExecutionPlan;
 //! use std::sync::Arc;
 //!
 //! let stats_manager = Arc::new(StatisticsManager::new());
 //! let assigner = CostAssigner::new(stats_manager);
+//! let stats = assigner.cost_calculator().stats_view(Some("my_space"));
 //!
 // Calculate the cost of the execution plan (only for optimization decisions)
-//! // let total_cost = assigner.assign_costs(&mut plan)?;
+//! // let total_cost = assigner.assign_costs(&stats, &mut plan)?;
 //! ```
 //!
 //! ## Architecture Description
@@ -26,7 +27,7 @@
 use std::sync::Arc;
 
 use crate::query::optimizer::error::CostResult;
-use crate::query::optimizer::stats::StatisticsManager;
+use crate::query::optimizer::stats::{StatisticsManager, StatsView};
 use crate::query::planning::plan::{ExecutionPlan, PlanNodeEnum};
 
 use super::{
@@ -86,10 +87,10 @@ impl CostAssigner {
     /// Assign a cost to the entire execution plan.
     ///
     /// This will recursively traverse the planning tree, calculating and setting the cost for each node.
-    pub fn assign_costs(&self, plan: &mut ExecutionPlan) -> CostResult<f64> {
+    pub fn assign_costs(&self, stats: &StatsView, plan: &mut ExecutionPlan) -> CostResult<f64> {
         match plan.root_mut() {
             Some(root) => {
-                let estimate = self.assign_node_costs_recursive(root)?;
+                let estimate = self.assign_node_costs_recursive(stats, root)?;
                 Ok(estimate.total_cost)
             }
             None => Ok(0.0),
@@ -101,10 +102,11 @@ impl CostAssigner {
     /// The cost and number of rows estimates for returning to the root node
     pub fn assign_costs_with_estimate(
         &self,
+        stats: &StatsView,
         plan: &mut ExecutionPlan,
     ) -> CostResult<NodeCostEstimate> {
         match plan.root_mut() {
-            Some(root) => self.assign_node_costs_recursive(root),
+            Some(root) => self.assign_node_costs_recursive(stats, root),
             None => Ok(NodeCostEstimate::new(0.0, 0.0, 0)),
         }
     }
@@ -113,12 +115,16 @@ impl CostAssigner {
     ///
     /// Use post-order traversal: First, calculate the cost of the child nodes, and then calculate the cost of the current node.
     /// Return the estimation results that include the cost and the number of rows.
-    fn assign_node_costs_recursive(&self, node: &mut PlanNodeEnum) -> CostResult<NodeCostEstimate> {
+    fn assign_node_costs_recursive(
+        &self,
+        stats: &StatsView,
+        node: &mut PlanNodeEnum,
+    ) -> CostResult<NodeCostEstimate> {
         // 1. First, recursively calculate the cost and the number of rows of the child nodes (using the post-order traversal method).
-        let child_estimates = self.calculate_child_estimates(node)?;
+        let child_estimates = self.calculate_child_estimates(stats, node)?;
 
         // 2. Calculate the own cost and the number of output rows based on the node type.
-        let estimate = self.calculate_node_estimate(node, &child_estimates)?;
+        let estimate = self.calculate_node_estimate(stats, node, &child_estimates)?;
 
         Ok(estimate)
     }
@@ -126,6 +132,7 @@ impl CostAssigner {
     /// Calculate the cost of child nodes and estimate the number of rows.
     fn calculate_child_estimates(
         &self,
+        stats: &StatsView,
         node: &mut PlanNodeEnum,
     ) -> CostResult<Vec<NodeCostEstimate>> {
         let mut estimates = Vec::new();
@@ -133,7 +140,7 @@ impl CostAssigner {
 
         for i in 0..child_count {
             if let Some(child) = node.get_child_mut(i) {
-                let estimate = self.assign_node_costs_recursive(child)?;
+                let estimate = self.assign_node_costs_recursive(stats, child)?;
                 estimates.push(estimate);
             }
         }
@@ -144,6 +151,7 @@ impl CostAssigner {
     /// Estimation of the cost of computing nodes and the number of output rows
     fn calculate_node_estimate(
         &self,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> CostResult<NodeCostEstimate> {
@@ -151,7 +159,7 @@ impl CostAssigner {
         let child_total_cost: f64 = child_estimates.iter().map(|e| e.total_cost).sum();
 
         // Select the appropriate estimator based on the node type.
-        let (node_cost, output_rows) = self.estimate_by_node_type(node, child_estimates)?;
+        let (node_cost, output_rows) = self.estimate_by_node_type(stats, node, child_estimates)?;
 
         let total_cost = node_cost + child_total_cost;
         Ok(NodeCostEstimate::new(node_cost, total_cost, output_rows))
@@ -160,6 +168,7 @@ impl CostAssigner {
     /// Select an estimator based on the node type to perform the estimation.
     fn estimate_by_node_type(
         &self,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> CostResult<(f64, u64)> {
@@ -170,7 +179,7 @@ impl CostAssigner {
             | PlanNodeEnum::IndexScan(_)
             | PlanNodeEnum::EdgeIndexScan(_) => {
                 let estimator = ScanEstimator::new(&self.cost_calculator);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Image traversal operations
@@ -182,7 +191,7 @@ impl CostAssigner {
             | PlanNodeEnum::GetVertices(_)
             | PlanNodeEnum::GetEdges(_) => {
                 let estimator = GraphTraversalEstimator::new(&self.cost_calculator);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Connection operation
@@ -193,7 +202,7 @@ impl CostAssigner {
             | PlanNodeEnum::CrossJoin(_)
             | PlanNodeEnum::FullOuterJoin(_) => {
                 let estimator = JoinEstimator::new(&self.cost_calculator);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Sorting and filtering operations
@@ -204,7 +213,7 @@ impl CostAssigner {
             | PlanNodeEnum::Dedup(_)
             | PlanNodeEnum::Sample(_) => {
                 let estimator = SortLimitEstimator::new(&self.cost_calculator);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Set operations: No need for optimization decisions; a conservative estimate is returned.
@@ -219,7 +228,7 @@ impl CostAssigner {
             | PlanNodeEnum::PassThrough(_)
             | PlanNodeEnum::Argument(_) => {
                 let estimator = ControlFlowEstimator::new(&self.cost_calculator, self.config);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Graph algorithms
@@ -228,7 +237,7 @@ impl CostAssigner {
             | PlanNodeEnum::MultiShortestPath(_)
             | PlanNodeEnum::BFSShortest(_) => {
                 let estimator = GraphAlgorithmEstimator::new(&self.cost_calculator);
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Data processing
@@ -242,7 +251,7 @@ impl CostAssigner {
                     &self.selectivity_estimator,
                     self.config,
                 );
-                estimator.estimate(node, child_estimates)
+                estimator.estimate(stats, node, child_estimates)
             }
 
             // Other node types

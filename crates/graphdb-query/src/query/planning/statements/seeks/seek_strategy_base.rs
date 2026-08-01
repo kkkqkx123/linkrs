@@ -367,7 +367,7 @@ impl SeekStrategySelector {
         if let Some(ref estimator) = self.selectivity_estimator {
             let mut total_selectivity = 1.0;
             for pred in &context.predicates {
-                let sel = estimator.estimate_from_expression(pred, None);
+                let sel = estimator.estimate_from_expression(None, pred, None);
                 total_selectivity *= sel;
             }
             return total_selectivity;

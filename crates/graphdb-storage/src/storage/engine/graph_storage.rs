@@ -509,7 +509,11 @@ impl StorageReader for GraphStorage {
         reader::has_edge_property_index(&self.ctx, space, edge_type)
     }
 
-    fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError> {
+    fn disable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<(), StorageError> {
         reader::disable_edge_property_index(&self.ctx, space, edge_type)
     }
 

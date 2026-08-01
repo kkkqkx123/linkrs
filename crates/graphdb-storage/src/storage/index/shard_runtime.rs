@@ -758,7 +758,10 @@ impl GenerationRuntime {
         gen
     }
 
-    fn load_with_pool_capacity(manifest: &IndexManifest, pool_capacity: u64) -> StorageResult<Self> {
+    fn load_with_pool_capacity(
+        manifest: &IndexManifest,
+        pool_capacity: u64,
+    ) -> StorageResult<Self> {
         let mut shards = HashMap::new();
         for shard in &manifest.shards {
             let data = if shard.checkpoint_file.is_dir() {

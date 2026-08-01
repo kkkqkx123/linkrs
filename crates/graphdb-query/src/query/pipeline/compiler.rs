@@ -17,10 +17,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn optimize_execution_plan(
         &mut self,
         plan: crate::query::planning::plan::ExecutionPlan,
+        space_name: Option<&str>,
     ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
         let mut optimized = self
             .optimizer_engine
-            .optimize(plan)
+            .optimize(plan, space_name)
             .map_err(|e| DBError::from(QueryError::pipeline_optimization_error(e)))?;
         let cfg = self.optimizer_engine.partitioning_config();
         optimized.set_max_workers(cfg.max_workers.max(1));
@@ -43,7 +44,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     )> {
         let execution_plan =
             self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
-        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
+        let space_name = query_context
+            .space_name()
+            .or_else(|| query_context.request_context().space_name.clone());
+        let optimized_plan = self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
         let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         Ok((physical_plan, optimized_plan))
     }

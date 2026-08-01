@@ -6,7 +6,7 @@ use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
 };
-use crate::query::optimizer::stats::StatisticsManager;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -109,11 +109,11 @@ fn leaf_id(node: &PlanNodeEnum) -> String {
     format!("leaf_{}", node.id())
 }
 
-fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatisticsManager) -> u64 {
+fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
     match node {
         PlanNodeEnum::ScanVertices(n) => {
             if let Some(tag) = n.tag() {
-                let count = stats.get_vertex_count(tag);
+                let count = stats.vertex_count(tag);
                 if count > 0 {
                     return count;
                 }
@@ -122,7 +122,7 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatisticsManager) -> u64 {
         }
         PlanNodeEnum::ScanEdges(n) => {
             if let Some(et) = n.edge_type() {
-                let count = stats.get_edge_count(&et);
+                let count = stats.edge_count(&et);
                 if count > 0 {
                     return count;
                 }
@@ -131,7 +131,7 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatisticsManager) -> u64 {
         }
         PlanNodeEnum::IndexScan(_) => 5000,
         PlanNodeEnum::EdgeIndexScan(n) => {
-            let count = stats.get_edge_count(n.edge_type());
+            let count = stats.edge_count(n.edge_type());
             if count > 0 {
                 return count;
             }
@@ -277,7 +277,7 @@ fn flatten_recursive(
     }
 }
 
-pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatisticsManager) {
+pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatsView) {
     for leaf in &mut chain.leaves {
         if leaf.id.is_empty() {
             leaf.id = leaf_id(&leaf.physical_node);
@@ -485,7 +485,7 @@ enum OptResult {
 
 fn try_optimize_join_tree(
     root: &PlanNodeEnum,
-    stats: &StatisticsManager,
+    stats: &StatsView,
     cost_calculator: &CostCalculator,
 ) -> OptResult {
     let Some(mut chain) = flatten_join_chain(root) else {
@@ -516,7 +516,7 @@ fn try_optimize_join_tree(
 
 pub fn walk_and_optimize_joins(
     root: &PlanNodeEnum,
-    stats: &StatisticsManager,
+    stats: &StatsView,
     cost_calculator: &CostCalculator,
 ) -> PlanNodeEnum {
     if let OptResult::Changed(optimized) = try_optimize_join_tree(root, stats, cost_calculator) {
@@ -632,6 +632,7 @@ pub fn walk_and_optimize_joins(
 mod tests {
     use super::*;
     use crate::query::optimizer::cost::CostCalculator;
+    use crate::query::optimizer::stats::StatisticsManager;
     use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
 
     fn make_scan(id: &str, _rows: u64) -> PlanNodeEnum {
@@ -710,7 +711,8 @@ mod tests {
         let a = make_scan("a", 1000);
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let result = walk_and_optimize_joins(&a, &stats, &cost_calc);
+        let stats_view = StatsView::new(&stats, None);
+        let result = walk_and_optimize_joins(&a, &stats_view, &cost_calc);
         // StartNode is preserved (same variant)
         assert!(matches!(result, PlanNodeEnum::Start(_)));
         // Output var is preserved
@@ -727,7 +729,8 @@ mod tests {
 
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let optimized = walk_and_optimize_joins(&join2, &stats, &cost_calc);
+        let stats_view = StatsView::new(&stats, None);
+        let optimized = walk_and_optimize_joins(&join2, &stats_view, &cost_calc);
 
         // The smallest table (b, 10 rows) should be first in the new tree
         assert!(matches!(optimized, PlanNodeEnum::HashInnerJoin(_)));
@@ -751,7 +754,8 @@ mod tests {
 
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let result = walk_and_optimize_joins(&left_join, &stats, &cost_calc);
+        let stats_view = StatsView::new(&stats, None);
+        let result = walk_and_optimize_joins(&left_join, &stats_view, &cost_calc);
 
         // The root should still be a LeftJoin
         assert!(matches!(result, PlanNodeEnum::LeftJoin(_)));
@@ -771,7 +775,8 @@ mod tests {
 
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
-        let result = walk_and_optimize_joins(&join, &stats, &cost_calc);
+        let stats_view = StatsView::new(&stats, None);
+        let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc);
 
         // Should complete without panic (greedy path)
         assert!(matches!(result, PlanNodeEnum::HashInnerJoin(_)));

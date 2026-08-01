@@ -11,14 +11,17 @@
 //! `histogram` – Statistical information in the form of a histogram.
 //! “Feedback” – A module for collecting runtime statistics and feedback.
 
+pub mod collector;
 pub mod edge;
 pub mod feedback;
 pub mod histogram;
 pub mod manager;
 pub mod property;
 pub mod tag;
+pub mod view;
 
 // Re-export the main types from the feedback module.
+pub use collector::{CollectedSummary, StatisticsCollector};
 pub use edge::{EdgeTypeStatistics, HotVertexInfo, SkewnessLevel};
 pub use feedback::{
     generate_query_fingerprint, normalize_query, ExecutionFeedbackCollector,
@@ -29,3 +32,4 @@ pub use histogram::{Histogram, HistogramBucket, RangeCondition};
 pub use manager::StatisticsManager;
 pub use property::{PropertyCombinationStats, PropertyStatistics};
 pub use tag::TagStatistics;
+pub use view::StatsView;

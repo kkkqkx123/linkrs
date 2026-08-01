@@ -457,6 +457,7 @@ impl<'a> Lexer<'a> {
             "RECOVER" => Tk::Recover,
             "EXPLAIN" => Tk::Explain,
             "PROFILE" => Tk::Profile,
+            "ANALYZE" => Tk::Analyze,
             "FORMAT" => Tk::Format,
             "ATOMIC_EDGE" => Tk::AtomicEdge,
             "DEFAULT" => Tk::Default,

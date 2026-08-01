@@ -434,6 +434,7 @@ impl StmtFactory {
             span,
             statement,
             format: ExplainFormat::default(),
+            analyze: false,
         })
     }
 
@@ -443,6 +444,7 @@ impl StmtFactory {
             span,
             statement,
             format,
+            analyze: false,
         })
     }
 

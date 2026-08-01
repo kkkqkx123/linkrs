@@ -274,9 +274,7 @@ fn test_expression_analyzer_with_case_expression() {
                 Expression::Literal(Value::string("medium")),
             ),
         ],
-        default: Some(Box::new(Expression::Literal(Value::string(
-            "small",
-        )))),
+        default: Some(Box::new(Expression::Literal(Value::string("small")))),
     };
 
     let ctx_expr = create_test_context(case_expr);

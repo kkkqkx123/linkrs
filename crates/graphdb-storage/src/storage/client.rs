@@ -119,7 +119,11 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     }
 
     /// Drop the per-table edge property index for `edge_type`.
-    fn disable_edge_property_index(&self, space: &str, edge_type: &str) -> Result<(), StorageError> {
+    fn disable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<(), StorageError> {
         let _ = (space, edge_type);
         Err(StorageError::not_supported(
             "Edge property index management is not supported by this storage implementation",

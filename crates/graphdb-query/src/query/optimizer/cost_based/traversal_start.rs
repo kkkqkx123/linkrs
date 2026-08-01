@@ -75,8 +75,8 @@ impl TraversalStartSelector {
     }
 
     /// Select the optimal starting point for the traversal from the available patterns.
-    pub fn select_start_node(&self, pattern: &Pattern) -> Option<CandidateStart> {
-        let candidates = self.evaluate_pattern(pattern);
+    pub fn select_start_node(&self, space: &str, pattern: &Pattern) -> Option<CandidateStart> {
+        let candidates = self.evaluate_pattern(space, pattern);
 
         if candidates.is_empty() {
             return None;
@@ -91,26 +91,26 @@ impl TraversalStartSelector {
     }
 
     /// All candidate nodes in the evaluation mode
-    fn evaluate_pattern(&self, pattern: &Pattern) -> Vec<CandidateStart> {
+    fn evaluate_pattern(&self, space: &str, pattern: &Pattern) -> Vec<CandidateStart> {
         let mut candidates = Vec::new();
 
         match pattern {
             Pattern::Node(node) => {
-                if let Some(candidate) = self.evaluate_node(node) {
+                if let Some(candidate) = self.evaluate_node(space, node) {
                     candidates.push(candidate);
                 }
             }
             Pattern::Path(path) => {
-                candidates.extend(self.evaluate_path(path));
+                candidates.extend(self.evaluate_path(space, path));
             }
             Pattern::Edge(edge) => {
                 // The edge mode can be converted into the node mode as a starting point.
                 // Obtain the source or target node of the edge as a candidate.
-                candidates.extend(self.evaluate_edge_as_start(edge));
+                candidates.extend(self.evaluate_edge_as_start(space, edge));
             }
             Pattern::Variable(var) => {
                 // The variable pattern attempts to parse the value from the context.
-                if let Some(candidate) = self.evaluate_variable(var) {
+                if let Some(candidate) = self.evaluate_variable(space, var) {
                     candidates.push(candidate);
                 }
             }
@@ -120,45 +120,45 @@ impl TraversalStartSelector {
     }
 
     /// Evaluate all nodes in the path pattern.
-    fn evaluate_path(&self, path: &PathPattern) -> Vec<CandidateStart> {
+    fn evaluate_path(&self, space: &str, path: &PathPattern) -> Vec<CandidateStart> {
         let mut candidates = Vec::new();
 
         for element in &path.elements {
             match element {
                 PathElement::Node(node) => {
-                    if let Some(candidate) = self.evaluate_node(node) {
+                    if let Some(candidate) = self.evaluate_node(space, node) {
                         candidates.push(candidate);
                     }
                 }
                 PathElement::Edge(edge) => {
                     // The edge mode can be converted into the node mode as a starting point.
-                    candidates.extend(self.evaluate_edge_as_start(edge));
+                    candidates.extend(self.evaluate_edge_as_start(space, edge));
                 }
                 PathElement::Alternative(patterns) => {
                     // Evaluate each of the alternative models.
                     for pattern in patterns {
-                        candidates.extend(self.evaluate_pattern(pattern));
+                        candidates.extend(self.evaluate_pattern(space, pattern));
                     }
                 }
                 PathElement::Optional(inner) => match inner.as_ref() {
                     PathElement::Node(node) => {
-                        if let Some(candidate) = self.evaluate_node(node) {
+                        if let Some(candidate) = self.evaluate_node(space, node) {
                             candidates.push(candidate);
                         }
                     }
                     PathElement::Edge(edge) => {
-                        candidates.extend(self.evaluate_edge_as_start(edge));
+                        candidates.extend(self.evaluate_edge_as_start(space, edge));
                     }
                     _ => {}
                 },
                 PathElement::Repeated(inner, _) => match inner.as_ref() {
                     PathElement::Node(node) => {
-                        if let Some(candidate) = self.evaluate_node(node) {
+                        if let Some(candidate) = self.evaluate_node(space, node) {
                             candidates.push(candidate);
                         }
                     }
                     PathElement::Edge(edge) => {
-                        candidates.extend(self.evaluate_edge_as_start(edge));
+                        candidates.extend(self.evaluate_edge_as_start(space, edge));
                     }
                     _ => {}
                 },
@@ -173,7 +173,7 @@ impl TraversalStartSelector {
     /// The border mode itself cannot be used directly as a starting point for traversal, but it can be converted in the following way:
     /// 1. If there is a type of edge, the number of edges can be estimated as a reference.
     /// 2. Return a virtual node representation indicating that the process can start from either end of the edge.
-    fn evaluate_edge_as_start(&self, edge: &EdgePattern) -> Vec<CandidateStart> {
+    fn evaluate_edge_as_start(&self, space: &str, edge: &EdgePattern) -> Vec<CandidateStart> {
         let mut candidates = Vec::new();
 
         // Edge modes cannot be used directly as a starting point, but we can create a virtual node that represents the endpoints of the edges.
@@ -184,7 +184,7 @@ impl TraversalStartSelector {
             let edge_stats = self
                 .cost_calculator
                 .statistics_manager()
-                .get_edge_stats(edge_type);
+                .get_edge_stats(space, edge_type);
 
             if let Some(stats) = edge_stats {
                 // Create a virtual node pattern to represent the source endpoint of an edge.
@@ -216,10 +216,10 @@ impl TraversalStartSelector {
     /// Evaluating variable patterns
     ///
     /// Find the node pattern corresponding to the variable from the variable context.
-    fn evaluate_variable(&self, var: &VariablePattern) -> Option<CandidateStart> {
+    fn evaluate_variable(&self, space: &str, var: &VariablePattern) -> Option<CandidateStart> {
         // Search for a variable in the context of the variables.
         if let Some(node) = self.variable_context.get(&var.name) {
-            return self.evaluate_node(node);
+            return self.evaluate_node(space, node);
         }
 
         // If the variable is not bound, create a placeholder candidate.
@@ -243,7 +243,7 @@ impl TraversalStartSelector {
     }
 
     /// Evaluating a single node
-    fn evaluate_node(&self, node: &NodePattern) -> Option<CandidateStart> {
+    fn evaluate_node(&self, space: &str, node: &NodePattern) -> Option<CandidateStart> {
         // Check whether there is an explicit VID (either through an attribute or a predicate).
         if let Some(vid_selectivity) = self.check_explicit_vid(node) {
             return Some(CandidateStart {
@@ -258,13 +258,13 @@ impl TraversalStartSelector {
         let tag_name = node.labels.first()?;
 
         // Calculating selectivity
-        let selectivity = self.calculate_node_selectivity(node, tag_name);
+        let selectivity = self.calculate_node_selectivity(space, node, tag_name);
 
         // Obtain the number of vertices
         let vertex_count = self
             .cost_calculator
             .statistics_manager()
-            .get_vertex_count(tag_name);
+            .get_vertex_count(space, tag_name);
 
         // Calculate the estimated number of starting nodes.
         let estimated_start_nodes = ((vertex_count as f64 * selectivity) as u64).max(1);
@@ -273,10 +273,11 @@ impl TraversalStartSelector {
         let estimated_cost = if selectivity < 0.1 {
             // Use index scanning
             self.cost_calculator
-                .calculate_index_scan_cost(tag_name, "", selectivity)
+                .calculate_index_scan_cost(space, tag_name, "", selectivity)
         } else {
             // Full table scan
-            self.cost_calculator.calculate_scan_vertices_cost(tag_name)
+            self.cost_calculator
+                .calculate_scan_vertices_cost(space, tag_name)
         };
 
         let reason = if selectivity < 0.1 {
@@ -395,15 +396,17 @@ impl TraversalStartSelector {
     }
 
     /// The selectivity of computing nodes
-    fn calculate_node_selectivity(&self, node: &NodePattern, tag_name: &str) -> f64 {
+    fn calculate_node_selectivity(&self, space: &str, node: &NodePattern, tag_name: &str) -> f64 {
         let mut selectivity = 1.0;
 
         // Estimating selectivity from dependent conditional probabilities
         if let Some(props) = &node.properties {
             if let Some(expr) = props.get_expression() {
-                let prop_selectivity = self
-                    .selectivity_estimator
-                    .estimate_from_expression(&expr, Some(tag_name));
+                let prop_selectivity = self.selectivity_estimator.estimate_from_expression(
+                    Some(space),
+                    &expr,
+                    Some(tag_name),
+                );
                 selectivity *= prop_selectivity;
             }
         }
@@ -411,9 +414,11 @@ impl TraversalStartSelector {
         // Estimating selectivity from predicate conditions
         for predicate in &node.predicates {
             if let Some(expr) = predicate.get_expression() {
-                let pred_selectivity = self
-                    .selectivity_estimator
-                    .estimate_from_expression(&expr, Some(tag_name));
+                let pred_selectivity = self.selectivity_estimator.estimate_from_expression(
+                    Some(space),
+                    &expr,
+                    Some(tag_name),
+                );
                 selectivity *= pred_selectivity;
             }
         }

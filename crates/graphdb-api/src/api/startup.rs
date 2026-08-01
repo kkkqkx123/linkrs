@@ -362,7 +362,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 
     // Create HTTP server
     let http_server = Arc::new(HttpServer::new(
-        graph_service,
+        graph_service.clone(),
         Arc::new(parking_lot::RwLock::new((*storage).clone())),
         transaction_manager,
         &config,
@@ -383,6 +383,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     super::shutdown_signal().await;
 
     info!("Shutting down GraphDB service...");
+    graph_service.shutdown();
     Ok(())
 }
 

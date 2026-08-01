@@ -160,7 +160,9 @@ pub(super) fn build_source_spec(
                 .scan_limits()
                 .first()
                 .map(index_limit_to_predicate)
-                .unwrap_or(crate::query::executor::streaming::operators::spec::BoundIndexPredicate::Full);
+                .unwrap_or(
+                    crate::query::executor::streaming::operators::spec::BoundIndexPredicate::Full,
+                );
             let projection = if scan_node.return_columns().is_empty() {
                 crate::query::executor::streaming::operators::spec::IndexProjection::RowIdOnly
             } else {

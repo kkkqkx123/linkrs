@@ -5,7 +5,7 @@
 //! guessing a full integer range would silently omit non-numeric or sparse
 //! identifiers.
 
-use crate::query::optimizer::StatisticsManager;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum};
 
 /// Static configuration for partition selection. The default is disabled so
@@ -62,11 +62,7 @@ impl PartitioningPlanner {
         &self.config
     }
 
-    pub fn decide(
-        &self,
-        root: &PlanNodeEnum,
-        statistics: &StatisticsManager,
-    ) -> PartitioningDecision {
+    pub fn decide(&self, root: &PlanNodeEnum, statistics: &StatsView) -> PartitioningDecision {
         if !self.config.enabled {
             return Self::fallback("partitioning is disabled");
         }
@@ -105,7 +101,7 @@ impl PartitioningPlanner {
         let Some(tag) = scans[0].tag() else {
             return Self::fallback("vertex scan has no tag statistics key");
         };
-        let rows = statistics.get_vertex_count(tag);
+        let rows = statistics.vertex_count(tag);
         if rows == 0 {
             return Self::fallback(format!(
                 "missing statistics for vertex tag '{tag}'; cannot estimate row count"
@@ -226,8 +222,12 @@ fn split_range(range: std::ops::Range<i64>, partition_count: usize) -> Vec<std::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::optimizer::stats::StatisticsManager;
+    use crate::query::optimizer::stats::StatsView;
     use crate::query::optimizer::TagStatistics;
     use crate::query::planning::plan::core::nodes::ScanVerticesNode;
+
+    const TEST_SPACE: &str = "test";
 
     fn tagged_scan() -> PlanNodeEnum {
         let mut scan = ScanVerticesNode::new(1, "space");
@@ -235,12 +235,16 @@ mod tests {
         PlanNodeEnum::ScanVertices(scan)
     }
 
+    fn view_of(stats: &StatisticsManager) -> StatsView<'_> {
+        StatsView::new(stats, Some(TEST_SPACE))
+    }
+
     #[test]
     fn selects_only_with_trusted_range_and_sufficient_statistics() {
         let stats = StatisticsManager::new();
         let mut tag = TagStatistics::new("person".to_string());
         tag.vertex_count = 10_000;
-        stats.update_tag_stats(tag);
+        stats.update_tag_stats(TEST_SPACE, tag);
         let planner = PartitioningPlanner::new(PartitioningConfig {
             enabled: true,
             min_rows_per_partition: 1_000,
@@ -250,7 +254,7 @@ mod tests {
             max_buffered_chunks: 10,
         });
 
-        let decision = planner.decide(&tagged_scan(), &stats);
+        let decision = planner.decide(&tagged_scan(), &view_of(&stats));
         assert_eq!(
             decision
                 .partition_spec
@@ -269,7 +273,7 @@ mod tests {
             ..PartitioningConfig::default()
         });
 
-        let decision = planner.decide(&tagged_scan(), &stats);
+        let decision = planner.decide(&tagged_scan(), &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("trusted vertex-id range"));
     }
@@ -289,7 +293,7 @@ mod tests {
         let stats = StatisticsManager::new();
         let mut tag = TagStatistics::new("person".to_string());
         tag.vertex_count = 10_000;
-        stats.update_tag_stats(tag);
+        stats.update_tag_stats(TEST_SPACE, tag);
         stats
     }
 
@@ -297,7 +301,7 @@ mod tests {
     fn falls_back_on_missing_statistics() {
         let stats = StatisticsManager::new(); // no stats populated
         let plan = tagged_scan();
-        let decision = make_planner().decide(&plan, &stats);
+        let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("missing statistics"));
     }
@@ -307,7 +311,7 @@ mod tests {
         use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode;
         let plan = PlanNodeEnum::BeginTransaction(BeginTransactionNode::new(1));
         let stats = make_stats();
-        let decision = make_planner().decide(&plan, &stats);
+        let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("transaction boundary"));
     }
@@ -317,7 +321,7 @@ mod tests {
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
         let plan = PlanNodeEnum::AppendVertices(AppendVerticesNode::new(1, "person"));
         let stats = make_stats();
-        let decision = make_planner().decide(&plan, &stats);
+        let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("graph traversal"));
     }

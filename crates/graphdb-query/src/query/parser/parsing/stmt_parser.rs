@@ -62,6 +62,7 @@ impl StmtParser {
             TokenKind::Show => Self::parse_show_statement_extended(ctx),
             TokenKind::Explain => Self::parse_explain_statement(ctx),
             TokenKind::Profile => Self::parse_profile_statement(ctx),
+            TokenKind::Analyze => Self::parse_analyze_statement(ctx),
             TokenKind::Group => Self::parse_group_by_statement(ctx),
             TokenKind::Kill => Self::parse_kill_statement(ctx),
             TokenKind::Fetch => UtilStmtParser::new().parse_fetch_statement(ctx),
@@ -167,6 +168,10 @@ impl StmtParser {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Explain)?;
 
+        // Optional ANALYZE: execute the statement and overlay actual
+        // operator statistics on the plan output.
+        let analyze = ctx.match_token(TokenKind::Analyze);
+
         // Analysis of the optional FORMAT clause
         let format = if ctx.match_token(TokenKind::Format) {
             ctx.expect_token(TokenKind::Assign)?;
@@ -195,6 +200,7 @@ impl StmtParser {
             span: start_span,
             statement,
             format,
+            analyze,
         }))
     }
 
@@ -231,6 +237,23 @@ impl StmtParser {
             span: start_span,
             statement,
             format,
+        }))
+    }
+
+    /// Analyzing the ANALYZE statement: `ANALYZE` or `ANALYZE SPACE <name>`.
+    fn parse_analyze_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let start_span = ctx.current_span();
+        ctx.expect_token(TokenKind::Analyze)?;
+
+        let space = if ctx.match_token(TokenKind::Space) {
+            Some(ctx.expect_identifier()?)
+        } else {
+            None
+        };
+
+        Ok(Stmt::Analyze(AnalyzeStmt {
+            span: start_span,
+            space,
         }))
     }
 
@@ -879,8 +902,44 @@ mod tests {
 
         if let Ok(Stmt::Explain(stmt)) = result {
             assert!(matches!(stmt.format, ExplainFormat::Dot));
+            assert!(!stmt.analyze);
         } else {
             panic!("“Expect” is a verb that means to have a belief or hope that something will happen in a particular way. For example, if you expect to finish a project by Friday, you believe that you will be able to complete it by that day. The phrase “explain” is a verb that means to give a clear description or explanation of something so that others can understand it. For example, if someone asks you to explain a complex concept, you need to provide enough information so that they can understand it.");
+        }
+    }
+
+    #[test]
+    fn test_parse_explain_analyze_statement() {
+        let mut ctx = create_parser_context("EXPLAIN ANALYZE MATCH (n) RETURN n");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "EXPLAIN ANALYZE failed to parse: {:?}",
+            result.err()
+        );
+
+        if let Ok(Stmt::Explain(stmt)) = result {
+            assert!(stmt.analyze);
+        } else {
+            panic!("Expected EXPLAIN ANALYZE statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_explain_analyze_with_format() {
+        let mut ctx = create_parser_context("EXPLAIN ANALYZE FORMAT = DOT MATCH (n) RETURN n");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "EXPLAIN ANALYZE FORMAT failed to parse: {:?}",
+            result.err()
+        );
+
+        if let Ok(Stmt::Explain(stmt)) = result {
+            assert!(stmt.analyze);
+            assert!(matches!(stmt.format, ExplainFormat::Dot));
+        } else {
+            panic!("Expected EXPLAIN ANALYZE statement");
         }
     }
 
@@ -894,6 +953,36 @@ mod tests {
             assert!(matches!(stmt.format, ExplainFormat::Table));
         } else {
             panic!("Expected Profile statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_analyze_statement() {
+        let mut ctx = create_parser_context("ANALYZE");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(result.is_ok(), "ANALYZE parse failure: {:?}", result.err());
+
+        if let Ok(Stmt::Analyze(stmt)) = result {
+            assert_eq!(stmt.space, None);
+        } else {
+            panic!("Expected Analyze statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_analyze_space_statement() {
+        let mut ctx = create_parser_context("ANALYZE SPACE basketball");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "ANALYZE SPACE parse failure: {:?}",
+            result.err()
+        );
+
+        if let Ok(Stmt::Analyze(stmt)) = result {
+            assert_eq!(stmt.space.as_deref(), Some("basketball"));
+        } else {
+            panic!("Expected Analyze statement");
         }
     }
 

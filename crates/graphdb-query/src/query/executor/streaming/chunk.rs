@@ -677,11 +677,7 @@ impl DataChunk {
     }
 
     /// Collect all Variable references from an expression tree into col_cache.
-    fn collect_variables(
-        &self,
-        expr: &Expression,
-        col_cache: &mut HashMap<String, Vec<Value>>,
-    ) {
+    fn collect_variables(&self, expr: &Expression, col_cache: &mut HashMap<String, Vec<Value>>) {
         match expr {
             Expression::Variable(name) => {
                 if !col_cache.contains_key(name) {
@@ -851,10 +847,7 @@ mod tests {
 
     #[test]
     fn test_data_chunk_creation() {
-        let rows = vec![vec![
-            Value::string("a"),
-            Value::string("b"),
-        ]];
+        let rows = vec![vec![Value::string("a"), Value::string("b")]];
         let chunk = DataChunk::from_rows(rows);
         assert_eq!(chunk.len(), 1);
         assert_eq!(chunk.num_columns(), 2);

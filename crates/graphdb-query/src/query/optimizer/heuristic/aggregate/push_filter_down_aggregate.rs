@@ -324,9 +324,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test",
-            ))),
+            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
         };
 
         assert!(
@@ -361,9 +359,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test",
-            ))),
+            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
         };
 
         let rewritten = PushFilterDownAggregateRule::rewrite_filter_condition(
@@ -391,9 +387,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("category".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string(
-                "A",
-            ))),
+            right: Box::new(Expression::Literal(crate::core::Value::string("A"))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);
@@ -465,9 +459,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::string(
-                "test",
-            ))),
+            right: Box::new(Expression::Literal(crate::core::Value::string("test"))),
         };
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = crate::core::types::expr::ExpressionMeta::new(condition);

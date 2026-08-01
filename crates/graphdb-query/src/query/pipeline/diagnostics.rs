@@ -94,10 +94,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .execute()
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
-        let plan_desc =
+        let mut plan_desc =
             crate::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description(
                 &physical_plan,
             );
+        Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
 
         let output = match explain_stmt.format {
             crate::query::parser::ast::stmt::ExplainFormat::Table => {
@@ -154,67 +155,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
         let mut plan_desc = physical_plan_to_plan_description(&physical_plan);
-
-        let (wall_us, work_us, workers, chunks_peak, bytes_peak) = {
-            let profile = instance.runtime().profile().flush_to_collector();
-            for (key, op_profile) in &profile.operators {
-                let node_id = key.physical_operator_id.0 as i64;
-                if let Some(node_desc) = plan_desc.get_node_desc_mut(node_id) {
-                    let profiling = ProfilingStats {
-                        rows: op_profile.output_rows as i64,
-                        exec_duration_in_us: (op_profile.open_time_us
-                            + op_profile.next_time_us
-                            + op_profile.close_time_us)
-                            as i64,
-                        total_duration_in_us: (op_profile.open_time_us
-                            + op_profile.next_time_us
-                            + op_profile.close_time_us)
-                            as i64,
-                        other_stats: {
-                            let mut map = std::collections::HashMap::new();
-                            map.insert(
-                                "open_time_us".to_string(),
-                                op_profile.open_time_us.to_string(),
-                            );
-                            map.insert(
-                                "next_time_us".to_string(),
-                                op_profile.next_time_us.to_string(),
-                            );
-                            map.insert(
-                                "close_time_us".to_string(),
-                                op_profile.close_time_us.to_string(),
-                            );
-                            map.insert(
-                                "peak_memory_bytes".to_string(),
-                                op_profile.peak_memory_bytes.to_string(),
-                            );
-                            map.insert(
-                                "spilled_bytes".to_string(),
-                                op_profile.spilled_bytes.to_string(),
-                            );
-                            map.insert(
-                                "spill_count".to_string(),
-                                op_profile.spill_count.to_string(),
-                            );
-                            map
-                        },
-                    };
-                    node_desc.add_profile(profiling);
-                }
-            }
-            profile.parallel_profile()
-        };
-        plan_desc.requested_workers = exec_ctx.max_workers;
-        if workers > 0 {
-            plan_desc.actual_workers = workers;
-        }
-        plan_desc.parallel_wall_time_us = wall_us;
-        plan_desc.parallel_work_time_us = work_us;
-        plan_desc.parallel_buffered_chunks_peak = chunks_peak;
-        plan_desc.parallel_buffered_bytes_peak = bytes_peak;
-        if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
-            plan_desc.parallel_fallback_reason = "serial fallback (P8 not activated)".to_string();
-        }
+        Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
 
         let mut ids = Vec::new();
         let mut names = Vec::new();
@@ -329,5 +270,77 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok(ExecutionResult::DataSet {
             data: result_dataset,
         })
+    }
+
+    /// Overlay the runtime execution profile onto a plan description.
+    ///
+    /// Shared by the PROFILE and EXPLAIN ANALYZE paths: per-operator actual
+    /// rows / execution time from the runtime profile collector are attached
+    /// to the matching physical operator nodes, plus parallel profile data.
+    fn overlay_execution_profile(
+        instance: &QueryExecutionInstance,
+        plan_desc: &mut crate::query::planning::plan::explain::PlanDescription,
+        max_workers: usize,
+    ) {
+        let (wall_us, work_us, workers, chunks_peak, bytes_peak) = {
+            let profile = instance.runtime().profile().flush_to_collector();
+            for (key, op_profile) in &profile.operators {
+                let node_id = key.physical_operator_id.0 as i64;
+                if let Some(node_desc) = plan_desc.get_node_desc_mut(node_id) {
+                    let profiling = ProfilingStats {
+                        rows: op_profile.output_rows as i64,
+                        exec_duration_in_us: (op_profile.open_time_us
+                            + op_profile.next_time_us
+                            + op_profile.close_time_us)
+                            as i64,
+                        total_duration_in_us: (op_profile.open_time_us
+                            + op_profile.next_time_us
+                            + op_profile.close_time_us)
+                            as i64,
+                        other_stats: {
+                            let mut map = std::collections::HashMap::new();
+                            map.insert(
+                                "open_time_us".to_string(),
+                                op_profile.open_time_us.to_string(),
+                            );
+                            map.insert(
+                                "next_time_us".to_string(),
+                                op_profile.next_time_us.to_string(),
+                            );
+                            map.insert(
+                                "close_time_us".to_string(),
+                                op_profile.close_time_us.to_string(),
+                            );
+                            map.insert(
+                                "peak_memory_bytes".to_string(),
+                                op_profile.peak_memory_bytes.to_string(),
+                            );
+                            map.insert(
+                                "spilled_bytes".to_string(),
+                                op_profile.spilled_bytes.to_string(),
+                            );
+                            map.insert(
+                                "spill_count".to_string(),
+                                op_profile.spill_count.to_string(),
+                            );
+                            map
+                        },
+                    };
+                    node_desc.add_profile(profiling);
+                }
+            }
+            profile.parallel_profile()
+        };
+        plan_desc.requested_workers = max_workers;
+        if workers > 0 {
+            plan_desc.actual_workers = workers;
+        }
+        plan_desc.parallel_wall_time_us = wall_us;
+        plan_desc.parallel_work_time_us = work_us;
+        plan_desc.parallel_buffered_chunks_peak = chunks_peak;
+        plan_desc.parallel_buffered_bytes_peak = bytes_peak;
+        if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
+            plan_desc.parallel_fallback_reason = "serial fallback (P8 not activated)".to_string();
+        }
     }
 }

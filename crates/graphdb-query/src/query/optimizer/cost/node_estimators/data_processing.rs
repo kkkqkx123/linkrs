@@ -16,6 +16,7 @@ use crate::query::optimizer::cost::expression_parser::ExpressionParser;
 use crate::query::optimizer::cost::selectivity::SelectivityEstimator;
 use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::error::CostError;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::graph_operations::UnwindNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -77,6 +78,7 @@ impl<'a> DataProcessingEstimator<'a> {
 impl<'a> NodeEstimator for DataProcessingEstimator<'a> {
     fn estimate(
         &self,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
@@ -89,9 +91,11 @@ impl<'a> NodeEstimator for DataProcessingEstimator<'a> {
                 };
                 let condition_count = self.count_filter_conditions(&condition_expr);
                 // Estimate the number of rows after filtering.
-                let selectivity = self
-                    .selectivity_estimator
-                    .estimate_from_expression(&condition_expr, None);
+                let selectivity = self.selectivity_estimator.estimate_from_expression(
+                    stats.space(),
+                    &condition_expr,
+                    None,
+                );
                 let output_rows = (input_rows_val as f64 * selectivity).max(1.0) as u64;
                 let cost = self
                     .cost_calculator
@@ -174,7 +178,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Filter(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 100)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -202,7 +210,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Project(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 100)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -222,7 +234,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Unwind(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 100)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -241,7 +257,11 @@ mod tests {
         let plan_node = PlanNodeEnum::DataCollect(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 100)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -259,7 +279,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Start(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -275,7 +299,11 @@ mod tests {
 
         let node = PlanNodeEnum::ScanVertices(crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(1, "test_space"));
         let child_estimates = vec![];
-        let result = estimator.estimate(&node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &node,
+            &child_estimates,
+        );
 
         assert!(result.is_err());
     }
@@ -360,7 +388,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Filter(node);
 
         let child_estimates = vec![NodeCostEstimate::new(0.0, 0.0, 0)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -409,7 +441,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Project(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 100)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -429,7 +465,11 @@ mod tests {
         let plan_node = PlanNodeEnum::Unwind(node);
 
         let child_estimates = vec![NodeCostEstimate::new(10.0, 10.0, 1000)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -448,7 +488,11 @@ mod tests {
         let plan_node = PlanNodeEnum::DataCollect(node);
 
         let child_estimates = vec![NodeCostEstimate::new(1000.0, 1000.0, 1_000_000)];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");

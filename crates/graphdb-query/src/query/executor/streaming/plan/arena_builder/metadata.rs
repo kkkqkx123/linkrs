@@ -626,4 +626,3 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
         TxnSpec::Rollback => "Rollback",
     }
 }
-

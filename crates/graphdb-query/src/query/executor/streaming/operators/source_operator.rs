@@ -1048,11 +1048,9 @@ impl SourceOperator {
                     Some(c) => c,
                     None => return Ok(None),
                 };
-                let batch = cur
-                    .next_batch(base.chunk_size)
-                    .map_err(|error| {
-                        storage_error("EdgeIndexScan", "read cursor", space_name, error)
-                    })?;
+                let batch = cur.next_batch(base.chunk_size).map_err(|error| {
+                    storage_error("EdgeIndexScan", "read cursor", space_name, error)
+                })?;
                 if batch.is_empty() {
                     return Ok(None);
                 }
@@ -1148,9 +1146,8 @@ fn lookup_edges_via_property_index(
     index_name: &str,
     predicate: Option<&BoundIndexPredicate>,
 ) -> Result<Vec<crate::core::Edge>, QueryError> {
-    let edge_type = edge_type.ok_or_else(|| {
-        QueryError::execution("EdgeIndexScan requires an edge type".to_string())
-    })?;
+    let edge_type = edge_type
+        .ok_or_else(|| QueryError::execution("EdgeIndexScan requires an edge type".to_string()))?;
     let index = storage
         .get_edge_index(space_name, index_name)
         .map_err(|error| {

@@ -51,6 +51,10 @@ pub struct EdgeTypeStatistics {
     pub degree_gini_coefficient: f64,
     /// List of the top K vertices (vertices with the highest degree)
     pub hot_vertices: Vec<HotVertexInfo>,
+    /// Space this statistics was collected for (`None` = legacy/default).
+    pub space: Option<String>,
+    /// Schema version at collection time (used for staleness checks).
+    pub schema_version: Option<u64>,
 }
 
 impl EdgeTypeStatistics {
@@ -68,7 +72,16 @@ impl EdgeTypeStatistics {
             in_degree_std_dev: 0.0,
             degree_gini_coefficient: 0.0,
             hot_vertices: Vec::new(),
+            space: None,
+            schema_version: None,
         }
+    }
+
+    /// Attach space and schema version provenance.
+    pub fn with_version(mut self, space: String, schema_version: u64) -> Self {
+        self.space = Some(space);
+        self.schema_version = Some(schema_version);
+        self
     }
 
     /// Estimate the cost of expansion

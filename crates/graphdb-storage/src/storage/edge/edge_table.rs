@@ -869,8 +869,8 @@ mod tests {
         let n = 100_000u32;
 
         // Pattern 1: dense sequential ids.
-        let mut dense = TimeTravelEdgeStore::with_config(schema.clone(), EdgeTableConfig::default())
-            .unwrap();
+        let mut dense =
+            TimeTravelEdgeStore::with_config(schema.clone(), EdgeTableConfig::default()).unwrap();
         for src in 0..n {
             dense.insert_edge(src, (src + 1) % n, 0, &[], ts).unwrap();
         }
@@ -893,7 +893,9 @@ mod tests {
         let mut reinsert =
             TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
         for src in 0..n {
-            reinsert.insert_edge(src, (src + 1) % n, 0, &[], ts).unwrap();
+            reinsert
+                .insert_edge(src, (src + 1) % n, 0, &[], ts)
+                .unwrap();
         }
         for src in 0..n / 2 {
             let _ = reinsert.delete_edge(src, (src + 1) % n, 0, ts + 1);
@@ -974,14 +976,18 @@ mod tests {
         let out_rows = table.out_csr.vertex_capacity();
         let in_rows = table.in_csr.vertex_capacity();
         let tail = |rows: usize| ((rows as f64) * 1.25).ceil() as usize;
-        
+
         assert!(
             out_rows <= tail(max_src + 1),
-            "out rows {} exceeds 1.25x tail of {}", out_rows, max_src + 1
+            "out rows {} exceeds 1.25x tail of {}",
+            out_rows,
+            max_src + 1
         );
         assert!(
             in_rows <= tail(max_dst + 1),
-            "in rows {} exceeds 1.25x tail of {}", in_rows, max_dst + 1
+            "in rows {} exceeds 1.25x tail of {}",
+            in_rows,
+            max_dst + 1
         );
 
         // Lazy allocation: wasted memory should stay tiny
@@ -1028,11 +1034,13 @@ mod tests {
         let in_tail = ((500_001usize) as f64 * 1.25).ceil() as usize;
         assert!(
             out_mutable_capacity <= out_tail,
-            "out mutable capacity {} exceeds 1.25x tail of 100_003", out_mutable_capacity
+            "out mutable capacity {} exceeds 1.25x tail of 100_003",
+            out_mutable_capacity
         );
         assert!(
             in_mutable_capacity <= in_tail,
-            "in mutable capacity {} exceeds 1.25x tail of 500_001", in_mutable_capacity
+            "in mutable capacity {} exceeds 1.25x tail of 500_001",
+            in_mutable_capacity
         );
     }
 

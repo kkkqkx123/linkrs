@@ -4,6 +4,7 @@
 
 use crate::query::optimizer::cost::estimate::NodeCostEstimate;
 use crate::query::optimizer::error::CostError;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::PlanNodeEnum;
 
 pub mod control_flow;
@@ -29,6 +30,8 @@ pub trait NodeEstimator {
     /// Estimate the cost of the nodes and the number of output rows.
     ///
     /// # Parameters
+    /// `stats`: The space-scoped statistics view for the query being optimized.
+    /// Estimators that do not consult statistics can ignore it.
     /// – **Node**: The planned execution node.
     /// `child_estimates`: The estimated results of the child nodes
     ///
@@ -36,6 +39,7 @@ pub trait NodeEstimator {
     /// `(node_cost, output_rows)`: The cost of the node itself and the estimated number of output rows.
     fn estimate(
         &self,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError>;

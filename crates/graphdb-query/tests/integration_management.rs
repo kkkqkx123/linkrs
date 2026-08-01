@@ -331,6 +331,52 @@ fn test_explain_execution_go() {
     assert!(result.is_ok() || result.is_err());
 }
 
+#[test]
+fn test_explain_analyze_parser() {
+    let query = "EXPLAIN ANALYZE MATCH (n:Person) RETURN n";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "EXPLAIN ANALYZE: should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("EXPLAIN ANALYZE语句: should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "EXPLAIN");
+    assert!(
+        stmt.ast
+            .stmt
+            .as_explain()
+            .map(|e| e.analyze)
+            .unwrap_or(false),
+        "EXPLAIN ANALYZE should set the analyze flag"
+    );
+}
+
+#[test]
+fn test_explain_analyze_execution() {
+    use common::test_scenario::TestScenario;
+
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("explain_analyze_space")
+        .exec_ddl("CREATE TAG person(name STRING)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX person(name) VALUES 1:(\"Alice\")")
+        .assert_success()
+        .query("EXPLAIN ANALYZE MATCH (n:person) RETURN n")
+        .assert_success();
+
+    let plan_text = scenario.get_plan_string().unwrap_or_default();
+    assert!(
+        plan_text.contains("rows:") && plan_text.contains("us"),
+        "EXPLAIN ANALYZE output should contain per-operator rows/time, got: {}",
+        plan_text
+    );
+}
+
 // ==================== RETURN 语句测试 ====================
 
 #[test]

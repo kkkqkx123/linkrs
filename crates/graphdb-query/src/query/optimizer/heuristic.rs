@@ -86,6 +86,9 @@ pub mod rewrite_rule;
 // Enumeration of static distribution rules
 pub mod rule_enum;
 
+// Batch optimizer (phased rule application with diagnostics)
+pub mod batch;
+
 // Specific Rules Module
 pub mod aggregate;
 pub mod elimination;

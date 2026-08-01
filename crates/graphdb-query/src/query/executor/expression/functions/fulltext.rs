@@ -543,15 +543,10 @@ mod tests {
 
     fn create_test_context() -> FulltextExecutionContext {
         let mut source = HashMap::new();
-        source.insert(
-            "title".to_string(),
-            Value::string("Database Optimization"),
-        );
+        source.insert("title".to_string(), Value::string("Database Optimization"));
         source.insert(
             "content".to_string(),
-            Value::string(
-                "This is a test article about database optimization techniques.",
-            ),
+            Value::string("This is a test article about database optimization techniques."),
         );
 
         let mut highlights = HashMap::new();
@@ -585,9 +580,7 @@ mod tests {
         let func = FulltextFunction::Highlight;
         let context = create_test_context();
 
-        let result = func
-            .execute(&[Value::string("content")], &context)
-            .unwrap();
+        let result = func.execute(&[Value::string("content")], &context).unwrap();
 
         assert!(matches!(result, Value::String(_)));
         if let Value::String(text) = result {
@@ -617,10 +610,7 @@ mod tests {
         let context = create_test_context();
 
         let result = func
-            .execute(
-                &[Value::string("content"), Value::Int(50)],
-                &context,
-            )
+            .execute(&[Value::string("content"), Value::Int(50)], &context)
             .unwrap();
 
         assert!(matches!(result, Value::String(_)));

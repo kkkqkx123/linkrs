@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::core::types::expr::Expression;
 use crate::core::value::Value;
-use crate::query::optimizer::stats::StatisticsManager;
+use crate::query::optimizer::stats::{StatisticsManager, StatsView};
 
 use super::config::CostModelConfig;
 
@@ -66,16 +66,16 @@ impl CostCalculator {
     /// Calculate the cost of vertex operations for a full table scan
     ///
     /// Formula: Number of rows × Cost of CPU processing
-    pub fn calculate_scan_vertices_cost(&self, tag_name: &str) -> f64 {
-        let row_count = self.stats_manager.get_vertex_count(tag_name);
+    pub fn calculate_scan_vertices_cost(&self, space: &str, tag_name: &str) -> f64 {
+        let row_count = self.stats_manager.get_vertex_count(space, tag_name);
         row_count as f64 * self.config.cpu_tuple_cost
     }
 
     /// Calculate the cost of scanning the entire table
     ///
     /// Formula: Number of edges × Cost of CPU processing
-    pub fn calculate_scan_edges_cost(&self, edge_type: &str) -> f64 {
-        let edge_count = self.stats_manager.get_edge_count(edge_type);
+    pub fn calculate_scan_edges_cost(&self, space: &str, edge_type: &str) -> f64 {
+        let edge_count = self.stats_manager.get_edge_count(space, edge_type);
         edge_count as f64 * self.config.cpu_tuple_cost
     }
 
@@ -89,11 +89,12 @@ impl CostCalculator {
     /// - `selectivity`: 选择性（0.0 ~ 1.0）
     pub fn calculate_index_scan_cost(
         &self,
+        space: &str,
         tag_name: &str,
         _property_name: &str,
         selectivity: f64,
     ) -> f64 {
-        let table_rows = self.stats_manager.get_vertex_count(tag_name);
+        let table_rows = self.stats_manager.get_vertex_count(space, tag_name);
         let matching_rows = (selectivity * table_rows as f64).max(1.0) as u64;
 
         // Index access cost (sequential I/O)
@@ -109,8 +110,13 @@ impl CostCalculator {
     }
 
     /// Calculating the cost of edge index scanning
-    pub fn calculate_edge_index_scan_cost(&self, edge_type: &str, selectivity: f64) -> f64 {
-        let edge_count = self.stats_manager.get_edge_count(edge_type);
+    pub fn calculate_edge_index_scan_cost(
+        &self,
+        space: &str,
+        edge_type: &str,
+        selectivity: f64,
+    ) -> f64 {
+        let edge_count = self.stats_manager.get_edge_count(space, edge_type);
         let matching_rows = (selectivity * edge_count as f64).max(1.0) as u64;
 
         let index_pages = (matching_rows / 10).max(1);
@@ -130,11 +136,16 @@ impl CostCalculator {
     /// # Parameters
     /// `start_nodes`: Number of starting nodes
     /// `edge_type`: Type of the edge (optional)
-    pub fn calculate_expand_cost(&self, start_nodes: u64, edge_type: Option<&str>) -> f64 {
+    pub fn calculate_expand_cost(
+        &self,
+        space: &str,
+        start_nodes: u64,
+        edge_type: Option<&str>,
+    ) -> f64 {
         let (avg_degree, is_super_node) = match edge_type {
             Some(et) => self
                 .stats_manager
-                .get_edge_stats(et)
+                .get_edge_stats(space, et)
                 .map(|s| {
                     let is_super = s.avg_out_degree > self.config.super_node_threshold as f64;
                     (s.avg_out_degree, is_super)
@@ -161,9 +172,14 @@ impl CostCalculator {
     }
 
     /// Calculate the full expansion cost (ExpandAll)
-    pub fn calculate_expand_all_cost(&self, start_nodes: u64, edge_type: Option<&str>) -> f64 {
+    pub fn calculate_expand_all_cost(
+        &self,
+        space: &str,
+        start_nodes: u64,
+        edge_type: Option<&str>,
+    ) -> f64 {
         // “ExpandAll” returns more data than “Expand” (including vertex information).
-        let base_cost = self.calculate_expand_cost(start_nodes, edge_type);
+        let base_cost = self.calculate_expand_cost(space, start_nodes, edge_type);
         // An additional 50% of the costs is used to obtain vertex information.
         base_cost * 1.5
     }
@@ -176,6 +192,7 @@ impl CostCalculator {
     /// - `steps`: The number of iterations (or steps) in a process.
     pub fn calculate_traverse_cost(
         &self,
+        space: &str,
         start_nodes: u64,
         edge_type: Option<&str>,
         steps: u32,
@@ -183,7 +200,7 @@ impl CostCalculator {
         let avg_degree = match edge_type {
             Some(et) => self
                 .stats_manager
-                .get_edge_stats(et)
+                .get_edge_stats(space, et)
                 .map(|s| (s.avg_out_degree + s.avg_in_degree) / 2.0)
                 .unwrap_or(2.0),
             None => 2.0,
@@ -212,11 +229,16 @@ impl CostCalculator {
     }
 
     /// Calculate the cost of obtaining neighboring nodes
-    pub fn calculate_get_neighbors_cost(&self, start_nodes: u64, edge_type: Option<&str>) -> f64 {
+    pub fn calculate_get_neighbors_cost(
+        &self,
+        space: &str,
+        start_nodes: u64,
+        edge_type: Option<&str>,
+    ) -> f64 {
         let avg_degree = match edge_type {
             Some(et) => self
                 .stats_manager
-                .get_edge_stats(et)
+                .get_edge_stats(space, et)
                 .map(|s| s.avg_out_degree)
                 .unwrap_or(2.0),
             None => 2.0,
@@ -531,9 +553,17 @@ impl CostCalculator {
         self.stats_manager.clone()
     }
 
+    /// Create a space-scoped statistics view over this calculator's statistics.
+    ///
+    /// The view binds the space name to the underlying statistics manager, so
+    /// estimators receive a single consistent source of statistics.
+    pub fn stats_view<'a>(&'a self, space: Option<&'a str>) -> StatsView<'a> {
+        StatsView::new(&self.stats_manager, space)
+    }
+
     /// Estimating the selectivity of tag selection
-    pub fn estimate_tag_selectivity(&self, tag_name: &str) -> f64 {
-        let vertex_count = self.stats_manager.get_vertex_count(tag_name);
+    pub fn estimate_tag_selectivity(&self, space: &str, tag_name: &str) -> f64 {
+        let vertex_count = self.stats_manager.get_vertex_count(space, tag_name);
         if vertex_count == 0 {
             1.0
         } else {
@@ -543,8 +573,8 @@ impl CostCalculator {
     }
 
     /// Estimating the selectivity of edge type choices
-    pub fn estimate_edge_selectivity(&self, edge_type: &str) -> f64 {
-        let edge_stats = self.stats_manager.get_edge_stats(edge_type);
+    pub fn estimate_edge_selectivity(&self, space: &str, edge_type: &str) -> f64 {
+        let edge_stats = self.stats_manager.get_edge_stats(space, edge_type);
         match edge_stats {
             Some(stats) if stats.edge_count > 0 => {
                 // Estimation based on the number of edges
@@ -769,7 +799,7 @@ mod tests {
         let calculator = CostCalculator::new(stats_manager);
 
         // When no statistical information is available, a value of 0 should be returned.
-        let cost = calculator.calculate_scan_vertices_cost("NonExistent");
+        let cost = calculator.calculate_scan_vertices_cost("test", "NonExistent");
         assert_eq!(cost, 0.0);
     }
 

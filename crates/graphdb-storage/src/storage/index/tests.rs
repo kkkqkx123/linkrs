@@ -1,3 +1,4 @@
+use crate::core::types::StorageVersion;
 use crate::core::types::{
     CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
     MAX_TIMESTAMP,
@@ -13,7 +14,6 @@ use crate::storage::index::manifest::{
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity};
 use crate::storage::index::*;
 use crate::storage::persistence::write_versioned_payload;
-use crate::core::types::StorageVersion;
 use std::collections::BTreeMap;
 
 fn write_crashed_build_state(index_root: &std::path::Path, state: &GenerationBuildState) {
@@ -198,11 +198,12 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let shard_runtime = crate::storage::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
-            shard.checkpoint_file.clone(),
-            64 * 1024 * 1024,
-        )
-        .expect("load split shard");
+        let shard_runtime =
+            crate::storage::index::shard_runtime::ShardRuntime::load_with_pool_capacity(
+                shard.checkpoint_file.clone(),
+                64 * 1024 * 1024,
+            )
+            .expect("load split shard");
         let forward = shard_runtime.read_forward().snapshot();
         shard_entries += forward.len();
         assert!(forward.keys().all(|key| key.starts_with(&first_prefix)));
@@ -728,8 +729,7 @@ fn wal_recovers_data_after_checkpoint() {
 
     // Load a new shard from the same checkpoint - should replay WAL
     let loaded_shard =
-        ShardRuntime::load_with_pool_capacity(checkpoint_file.clone(), 128 * 1024 * 1024)
-            .unwrap();
+        ShardRuntime::load_with_pool_capacity(checkpoint_file.clone(), 128 * 1024 * 1024).unwrap();
 
     let fwd = loaded_shard.read_forward();
     let rev = loaded_shard.read_reverse();

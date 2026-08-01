@@ -107,6 +107,7 @@ impl IndexSelector {
     /// Select the optimal index for the query.
     pub fn select_index(
         &self,
+        space: &str,
         tag_name: &str,
         predicates: &[PropertyPredicate],
         available_indexes: &[Index],
@@ -116,8 +117,10 @@ impl IndexSelector {
             let vertex_count = self
                 .cost_calculator
                 .statistics_manager()
-                .get_vertex_count(tag_name);
-            let estimated_cost = self.cost_calculator.calculate_scan_vertices_cost(tag_name);
+                .get_vertex_count(space, tag_name);
+            let estimated_cost = self
+                .cost_calculator
+                .calculate_scan_vertices_cost(space, tag_name);
             return IndexSelection::FullScan {
                 estimated_cost,
                 vertex_count,
@@ -133,7 +136,7 @@ impl IndexSelector {
                 continue;
             }
 
-            if let Some(selection) = self.evaluate_index(index, predicates) {
+            if let Some(selection) = self.evaluate_index(space, index, predicates) {
                 match &best_selection {
                     None => best_selection = Some(selection),
                     Some(current_best) => {
@@ -150,8 +153,10 @@ impl IndexSelector {
             let vertex_count = self
                 .cost_calculator
                 .statistics_manager()
-                .get_vertex_count(tag_name);
-            let estimated_cost = self.cost_calculator.calculate_scan_vertices_cost(tag_name);
+                .get_vertex_count(space, tag_name);
+            let estimated_cost = self
+                .cost_calculator
+                .calculate_scan_vertices_cost(space, tag_name);
             IndexSelection::FullScan {
                 estimated_cost,
                 vertex_count,
@@ -162,6 +167,7 @@ impl IndexSelector {
     /// Evaluating a single index
     fn evaluate_index(
         &self,
+        space: &str,
         index: &Index,
         predicates: &[PropertyPredicate],
     ) -> Option<IndexSelection> {
@@ -187,6 +193,7 @@ impl IndexSelector {
                         None
                     };
                     self.selectivity_estimator.estimate_equality_selectivity(
+                        Some(space),
                         Some(&index.schema_name),
                         &predicate.property_name,
                         value.as_ref(),
@@ -216,6 +223,7 @@ impl IndexSelector {
 
         // Calculating the cost
         let estimated_cost = self.cost_calculator.calculate_index_scan_cost(
+            space,
             &index.schema_name,
             &covered_predicates[0].property_name,
             total_selectivity,
@@ -235,6 +243,7 @@ impl IndexSelector {
     /// Choosing the optimal composite index strategy
     pub fn select_composite_index_strategy(
         &self,
+        space: &str,
         tag_name: &str,
         predicates: &[PropertyPredicate],
         available_indexes: &[Index],
@@ -245,8 +254,10 @@ impl IndexSelector {
         let vertex_count = self
             .cost_calculator
             .statistics_manager()
-            .get_vertex_count(tag_name);
-        let full_scan_cost = self.cost_calculator.calculate_scan_vertices_cost(tag_name);
+            .get_vertex_count(space, tag_name);
+        let full_scan_cost = self
+            .cost_calculator
+            .calculate_scan_vertices_cost(space, tag_name);
         strategies.push(IndexSelection::FullScan {
             estimated_cost: full_scan_cost,
             vertex_count,
@@ -258,7 +269,7 @@ impl IndexSelector {
                 continue;
             }
 
-            if let Some(selection) = self.evaluate_index(index, predicates) {
+            if let Some(selection) = self.evaluate_index(space, index, predicates) {
                 strategies.push(selection);
             }
         }

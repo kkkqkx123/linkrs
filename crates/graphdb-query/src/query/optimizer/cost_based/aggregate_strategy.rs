@@ -10,7 +10,7 @@
 //! use std::sync::Arc;
 //!
 //! let selector = AggregateStrategySelector::new(cost_calculator);
-//! let decision = selector.select_strategy(&context);
+//! let decision = selector.select_strategy("test", &context);
 //! ```
 
 use std::sync::Arc;
@@ -169,8 +169,12 @@ impl AggregateStrategySelector {
     ///
     /// # Return
     /// Aggregation policy decision-making, including the selected policy and the estimated cost.
-    pub fn select_strategy(&self, context: &AggregateContext) -> AggregateStrategyDecision {
-        self.select_strategy_internal(context, false)
+    pub fn select_strategy(
+        &self,
+        space: &str,
+        context: &AggregateContext,
+    ) -> AggregateStrategyDecision {
+        self.select_strategy_internal(space, context, false)
     }
 
     /// Selecting the optimal aggregation strategy with memory pressure awareness
@@ -185,25 +189,27 @@ impl AggregateStrategySelector {
     /// Aggregation policy decision-making, including the selected policy and the estimated cost.
     pub fn select_strategy_with_memory_pressure(
         &self,
+        space: &str,
         context: &AggregateContext,
     ) -> AggregateStrategyDecision {
-        self.select_strategy_internal(context, true)
+        self.select_strategy_internal(space, context, true)
     }
 
     /// Internal method for selecting aggregation strategy
     fn select_strategy_internal(
         &self,
+        space: &str,
         context: &AggregateContext,
         consider_memory_pressure: bool,
     ) -> AggregateStrategyDecision {
         // If the input is already sorted and the sorting key matches the grouping key, stream aggregation should be used preferentially.
         if context.input_is_sorted && context.sort_keys_match_group_keys {
-            return self.create_streaming_aggregate_decision(context);
+            return self.create_streaming_aggregate_decision(space, context);
         }
 
         // If the expression is non-deterministic, hash aggregation should be used preferentially (to avoid the uncertainties associated with sorting).
         if !context.is_deterministic {
-            let group_by_cardinality = self.estimate_group_by_cardinality(context);
+            let group_by_cardinality = self.estimate_group_by_cardinality(space, context);
             let hash_cost = self.calculate_hash_aggregate_cost(context, group_by_cardinality);
             let hash_memory = self.estimate_hash_memory_usage(context, group_by_cardinality);
             return AggregateStrategyDecision {
@@ -219,7 +225,7 @@ impl AggregateStrategySelector {
         }
 
         // Estimating the cardinality of the group key
-        let group_by_cardinality = self.estimate_group_by_cardinality(context);
+        let group_by_cardinality = self.estimate_group_by_cardinality(space, context);
 
         // Calculate the cost of each strategy.
         let hash_cost = self.calculate_hash_aggregate_cost(context, group_by_cardinality);
@@ -376,13 +382,13 @@ impl AggregateStrategySelector {
     ///
     /// First tries to use property combination statistics if available,
     /// then falls back to heuristic estimation.
-    fn estimate_group_by_cardinality(&self, context: &AggregateContext) -> u64 {
+    fn estimate_group_by_cardinality(&self, space: &str, context: &AggregateContext) -> u64 {
         // Try to use property combination statistics for better estimation
         if let Some(table_name) = self.get_table_name_from_context(context) {
             if let Some(cardinality) = self
                 .cost_calculator
                 .statistics_manager()
-                .get_combined_cardinality(Some(&table_name), &context.group_keys)
+                .get_combined_cardinality(space, Some(&table_name), &context.group_keys)
             {
                 return cardinality.min(context.input_rows).max(1);
             }
@@ -484,10 +490,11 @@ impl AggregateStrategySelector {
     /// Creating streaming aggregation decisions
     fn create_streaming_aggregate_decision(
         &self,
+        space: &str,
         context: &AggregateContext,
     ) -> AggregateStrategyDecision {
         let estimated_cost = self.calculate_streaming_aggregate_cost(context);
-        let group_by_cardinality = self.estimate_group_by_cardinality(context);
+        let group_by_cardinality = self.estimate_group_by_cardinality(space, context);
 
         AggregateStrategyDecision {
             strategy: AggregateStrategy::StreamingAggregate,
@@ -499,8 +506,13 @@ impl AggregateStrategySelector {
     }
 
     /// Update and optimize the information on the aggregation strategies used in decision-making processes.
-    pub fn update_decision(&self, decision: &mut OptimizationDecision, context: &AggregateContext) {
-        let strategy_decision = self.select_strategy(context);
+    pub fn update_decision(
+        &self,
+        space: &str,
+        decision: &mut OptimizationDecision,
+        context: &AggregateContext,
+    ) {
+        let strategy_decision = self.select_strategy(space, context);
 
         // Encode the aggregation policy information into the `rewrite_rules` used for decision-making.
         // Use a specific rule ID to indicate the selection of the aggregation policy.
@@ -543,12 +555,13 @@ impl AggregateStrategySelector {
     /// - Cost comparison
     pub fn select_strategy_comprehensive(
         &self,
+        space: &str,
         context: &AggregateContext,
         agg_functions: &[ContextualExpression],
     ) -> AggregateStrategyDecision {
         // First check if we can use streaming aggregation
         if context.input_is_sorted && context.sort_keys_match_group_keys {
-            return self.create_streaming_aggregate_decision(context);
+            return self.create_streaming_aggregate_decision(space, context);
         }
 
         // Analyze expression complexity
@@ -560,14 +573,14 @@ impl AggregateStrategySelector {
         };
 
         // Get base decision with memory pressure awareness
-        let mut decision = self.select_strategy_with_memory_pressure(context);
+        let mut decision = self.select_strategy_with_memory_pressure(space, context);
 
         // If expressions are complex and we're using SortAggregate,
         // consider switching to HashAggregate to avoid redundant computations
         if decision.strategy == AggregateStrategy::SortAggregate
             && avg_expression_cost > self.cost_calculator.config().function_call_base_cost * 2.0
         {
-            let group_by_cardinality = self.estimate_group_by_cardinality(context);
+            let group_by_cardinality = self.estimate_group_by_cardinality(space, context);
             let hash_cost = self.calculate_hash_aggregate_cost(context, group_by_cardinality);
             let sort_cost = decision.estimated_cost;
 
@@ -617,7 +630,7 @@ mod tests {
             table_name: None,
         };
 
-        let decision = selector.select_strategy(&context);
+        let decision = selector.select_strategy("test", &context);
         assert_eq!(decision.strategy, AggregateStrategy::StreamingAggregate);
         matches!(decision.reason, SelectionReason::InputAlreadySorted);
     }
@@ -637,7 +650,7 @@ mod tests {
             table_name: None,
         };
 
-        let decision = selector.select_strategy(&context);
+        let decision = selector.select_strategy("test", &context);
         assert_eq!(decision.strategy, AggregateStrategy::HashAggregate);
         matches!(decision.reason, SelectionReason::SmallDataSet);
     }
@@ -657,7 +670,7 @@ mod tests {
             table_name: None,
         };
 
-        let decision = selector.select_strategy(&context);
+        let decision = selector.select_strategy("test", &context);
         assert_eq!(decision.strategy, AggregateStrategy::SortAggregate);
         matches!(decision.reason, SelectionReason::MemoryConstrained);
     }
@@ -715,10 +728,10 @@ mod tests {
         };
 
         // Without memory pressure, should likely choose HashAggregate for high cardinality
-        let _normal_decision = selector.select_strategy(&context);
+        let _normal_decision = selector.select_strategy("test", &context);
 
         // With memory pressure awareness, check if it considers memory threshold
-        let pressure_decision = selector.select_strategy_with_memory_pressure(&context);
+        let pressure_decision = selector.select_strategy_with_memory_pressure("test", &context);
 
         // Both should return valid decisions
         assert!(pressure_decision.estimated_cost > 0.0);
@@ -763,7 +776,7 @@ mod tests {
         };
 
         // Test comprehensive selection with empty functions
-        let decision = selector.select_strategy_comprehensive(&context, &[]);
+        let decision = selector.select_strategy_comprehensive("test", &context, &[]);
         assert!(decision.estimated_cost > 0.0);
         assert!(decision.estimated_memory_bytes > 0);
     }

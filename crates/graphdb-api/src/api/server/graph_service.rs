@@ -11,6 +11,9 @@ use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
 use crate::core::{DataType, MetricType, Permission};
+use crate::query::executor::streaming::pool::SharedScheduler;
+use crate::query::executor::streaming::query_registry::QueryRegistry;
+use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
@@ -39,6 +42,11 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 
     // Transaction management-related
     transaction_manager: Option<Arc<TransactionManager>>,
+
+    /// Engine-level shared scheduler, created once at startup.
+    shared_scheduler: Arc<SharedScheduler>,
+    /// Process-level query registry, created once at startup.
+    query_registry: Arc<QueryRegistry>,
 
     /// Monotonically increasing query ID counter (server-assigned, not hash-based).
     next_query_id: AtomicU64,
@@ -178,6 +186,18 @@ impl<
             )
         };
 
+        // Engine-level shared scheduler + query registry, created once at
+        // startup and reused across all queries (worker threads persist).
+        let optimizer_engine = Arc::new(crate::query::OptimizerEngine::default());
+        let shared_scheduler = Arc::new(SharedScheduler::new(
+            optimizer_engine.partitioning_config().max_workers.max(1),
+        ));
+        let query_registry = Arc::new(QueryRegistry::new());
+        info!(
+            "Shared query scheduler created with {} worker(s)",
+            shared_scheduler.max_workers()
+        );
+
         #[cfg(feature = "qdrant")]
         let (query_api, vector_api) = if config.is_vector_enabled() {
             // Use shared VectorManager if available, otherwise create a new one
@@ -198,7 +218,8 @@ impl<
             )
             .await
             {
-                Ok(api) => {
+                Ok(mut api) => {
+                    api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     let vector_api = Arc::new(VectorApi::new(vm));
                     (Arc::new(RwLock::new(api)), Some(vector_api))
                 }
@@ -207,21 +228,31 @@ impl<
                         "Failed to initialize vector search, falling back to basic QueryApi: {}",
                         e
                     );
-                    let api =
+                    let mut api =
                         Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+                    api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     (Arc::new(RwLock::new(api)), None)
                 }
             }
         } else {
-            let api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            let mut api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             (Arc::new(RwLock::new(api)), None)
         };
 
         #[cfg(not(feature = "qdrant"))]
         let query_api = {
-            let api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            let mut api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             Arc::new(RwLock::new(api))
         };
+
+        // Startup statistics load: collect optimizer statistics for every
+        // loaded space in the background. Failures are logged as warnings
+        // and never block server startup.
+        if start_cleanup_task {
+            Self::spawn_startup_statistics_load(query_api.clone(), storage.clone());
+        }
 
         let authenticator = AuthenticatorFactory::create_default(&config.server.auth);
         let permission_manager = Arc::new(PermissionManager::new());
@@ -242,6 +273,8 @@ impl<
             vector_api,
             sync_api,
             transaction_manager,
+            shared_scheduler,
+            query_registry,
             next_query_id: AtomicU64::new(1),
         };
         Arc::new(service)
@@ -259,6 +292,32 @@ impl<
         } else {
             QueryApi::new(inner, stats_manager.clone())
         }
+    }
+
+    /// Spawn a background task that collects optimizer statistics for all
+    /// loaded spaces. Failure of any space is a warning only.
+    fn spawn_startup_statistics_load(query_api: Arc<RwLock<QueryApi<S>>>, storage: Arc<S>) {
+        tokio::spawn(async move {
+            let spaces = match storage.list_spaces() {
+                Ok(spaces) => spaces,
+                Err(error) => {
+                    warn!("Startup statistics load: failed to list spaces: {}", error);
+                    return;
+                }
+            };
+            for space in spaces {
+                let result = query_api
+                    .read()
+                    .collect_statistics(&space.space_name, false);
+                match result {
+                    Ok(()) => info!("Startup statistics loaded for space '{}'", space.space_name),
+                    Err(error) => warn!(
+                        "Startup statistics load failed for space '{}': {}",
+                        space.space_name, error
+                    ),
+                }
+            }
+        });
     }
 
     pub async fn authenticate(
@@ -686,6 +745,22 @@ impl<
             }
             _ => result.space_summary().cloned(),
         }
+    }
+
+    /// Graceful shutdown of the shared execution infrastructure.
+    ///
+    /// Order matters: `cancel_all` must complete before the scheduler is
+    /// shut down so no query can submit work during teardown.
+    pub fn shutdown(&self) {
+        let cancelled = self.query_registry.cancel_all(CancelReason::Shutdown);
+        if !cancelled.is_empty() {
+            info!(
+                "Cancelled {} active query(s) during shutdown",
+                cancelled.len()
+            );
+        }
+        self.shared_scheduler.shutdown_shared();
+        info!("Shared query scheduler shut down");
     }
 
     pub async fn signout(&self, session_id: i64) {

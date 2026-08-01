@@ -145,9 +145,20 @@ impl BatchOptimizer {
         let mut optimizer = Self::new();
 
         // Default batch assignment based on rule categories
+        let mut total_rules = 0usize;
         for rule in registry.into_vec() {
             let batch = Self::assign_rule_to_batch(&rule);
             optimizer.batch_rules.entry(batch).or_default().push(rule);
+            total_rules += 1;
+        }
+
+        let assigned: usize = optimizer.batch_rules.values().map(Vec::len).sum();
+        if assigned != total_rules {
+            log::warn!(
+                "BatchOptimizer: {}/{} rules unclassified and will not run",
+                total_rules.saturating_sub(assigned),
+                total_rules
+            );
         }
 
         optimizer
@@ -220,6 +231,11 @@ impl BatchOptimizer {
     pub fn with_max_iterations(mut self, max: usize) -> Self {
         self.max_iterations = AtomicUsize::new(max);
         self
+    }
+
+    /// Set the maximum number of iterations (interior mutability via `AtomicUsize`).
+    pub fn set_max_iterations(&self, max: usize) {
+        self.max_iterations.store(max, Ordering::Relaxed);
     }
 
     /// Set whether to enable diagnostics
@@ -462,16 +478,19 @@ mod tests {
     #[test]
     fn test_batch_optimizer_from_registry() {
         let registry = RuleRegistry::default();
+        let total_rules = registry.len();
         let optimizer = BatchOptimizer::from_registry(registry);
 
         // Check that rules are distributed across batches
-        let total_rules: usize = optimizer
+        let assigned_rules: usize = optimizer
             .batch_rules
             .values()
             .map(|rules| rules.len())
             .sum();
 
-        assert!(total_rules > 0);
+        assert!(assigned_rules > 0);
+        // Every rule in the registry must land in exactly one batch.
+        assert_eq!(assigned_rules, total_rules);
     }
 
     #[test]

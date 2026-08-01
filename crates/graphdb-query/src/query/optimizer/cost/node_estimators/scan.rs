@@ -10,6 +10,7 @@ use super::NodeEstimator;
 use crate::query::optimizer::cost::estimate::NodeCostEstimate;
 use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::error::CostError;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::access::EdgeIndexScanNode;
 use crate::query::planning::plan::core::nodes::access::{IndexScanNode, ScanType};
 use crate::query::planning::plan::PlanNodeEnum;
@@ -98,17 +99,21 @@ impl<'a> ScanEstimator<'a> {
 impl<'a> NodeEstimator for ScanEstimator<'a> {
     fn estimate(
         &self,
+        stats: &StatsView,
         node: &PlanNodeEnum,
         _child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
+        let space = stats.space().unwrap_or("");
         match node {
             PlanNodeEnum::ScanVertices(n) => {
                 let tag_name = n.tag().map(|s| s.as_str()).unwrap_or("default");
                 let row_count = self
                     .cost_calculator
                     .statistics_manager()
-                    .get_vertex_count(tag_name);
-                let cost = self.cost_calculator.calculate_scan_vertices_cost(tag_name);
+                    .get_vertex_count(space, tag_name);
+                let cost = self
+                    .cost_calculator
+                    .calculate_scan_vertices_cost(space, tag_name);
                 Ok((cost, row_count.max(1)))
             }
             PlanNodeEnum::ScanEdges(n) => {
@@ -116,8 +121,10 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
                 let row_count = self
                     .cost_calculator
                     .statistics_manager()
-                    .get_edge_count(&edge_type);
-                let cost = self.cost_calculator.calculate_scan_edges_cost(&edge_type);
+                    .get_edge_count(space, &edge_type);
+                let cost = self
+                    .cost_calculator
+                    .calculate_scan_edges_cost(space, &edge_type);
                 Ok((cost, row_count.max(1)))
             }
             PlanNodeEnum::IndexScan(n) => {
@@ -127,9 +134,10 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
                 let table_rows = self
                     .cost_calculator
                     .statistics_manager()
-                    .get_vertex_count(&tag_name);
+                    .get_vertex_count(space, &tag_name);
                 let output_rows = (selectivity * table_rows as f64).max(1.0) as u64;
                 let cost = self.cost_calculator.calculate_index_scan_cost(
+                    space,
                     &tag_name,
                     &property_name,
                     selectivity,
@@ -142,11 +150,13 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
                 let edge_count = self
                     .cost_calculator
                     .statistics_manager()
-                    .get_edge_count(edge_type);
+                    .get_edge_count(space, edge_type);
                 let output_rows = (selectivity * edge_count as f64).max(1.0) as u64;
-                let cost = self
-                    .cost_calculator
-                    .calculate_edge_index_scan_cost(edge_type, selectivity);
+                let cost = self.cost_calculator.calculate_edge_index_scan_cost(
+                    space,
+                    edge_type,
+                    selectivity,
+                );
                 Ok((cost, output_rows))
             }
             _ => Err(CostError::UnsupportedNodeType(format!(
@@ -181,8 +191,9 @@ mod tests {
             vertex_count: 1000,
             avg_out_degree: 5.0,
             avg_in_degree: 5.0,
+            ..TagStatistics::default()
         };
-        stats_manager.update_tag_stats(tag_stats);
+        stats_manager.update_tag_stats("test", tag_stats);
 
         let edge_stats = EdgeTypeStatistics {
             edge_type: "friend".to_string(),
@@ -196,8 +207,9 @@ mod tests {
             in_degree_std_dev: 1.5,
             degree_gini_coefficient: 0.3,
             hot_vertices: Vec::new(),
+            ..EdgeTypeStatistics::default()
         };
-        stats_manager.update_edge_stats(edge_stats);
+        stats_manager.update_edge_stats("test", edge_stats);
 
         let config = CostModelConfig::default();
         CostCalculator::with_config(stats_manager, config)
@@ -213,7 +225,11 @@ mod tests {
         let plan_node = PlanNodeEnum::ScanVertices(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimates should be successful");
@@ -230,7 +246,11 @@ mod tests {
         let plan_node = PlanNodeEnum::ScanEdges(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimates should be successful");
@@ -258,7 +278,11 @@ mod tests {
         let plan_node = PlanNodeEnum::IndexScan(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimates should be successful");
@@ -276,7 +300,11 @@ mod tests {
         let plan_node = PlanNodeEnum::EdgeIndexScan(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimates should be successful");
@@ -293,7 +321,11 @@ mod tests {
             crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new(),
         );
         let child_estimates = vec![];
-        let result = estimator.estimate(&node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &node,
+            &child_estimates,
+        );
 
         assert!(result.is_err());
     }
@@ -429,7 +461,11 @@ mod tests {
         let plan_node = PlanNodeEnum::ScanVertices(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -446,7 +482,11 @@ mod tests {
         let plan_node = PlanNodeEnum::ScanEdges(node);
 
         let child_estimates = vec![];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");

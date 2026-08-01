@@ -44,14 +44,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
     }
 
-    pub fn execute_query_with_streaming(
-        &mut self,
-        query_text: &str,
-        space_info: Option<SpaceInfo>,
-    ) -> DBResult<ExecutionResult> {
-        self.execute_query_with_space(query_text, space_info)
-    }
-
     pub fn execute_query_stream_with_request(
         &mut self,
         query_text: &str,
@@ -196,26 +188,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let optimize_start = Instant::now();
-        let optimized_plan = match self.optimize_execution_plan(execution_plan) {
-            Ok(plan) => {
-                profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
-                metrics.record_optimize_time(optimize_start.elapsed());
-                plan
-            }
-            Err(e) => {
-                profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
-                let error_info = ErrorInfo::new(
-                    ErrorType::OptimizationError,
-                    QueryPhase::Optimize,
-                    e.to_string(),
-                );
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                return Err(e);
-            }
-        };
+        let space_name = request
+            .query_context
+            .space_name()
+            .or_else(|| request.query_context.request_context().space_name.clone());
+        let optimized_plan =
+            match self.optimize_execution_plan(execution_plan, space_name.as_deref()) {
+                Ok(plan) => {
+                    profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
+                    metrics.record_optimize_time(optimize_start.elapsed());
+                    plan
+                }
+                Err(e) => {
+                    profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
+                    let error_info = ErrorInfo::new(
+                        ErrorType::OptimizationError,
+                        QueryPhase::Optimize,
+                        e.to_string(),
+                    );
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
+            };
 
         let physical_plan = self.build_physical_plan(&optimized_plan, &request.query_context)?;
 
@@ -377,6 +374,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             parameters: Arc::new(params),
             ..ExecutionContext::default()
         };
+        context.shared_scheduler = self.shared_scheduler.clone();
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn QueryStorage>> = if let Some(operation_storage) =
                 query_context.request_context().operation_storage.clone()

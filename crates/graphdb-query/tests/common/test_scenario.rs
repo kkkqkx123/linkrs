@@ -118,6 +118,61 @@ impl TestScenario {
 
     // ==================== Setup Methods ====================
 
+    /// Access the optimizer statistics manager.
+    pub fn stats_manager(&self) -> &graphdb_query::query::optimizer::stats::StatisticsManager {
+        self.pipeline.optimizer_engine().stats_manager()
+    }
+
+    /// The last recorded error message, if any.
+    pub fn error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// Execute `ANALYZE` for the current space.
+    pub fn analyze(mut self) -> Self {
+        let space_name = self.current_space.as_ref().map(|s| s.space_name.clone());
+        match space_name {
+            Some(name) => self.query(&format!("ANALYZE SPACE {}", name)),
+            None => {
+                self.last_error = Some("No space selected for ANALYZE".to_string());
+                self.last_result = None;
+                self
+            }
+        }
+    }
+
+    /// Assert the analyzed vertex count for a tag in the current space.
+    pub fn assert_analyzed_vertex_count(self, tag: &str, expected: u64) -> Self {
+        let space = self
+            .current_space
+            .as_ref()
+            .map(|s| s.space_name.clone())
+            .unwrap_or_default();
+        let actual = self.stats_manager().get_vertex_count(&space, tag);
+        assert_eq!(
+            actual, expected,
+            "Analyzed vertex count for tag '{}' in space '{}'",
+            tag, space
+        );
+        self
+    }
+
+    /// Assert the analyzed edge count for an edge type in the current space.
+    pub fn assert_analyzed_edge_count(self, edge_type: &str, expected: u64) -> Self {
+        let space = self
+            .current_space
+            .as_ref()
+            .map(|s| s.space_name.clone())
+            .unwrap_or_default();
+        let actual = self.stats_manager().get_edge_count(&space, edge_type);
+        assert_eq!(
+            actual, expected,
+            "Analyzed edge count for edge type '{}' in space '{}'",
+            edge_type, space
+        );
+        self
+    }
+
     /// Setup graph space
     pub fn setup_space(mut self, space_name: &str) -> Self {
         let query = format!("CREATE SPACE IF NOT EXISTS {}", space_name);

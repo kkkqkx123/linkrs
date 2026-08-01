@@ -12,6 +12,7 @@ use super::{get_input_rows, NodeEstimator};
 use crate::query::optimizer::cost::estimate::NodeCostEstimate;
 use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::error::CostError;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Connection Operation Estimator
@@ -29,6 +30,7 @@ impl<'a> JoinEstimator<'a> {
 impl<'a> NodeEstimator for JoinEstimator<'a> {
     fn estimate(
         &self,
+        _stats: &StatsView,
         node: &PlanNodeEnum,
         child_estimates: &[NodeCostEstimate],
     ) -> Result<(f64, u64), CostError> {
@@ -121,7 +123,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -145,7 +151,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -168,7 +178,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -192,7 +206,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -214,7 +232,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -237,7 +259,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 100),
             NodeCostEstimate::new(20.0, 20.0, 200),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -252,7 +278,11 @@ mod tests {
 
         let node = PlanNodeEnum::Start(StartNode::new());
         let child_estimates = vec![];
-        let result = estimator.estimate(&node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &node,
+            &child_estimates,
+        );
 
         assert!(result.is_err());
     }
@@ -273,7 +303,11 @@ mod tests {
                 NodeCostEstimate::new(10.0, 10.0, left_rows),
                 NodeCostEstimate::new(20.0, 20.0, right_rows),
             ];
-            let result = estimator.estimate(&plan_node, &child_estimates);
+            let result = estimator.estimate(
+                &calculator.stats_view(Some("test")),
+                &plan_node,
+                &child_estimates,
+            );
 
             assert!(result.is_ok());
             let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -296,7 +330,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 1000),
             NodeCostEstimate::new(20.0, 20.0, 1000),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -319,7 +357,11 @@ mod tests {
             NodeCostEstimate::new(0.0, 0.0, 0),
             NodeCostEstimate::new(0.0, 0.0, 0),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (cost, output_rows) = result.expect("Estimation should succeed");
@@ -342,7 +384,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 500),
             NodeCostEstimate::new(20.0, 20.0, 1000),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (_, output_rows) = result.expect("Estimation should succeed");
@@ -364,7 +410,11 @@ mod tests {
             NodeCostEstimate::new(10.0, 10.0, 750),
             NodeCostEstimate::new(20.0, 20.0, 1500),
         ];
-        let result = estimator.estimate(&plan_node, &child_estimates);
+        let result = estimator.estimate(
+            &calculator.stats_view(Some("test")),
+            &plan_node,
+            &child_estimates,
+        );
 
         assert!(result.is_ok());
         let (_, output_rows) = result.expect("Estimation should succeed");

@@ -13,6 +13,10 @@ pub struct TagStatistics {
     pub avg_out_degree: f64,
     /// Average Indegree
     pub avg_in_degree: f64,
+    /// Space this statistics was collected for (`None` = legacy/default).
+    pub space: Option<String>,
+    /// Schema version at collection time (used for staleness checks).
+    pub schema_version: Option<u64>,
 }
 
 impl TagStatistics {
@@ -23,7 +27,16 @@ impl TagStatistics {
             vertex_count: 0,
             avg_out_degree: 0.0,
             avg_in_degree: 0.0,
+            space: None,
+            schema_version: None,
         }
+    }
+
+    /// Attach space and schema version provenance.
+    pub fn with_version(mut self, space: String, schema_version: u64) -> Self {
+        self.space = Some(space);
+        self.schema_version = Some(schema_version);
+        self
     }
 }
 

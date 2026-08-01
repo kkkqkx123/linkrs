@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
@@ -1013,8 +1012,10 @@ mod tests {
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
 
-        let edge_type = crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string())
-            .with_properties(vec![PropertyDef::new("weight".to_string(), DataType::BigInt)]);
+        let edge_type =
+            crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
+                PropertyDef::new("weight".to_string(), DataType::BigInt),
+            ]);
         storage
             .create_edge_type("test_space", &edge_type)
             .expect("Failed to create edge type");
@@ -1034,9 +1035,15 @@ mod tests {
                     .collect(),
             )
         };
-        storage.insert_edge("test_space", make_edge(1, 2, 10)).unwrap();
-        storage.insert_edge("test_space", make_edge(1, 3, 25)).unwrap();
-        storage.insert_edge("test_space", make_edge(2, 3, 5)).unwrap();
+        storage
+            .insert_edge("test_space", make_edge(1, 2, 10))
+            .unwrap();
+        storage
+            .insert_edge("test_space", make_edge(1, 3, 25))
+            .unwrap();
+        storage
+            .insert_edge("test_space", make_edge(2, 3, 5))
+            .unwrap();
 
         // Enable after inserts: build path indexes existing edges.
         assert!(!storage
@@ -2081,8 +2088,10 @@ mod tests {
         let mut storage = create_test_storage();
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
-        let edge_type = crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string())
-            .with_properties(vec![PropertyDef::new("weight".to_string(), DataType::BigInt)]);
+        let edge_type =
+            crate::core::types::EdgeTypeInfo::new("WEIGHTED".to_string()).with_properties(vec![
+                PropertyDef::new("weight".to_string(), DataType::BigInt),
+            ]);
         storage.create_edge_type("test_space", &edge_type).unwrap();
         insert_test_vertex(&mut storage, 1, "Alice");
         insert_test_vertex(&mut storage, 2, "Bob");
@@ -2098,19 +2107,44 @@ mod tests {
                     .collect(),
             )
         };
-        storage.insert_edge("test_space", make_edge(1, 2, 10)).unwrap();
-        storage.insert_edge("test_space", make_edge(1, 3, 25)).unwrap();
-        storage.insert_edge("test_space", make_edge(2, 3, 5)).unwrap();
-        let all = storage.scan_edges_by_type("test_space", "WEIGHTED").unwrap();
+        storage
+            .insert_edge("test_space", make_edge(1, 2, 10))
+            .unwrap();
+        storage
+            .insert_edge("test_space", make_edge(1, 3, 25))
+            .unwrap();
+        storage
+            .insert_edge("test_space", make_edge(2, 3, 5))
+            .unwrap();
+        let all = storage
+            .scan_edges_by_type("test_space", "WEIGHTED")
+            .unwrap();
         eprintln!("scan_edges_by_type count = {}", all.len());
-        for e in &all { eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props); }
-        storage.enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024).unwrap();
-        eprintln!("has_index = {:?}", storage.has_edge_property_index("test_space", "WEIGHTED"));
-        let edges = storage.lookup_edges_by_property_range(
-            "test_space", "WEIGHTED", "weight", Some(&Value::BigInt(20)), None, true, false,
-        ).unwrap();
+        for e in &all {
+            eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props);
+        }
+        storage
+            .enable_edge_property_index("test_space", "WEIGHTED", 64 * 1024 * 1024)
+            .unwrap();
+        eprintln!(
+            "has_index = {:?}",
+            storage.has_edge_property_index("test_space", "WEIGHTED")
+        );
+        let edges = storage
+            .lookup_edges_by_property_range(
+                "test_space",
+                "WEIGHTED",
+                "weight",
+                Some(&Value::BigInt(20)),
+                None,
+                true,
+                false,
+            )
+            .unwrap();
         eprintln!("lookup >=20 count = {}", edges.len());
-        for e in &edges { eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props); }
+        for e in &edges {
+            eprintln!("  edge src={:?} dst={:?} props={:?}", e.src, e.dst, e.props);
+        }
     }
 
     #[test]

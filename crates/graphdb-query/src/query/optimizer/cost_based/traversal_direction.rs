@@ -120,6 +120,8 @@ pub struct TraversalDirectionDecision {
 #[derive(Debug)]
 pub struct TraversalDirectionOptimizer {
     cost_calculator: Arc<CostCalculator>,
+    /// Space name used to look up statistics.
+    space: String,
     /// Super Node Threshold (A node is considered a super node if its degree exceeds this value.)
     super_node_threshold: f64,
     /// Threshold for degree difference: Differences smaller than this value are considered equal.
@@ -148,9 +150,16 @@ impl TraversalDirectionOptimizer {
         let thresholds = cost_calculator.config().strategy_thresholds;
         Self {
             cost_calculator,
+            space: String::new(),
             super_node_threshold: thresholds.traversal_super_node_threshold,
             degree_equality_threshold: thresholds.bidirectional_savings_threshold,
         }
+    }
+
+    /// Set the space name used to look up statistics.
+    pub fn with_space(mut self, space: &str) -> Self {
+        self.space = space.to_string();
+        self
     }
 
     /// Setting the threshold for super nodes
@@ -182,7 +191,7 @@ impl TraversalDirectionOptimizer {
         let stats = self
             .cost_calculator
             .statistics_manager()
-            .get_edge_stats(&context.edge_type);
+            .get_edge_stats(&self.space, &context.edge_type);
 
         match stats {
             Some(edge_stats) => self.optimize_with_stats(context, &edge_stats),
@@ -333,9 +342,11 @@ impl TraversalDirectionOptimizer {
 
     /// Calculating the cost of traversal with a specific degree
     fn calculate_cost_with_degree(&self, context: &DirectionContext, degree: f64) -> f64 {
-        let base_cost = self
-            .cost_calculator
-            .calculate_expand_cost(context.start_nodes, Some(&context.edge_type));
+        let base_cost = self.cost_calculator.calculate_expand_cost(
+            &self.space,
+            context.start_nodes,
+            Some(&context.edge_type),
+        );
 
         // Apply penalty for high-degree (super node) scenarios
         let degree_factor = if degree > self.super_node_threshold {
@@ -350,9 +361,11 @@ impl TraversalDirectionOptimizer {
 
     /// Calculating the cost of traversal (legacy method for backward compatibility)
     fn calculate_cost(&self, context: &DirectionContext, is_super: bool) -> f64 {
-        let base_cost = self
-            .cost_calculator
-            .calculate_expand_cost(context.start_nodes, Some(&context.edge_type));
+        let base_cost = self.cost_calculator.calculate_expand_cost(
+            &self.space,
+            context.start_nodes,
+            Some(&context.edge_type),
+        );
 
         if is_super {
             base_cost * self.cost_calculator.config().super_node_penalty
@@ -371,7 +384,7 @@ impl TraversalDirectionOptimizer {
         let avg_degree = self
             .cost_calculator
             .statistics_manager()
-            .get_edge_stats(&context.edge_type)
+            .get_edge_stats(&self.space, &context.edge_type)
             .map(|s| match direction {
                 TraversalDirection::Forward => s.avg_out_degree,
                 TraversalDirection::Backward => s.avg_in_degree,
@@ -410,7 +423,7 @@ impl TraversalDirectionOptimizer {
         let stats = self
             .cost_calculator
             .statistics_manager()
-            .get_edge_stats(edge_type);
+            .get_edge_stats(&self.space, edge_type);
 
         match stats {
             Some(s) => {
@@ -435,7 +448,7 @@ impl TraversalDirectionOptimizer {
     pub fn get_degree_info(&self, edge_type: &str) -> Option<DegreeInfo> {
         self.cost_calculator
             .statistics_manager()
-            .get_edge_stats(edge_type)
+            .get_edge_stats(&self.space, edge_type)
             .map(|s| DegreeInfo {
                 avg_out_degree: s.avg_out_degree,
                 avg_in_degree: s.avg_in_degree,

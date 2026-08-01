@@ -332,8 +332,8 @@ impl IndexDataManagerImpl {
             // shard checkpoint files. Load the runtime from disk so that shard data
             // is actually available, instead of creating an empty generation that
             // satisfies the `restore_active_generation` check without any data.
-            let has_disk_shards =
-                catalog_already_loaded && manifest.shards.iter().any(|s| s.checkpoint_file.is_dir());
+            let has_disk_shards = catalog_already_loaded
+                && manifest.shards.iter().any(|s| s.checkpoint_file.is_dir());
             if has_disk_shards {
                 let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
                 let runtime = IndexRuntime::load_with_pool_capacity(&manifest, pool_cap)
@@ -373,8 +373,7 @@ impl IndexDataManagerImpl {
             }
         }
         let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
-        let runtime =
-            IndexRuntime::load_with_pool_capacity(handle.manifest(), pool_cap)?;
+        let runtime = IndexRuntime::load_with_pool_capacity(handle.manifest(), pool_cap)?;
         self.runtimes.write().insert(identity, Arc::new(runtime));
         self.restored_generations
             .write()

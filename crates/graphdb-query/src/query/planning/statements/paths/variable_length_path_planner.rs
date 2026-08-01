@@ -476,11 +476,7 @@ mod tests {
     fn test_path_pruner_no_cycles() {
         let mut pruner = PathPruner::new(PruningStrategy::NoCycles);
 
-        let path = vec![
-            Value::string("a"),
-            Value::string("b"),
-            Value::string("a"),
-        ];
+        let path = vec![Value::string("a"), Value::string("b"), Value::string("a")];
 
         assert!(pruner.should_prune(&path));
     }
@@ -491,10 +487,7 @@ mod tests {
 
         pruner.update_best(3);
 
-        let short_path = vec![
-            Value::string("a"),
-            Value::string("b"),
-        ];
+        let short_path = vec![Value::string("a"), Value::string("b")];
         assert!(!pruner.should_prune(&short_path));
 
         let long_path = vec![

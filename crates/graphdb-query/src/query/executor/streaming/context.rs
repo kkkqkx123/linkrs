@@ -236,21 +236,14 @@ mod tests {
 
     #[test]
     fn test_context_creation() {
-        let row = vec![
-            Value::Int(1),
-            Value::string("test"),
-            Value::Bool(true),
-        ];
+        let row = vec![Value::Int(1), Value::string("test"), Value::Bool(true)];
         let col_names = vec!["id".to_string(), "name".to_string(), "active".to_string()];
         let layout = Arc::new(SlotLayout::from_names(&col_names));
 
         let context = ValueRowContext::new(row, layout);
 
         assert_eq!(context.get_variable("id"), Some(Value::Int(1)));
-        assert_eq!(
-            context.get_variable("name"),
-            Some(Value::string("test"))
-        );
+        assert_eq!(context.get_variable("name"), Some(Value::string("test")));
         assert_eq!(context.get_variable("active"), Some(Value::Bool(true)));
     }
 
@@ -264,10 +257,7 @@ mod tests {
         context.set_variable("var1".to_string(), Value::string("hello"));
         context.set_variable("var2".to_string(), Value::Int(42));
 
-        assert_eq!(
-            context.get_variable("var1"),
-            Some(Value::string("hello"))
-        );
+        assert_eq!(context.get_variable("var1"), Some(Value::string("hello")));
         assert_eq!(context.get_variable("var2"), Some(Value::Int(42)));
     }
 

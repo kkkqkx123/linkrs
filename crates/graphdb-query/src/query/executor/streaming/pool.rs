@@ -90,6 +90,16 @@ impl SharedScheduler {
         // If other references remain, workers will exit when their
         // stop flag or channel closure is detected (via detach on drop).
     }
+
+    /// Shut down workers through a shared reference.
+    ///
+    /// Signals the stop flag and closes the batch channel so workers exit
+    /// promptly, even while other references (in-flight query runtimes)
+    /// still exist.  Worker threads are not joined here; they terminate
+    /// after observing the stop flag / closed channel.
+    pub fn shutdown_shared(&self) {
+        self.pool.shutdown_shared();
+    }
 }
 
 #[derive(Debug)]
@@ -534,6 +544,19 @@ impl MorselWorkerPool {
         *self.batch_tx.get_mut().unwrap() = None;
         for handle in self.workers.drain(..) {
             let _ = handle.join();
+        }
+    }
+
+    /// Signal all workers to stop through a shared reference.
+    ///
+    /// Sets the stop flag and closes the batch channel.  Workers blocked on
+    /// `recv` observe the closed channel and exit; the stop flag covers
+    /// workers between batches.  Safe to call while queries still hold
+    /// runtime references to this pool.
+    pub fn shutdown_shared(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Ok(mut guard) = self.batch_tx.lock() {
+            *guard = None;
         }
     }
 

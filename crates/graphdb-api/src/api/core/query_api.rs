@@ -6,6 +6,8 @@ use crate::api::core::error::{CoreError, CoreResult};
 use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult, Row};
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
+use crate::query::executor::streaming::pool::SharedScheduler;
+use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::{QueryStorage, StorageClient, StorageOperationContext};
@@ -70,7 +72,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         }
     }
 
-    /// Create a new QueryApi instance with both schema manager and sync manager support
+    /// Create a new QueryApi with both schema manager and sync manager support
     pub fn with_schema_and_sync_manager(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
@@ -88,6 +90,59 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             .with_schema_manager(schema_manager)
             .with_sync_manager(sync_manager),
         }
+    }
+
+    /// Create a new QueryApi wired with an engine-level shared scheduler and
+    /// a query registry, both created once at server startup and reused
+    /// across all queries.
+    pub fn with_shared_scheduler(
+        storage: Arc<RwLock<S>>,
+        stats_manager: Arc<StatsManager>,
+        optimizer_engine: Arc<OptimizerEngine>,
+        shared_scheduler: Arc<SharedScheduler>,
+        query_registry: Arc<QueryRegistry>,
+    ) -> Self {
+        Self {
+            pipeline_manager: QueryPipelineManager::with_optimizer(
+                storage,
+                stats_manager,
+                optimizer_engine,
+            )
+            .with_shared_scheduler(shared_scheduler)
+            .with_query_registry(query_registry),
+        }
+    }
+
+    /// Install a shared scheduler and query registry into an existing
+    /// pipeline (used when the pipeline was built by another constructor).
+    pub fn install_shared_scheduler(
+        &mut self,
+        shared_scheduler: Arc<SharedScheduler>,
+        query_registry: Arc<QueryRegistry>,
+    ) {
+        self.pipeline_manager
+            .set_shared_scheduler(Some(shared_scheduler));
+        self.pipeline_manager
+            .set_query_registry(Some(query_registry));
+    }
+
+    /// Access the shared scheduler instance held by the pipeline, if any.
+    pub fn shared_scheduler(&self) -> Option<Arc<SharedScheduler>> {
+        self.pipeline_manager.shared_scheduler()
+    }
+
+    /// Access the query registry instance held by the pipeline, if any.
+    pub fn query_registry(&self) -> Option<Arc<QueryRegistry>> {
+        self.pipeline_manager.query_registry()
+    }
+
+    /// Collect (or serve cached) optimizer statistics for a space.
+    ///
+    /// `force` bypasses the schema-version gate so an explicit ANALYZE always
+    /// refreshes the statistics. Failures are returned as `Err`, never panic.
+    pub fn collect_statistics(&self, space: &str, force: bool) -> Result<(), String> {
+        self.pipeline_manager.collect_statistics(space, force)?;
+        Ok(())
     }
 
     /// Create a new QueryApi instance with vector search support

@@ -197,15 +197,12 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
                 for chunk in records.chunks(BATCH_SIZE) {
                     for record in chunk {
                         record_vertex_read(ctx, record.vid);
-                        let entry =
-                            merged
-                                .entry(record.vid)
-                                .or_insert_with(|| MergedVertex {
-                                    vid: record.vid,
-                                    internal_id: record.internal_id,
-                                    tags: Vec::new(),
-                                    properties: HashMap::new(),
-                                });
+                        let entry = merged.entry(record.vid).or_insert_with(|| MergedVertex {
+                            vid: record.vid,
+                            internal_id: record.internal_id,
+                            tags: Vec::new(),
+                            properties: HashMap::new(),
+                        });
                         entry.internal_id = record.internal_id;
                         let props: HashMap<String, Value> =
                             record.properties.iter().cloned().collect();
@@ -820,7 +817,10 @@ fn resolve_edge_table_labels(
         .schema_manager()
         .get_edge_type(space, edge_type)?
         .ok_or_else(|| {
-            StorageError::not_found(format!("Edge type {} not found in space {}", edge_type, space))
+            StorageError::not_found(format!(
+                "Edge type {} not found in space {}",
+                edge_type, space
+            ))
         })?;
     let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?.unwrap_or(0);
     let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?.unwrap_or(0);
@@ -840,17 +840,18 @@ pub(crate) fn enable_edge_property_index(
         ctx.enable_edge_property_index(src_label, dst_label, edge_label, pool_capacity)?;
     } else {
         // Unconstrained endpoint tags: enable on every table of this edge type.
-        ctx.data_store().with_edge_tables(|tables| -> StorageResult<()> {
-            let matching: Vec<_> = tables
-                .values()
-                .filter(|arc| arc.read().0.label() == edge_label)
-                .cloned()
-                .collect();
-            for arc in matching {
-                arc.write().0.enable_property_index(pool_capacity)?;
-            }
-            Ok(())
-        })?;
+        ctx.data_store()
+            .with_edge_tables(|tables| -> StorageResult<()> {
+                let matching: Vec<_> = tables
+                    .values()
+                    .filter(|arc| arc.read().0.label() == edge_label)
+                    .cloned()
+                    .collect();
+                for arc in matching {
+                    arc.write().0.enable_property_index(pool_capacity)?;
+                }
+                Ok(())
+            })?;
     }
     Ok(true)
 }
@@ -886,15 +887,16 @@ pub(crate) fn disable_edge_property_index(
     if src_label != 0 && dst_label != 0 {
         ctx.disable_edge_property_index(src_label, dst_label, edge_label)?;
     } else {
-        ctx.data_store().with_edge_tables(|tables| -> StorageResult<()> {
-            for arc in tables
-                .values()
-                .filter(|arc| arc.read().0.label() == edge_label)
-            {
-                arc.write().0.disable_property_index();
-            }
-            Ok(())
-        })?;
+        ctx.data_store()
+            .with_edge_tables(|tables| -> StorageResult<()> {
+                for arc in tables
+                    .values()
+                    .filter(|arc| arc.read().0.label() == edge_label)
+                {
+                    arc.write().0.disable_property_index();
+                }
+                Ok(())
+            })?;
     }
     Ok(())
 }
@@ -966,13 +968,13 @@ pub(crate) fn lookup_edges_by_property_range(
             let mut records = Vec::new();
             for arc in matching {
                 let table = arc.read();
-                records.extend(table.0.lookup_edges_by_property_range(
-                    prop_name,
-                    &value_lower,
-                    &value_upper,
-                ).into_iter().filter_map(|(src, dst, rank)| {
-                    table.0.get_edge(src, dst, rank, ts)
-                }));
+                records.extend(
+                    table
+                        .0
+                        .lookup_edges_by_property_range(prop_name, &value_lower, &value_upper)
+                        .into_iter()
+                        .filter_map(|(src, dst, rank)| table.0.get_edge(src, dst, rank, ts)),
+                );
             }
             records
         })
@@ -1003,7 +1005,12 @@ pub(crate) fn lookup_edges_by_property_range(
             ctx.get_external_id_any(dst_internal, ts)
                 .unwrap_or_else(|| format!("{}", record.dst_vid))
         };
-        edges.push(edge_record_to_edge(&record, edge_type, &src_external, &dst_external));
+        edges.push(edge_record_to_edge(
+            &record,
+            edge_type,
+            &src_external,
+            &dst_external,
+        ));
     }
 
     Ok(edges)

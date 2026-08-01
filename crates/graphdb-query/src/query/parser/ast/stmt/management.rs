@@ -45,11 +45,14 @@ pub struct ExplainStmt {
     pub span: Span,
     pub statement: Box<Stmt>,
     pub format: ExplainFormat,
+    /// Whether the statement is executed and actual operator statistics
+    /// (rows / time) are overlaid on the plan output.
+    pub analyze: bool,
 }
 
 impl PartialEq for ExplainStmt {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.format == other.format
+        self.span == other.span && self.format == other.format && self.analyze == other.analyze
     }
 }
 
@@ -58,6 +61,14 @@ pub struct ProfileStmt {
     pub span: Span,
     pub statement: Box<Stmt>,
     pub format: ExplainFormat,
+}
+
+/// ANALYZE statement: collect statistics for a space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalyzeStmt {
+    pub span: Span,
+    /// None = current/default space.
+    pub space: Option<String>,
 }
 
 impl PartialEq for ProfileStmt {

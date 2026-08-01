@@ -18,6 +18,7 @@ use std::time::Instant;
 /// Classification of a prepared statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementClass {
+    Analyze,
     ReadOnly,
     Dml,
     Ddl,
@@ -59,6 +60,8 @@ pub struct PreparedRequest {
 pub fn classify_statement(stmt: &Stmt) -> StatementClass {
     if is_diagnostic(stmt) {
         StatementClass::Diagnostic
+    } else if is_analyze(stmt) {
+        StatementClass::Analyze
     } else if is_transaction(stmt) {
         StatementClass::Transaction
     } else if is_ddl(stmt) {
@@ -68,6 +71,10 @@ pub fn classify_statement(stmt: &Stmt) -> StatementClass {
     } else {
         StatementClass::ReadOnly
     }
+}
+
+pub fn is_analyze(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Analyze(_))
 }
 
 pub fn requires_auto_commit(stmt: &Stmt) -> bool {
@@ -131,6 +138,7 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
             | Stmt::RollbackTransaction(_)
             | Stmt::Explain(_)
             | Stmt::Profile(_)
+            | Stmt::Analyze(_)
     )
 }
 
@@ -232,6 +240,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if request.statement_class == StatementClass::Diagnostic {
             return self.execute_diagnostic(request);
         }
+        if request.statement_class == StatementClass::Analyze {
+            return self.execute_analyze(request);
+        }
         let physical_plan = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
@@ -269,6 +280,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         if request.statement_class == StatementClass::Diagnostic {
             return self.execute_diagnostic(request);
+        }
+        if request.statement_class == StatementClass::Analyze {
+            return self.execute_analyze(request);
         }
         let physical_plan = if let Some(ref bound) = request.bound_statement {
             let (plan, _) =
@@ -311,6 +325,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let result = self.execute_diagnostic(request)?;
             return Ok(StreamingQueryResult::from_execution_result(result));
         }
+        if request.statement_class == StatementClass::Analyze {
+            let result = self.execute_analyze(request)?;
+            return Ok(StreamingQueryResult::from_execution_result(result));
+        }
         if request.statement_class == StatementClass::Ddl {
             let result = self.execute_prepared_materialized(request)?;
             return Ok(StreamingQueryResult::from_execution_result(result));
@@ -346,7 +364,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         match &request.stmt {
             Stmt::Explain(ref explain_stmt) => {
-                self.execute_explain(explain_stmt, request.query_context.clone())
+                if explain_stmt.analyze {
+                    self.execute_explain_analyze(explain_stmt, request.query_context.clone())
+                } else {
+                    self.execute_explain(explain_stmt, request.query_context.clone())
+                }
             }
             Stmt::Profile(ref profile_stmt) => {
                 self.execute_profile(profile_stmt, request.query_context.clone())
@@ -355,6 +377,34 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 "Not a diagnostic statement".to_string(),
             ))),
         }
+    }
+
+    /// Execute an ANALYZE statement: collect statistics for the target space.
+    ///
+    /// This is a bypass path: no plan is generated, statistics are written to
+    /// the optimizer's `StatisticsManager` only.
+    pub(crate) fn execute_analyze(
+        &mut self,
+        request: &PreparedRequest,
+    ) -> DBResult<ExecutionResult> {
+        let space_name = match &request.stmt {
+            Stmt::Analyze(analyze) => analyze
+                .space
+                .clone()
+                .or_else(|| request.query_context.space_name())
+                .or_else(|| request.query_context.request_context().space_name.clone()),
+            _ => request.query_context.space_name(),
+        };
+        let space_name = space_name.ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "ANALYZE requires a space: use ANALYZE SPACE <name> or USE <space> first"
+                    .to_string(),
+            ))
+        })?;
+        self.collect_statistics(&space_name, true)
+            .map_err(|error| DBError::from(QueryError::execution(error)))?;
+        log::info!("ANALYZE completed for space '{}'", space_name);
+        Ok(ExecutionResult::Success)
     }
 
     // ── Request context construction ──────────────────────────────────────
@@ -451,6 +501,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.index_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.optimizer_engine
+            .stats_manager()
+            .invalidate_space(space_name);
         if let Some(space_name) = space_name {
             let removed = self.plan_cache.invalidate_space(space_name);
             if removed > 0 {

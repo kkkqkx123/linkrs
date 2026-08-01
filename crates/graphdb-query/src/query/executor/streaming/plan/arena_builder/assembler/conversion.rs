@@ -84,14 +84,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_filter_spec(filter_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Project(project_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -103,14 +96,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_project_spec(project_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Limit(limit_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -122,14 +108,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_limit_spec(limit_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Sample(sample_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -141,14 +120,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_sample_spec(sample_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Remove(remove_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -160,14 +132,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_remove_spec(remove_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Assign(assign_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -179,14 +144,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_assign_spec(assign_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Unwind(unwind_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -198,14 +156,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_unwind_spec(unwind_node)?;
-                Self::push_unary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    child_fid,
-                    node.id(),
-                    spec,
-                )
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
 
             // ── Blocking nodes ──────────────────────────────────────────────────

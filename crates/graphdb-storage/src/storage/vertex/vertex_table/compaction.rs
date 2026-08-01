@@ -269,7 +269,8 @@ mod tests {
     #[test]
     fn test_coordinator_empty_table() {
         let schema = create_test_schema();
-        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+        let mut table =
+            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
         let mut coordinator = CompactionCoordinator::new();
 
         // Empty table should compact without error
@@ -280,7 +281,8 @@ mod tests {
     #[test]
     fn test_coordinator_single_vertex() {
         let schema = create_test_schema();
-        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+        let mut table =
+            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
 
         table
             .insert("v1", &[("name".to_string(), Value::string("Alice"))], 100)
@@ -297,7 +299,8 @@ mod tests {
     #[test]
     fn test_coordinator_remapping() {
         let schema = create_test_schema();
-        let mut table = VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
+        let mut table =
+            VertexTable::with_config(0, "test".to_string(), schema, VertexTableConfig::default());
 
         // Insert 5 vertices to allocate space
         for i in 0..5 {

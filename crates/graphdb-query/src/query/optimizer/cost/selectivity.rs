@@ -54,13 +54,15 @@ impl SelectivityEstimator {
     /// Otherwise the default value of 0.1 is used
     pub fn estimate_equality_selectivity(
         &self,
+        space: Option<&str>,
         tag_name: Option<&str>,
         property_name: &str,
         value: Option<&Value>,
     ) -> f64 {
-        let stats = self
-            .stats_manager
-            .get_property_stats(tag_name, property_name);
+        let stats = space.and_then(|s| {
+            self.stats_manager
+                .get_property_stats(s, tag_name, property_name)
+        });
 
         match stats {
             Some(s) => {
@@ -87,10 +89,11 @@ impl SelectivityEstimator {
     /// Estimated Equivalence Condition Selectivity (simplified version, without values)
     pub fn estimate_equality_selectivity_simple(
         &self,
+        space: Option<&str>,
         tag_name: Option<&str>,
         property_name: &str,
     ) -> f64 {
-        self.estimate_equality_selectivity(tag_name, property_name, None)
+        self.estimate_equality_selectivity(space, tag_name, property_name, None)
     }
 
     /// Conditional selectivity of the estimation range
@@ -99,13 +102,15 @@ impl SelectivityEstimator {
     /// Otherwise, use the default value of 1/3.
     pub fn estimate_range_selectivity(
         &self,
+        space: Option<&str>,
         tag_name: Option<&str>,
         property_name: &str,
         range: &RangeCondition,
     ) -> f64 {
-        let stats = self
-            .stats_manager
-            .get_property_stats(tag_name, property_name);
+        let stats = space.and_then(|s| {
+            self.stats_manager
+                .get_property_stats(s, tag_name, property_name)
+        });
 
         match stats {
             Some(s) => {
@@ -229,13 +234,18 @@ impl SelectivityEstimator {
     /// Estimating selectivity from expressions
     ///
     /// This is the main entry method, which distributes the data to the specific estimation methods based on the type of the expression.
-    pub fn estimate_from_expression(&self, expr: &Expression, tag_name: Option<&str>) -> f64 {
+    pub fn estimate_from_expression(
+        &self,
+        space: Option<&str>,
+        expr: &Expression,
+        tag_name: Option<&str>,
+    ) -> f64 {
         match expr {
             Expression::Binary { op, left, right } => {
-                self.estimate_binary_expression(op, left, right, tag_name)
+                self.estimate_binary_expression(space, op, left, right, tag_name)
             }
             Expression::Unary { op, operand } => {
-                self.estimate_unary_expression(op, operand, tag_name)
+                self.estimate_unary_expression(space, op, operand, tag_name)
             }
             Expression::Function { name, args } => self.estimate_function_expression(name, args),
             Expression::Literal(_) => {
@@ -254,6 +264,7 @@ impl SelectivityEstimator {
     /// Estimating the selectivity of binary expressions
     fn estimate_binary_expression(
         &self,
+        space: Option<&str>,
         op: &BinaryOperator,
         left: &Expression,
         right: &Expression,
@@ -272,7 +283,7 @@ impl SelectivityEstimator {
                     .or_else(|| self.extract_value(left));
 
                 if let Some(prop) = property_name {
-                    self.estimate_equality_selectivity(tag_name, &prop, value.as_ref())
+                    self.estimate_equality_selectivity(space, tag_name, &prop, value.as_ref())
                 } else {
                     defaults::EQUALITY
                 }
@@ -299,14 +310,14 @@ impl SelectivityEstimator {
                     .clamp(0.01, 0.9)
             }
             BinaryOperator::And => {
-                let left_sel = self.estimate_from_expression(left, tag_name);
-                let right_sel = self.estimate_from_expression(right, tag_name);
+                let left_sel = self.estimate_from_expression(space, left, tag_name);
+                let right_sel = self.estimate_from_expression(space, right, tag_name);
                 // The selectivity of the “AND” operator is usually slightly higher than that of the multiplication operator (because there may be correlations between the conditions).
                 (left_sel * right_sel / defaults::AND_CORRELATION).min(1.0)
             }
             BinaryOperator::Or => {
-                let left_sel = self.estimate_from_expression(left, tag_name);
-                let right_sel = self.estimate_from_expression(right, tag_name);
+                let left_sel = self.estimate_from_expression(space, left, tag_name);
+                let right_sel = self.estimate_from_expression(space, right, tag_name);
                 // OR 的选择性：P(A or B) = P(A) + P(B) - P(A and B)
                 let combined =
                     left_sel + right_sel - left_sel * right_sel * defaults::OR_CORRELATION;
@@ -324,6 +335,7 @@ impl SelectivityEstimator {
     /// Estimating the selectivity of a unary expression
     fn estimate_unary_expression(
         &self,
+        space: Option<&str>,
         op: &crate::core::types::UnaryOperator,
         expr: &Expression,
         tag_name: Option<&str>,
@@ -332,7 +344,7 @@ impl SelectivityEstimator {
 
         match op {
             UnaryOperator::Not => {
-                let inner = self.estimate_from_expression(expr, tag_name);
+                let inner = self.estimate_from_expression(space, expr, tag_name);
                 self.estimate_not_selectivity(inner)
             }
             UnaryOperator::IsNull => defaults::IS_NULL,

@@ -9,6 +9,7 @@ mod prepared;
 use crate::core::metadata::index_manager::IndexMetadataManager;
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
+use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::SessionTransactionController;
 use crate::query::optimizer::OptimizerEngine;
@@ -39,7 +40,13 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) schema_generation: Arc<AtomicU64>,
     pub(crate) index_generation: Arc<AtomicU64>,
     pub(crate) query_registry: Option<Arc<QueryRegistry>>,
+    /// Engine-level shared scheduler, created once and reused across queries.
+    pub(crate) shared_scheduler: Option<Arc<SharedScheduler>>,
     pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
+    /// Serializes statistics collection to prevent concurrent re-collection.
+    pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
+    /// Sample cap for per-tag/per-edge-type degree estimation during collection.
+    pub(crate) statistics_sample_limit: usize,
 }
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
@@ -72,13 +79,99 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             schema_generation: Arc::new(AtomicU64::new(0)),
             index_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
+            shared_scheduler: None,
             session_controller: parking_lot::RwLock::new(None),
+            statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
+            statistics_sample_limit: 10_000,
         }
+    }
+
+    pub fn with_statistics_sample_limit(mut self, sample_limit: usize) -> Self {
+        self.statistics_sample_limit = sample_limit.max(1);
+        self
+    }
+
+    /// Collect (or serve cached) statistics for a space into the optimizer's
+    /// `StatisticsManager`.
+    ///
+    /// `force` bypasses the version gate so an explicit ANALYZE always
+    /// refreshes the statistics. Collection is serialized internally.
+    pub fn collect_statistics(
+        &self,
+        space: &str,
+        force: bool,
+    ) -> Result<crate::query::optimizer::stats::CollectedSummary, String> {
+        let _guard = self.statistics_collect_lock.lock();
+        let stats_manager = self.optimizer_engine.stats_manager().clone();
+        let schema_version = self
+            .schema_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if force {
+            stats_manager.mark_space_dirty(space);
+        }
+        let storage: Arc<RwLock<dyn QueryStorage>> = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| "No storage binding available for statistics collection".to_string())?
+            .clone();
+        let result = crate::query::optimizer::stats::StatisticsCollector::collect_space(
+            &stats_manager,
+            &storage,
+            space,
+            schema_version,
+            self.statistics_sample_limit,
+        );
+        match &result {
+            Ok(summary) => {
+                log::info!(
+                    "Statistics collection for space '{}': {} tags, {} edge types{}",
+                    space,
+                    summary.tags,
+                    summary.edge_types,
+                    if summary.cached { " (cached)" } else { "" }
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "Statistics collection failed for space '{}': {}",
+                    space,
+                    error
+                );
+            }
+        }
+        result
     }
 
     pub fn with_query_registry(mut self, registry: Arc<QueryRegistry>) -> Self {
         self.query_registry = Some(registry);
         self
+    }
+
+    pub fn with_shared_scheduler(mut self, scheduler: Arc<SharedScheduler>) -> Self {
+        self.shared_scheduler = Some(scheduler);
+        self
+    }
+
+    /// Set the shared scheduler (used when the pipeline is built before the
+    /// scheduler is created, e.g. the vector-enabled server path).
+    pub fn set_shared_scheduler(&mut self, scheduler: Option<Arc<SharedScheduler>>) {
+        self.shared_scheduler = scheduler;
+    }
+
+    /// Set the query registry (used when the pipeline is built before the
+    /// registry is created, e.g. the vector-enabled server path).
+    pub fn set_query_registry(&mut self, registry: Option<Arc<QueryRegistry>>) {
+        self.query_registry = registry;
+    }
+
+    /// Access the shared scheduler instance, if any.
+    pub fn shared_scheduler(&self) -> Option<Arc<SharedScheduler>> {
+        self.shared_scheduler.clone()
+    }
+
+    /// Access the query registry instance, if any.
+    pub fn query_registry(&self) -> Option<Arc<QueryRegistry>> {
+        self.query_registry.clone()
     }
 
     pub fn with_optimizer_and_cache(
@@ -114,7 +207,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             schema_generation: Arc::new(AtomicU64::new(0)),
             index_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
+            shared_scheduler: None,
             session_controller: parking_lot::RwLock::new(None),
+            statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
+            statistics_sample_limit: 10_000,
         }
     }
 

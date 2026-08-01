@@ -20,8 +20,8 @@
 //! use graphdb::query::optimizer::strategy::SubqueryUnnestingOptimizer;
 //! use graphdb::query::optimizer::OptimizerEngine;
 //!
-//! let optimizer = SubqueryUnnestingOptimizer::new(engine.stats_manager());
-//! let decision = optimizer.should_unnest(&pattern_apply, &analysis);
+//! let optimizer = SubqueryUnnestingOptimizer::new();
+//! let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view);
 //! ```
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -30,7 +30,7 @@ use crate::core::types::operators::BinaryOperator;
 use crate::core::types::ContextualExpression;
 use crate::core::Expression;
 use crate::query::optimizer::analysis::BatchPlanAnalysis;
-use crate::query::optimizer::stats::StatisticsManager;
+use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::{HashInnerJoinNode, PatternApplyNode};
 
@@ -80,19 +80,22 @@ pub enum KeepReason {
 /// Based on batch plan analysis and statistical information, a decision is made as to whether to convert PatternApply to HashInnerJoin.
 #[derive(Debug, Clone)]
 pub struct SubqueryUnnestingOptimizer {
-    /// Statistics Information Manager
-    stats_manager: StatisticsManager,
     /// The maximum number of estimated rows allowed for a subquery
     max_subquery_rows: u64,
     /// The maximum allowable complexity of the expression
     max_complexity: u32,
 }
 
+impl Default for SubqueryUnnestingOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubqueryUnnestingOptimizer {
     /// Create a new optimizer.
-    pub fn new(stats_manager: &StatisticsManager) -> Self {
+    pub fn new() -> Self {
         Self {
-            stats_manager: stats_manager.clone(),
             max_subquery_rows: 1000,
             max_complexity: 50,
         }
@@ -115,6 +118,7 @@ impl SubqueryUnnestingOptimizer {
     /// # Parameters
     /// `pattern_apply`: The PatternApply node
     /// `analysis`: The batch plan analysis result
+    /// `stats`: The space-scoped statistics for the query
     ///
     /// # Decision
     /// De-associative decision-making
@@ -122,6 +126,7 @@ impl SubqueryUnnestingOptimizer {
         &self,
         pattern_apply: &PatternApplyNode,
         analysis: &BatchPlanAnalysis,
+        stats: &StatsView,
     ) -> UnnestDecision {
         // 1. Check determinism from batch analysis
         if !analysis.expression_summary.is_fully_deterministic {
@@ -145,7 +150,7 @@ impl SubqueryUnnestingOptimizer {
         }
 
         // 4. Checking the number of estimated rows for subqueries
-        let estimated_rows = self.estimate_subquery_rows(pattern_apply.right_input());
+        let estimated_rows = self.estimate_subquery_rows(pattern_apply.right_input(), stats);
         if estimated_rows > self.max_subquery_rows {
             return UnnestDecision::KeepPatternApply {
                 reason: KeepReason::TooManyRows,
@@ -230,13 +235,13 @@ impl SubqueryUnnestingOptimizer {
     }
 
     /// Estimating the number of rows returned by a subquery
-    fn estimate_subquery_rows(&self, node: &PlanNodeEnum) -> u64 {
+    fn estimate_subquery_rows(&self, node: &PlanNodeEnum, stats: &StatsView) -> u64 {
         match node {
             PlanNodeEnum::ScanVertices(n) => {
                 // Get the number of label vertices from statistics
                 if let Some(tag_name) = n.tag() {
-                    if let Some(stats) = self.stats_manager.get_tag_stats(tag_name) {
-                        stats.vertex_count
+                    if let Some(tag_stats) = stats.tag_stats(tag_name) {
+                        tag_stats.vertex_count
                     } else {
                         1
                     }
@@ -246,12 +251,13 @@ impl SubqueryUnnestingOptimizer {
             }
             PlanNodeEnum::Filter(n) => {
                 // Filtered estimate is 30% of original rows
-                (self.estimate_subquery_rows(crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode::input(n)) as f64 * 0.3) as u64
+                (self.estimate_subquery_rows(crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode::input(n), stats) as f64 * 0.3) as u64
             }
             PlanNodeEnum::Project(n) => self.estimate_subquery_rows(
                 crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode::input(
                     n,
                 ),
+                stats,
             ),
             _ => 1000, // default value
         }
@@ -333,7 +339,6 @@ impl SubqueryUnnestingOptimizer {
     }
 
     /// Replace all variable references in the expression with the specified variables.
-    ///
     /// This method recursively traverses the expression tree and replaces all Variable nodes with the specified variable name.
     /// This is used to convert the variables in the original expression when transforming PatternApply to HashInnerJoin.
     /// The placeholders (usually “_”) should be replaced with the variable names provided on the left and on the right.
@@ -521,24 +526,21 @@ mod tests {
 
     #[test]
     fn test_optimizer_creation() {
-        let stats_manager = StatisticsManager::new();
-        let optimizer = SubqueryUnnestingOptimizer::new(&stats_manager);
+        let optimizer = SubqueryUnnestingOptimizer::new();
         assert_eq!(optimizer.max_subquery_rows, 1000);
         assert_eq!(optimizer.max_complexity, 50);
     }
 
     #[test]
     fn test_optimizer_with_config() {
-        let stats_manager = StatisticsManager::new();
-        let _optimizer = SubqueryUnnestingOptimizer::new(&stats_manager)
+        let _optimizer = SubqueryUnnestingOptimizer::new()
             .with_max_rows(500)
             .with_max_complexity(30);
     }
 
     #[test]
     fn test_simple_expression_check() {
-        let stats_manager = StatisticsManager::new();
-        let optimizer = SubqueryUnnestingOptimizer::new(&stats_manager);
+        let optimizer = SubqueryUnnestingOptimizer::new();
 
         let literal = Expression::Literal(crate::core::Value::Int(42));
         assert!(optimizer.is_simple_expression(&literal));

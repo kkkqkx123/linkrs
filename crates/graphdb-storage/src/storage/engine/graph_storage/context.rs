@@ -486,11 +486,11 @@ pub struct GraphStorageContext {
 // Module organization: split into logical groups
 // ──────────────────────────────────────────────────────────────────────────────
 
-pub(crate) mod helpers;
 mod accessors;
 mod cache_index;
 mod edge_ops;
 mod freeze;
+pub(crate) mod helpers;
 mod init;
 mod maintenance;
 mod persistence;

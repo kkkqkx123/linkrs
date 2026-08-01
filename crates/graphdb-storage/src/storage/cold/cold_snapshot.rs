@@ -379,8 +379,8 @@ fn encode_snapshot(
     let out_data = out_csr.dump();
     let in_data = in_csr.dump();
     let prop_data = properties.dump();
-    let schema_json = serde_json::to_string(schema)
-        .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+    let schema_json =
+        serde_json::to_string(schema).map_err(|e| StorageError::serialize_error(e.to_string()))?;
     let schema_bytes = schema_json.as_bytes();
 
     let mut buf = Vec::new();

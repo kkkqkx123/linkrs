@@ -151,6 +151,7 @@ impl BidirectionalTraversalOptimizer {
     /// Return the decision for bidirectional traversal.
     pub fn evaluate(
         &self,
+        space: &str,
         start_variable: &str,
         end_variable: &str,
         edge_types: &[String],
@@ -162,7 +163,7 @@ impl BidirectionalTraversalOptimizer {
         }
 
         // Obtaining the average branching factor
-        let avg_branching = self.estimate_average_branching(edge_types);
+        let avg_branching = self.estimate_average_branching(space, edge_types);
 
         // Calculate the one-way search space: b^d
         let unidirectional_cost = avg_branching.powi(max_depth as i32);
@@ -199,6 +200,7 @@ impl BidirectionalTraversalOptimizer {
     /// Evaluating whether the path query is suitable for bidirectional traversal
     pub fn evaluate_path_query(
         &self,
+        space: &str,
         start_variable: &str,
         end_variable: &str,
         edge_types: &[String],
@@ -210,18 +212,19 @@ impl BidirectionalTraversalOptimizer {
 
         // If the minimum depth is relatively large, a bidirectional traversal is more worthwhile.
         if min_depth >= 2 {
-            let decision = self.evaluate(start_variable, end_variable, edge_types, avg_depth);
+            let decision =
+                self.evaluate(space, start_variable, end_variable, edge_types, avg_depth);
             if decision.use_bidirectional {
                 return decision;
             }
         }
 
         // Otherwise, use the standard evaluation method.
-        self.evaluate(start_variable, end_variable, edge_types, max_depth)
+        self.evaluate(space, start_variable, end_variable, edge_types, max_depth)
     }
 
     /// Estimate the average branching factor
-    fn estimate_average_branching(&self, edge_types: &[String]) -> f64 {
+    fn estimate_average_branching(&self, space: &str, edge_types: &[String]) -> f64 {
         if edge_types.is_empty() {
             // Default branching factor
             return 2.0;
@@ -231,7 +234,7 @@ impl BidirectionalTraversalOptimizer {
         let mut count = 0;
 
         for edge_type in edge_types {
-            if let Some(stats) = self.stats_manager.get_edge_stats(edge_type) {
+            if let Some(stats) = self.stats_manager.get_edge_stats(space, edge_type) {
                 // Using the average outdegree as the branching factor for estimation
                 let branching = stats.avg_out_degree;
                 total_branching += branching;
@@ -250,7 +253,11 @@ impl BidirectionalTraversalOptimizer {
     ///
     /// Based on statistical information about edge types and degree estimates, the depth of forward and backward searches is intelligently allocated.
     /// Strategy: Allocate more depth to the end with the smaller degree value, as there are fewer branches and a smaller search space.
-    pub fn calculate_depth_allocation(&self, context: &DepthAllocationContext) -> (u32, u32) {
+    pub fn calculate_depth_allocation(
+        &self,
+        space: &str,
+        context: &DepthAllocationContext,
+    ) -> (u32, u32) {
         let total_depth = context.total_depth;
 
         // When the depth is less than 2, the resources are evenly distributed directly.
@@ -262,23 +269,28 @@ impl BidirectionalTraversalOptimizer {
         let edge_stats: Vec<EdgeTypeStatistics> = context
             .edge_types
             .iter()
-            .filter_map(|et| self.stats_manager.get_edge_stats(et))
+            .filter_map(|et| self.stats_manager.get_edge_stats(space, et))
             .collect();
 
         // Estimate the degrees of the starting and ending points.
         let start_degree = context
             .start_degree_hint
             .or_else(|| {
-                self.estimate_vertex_degree(&context.start_tag, &edge_stats, EdgeDirection::Out)
+                self.estimate_vertex_degree(
+                    space,
+                    &context.start_tag,
+                    &edge_stats,
+                    EdgeDirection::Out,
+                )
             })
-            .unwrap_or_else(|| self.estimate_average_branching(&context.edge_types));
+            .unwrap_or_else(|| self.estimate_average_branching(space, &context.edge_types));
 
         let end_degree = context
             .end_degree_hint
             .or_else(|| {
-                self.estimate_vertex_degree(&context.end_tag, &edge_stats, EdgeDirection::In)
+                self.estimate_vertex_degree(space, &context.end_tag, &edge_stats, EdgeDirection::In)
             })
-            .unwrap_or_else(|| self.estimate_average_branching(&context.edge_types));
+            .unwrap_or_else(|| self.estimate_average_branching(space, &context.edge_types));
 
         // Depth distribution calculated based on the degree proportion.
         // The smaller the degree, the greater the allocated depth (because the search space grows more slowly).
@@ -344,6 +356,7 @@ impl BidirectionalTraversalOptimizer {
     /// Estimating the degree of a vertex
     fn estimate_vertex_degree(
         &self,
+        space: &str,
         tag: &Option<String>,
         _edge_stats: &[EdgeTypeStatistics],
         direction: EdgeDirection,
@@ -351,7 +364,7 @@ impl BidirectionalTraversalOptimizer {
         let tag_name = tag.as_ref()?;
 
         // Obtain tag statistics information
-        let tag_stats = self.stats_manager.get_tag_stats(tag_name)?;
+        let tag_stats = self.stats_manager.get_tag_stats(space, tag_name)?;
 
         // Return the average degree based on the direction.
         match direction {
@@ -364,7 +377,7 @@ impl BidirectionalTraversalOptimizer {
     /// Check whether it is suitable for use with bidirectional traversal.
     ///
     /// Determine whether bidirectional traversal is beneficial based on statistical information about edge types.
-    pub fn should_use_bidirectional(&self, edge_types: &[String]) -> bool {
+    pub fn should_use_bidirectional(&self, space: &str, edge_types: &[String]) -> bool {
         if edge_types.is_empty() {
             return false;
         }
@@ -374,7 +387,7 @@ impl BidirectionalTraversalOptimizer {
         let mut count = 0;
 
         for edge_type in edge_types {
-            if let Some(stats) = self.stats_manager.get_edge_stats(edge_type) {
+            if let Some(stats) = self.stats_manager.get_edge_stats(space, edge_type) {
                 total_out_degree += stats.avg_out_degree;
                 total_in_degree += stats.avg_in_degree;
                 count += 1;
@@ -412,7 +425,7 @@ mod tests {
 
         // Add test data
         let edge_stats = EdgeTypeStatistics::new("friend".to_string());
-        stats_manager.update_edge_stats(edge_stats);
+        stats_manager.update_edge_stats("test", edge_stats);
 
         BidirectionalTraversalOptimizer::new(cost_calculator, stats_manager)
     }
@@ -428,16 +441,18 @@ mod tests {
             vertex_count: 1000,
             avg_out_degree: 5.0,
             avg_in_degree: 4.0,
+            ..TagStatistics::default()
         };
-        stats_manager.update_tag_stats(person_tag);
+        stats_manager.update_tag_stats("test", person_tag);
 
         let company_tag = TagStatistics {
             tag_name: "Company".to_string(),
             vertex_count: 100,
             avg_out_degree: 2.0,
             avg_in_degree: 50.0,
+            ..TagStatistics::default()
         };
-        stats_manager.update_tag_stats(company_tag);
+        stats_manager.update_tag_stats("test", company_tag);
 
         // Add edge statistics
         let edge_stats = EdgeTypeStatistics {
@@ -452,8 +467,9 @@ mod tests {
             in_degree_std_dev: 2.0,
             degree_gini_coefficient: 0.2,
             hot_vertices: Vec::new(),
+            ..EdgeTypeStatistics::default()
         };
-        stats_manager.update_edge_stats(edge_stats);
+        stats_manager.update_edge_stats("test", edge_stats);
 
         BidirectionalTraversalOptimizer::new(cost_calculator, stats_manager)
     }
@@ -461,7 +477,7 @@ mod tests {
     #[test]
     fn test_unidirectional_for_shallow_depth() {
         let optimizer = create_test_optimizer();
-        let decision = optimizer.evaluate("a", "b", &[], 1);
+        let decision = optimizer.evaluate("test", "a", "b", &[], 1);
 
         assert!(!decision.use_bidirectional);
         assert_eq!(decision.forward_start, "a");
@@ -471,7 +487,7 @@ mod tests {
     fn test_bidirectional_for_deep_depth() {
         let optimizer = create_test_optimizer();
         // When the depth is 4, there should be a significant benefit from performing a bidirectional traversal.
-        let decision = optimizer.evaluate("a", "b", &[], 4);
+        let decision = optimizer.evaluate("test", "a", "b", &[], 4);
 
         // Since the default branching factor is 2, there should be a significant savings at a depth of 4.
         if decision.use_bidirectional {
@@ -484,7 +500,7 @@ mod tests {
     #[test]
     fn test_estimate_average_branching() {
         let optimizer = create_test_optimizer();
-        let branching = optimizer.estimate_average_branching(&[]);
+        let branching = optimizer.estimate_average_branching("test", &[]);
 
         // The list of empty edge types should return the default value.
         assert_eq!(branching, 2.0);
@@ -496,7 +512,7 @@ mod tests {
 
         // Test average distribution (without label information)
         let context = DepthAllocationContext::new("a", "b", vec!["works_at".to_string()], 4);
-        let (forward, backward) = optimizer.calculate_depth_allocation(&context);
+        let (forward, backward) = optimizer.calculate_depth_allocation("test", &context);
 
         assert_eq!(forward + backward, 4);
         assert!(forward >= 1);
@@ -512,7 +528,7 @@ mod tests {
             .with_start_tag("Person")
             .with_end_tag("Company");
 
-        let (forward, backward) = optimizer.calculate_depth_allocation(&context);
+        let (forward, backward) = optimizer.calculate_depth_allocation("test", &context);
 
         // Verify that the sum of the depths is correct.
         assert_eq!(forward + backward, 4);
@@ -533,7 +549,7 @@ mod tests {
             .with_start_degree(2.0)
             .with_end_degree(8.0);
 
-        let (forward, backward) = optimizer.calculate_depth_allocation(&context);
+        let (forward, backward) = optimizer.calculate_depth_allocation("test", &context);
 
         // If the degree value is 2 < degree value is 8, the starting point should be given more “depth” (in terms of certain parameters, such as depth of field, complexity, or significance).
         assert!(
@@ -548,10 +564,10 @@ mod tests {
         let optimizer = create_test_optimizer_with_stats();
 
         // The degree value associated with the “works_at” field is relatively low, which should make it suitable for bidirectional traversal.
-        assert!(optimizer.should_use_bidirectional(&["works_at".to_string()]));
+        assert!(optimizer.should_use_bidirectional("test", &["works_at".to_string()]));
 
         // The list of empty edge types should return false.
-        assert!(!optimizer.should_use_bidirectional(&[]));
+        assert!(!optimizer.should_use_bidirectional("test", &[]));
     }
 
     #[test]
@@ -560,7 +576,7 @@ mod tests {
 
         // When the depth is 1, all resources should be allocated to the positive direction (i.e., to the positive part of the process or the positive outcome).
         let context = DepthAllocationContext::new("a", "b", vec![], 1);
-        let (forward, backward) = optimizer.calculate_depth_allocation(&context);
+        let (forward, backward) = optimizer.calculate_depth_allocation("test", &context);
 
         assert_eq!(forward, 1);
         assert_eq!(backward, 0);

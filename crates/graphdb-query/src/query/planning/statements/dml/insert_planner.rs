@@ -259,10 +259,7 @@ mod tests {
             }],
             values: vec![VertexRow {
                 vid: lit(Value::Int(1)),
-                tag_values: vec![vec![
-                    lit(Value::string("Alice")),
-                    lit(Value::Int(30)),
-                ]],
+                tag_values: vec![vec![lit(Value::string("Alice")), lit(Value::Int(30))]],
             }],
         });
         assert!(planner.match_planner(&ast.stmt));
@@ -336,10 +333,7 @@ mod tests {
                 }],
                 vec![VertexRow {
                     vid: lit(Value::Int(1)),
-                    tag_values: vec![vec![
-                        lit(Value::string("Alice")),
-                        lit(Value::Int(30)),
-                    ]],
+                    tag_values: vec![vec![lit(Value::string("Alice")), lit(Value::Int(30))]],
                 }],
                 false,
             )

@@ -149,17 +149,15 @@ impl GraphStorageContext {
         projection: Option<&[String]>,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
-        self.persistent.data_store.with_vertex_tables(
-            |vertex_tables| -> Option<VertexRecord> {
+        self.persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| -> Option<VertexRecord> {
                 let table = vertex_tables.get(&label)?;
                 match projection {
-                    Some(proj) => {
-                        table.get_projected_by_internal_id(internal_id, ts, Some(proj))
-                    }
+                    Some(proj) => table.get_projected_by_internal_id(internal_id, ts, Some(proj)),
                     None => table.get_by_internal_id(internal_id, ts),
                 }
-            },
-        )
+            })
     }
 
     /// Fetch a vertex restricted to the given property projection, skipping

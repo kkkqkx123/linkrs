@@ -755,11 +755,7 @@ mod tests {
     fn test_substring() {
         let func = StringFunction::Substring;
         let result = func
-            .execute(&[
-                Value::string("hello"),
-                Value::Int(1),
-                Value::Int(3),
-            ])
+            .execute(&[Value::string("hello"), Value::Int(1), Value::Int(3)])
             .expect("Execution should succeed");
         assert_eq!(result, Value::string("ell"));
     }
@@ -781,10 +777,7 @@ mod tests {
     fn test_contains() {
         let func = StringFunction::Contains;
         let result = func
-            .execute(&[
-                Value::string("hello world"),
-                Value::string("world"),
-            ])
+            .execute(&[Value::string("hello world"), Value::string("world")])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
     }
@@ -793,10 +786,7 @@ mod tests {
     fn test_starts_with() {
         let func = StringFunction::StartsWith;
         let result = func
-            .execute(&[
-                Value::string("hello world"),
-                Value::string("hello"),
-            ])
+            .execute(&[Value::string("hello world"), Value::string("hello")])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
     }
@@ -805,10 +795,7 @@ mod tests {
     fn test_ends_with() {
         let func = StringFunction::EndsWith;
         let result = func
-            .execute(&[
-                Value::string("hello world"),
-                Value::string("world"),
-            ])
+            .execute(&[Value::string("hello world"), Value::string("world")])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
     }
@@ -859,29 +846,19 @@ mod tests {
                 Value::Int(95),
             ])
             .expect("Execution should succeed");
-        assert_eq!(
-            result,
-            Value::string("Hello Alice, your score is 95")
-        );
+        assert_eq!(result, Value::string("Hello Alice, your score is 95"));
     }
 
     #[test]
     fn test_string_split() {
         let func = StringFunction::StringSplit;
         let result = func
-            .execute(&[
-                Value::string("a,b,c"),
-                Value::string(","),
-            ])
+            .execute(&[Value::string("a,b,c"), Value::string(",")])
             .expect("Execution should succeed");
         assert_eq!(
             result,
             Value::list(List {
-                values: vec![
-                    Value::string("a"),
-                    Value::string("b"),
-                    Value::string("c"),
-                ]
+                values: vec![Value::string("a"), Value::string("b"), Value::string("c"),]
             })
         );
     }

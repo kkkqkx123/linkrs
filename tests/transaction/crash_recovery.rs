@@ -250,10 +250,7 @@ fn write_wal_entries(
     Ok(())
 }
 
-fn recover(
-    wal_dir: &Path,
-    data_dir: &Path,
-) -> (ReplayedVertices, ReplayedVertexProps) {
+fn recover(wal_dir: &Path, data_dir: &Path) -> (ReplayedVertices, ReplayedVertexProps) {
     let mut manager = RecoveryManager::new(RecoveryConfig {
         wal_dir: wal_dir.to_path_buf(),
         data_dir: data_dir.to_path_buf(),

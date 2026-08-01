@@ -34,11 +34,17 @@
 //! This is not a global singleton, but an instance that is shared between components through `Arc`. Each database instance can have its own optimizer engine configuration.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::cost_based::subquery_unnesting::UnnestDecision;
+use crate::query::optimizer::heuristic::batch::{
+    BatchOptimizer, BatchStatistics, OptimizationBatch,
+};
+use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
+use crate::query::optimizer::stats::StatsView;
 use crate::query::optimizer::{
     AggregateStrategySelector, BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager,
     SelectivityEstimator, SelectivityFeedbackManager, SortEliminationOptimizer, StatisticsManager,
@@ -47,6 +53,15 @@ use crate::query::optimizer::{
 
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::planning::plan::PlanNodeEnum;
+
+/// Heuristic optimization mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeuristicMode {
+    /// Use the batch optimizer (default)
+    Batch,
+    /// Use the legacy single-loop plan rewriter (differential comparison / fallback)
+    LegacyRewriter,
+}
 
 /// Optimizer engine
 ///
@@ -76,8 +91,14 @@ pub struct OptimizerEngine {
     subquery_unnesting_optimizer: SubqueryUnnestingOptimizer,
     /// Cost model configuration
     cost_config: CostModelConfig,
-    /// Heuristic plan rewriter
+    /// Heuristic batch optimizer (production heuristic main chain)
+    heuristic_batch: BatchOptimizer,
+    /// Legacy heuristic plan rewriter (kept for differential testing / fallback)
     heuristic_rewriter: PlanRewriter,
+    /// Heuristic mode selector
+    heuristic_mode: HeuristicMode,
+    /// Last batch optimization statistics (exposed for EXPLAIN diagnostics)
+    last_batch_statistics: Mutex<Vec<(OptimizationBatch, BatchStatistics)>>,
     /// Conservative selector for physical streaming partitions.
     partitioning_planner: PartitioningPlanner,
     /// Enable heuristic optimization phase
@@ -151,10 +172,13 @@ impl OptimizerEngine {
         let aggregate_strategy_selector = AggregateStrategySelector::new(cost_calculator.clone());
 
         // Create a subquery to de-associate the optimizer.
-        let subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new(&stats_manager);
+        let subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new();
 
         // Create a heuristic plan rewriter
         let heuristic_rewriter = PlanRewriter::default();
+
+        // Create the heuristic batch optimizer (production heuristic main chain)
+        let heuristic_batch = BatchOptimizer::from_registry(RuleRegistry::default());
 
         Self {
             expression_context,
@@ -168,7 +192,10 @@ impl OptimizerEngine {
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
             cost_config,
+            heuristic_batch,
             heuristic_rewriter,
+            heuristic_mode: HeuristicMode::Batch,
+            last_batch_statistics: Mutex::new(Vec::new()),
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
             max_heuristic_iterations: 100,
@@ -266,7 +293,7 @@ impl OptimizerEngine {
         self.aggregate_strategy_selector =
             AggregateStrategySelector::new(self.cost_calculator.clone());
         // Re-create the subquery to de-associate the optimizer.
-        self.subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new(&self.stats_manager);
+        self.subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new();
         log::info!(
             "Optimizer cost model configuration has been updated: {:?}",
             self.cost_config
@@ -302,10 +329,16 @@ impl OptimizerEngine {
     ///
     /// # Parameters
     /// `plan`: The execution plan to optimize
+    /// `space`: The space of the query being optimized; `None` disables
+    /// statistics-driven cost-based decisions.
     ///
     /// # Returns
     /// The optimized execution plan
-    pub fn optimize(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+    pub fn optimize(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+    ) -> OptimizeResult<ExecutionPlan> {
         let mut current_plan = plan;
 
         // Phase 1: Heuristic Optimization (Always Executed)
@@ -318,22 +351,27 @@ impl OptimizerEngine {
 
         // Phase 2: Cost-Based Optimization (always active — conservative rules)
         log::debug!("Starting Phase 2: Cost-Based Optimization");
-        current_plan = self.apply_cost_based(current_plan)?;
+        current_plan = self.apply_cost_based(current_plan, space)?;
         log::debug!("Phase 2 completed successfully");
 
-        current_plan = self.apply_partitioning_selection(current_plan);
+        current_plan = self.apply_partitioning_selection(current_plan, space);
 
         Ok(current_plan)
     }
 
-    fn apply_partitioning_selection(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+    fn apply_partitioning_selection(
+        &self,
+        mut plan: ExecutionPlan,
+        space: Option<&str>,
+    ) -> ExecutionPlan {
         if plan.partition_spec().is_some() {
             return plan;
         }
         let Some(root) = plan.root.as_ref() else {
             return plan;
         };
-        let decision = self.partitioning_planner.decide(root, &self.stats_manager);
+        let stats = StatsView::new(&self.stats_manager, space);
+        let decision = self.partitioning_planner.decide(root, &stats);
         if let Some(spec) = decision.partition_spec {
             log::debug!("Selected partition layout: {}", decision.reason);
             plan.set_partition_spec(spec);
@@ -358,10 +396,31 @@ impl OptimizerEngine {
         max_iterations: usize,
     ) -> OptimizeResult<ExecutionPlan> {
         // Interior mutability via Cell: set_max_iterations does not need &mut self.
+        self.heuristic_batch.set_max_iterations(max_iterations);
         self.heuristic_rewriter.set_max_iterations(max_iterations);
-        self.heuristic_rewriter
-            .rewrite(plan)
-            .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))
+
+        match self.heuristic_mode {
+            HeuristicMode::Batch => {
+                let root = match plan.root.clone() {
+                    Some(root) => root,
+                    None => return Ok(plan),
+                };
+                let result = self
+                    .heuristic_batch
+                    .optimize(root)
+                    .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
+                if let Ok(mut guard) = self.last_batch_statistics.lock() {
+                    *guard = result.batch_statistics.clone();
+                }
+                let mut new_plan = plan;
+                new_plan.set_root(result.optimized_plan);
+                Ok(new_plan)
+            }
+            HeuristicMode::LegacyRewriter => self
+                .heuristic_rewriter
+                .rewrite(plan)
+                .map_err(|e| OptimizeError::HeuristicFailed(e.to_string())),
+        }
     }
 
     /// Apply cost-based optimization strategies.
@@ -369,13 +428,18 @@ impl OptimizerEngine {
     /// Currently performs:
     /// - Subquery unnesting: PatternApply → HashInnerJoin when cost-beneficial
     /// - Join order optimization: reorder joins based on estimated costs
-    fn apply_cost_based(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+    fn apply_cost_based(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+    ) -> OptimizeResult<ExecutionPlan> {
         let mut plan = plan;
+        let stats = StatsView::new(&self.stats_manager, space);
 
         // Phase 1: Subquery unnesting (PatternApply → HashInnerJoin)
         let root_clone = plan.root.clone();
         if let Some(ref root) = root_clone {
-            let rewritten = self.unnest_subqueries(root);
+            let rewritten = self.unnest_subqueries(root, &stats);
             plan.set_root(rewritten);
         }
 
@@ -384,7 +448,7 @@ impl OptimizerEngine {
             let rewritten =
                 crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
                     root,
-                    &self.stats_manager,
+                    &stats,
                     &self.cost_calculator,
                 );
             plan.set_root(rewritten);
@@ -395,7 +459,7 @@ impl OptimizerEngine {
 
     /// Recursively walk the plan tree and rewrite PatternApply → HashInnerJoin
     /// when the subquery unnesting optimizer determines it is beneficial.
-    fn unnest_subqueries(&self, node: &PlanNodeEnum) -> PlanNodeEnum {
+    fn unnest_subqueries(&self, node: &PlanNodeEnum, stats: &StatsView) -> PlanNodeEnum {
         use PlanNodeEnum::*;
 
         // Try PatternApply unnesting at this level first.
@@ -403,14 +467,14 @@ impl OptimizerEngine {
             let analysis = self.batch_plan_analyzer.analyze(node);
             if let UnnestDecision::ShouldUnnest { ref reason, .. } = self
                 .subquery_unnesting_optimizer
-                .should_unnest(apply, &analysis)
+                .should_unnest(apply, &analysis, stats)
             {
                 log::debug!(
                     "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
                     reason
                 );
                 if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
-                    return self.unnest_subqueries(&join);
+                    return self.unnest_subqueries(&join, stats);
                 }
             }
         }
@@ -422,7 +486,7 @@ impl OptimizerEngine {
         macro_rules! rewrite_single {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_input = self.unnest_subqueries(cloned.input());
+                let new_input = self.unnest_subqueries(cloned.input(), stats);
                 cloned.set_input(new_input);
                 cloned
             }};
@@ -430,8 +494,8 @@ impl OptimizerEngine {
         macro_rules! rewrite_binary {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_left = self.unnest_subqueries(cloned.left_input());
-                let new_right = self.unnest_subqueries(cloned.right_input());
+                let new_left = self.unnest_subqueries(cloned.left_input(), stats);
+                let new_right = self.unnest_subqueries(cloned.right_input(), stats);
                 cloned.set_left_input(new_left);
                 cloned.set_right_input(new_right);
                 cloned
@@ -471,9 +535,33 @@ impl OptimizerEngine {
         }
     }
 
-    /// Get the heuristic rewriter
+    /// Get the heuristic rewriter (legacy, kept for differential testing / fallback)
     pub fn heuristic_rewriter(&self) -> &PlanRewriter {
         &self.heuristic_rewriter
+    }
+
+    /// Get the heuristic batch optimizer
+    pub fn heuristic_batch(&self) -> &BatchOptimizer {
+        &self.heuristic_batch
+    }
+
+    /// Set the heuristic optimization mode
+    pub fn set_heuristic_mode(&mut self, mode: HeuristicMode) {
+        self.heuristic_mode = mode;
+        log::info!("Heuristic optimization mode set to {:?}", mode);
+    }
+
+    /// Get the current heuristic optimization mode
+    pub fn heuristic_mode(&self) -> HeuristicMode {
+        self.heuristic_mode
+    }
+
+    /// Get the batch statistics of the last heuristic optimization (for EXPLAIN diagnostics)
+    pub fn last_batch_statistics(&self) -> Vec<(OptimizationBatch, BatchStatistics)> {
+        match self.last_batch_statistics.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 }
 

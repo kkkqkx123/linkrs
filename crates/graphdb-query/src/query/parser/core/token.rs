@@ -183,6 +183,7 @@ pub enum TokenKind {
     Recover,
     Explain,
     Profile,
+    Analyze,
     Format,
     AtomicEdge,
     Default,

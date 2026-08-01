@@ -125,9 +125,8 @@ impl Spiller {
             self.cache_manager.shrink_cache();
             self.cache_manager.refresh_memory_usage();
             let after = self.accounting.snapshot();
-            let freed = cache_bytes.saturating_sub(
-                after.categories[MemoryCategory::Cache as usize].current_bytes,
-            );
+            let freed = cache_bytes
+                .saturating_sub(after.categories[MemoryCategory::Cache as usize].current_bytes);
             if freed > 0 {
                 self.active_spills.write().push(SpillFile {
                     path: self.spill_dir.join("cache_eviction.spill"),

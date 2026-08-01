@@ -4,8 +4,8 @@
 
 use crate::core::types::{LabelId, Timestamp};
 use crate::storage::cache::{
-    CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats,
-    SharedRecordCache, VertexCacheKey,
+    CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats, SharedRecordCache,
+    VertexCacheKey,
 };
 use crate::storage::engine::config::ResourceConfig;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory};
