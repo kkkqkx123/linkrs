@@ -275,6 +275,41 @@ impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static>
     fn trigger_background_freeze(&self) -> crate::core::StorageResult<()> {
         self.inner.trigger_background_freeze()
     }
+
+    fn list_cold_snapshots(
+        &self,
+    ) -> crate::core::StorageResult<Vec<crate::storage::client::ColdSnapshotInfo>> {
+        self.inner.list_cold_snapshots()
+    }
+
+    fn load_cold_snapshot(
+        &self,
+        path: &std::path::Path,
+    ) -> crate::core::StorageResult<crate::storage::client::ColdSnapshotInfo> {
+        self.inner.load_cold_snapshot(path)
+    }
+
+    fn remove_cold_snapshot(
+        &self,
+        label: crate::core::types::LabelId,
+    ) -> crate::core::StorageResult<()> {
+        self.inner.remove_cold_snapshot(label)
+    }
+
+    fn export_cold_snapshot(
+        &self,
+        label: crate::core::types::LabelId,
+        path: &std::path::Path,
+    ) -> crate::core::StorageResult<crate::storage::client::ColdSnapshotInfo> {
+        self.inner.export_cold_snapshot(label, path)
+    }
+
+    fn merge_cold_snapshots(
+        &self,
+        labels: &[crate::core::types::LabelId],
+    ) -> crate::core::StorageResult<Vec<crate::storage::client::ColdSnapshotInfo>> {
+        self.inner.merge_cold_snapshots(labels)
+    }
 }
 
 impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::UndoTarget

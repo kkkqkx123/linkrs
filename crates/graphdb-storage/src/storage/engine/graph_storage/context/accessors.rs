@@ -634,4 +634,48 @@ impl GraphStorageContext {
             .map(|(label, _)| *label)
             .collect()
     }
+
+    /// Derive a time-travel view over the currently registered snapshots:
+    /// a per-label shelf of immutable snapshots keyed by timestamp.
+    ///
+    /// The view is a lightweight copy of the registration (Arc clones only),
+    /// so callers may query it without holding the registry lock.
+    pub fn cold_time_machine(
+        &self,
+    ) -> crate::storage::cold::ColdSnapshotTimeMachine {
+        let mut machine = crate::storage::cold::ColdSnapshotTimeMachine::new();
+        let cold = self.cold_snapshots.read();
+        for snapshots in cold.values() {
+            for snapshot in snapshots {
+                machine.insert_arc(snapshot.clone());
+            }
+        }
+        machine
+    }
+
+    /// Most recent cold snapshot of `label` not newer than `ts`, using the
+    /// same timestamp routing as the query engine's cold fallback.
+    pub fn cold_snapshot_at(
+        &self,
+        label: LabelId,
+        ts: Timestamp,
+    ) -> Option<Arc<crate::storage::cold::ColdSnapshot>> {
+        self.cold_time_machine().snapshot_at(label, ts)
+    }
+
+    /// Resolve the cold snapshot directory: `cold_tier.snapshot_dir` when
+    /// configured, else `{work_dir}/cold_snapshots`.
+    pub(crate) fn cold_snapshot_dir(&self) -> std::path::PathBuf {
+        let cfg_dir = &self.persistent.config.cold_tier.snapshot_dir;
+        if cfg_dir.as_os_str().is_empty() {
+            self.persistent
+                .layout
+                .work_dir()
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/linkrs_cold"))
+                .join("cold_snapshots")
+        } else {
+            cfg_dir.clone()
+        }
+    }
 }

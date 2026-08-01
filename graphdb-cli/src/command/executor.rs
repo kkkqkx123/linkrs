@@ -387,6 +387,9 @@ impl CommandExecutor {
             MetaCommand::ImportSchema { file_path } => {
                 meta::io::execute_import_schema(self, file_path, session_mgr).await
             }
+            MetaCommand::Snapshot { action } => {
+                meta::snapshot::execute_snapshot(self, action, session_mgr).await
+            }
         }
     }
 

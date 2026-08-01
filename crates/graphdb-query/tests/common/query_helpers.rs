@@ -2,7 +2,7 @@
 //!
 //! Provides convenient query execution and result extraction functions for tests
 
-use crate::common::TestResult;
+use super::TestResult;
 use graphdb_query::core::error::DBError;
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::base::ExecutionResult;

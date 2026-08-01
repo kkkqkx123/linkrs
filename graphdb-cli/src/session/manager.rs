@@ -230,6 +230,38 @@ impl SessionManager {
         self.client.list_edge_types(space).await
     }
 
+    /// List all registered cold snapshots.
+    pub async fn list_cold_snapshots(&self) -> Result<Vec<crate::client::ColdSnapshotInfo>> {
+        self.client.list_cold_snapshots().await
+    }
+
+    /// Register a cold snapshot from a server-side `.lkcs` file.
+    pub async fn load_cold_snapshot(&self, path: &str) -> Result<crate::client::ColdSnapshotInfo> {
+        self.client.load_cold_snapshot(path).await
+    }
+
+    /// Drop all cold snapshots of a label from the registry.
+    pub async fn remove_cold_snapshot(&self, label: u32) -> Result<()> {
+        self.client.remove_cold_snapshot(label).await
+    }
+
+    /// Re-export the most recent cold snapshot of a label to a path.
+    pub async fn export_cold_snapshot(
+        &self,
+        label: u32,
+        path: &str,
+    ) -> Result<crate::client::ColdSnapshotInfo> {
+        self.client.export_cold_snapshot(label, path).await
+    }
+
+    /// Consolidate every registered version of the given labels.
+    pub async fn merge_cold_snapshots(
+        &self,
+        labels: &[u32],
+    ) -> Result<Vec<crate::client::ColdSnapshotInfo>> {
+        self.client.merge_cold_snapshots(labels).await
+    }
+
     /// Get current session reference
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()

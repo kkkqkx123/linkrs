@@ -1495,7 +1495,7 @@ mod tests {
                             sequence.to_string().as_bytes(),
                         )?;
                         Ok(CheckpointData {
-                            vertex_count: sequence as u64,
+                            vertex_count: sequence,
                             edge_count: 0,
                             data_size: 1,
                         })
@@ -1525,7 +1525,7 @@ mod tests {
                     |temporary_dir, _| {
                         std::fs::write(temporary_dir.join("table.data"), b"data")?;
                         Ok(CheckpointData {
-                            vertex_count: sequence as u64,
+                            vertex_count: sequence,
                             edge_count: 0,
                             data_size: 4,
                         })

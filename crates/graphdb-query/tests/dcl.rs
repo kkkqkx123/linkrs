@@ -12,14 +12,21 @@
 //! - DESCRIBE USER - Describe user details
 
 mod common;
-mod permission;
-mod role;
-mod user_management;
-
-// Advanced integration tests
+#[path = "dcl/cascade_operations.rs"]
 mod cascade_operations;
+#[path = "dcl/concurrent_operations.rs"]
 mod concurrent_operations;
+#[path = "dcl/cross_operation_consistency.rs"]
 mod cross_operation_consistency;
+#[path = "dcl/edge_cases.rs"]
 mod edge_cases;
+#[path = "dcl/permission.rs"]
+mod permission;
+#[path = "dcl/role.rs"]
+mod role;
+#[path = "dcl/security_tests.rs"]
 mod security_tests;
+#[path = "dcl/transaction_consistency.rs"]
 mod transaction_consistency;
+#[path = "dcl/user_management.rs"]
+mod user_management;

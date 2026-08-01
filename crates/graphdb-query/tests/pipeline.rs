@@ -8,6 +8,10 @@
 //! These tests focus on internal processing correctness, complementing
 //! the end-to-end tests in dcl/ddl/dml/dql directories.
 
+mod common;
+#[path = "pipeline/parsing.rs"]
 pub mod parsing;
+#[path = "pipeline/planning.rs"]
 pub mod planning;
+#[path = "pipeline/validation.rs"]
 pub mod validation;

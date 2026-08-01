@@ -340,7 +340,9 @@ mod tests {
         }
         pool.insert(2, "evictable", 200);
         pool.evict(400);
-        pool.get(&1).map(|i| i.unpin());
+        if let Some(item) = pool.get(&1) {
+            item.unpin();
+        }
     }
 
     #[test]

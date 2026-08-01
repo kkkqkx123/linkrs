@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
-use crate::core::types::{LabelId, Timestamp, VertexId};
+use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::storage::edge::edge_table::remap::remap_immutable_csr;
@@ -12,7 +12,9 @@ use crate::storage::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTa
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
 
 pub const COLD_SNAPSHOT_MAGIC: [u8; 4] = *b"LKCS";
-pub const COLD_SNAPSHOT_VERSION: u32 = 2;
+/// v3: dict-encoded CSR adjacency (30-50% smaller for repeated endpoints),
+/// zstd-compressed property section, and an out-row presence bitmap.
+pub const COLD_SNAPSHOT_VERSION: u32 = 3;
 const HEADER_SIZE: usize = 36;
 
 /// A scanned edge record from a ColdSnapshot.
@@ -247,24 +249,38 @@ impl ColdPropertyIndex {
 /// Contains CSR adjacency data (out/in), columnar property storage,
 /// snapshot metadata, edge schema, and an optional ordered property index.
 ///
-/// File format:
+/// v3 file format:
 /// ```text
 /// [4]  Magic "LKCS"
-/// [4]  Version (u32 LE)
+/// [4]  Version (u32 LE, 3)
 /// [8]  Snapshot timestamp (u64 LE)
 /// [8]  Edge count (u64 LE)
 /// [4]  Label ID (u32 LE)
 /// [8]  Vertex capacity (u64 LE)
 /// --- sections ---
-/// [8]  Out CSR length (u64 LE) + [N] Out CSR data
-/// [8]  In CSR length (u64 LE) + [N] In CSR data
-/// [8]  Property table length (u64 LE) + [N] Property table data
+/// [8]  Out CSR length (u64 LE) + [N] out CSR (marker + raw/dict payload)
+/// [8]  In CSR length (u64 LE) + [N] in CSR (marker + raw/dict payload)
+/// [8]  Property table length (u64 LE) + [N] property data
+///      (1-byte marker: 0x00 raw, 0x01 zstd-compressed)
 /// [8]  Schema length (u64 LE) + [N] Schema data (JSON)
 /// [8]  Index length (u64 LE, 0 = no index)
 /// [N]  Index data (ColdPropertyIndex::encode)
+/// [8]  Presence bitmap length (u64 LE, 0 = none)
+/// [N]  Presence bitmap (u64 words, bit v = row v has out edges)
 /// [4]  CRC32 of all preceding bytes
 /// ```
-#[derive(Clone)]
+///
+/// Dict-encoded CSR payload:
+/// ```text
+/// [8]  Vertex capacity (u64 LE)
+/// [8]  Edge count (u64 LE)
+/// [8]  Dict size (u64 LE)
+/// [N]  Dict entries: [1+len] vertex id bytes each
+/// [8]  Offsets length (u64 LE)
+/// [N]  Offsets (u32 LE, vertex_capacity + 1 entries)
+/// [N]  Edge records: (dict_id u32, edge_id u64, prop_offset u32, ts u64)
+/// ```
+#[derive(Debug, Clone)]
 pub struct ColdSnapshot {
     snapshot_ts: Timestamp,
     label: LabelId,
@@ -275,6 +291,9 @@ pub struct ColdSnapshot {
     properties: PropertyTable,
     schema: EdgeSchema,
     property_index: Option<ColdPropertyIndex>,
+    /// Bit v set = row v holds at least one out edge. Lets full scans skip
+    /// empty rows without touching the CSR offsets.
+    vertex_presence: Option<Vec<u64>>,
     /// Backing `.lkcs` file when opened from or created at a path.
     path: Option<PathBuf>,
 }
@@ -328,8 +347,25 @@ impl ColdSnapshot {
         // Sections
         let out_data = read_section(data, &mut pos)?;
         let in_data = read_section(data, &mut pos)?;
-        let prop_data = read_section(data, &mut pos)?;
+        let prop_section = read_section(data, &mut pos)?;
         let schema_data = read_section(data, &mut pos)?;
+
+        // Property section: 1-byte marker (raw / zstd) + payload.
+        let (marker, prop_payload) = prop_section
+            .split_first()
+            .ok_or_else(|| StorageError::deserialize_error("ColdSnapshot property section empty"))?;
+        let prop_data: Vec<u8> = match *marker {
+            ZSTD_MARKER => zstd::decode_all(prop_payload).map_err(|e| {
+                StorageError::deserialize_error(format!("zstd decompress failed: {}", e))
+            })?,
+            RAW_MARKER => prop_payload.to_vec(),
+            other => {
+                return Err(StorageError::deserialize_error(format!(
+                    "unknown property marker: {:#x}",
+                    other
+                )));
+            }
+        };
 
         // Optional property index section (length 0 = no index)
         let index_len = u64::from_le_bytes(read_arr::<8>(data, &mut pos));
@@ -346,6 +382,29 @@ impl ColdSnapshot {
             None
         };
 
+        // Optional presence bitmap section (length 0 = none)
+        let presence_len = u64::from_le_bytes(read_arr::<8>(data, &mut pos));
+        let vertex_presence = if presence_len > 0 {
+            if pos + presence_len as usize > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "ColdSnapshot presence bitmap exceeds file size",
+                ));
+            }
+            if !presence_len.is_multiple_of(8) {
+                return Err(StorageError::deserialize_error(
+                    "ColdSnapshot presence bitmap length is not word-aligned",
+                ));
+            }
+            let words = presence_len as usize / 8;
+            let mut bitmap = Vec::with_capacity(words);
+            for _ in 0..words {
+                bitmap.push(u64::from_le_bytes(read_arr::<8>(data, &mut pos)));
+            }
+            Some(bitmap)
+        } else {
+            None
+        };
+
         // CRC32 verification
         let stored_crc = u32::from_le_bytes(read_arr::<4>(data, &mut pos));
         let computed_crc = crc32fast::hash(&data[..pos - 4]);
@@ -357,14 +416,11 @@ impl ColdSnapshot {
         }
 
         // Deserialize
-        let mut out_csr = Csr::new();
-        out_csr.load(out_data)?;
-
-        let mut in_csr = Csr::new();
-        in_csr.load(in_data)?;
+        let out_csr = decode_csr_section(out_data)?;
+        let in_csr = decode_csr_section(in_data)?;
 
         let mut properties = PropertyTable::new();
-        properties.load(prop_data)?;
+        properties.load(&prop_data)?;
 
         let schema_json = std::str::from_utf8(schema_data)
             .map_err(|e| StorageError::deserialize_error(format!("invalid schema utf-8: {}", e)))?;
@@ -381,6 +437,7 @@ impl ColdSnapshot {
             properties,
             schema,
             property_index,
+            vertex_presence,
             path: None,
         })
     }
@@ -435,12 +492,147 @@ impl ColdSnapshot {
             .map_err(|e| StorageError::io_error(format!("failed to rewrite snapshot file: {}", e)))
     }
 
+    /// Build a minimal empty snapshot file (no edges) and return the
+    /// in-memory snapshot bound to that path. Used by tooling and tests that
+    /// need a valid `.lkcs` file without an edge table.
+    pub fn create_empty<P: AsRef<Path>>(
+        label: LabelId,
+        label_name: &str,
+        ts: Timestamp,
+        path: P,
+    ) -> StorageResult<Self> {
+        let schema = EdgeSchema {
+            label_id: label,
+            label_name: label_name.to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: Vec::new(),
+            oe_strategy: crate::storage::edge::EdgeStrategy::Multiple,
+            ie_strategy: crate::storage::edge::EdgeStrategy::Multiple,
+            schema_version: 1,
+        };
+        let exported = ExportedEdgeSnapshot {
+            snapshot_ts: ts,
+            label,
+            out_csr: Csr::new(),
+            in_csr: Csr::new(),
+            properties: PropertyTable::new(),
+            schema,
+        };
+        Self::create(&exported, path)
+    }
+
+    /// Serialize the current in-memory state to `path` (v3 `.lkcs` format)
+    /// and return a copy bound to that path.
+    pub(crate) fn export_to_path<P: AsRef<Path>>(&self, path: P) -> StorageResult<Self> {
+        let buf = encode_snapshot(
+            &self.out_csr,
+            &self.in_csr,
+            &self.properties,
+            &self.schema,
+            self.snapshot_ts,
+            self.label,
+            self.property_index.as_ref(),
+        )?;
+        std::fs::write(path.as_ref(), &buf).map_err(|e| {
+            StorageError::io_error(format!("failed to write snapshot file: {}", e))
+        })?;
+        let mut copy = Self::from_bytes(&buf)?;
+        copy.path = Some(path.as_ref().to_path_buf());
+        Ok(copy)
+    }
+
     pub fn snapshot_ts(&self) -> Timestamp {
         self.snapshot_ts
     }
 
+    /// Structural equality of the CSR data (edges, endpoints, offsets).
+    /// Property payloads are compared through `read_properties` on demand by
+    /// delta builders; this only guards the "identical timestamp" fast path.
+    pub(crate) fn identical_to(&self, other: &Self) -> bool {
+        if self.edge_count != other.edge_count || self.label != other.label {
+            return false;
+        }
+        let cap = self.vertex_capacity.max(other.vertex_capacity);
+        for src in 0..cap {
+            let a = self.out_csr.edges_of(src as u32);
+            let b = other.out_csr.edges_of(src as u32);
+            if a.len() != b.len() || !a.iter().zip(b.iter()).all(|(x, y)| x == y) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reconstruct a snapshot from already-parsed parts. Used by the delta
+    /// application path, which mutates a base snapshot in place of a fresh
+    /// file read. The presence bitmap is rebuilt from the out CSR.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub(crate) fn from_parts(
+        snapshot_ts: Timestamp,
+        label: LabelId,
+        edge_count: u64,
+        vertex_capacity: usize,
+        out_csr: Csr,
+        in_csr: Csr,
+        properties: PropertyTable,
+        schema: EdgeSchema,
+        property_index: Option<ColdPropertyIndex>,
+    ) -> Self {
+        let vertex_presence = {
+            let bitmap = build_presence_bitmap(&out_csr);
+            if bitmap.is_empty() {
+                None
+            } else {
+                Some(bitmap)
+            }
+        };
+        Self {
+            snapshot_ts,
+            label,
+            edge_count,
+            vertex_capacity,
+            out_csr,
+            in_csr,
+            properties,
+            schema,
+            property_index,
+            vertex_presence,
+            path: None,
+        }
+    }
+
+    /// Attach a backing file path (or clear it) after in-memory
+    /// reconstruction such as delta application.
+    pub(crate) fn with_path(&mut self, path: Option<PathBuf>) {
+        self.path = path;
+    }
+
+    /// Build an in-memory snapshot from an exported edge snapshot without
+    /// touching the filesystem (used by delta computation).
+    pub(crate) fn from_export(exported: &ExportedEdgeSnapshot) -> StorageResult<Self> {
+        Ok(Self::from_parts(
+            exported.snapshot_ts,
+            exported.label,
+            exported.out_csr.edge_count(),
+            exported.out_csr.vertex_capacity().max(exported.in_csr.vertex_capacity()),
+            exported.out_csr.clone(),
+            exported.in_csr.clone(),
+            exported.properties.clone(),
+            exported.schema.clone(),
+            None,
+        ))
+    }
+
     pub fn label(&self) -> LabelId {
         self.label
+    }
+
+    /// Backing `.lkcs` file path when the snapshot was opened from or
+    /// created at a path.
+    pub(crate) fn backing_path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -521,6 +713,9 @@ impl ColdSnapshot {
         let cap = self.vertex_capacity;
         let mut results = Vec::with_capacity(self.edge_count as usize);
         for src in 0..cap {
+            if !self.row_has_edges(src) {
+                continue;
+            }
             let src_u32 = src as u32;
             for nbr in self.out_csr.edges_of(src_u32) {
                 let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
@@ -534,6 +729,26 @@ impl ColdSnapshot {
             }
         }
         results
+    }
+
+    /// Whether vertex row `row` holds at least one out edge, using the
+    /// presence bitmap when available and the CSR offsets otherwise.
+    pub fn row_has_edges(&self, row: usize) -> bool {
+        if let Some(bitmap) = &self.vertex_presence {
+            let word = row / 64;
+            let bit = row % 64;
+            bitmap
+                .get(word)
+                .is_some_and(|w| (w & (1u64 << bit)) != 0)
+        } else {
+            !self.out_csr.edges_of(row as u32).is_empty()
+        }
+    }
+
+    /// The out-row presence bitmap (bit v = row v has edges), when the
+    /// snapshot file carried one.
+    pub fn vertex_presence(&self) -> Option<&[u64]> {
+        self.vertex_presence.as_deref()
     }
 
     pub fn nbr_to_edge_record(
@@ -577,6 +792,8 @@ impl ColdSnapshot {
         self.in_csr = new_in;
         self.vertex_capacity = out_capacity.max(in_capacity);
         self.edge_count = self.out_csr.edge_count();
+        let bitmap = build_presence_bitmap(&self.out_csr);
+        self.vertex_presence = if bitmap.is_empty() { None } else { Some(bitmap) };
 
         if let Some(index) = self.property_index.as_mut() {
             index.remap_vertex_ids(src_mapping, dst_mapping);
@@ -636,12 +853,22 @@ fn encode_snapshot(
     label: LabelId,
     index: Option<&ColdPropertyIndex>,
 ) -> StorageResult<Vec<u8>> {
-    let out_data = out_csr.dump();
-    let in_data = in_csr.dump();
+    let out_data = encode_csr_section(out_csr);
+    let in_data = encode_csr_section(in_csr);
     let prop_data = properties.dump();
+    // zstd-compress the property section when it actually shrinks.
+    let compressed_prop = zstd::encode_all(&prop_data[..], ZSTD_LEVEL)
+        .map_err(|e| StorageError::serialize_error(format!("zstd compress failed: {}", e)))?;
+    let (prop_marker, prop_payload) = if compressed_prop.len() < prop_data.len() {
+        (ZSTD_MARKER, compressed_prop)
+    } else {
+        (RAW_MARKER, prop_data)
+    };
     let schema_json =
         serde_json::to_string(schema).map_err(|e| StorageError::serialize_error(e.to_string()))?;
     let schema_bytes = schema_json.as_bytes();
+
+    let presence = build_presence_bitmap(out_csr);
 
     let mut buf = Vec::new();
 
@@ -654,7 +881,13 @@ fn encode_snapshot(
 
     write_section(&mut buf, &out_data);
     write_section(&mut buf, &in_data);
-    write_section(&mut buf, &prop_data);
+
+    // Property section: length prefix covers marker + payload.
+    let mut prop_section = Vec::with_capacity(1 + prop_payload.len());
+    prop_section.push(prop_marker);
+    prop_section.extend_from_slice(&prop_payload);
+    write_section(&mut buf, &prop_section);
+
     write_section(&mut buf, schema_bytes);
 
     if let Some(index) = index {
@@ -665,10 +898,222 @@ fn encode_snapshot(
         buf.extend_from_slice(&0u64.to_le_bytes());
     }
 
+    buf.extend_from_slice(&((presence.len() * 8) as u64).to_le_bytes());
+    for word in &presence {
+        buf.extend_from_slice(&word.to_le_bytes());
+    }
+
     let checksum = crc32fast::hash(&buf);
     buf.extend_from_slice(&checksum.to_le_bytes());
 
     Ok(buf)
+}
+
+const ZSTD_MARKER: u8 = 0x01;
+const RAW_MARKER: u8 = 0x00;
+const ZSTD_LEVEL: i32 = 3;
+
+/// Build the out-row presence bitmap: bit v set = vertex row v has at least
+/// one out edge. Rows past the CSR capacity are implicitly absent.
+fn build_presence_bitmap(csr: &Csr) -> Vec<u64> {
+    let capacity = csr.vertex_capacity();
+    if capacity == 0 || csr.edge_count() == 0 {
+        return Vec::new();
+    }
+    let mut bitmap = vec![0u64; capacity.div_ceil(64)];
+    for v in 0..capacity {
+        if !csr.edges_of(v as u32).is_empty() {
+            let word = v / 64;
+            let bit = v % 64;
+            bitmap[word] |= 1u64 << bit;
+        }
+    }
+    bitmap
+}
+
+/// Dict-encode a CSR: distinct endpoint `VertexId`s become u32 dictionary
+/// references, so repeated neighbors cost 24 bytes instead of 37. The
+/// section carries a format marker so the smaller of raw/dict encoding is
+/// chosen per CSR:
+/// ```text
+/// [1] marker (0x00 raw Csr::dump, 0x01 dict-encoded)
+/// [N] payload
+/// ```
+fn encode_csr_section(csr: &Csr) -> Vec<u8> {
+    let raw_data = csr.dump();
+    let dict_data = encode_csr_dict(csr);
+    let mut buf = Vec::new();
+    if dict_data.len() < raw_data.len() {
+        buf.push(CSR_DICT);
+        buf.extend_from_slice(&dict_data);
+    } else {
+        buf.push(CSR_RAW);
+        buf.extend_from_slice(&raw_data);
+    }
+    buf
+}
+
+/// Decode a CSR section written by [`encode_csr_section`].
+fn decode_csr_section(data: &[u8]) -> StorageResult<Csr> {
+    let (marker, payload) = data
+        .split_first()
+        .ok_or_else(|| StorageError::deserialize_error("cold CSR section empty"))?;
+    match *marker {
+        CSR_RAW => {
+            let mut csr = Csr::new();
+            csr.load(payload)?;
+            Ok(csr)
+        }
+        CSR_DICT => decode_csr_dict(payload),
+        other => Err(StorageError::deserialize_error(format!(
+            "unknown cold CSR marker: {:#x}",
+            other
+        ))),
+    }
+}
+
+const CSR_RAW: u8 = 0x00;
+const CSR_DICT: u8 = 0x01;
+
+/// Dict-encode a CSR (payload of a `CSR_DICT` section).
+fn encode_csr_dict(csr: &Csr) -> Vec<u8> {
+    let capacity = csr.vertex_capacity();
+    let edge_count = csr.edge_count();
+
+    // Build the endpoint dictionary in order of first appearance.
+    let mut dict: Vec<VertexId> = Vec::new();
+    let mut dict_ids: HashMap<VertexId, u32> = HashMap::new();
+    let mut edges: Vec<(u32, EdgeId, u32, Timestamp)> = Vec::with_capacity(edge_count as usize);
+    for v in 0..capacity {
+        for nbr in csr.edges_of(v as u32) {
+            let id = match dict_ids.get(&nbr.neighbor) {
+                Some(&id) => id,
+                None => {
+                    let id = dict.len() as u32;
+                    dict.push(nbr.neighbor);
+                    dict_ids.insert(nbr.neighbor, id);
+                    id
+                }
+            };
+            edges.push((id, nbr.edge_id, nbr.prop_offset, nbr.timestamp));
+        }
+    }
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(capacity as u64).to_le_bytes());
+    buf.extend_from_slice(&(edge_count).to_le_bytes());
+    buf.extend_from_slice(&(dict.len() as u64).to_le_bytes());
+    for id in &dict {
+        let bytes = id.as_bytes();
+        buf.push(bytes.len() as u8);
+        buf.extend_from_slice(bytes);
+    }
+    // Offsets: capacity + 1 entries, relative to the edge records.
+    let mut offsets = Vec::with_capacity(capacity + 1);
+    let mut running = 0u32;
+    offsets.push(0);
+    for v in 0..capacity {
+        running += csr.edges_of(v as u32).len() as u32;
+        offsets.push(running);
+    }
+    buf.extend_from_slice(&(offsets.len() as u64).to_le_bytes());
+    for offset in &offsets {
+        buf.extend_from_slice(&offset.to_le_bytes());
+    }
+    for (dict_id, edge_id, prop_offset, ts) in &edges {
+        buf.extend_from_slice(&dict_id.to_le_bytes());
+        buf.extend_from_slice(&edge_id.as_u64().to_le_bytes());
+        buf.extend_from_slice(&prop_offset.to_le_bytes());
+        buf.extend_from_slice(&ts.to_le_bytes());
+    }
+    buf
+}
+
+/// Decode a dict-encoded CSR payload back into a `Csr`.
+fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
+    let mut pos = 0usize;
+    let read_u64 = |pos: &mut usize| -> StorageResult<u64> {
+        if *pos + 8 > data.len() {
+            return Err(StorageError::deserialize_error(
+                "cold CSR section truncated (u64)",
+            ));
+        }
+        let v = u64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
+        *pos += 8;
+        Ok(v)
+    };
+
+    let capacity = read_u64(&mut pos)? as usize;
+    let edge_count = read_u64(&mut pos)? as usize;
+    let dict_len = read_u64(&mut pos)? as usize;
+    let mut dict = Vec::with_capacity(dict_len);
+    for _ in 0..dict_len {
+        if pos >= data.len() {
+            return Err(StorageError::deserialize_error(
+                "cold CSR dict truncated (id length)",
+            ));
+        }
+        let len = data[pos] as usize;
+        pos += 1;
+        if pos + len > data.len() {
+            return Err(StorageError::deserialize_error(
+                "cold CSR dict truncated (id bytes)",
+            ));
+        }
+        dict.push(VertexId::from_bytes(data[pos..pos + len].to_vec()));
+        pos += len;
+    }
+
+    let offsets_len = read_u64(&mut pos)? as usize;
+    if offsets_len != capacity + 1 {
+        return Err(StorageError::deserialize_error(format!(
+            "cold CSR offsets length mismatch: expected {}, got {}",
+            capacity + 1,
+            offsets_len
+        )));
+    }
+    if pos + offsets_len * 4 > data.len() {
+        return Err(StorageError::deserialize_error(
+            "cold CSR offsets truncated",
+        ));
+    }
+    let mut offsets = Vec::with_capacity(offsets_len);
+    for _ in 0..offsets_len {
+        offsets.push(u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()));
+        pos += 4;
+    }
+    if pos + edge_count * 20 > data.len() {
+        return Err(StorageError::deserialize_error(
+            "cold CSR edge records truncated",
+        ));
+    }
+
+    // Expand dictionary references back into ImmutableNbr values.
+    let mut entries: Vec<(u32, Nbr)> = Vec::with_capacity(edge_count);
+    for v in 0..capacity {
+        let start = offsets[v] as usize;
+        let end = offsets[v + 1] as usize;
+        for _ in start..end {
+            let dict_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let edge_id = EdgeId::new(u64::from_le_bytes(
+                data[pos..pos + 8].try_into().unwrap(),
+            ));
+            pos += 8;
+            let prop_offset = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let ts = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
+            pos += 8;
+            let neighbor = *dict
+                .get(dict_id as usize)
+                .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
+            entries.push((
+                v as u32,
+                Nbr::new(neighbor, edge_id, prop_offset, ts),
+            ));
+        }
+    }
+    Ok(Csr::from_nbr_entries(&entries, capacity))
 }
 
 #[cfg(test)]
@@ -1047,11 +1492,11 @@ mod tests {
         assert_eq!(hits[0].rank, 0);
 
         // Range lookup: weight >= 2.5
-        let hits = index.lookup("weight", &key, &vec![0xFF]);
+        let hits = index.lookup("weight", &key, &[0xFF]);
         assert_eq!(hits.len(), 2);
 
         // Unknown property yields nothing
-        assert!(index.lookup("missing", &key, &vec![0xFF]).is_empty());
+        assert!(index.lookup("missing", &key, &[0xFF]).is_empty());
     }
 
     #[test]
@@ -1146,5 +1591,104 @@ mod tests {
 
         // Missing offset returns None
         assert!(pt.read_properties(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn test_cold_snapshot_v3_presence_bitmap() {
+        let mut table = make_table();
+        for src in [0u32, 5, 100] {
+            table
+                .insert_edge(src, src + 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                .unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let presence = snapshot.vertex_presence().expect("presence bitmap present");
+        assert!(snapshot.row_has_edges(0));
+        assert!(snapshot.row_has_edges(5));
+        assert!(snapshot.row_has_edges(100));
+        assert!(!snapshot.row_has_edges(1));
+        assert!(!snapshot.row_has_edges(200));
+
+        let loaded = ColdSnapshot::open(&path).unwrap();
+        assert_eq!(loaded.vertex_presence(), Some(presence));
+        assert_eq!(loaded.scan_edges().len(), 3);
+        assert!(loaded.row_has_edges(5));
+        assert!(!loaded.row_has_edges(6));
+    }
+
+    #[test]
+    fn test_cold_snapshot_v3_dict_encoding_smaller() {
+        // 100 sources x 5 destinations = 500 edges over 6 distinct endpoints:
+        // dict encoding (24 B/edge + tiny dict) beats raw (37 B/edge).
+        let mut table = make_table();
+        for src in 0..100u32 {
+            for dst in 0..5u32 {
+                table
+                    .insert_edge(src, dst, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                    .unwrap();
+            }
+        }
+        let csr = table.export_snapshot(100).unwrap().out_csr;
+        let raw = csr.dump();
+        let dict = encode_csr_dict(&csr);
+        assert!(
+            dict.len() < raw.len(),
+            "dict encoding should shrink repetitive CSRs: dict={}, raw={}",
+            dict.len(),
+            raw.len()
+        );
+
+        let roundtrip = decode_csr_dict(&dict).unwrap();
+        assert_eq!(roundtrip.edge_count(), csr.edge_count());
+        assert_eq!(roundtrip.edges_of(0).len(), 5);
+        assert_eq!(roundtrip.edges_of(99).len(), 5);
+        assert_eq!(roundtrip.edges_of(50).len(), 5);
+        // Endpoint bytes survive the dict round-trip.
+        assert_eq!(roundtrip.edges_of(0)[0].neighbor, csr.edges_of(0)[0].neighbor);
+    }
+
+    #[test]
+    fn test_cold_snapshot_v3_zstd_property_section() {
+        // Large string-heavy property payloads must compress.
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".to_string(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef::new(
+                "name".to_string(),
+                crate::core::types::DataType::String,
+            )],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+        };
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        for i in 0..50u32 {
+            table
+                .insert_edge(
+                    i,
+                    i + 1,
+                    0,
+                    &[("name".to_string(), Value::string(format!("repeated-pattern-{}", i % 7)))],
+                    100,
+                )
+                .unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        ColdSnapshot::create(&exported, &path).unwrap();
+        let loaded = ColdSnapshot::open(&path).unwrap();
+        assert_eq!(loaded.edge_count(), 50);
+        let nbr = loaded.get_out_edges(10)[0];
+        let props = loaded.properties().read_properties(nbr.prop_offset).unwrap();
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].1, Value::string("repeated-pattern-3"));
     }
 }

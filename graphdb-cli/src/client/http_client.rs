@@ -266,6 +266,112 @@ impl HttpClient {
         }
     }
 
+    // ── Cold snapshot management ──
+
+    /// List all registered cold snapshots.
+    pub async fn list_cold_snapshots(&self) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+        let url = format!("{}/snapshots/cold", self.base_url);
+        let response = self.inner.get(&url).send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to list cold snapshots ({}): {}",
+                status, body
+            )));
+        }
+        let body: serde_json::Value = response.json().await?;
+        let snapshots = body
+            .get("snapshots")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        Ok(snapshots)
+    }
+
+    /// Register a cold snapshot from a server-side `.lkcs` file.
+    pub async fn load_cold_snapshot(&self, path: &str) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
+        let url = format!("{}/snapshots/cold/load", self.base_url);
+        let response = self
+            .inner
+            .post(&url)
+            .json(&serde_json::json!({ "path": path }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to load cold snapshot ({}): {}",
+                status, body
+            )));
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Drop all cold snapshots of a label from the registry.
+    pub async fn remove_cold_snapshot(&self, label: u32) -> Result<()> {
+        let url = format!("{}/snapshots/cold/{}", self.base_url, label);
+        let response = self.inner.delete(&url).send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to remove cold snapshot ({}): {}",
+                status, body
+            )));
+        }
+        Ok(())
+    }
+
+    /// Re-export the most recent cold snapshot of a label to a path.
+    pub async fn export_cold_snapshot(
+        &self,
+        label: u32,
+        path: &str,
+    ) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
+        let url = format!("{}/snapshots/cold/export", self.base_url);
+        let response = self
+            .inner
+            .post(&url)
+            .json(&serde_json::json!({ "label": label, "path": path }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to export cold snapshot ({}): {}",
+                status, body
+            )));
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Consolidate every registered version of the given labels.
+    pub async fn merge_cold_snapshots(&self, labels: &[u32]) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+        let url = format!("{}/snapshots/cold/merge", self.base_url);
+        let response = self
+            .inner
+            .post(&url)
+            .json(&serde_json::json!({ "labels": labels }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to merge cold snapshots ({}): {}",
+                status, body
+            )));
+        }
+        let body: serde_json::Value = response.json().await?;
+        let merged = body
+            .get("merged")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        Ok(merged)
+    }
+
     /// Begin a new transaction
     pub async fn begin_transaction(&self, options: TransactionOptions) -> Result<TransactionInfo> {
         let url = format!("{}/transactions", self.base_url);

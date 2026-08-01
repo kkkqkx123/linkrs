@@ -2,7 +2,7 @@
 //!
 //! Provides a high-level API for writing integration tests with fluent interface
 
-use crate::common::TestResult;
+use super::TestResult;
 use graphdb_query::core::types::VertexId;
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::base::ExecutionResult;
@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::common::TestStorage;
+use super::TestStorage;
 
 /// Test scenario builder for fluent test writing
 pub struct TestScenario {

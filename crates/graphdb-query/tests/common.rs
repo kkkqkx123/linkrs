@@ -4,10 +4,15 @@
 
 #![allow(dead_code)]
 
+#[path = "common/assertions.rs"]
 pub mod assertions;
+#[path = "common/data_fixtures.rs"]
 pub mod data_fixtures;
+#[path = "common/query_helpers.rs"]
 pub mod query_helpers;
+#[path = "common/storage_helpers.rs"]
 pub mod storage_helpers;
+#[path = "common/test_scenario.rs"]
 pub mod test_scenario;
 
 use graphdb_query::core::error::DBError;

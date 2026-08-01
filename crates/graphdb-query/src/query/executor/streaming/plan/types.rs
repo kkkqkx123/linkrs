@@ -561,8 +561,7 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_within_version() {
-        let mut ops = Vec::new();
-        ops.push(PhysicalOperatorSpec {
+        let ops = vec![PhysicalOperatorSpec {
             operator_id: PhysicalOperatorId(0),
             logical_node_id: None,
             spec: OperatorKindSpec::Source(
@@ -575,7 +574,7 @@ mod tests {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             explain_name: "Start",
-        });
+        }];
         let fp1 = PlanFingerprint::compute(&ops);
         let fp2 = PlanFingerprint::compute(&ops);
         assert_eq!(fp1, fp2, "same plan must produce same fingerprint");

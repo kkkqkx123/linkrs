@@ -1,23 +1,18 @@
-//! Fulltext Search Module Integration Tests
-//!
-//! Test coverage:
-//! - Basic CRUD - create index, drop index, insert, update, delete, search
-//! - Concurrent operations - concurrent inserts, searches, mixed operations
-//! - Sync mechanism - vertex change auto-sync, transaction buffering
-//! - Edge cases - empty content, unicode, special characters, very long content
-//! - Error handling - index not found, duplicate creation, invalid queries
-//! - Multi-space isolation - space isolation for indexes
-//! - Transaction support - transaction buffer, commit, rollback
-//! - Advanced queries - boolean queries, phrase queries, prefix search
-//! - Persistence - index and document persistence across restarts
-//!
-//! Note: Dead letter queue tests have been moved to unit tests in src/sync/dead_letter_queue.rs
+#![cfg(feature = "fulltext-search")]
 
+#[path = "fulltext_tests/advanced_queries.rs"]
 mod advanced_queries;
+#[path = "fulltext_tests/basic.rs"]
 mod basic;
+#[path = "fulltext_tests/common.rs"]
 mod common;
+#[path = "fulltext_tests/concurrent.rs"]
 mod concurrent;
+#[path = "fulltext_tests/edge_cases.rs"]
 mod edge_cases;
+#[path = "fulltext_tests/persistence.rs"]
 mod persistence;
+#[path = "fulltext_tests/sync.rs"]
 mod sync;
+#[path = "fulltext_tests/transaction.rs"]
 mod transaction;

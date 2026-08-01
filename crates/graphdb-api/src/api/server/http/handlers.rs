@@ -9,6 +9,7 @@ pub mod query;
 pub mod query_types;
 pub mod schema;
 pub mod session;
+pub mod snapshot;
 pub mod statistics;
 pub mod stream;
 pub mod sync;

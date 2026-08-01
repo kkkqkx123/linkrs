@@ -1048,7 +1048,7 @@ mod tests {
         table.insert_edge(0, 50_001, 1, &[], 160).unwrap();
 
         // Compact mutable CSR (layer 1 deletion)
-        let removed = table.compact_csr_only(200, 0.25);
+        let _removed = table.compact_csr_only(200, 0.25);
         // The deleted edge may be in out_csr (deletion at timestamp 150)
         // The compaction at timestamp 200 may or may not remove it depending on visibility
         // Assert that row capacity is within bounds regardless of whether compaction removed edges

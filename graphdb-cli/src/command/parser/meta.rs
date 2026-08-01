@@ -4,5 +4,6 @@ pub mod connection;
 pub mod control;
 pub mod io;
 pub mod schema;
+pub mod snapshot;
 pub mod transaction;
 pub mod variables;

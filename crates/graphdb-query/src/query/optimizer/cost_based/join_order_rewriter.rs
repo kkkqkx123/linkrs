@@ -769,8 +769,8 @@ mod tests {
         }
         // Build a left-deep join chain
         let mut join = make_hash_join(tables[0].clone(), tables[1].clone(), vec![], vec![]);
-        for i in 2..12 {
-            join = make_hash_join(join, tables[i].clone(), vec![], vec![]);
+        for table in tables.iter().skip(2) {
+            join = make_hash_join(join, table.clone(), vec![], vec![]);
         }
 
         let stats = StatisticsManager::new();

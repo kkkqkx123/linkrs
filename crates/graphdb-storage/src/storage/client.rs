@@ -14,6 +14,7 @@ use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
 use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
 use crate::transaction::UndoTarget;
+use std::path::Path;
 use std::sync::Arc;
 
 use graphdb_transaction::transaction::TransactionMutationRecorder;
@@ -733,6 +734,46 @@ pub trait StorageSnapshotOps: Send + Sync + std::fmt::Debug {
     fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>>;
     fn get_freeze_stats(&self) -> Option<FreezeStats>;
     fn trigger_background_freeze(&self) -> StorageResult<()>;
+
+    // ── ColdSnapshot management ──
+
+    /// List all registered cold snapshots with their metadata.
+    fn list_cold_snapshots(&self) -> StorageResult<Vec<ColdSnapshotInfo>>;
+
+    /// Register a cold snapshot from a `.lkcs` file.
+    fn load_cold_snapshot(&self, path: &Path) -> StorageResult<ColdSnapshotInfo>;
+
+    /// Drop all cold snapshots of an edge label from the registry. The
+    /// underlying `.lkcs` files are left untouched.
+    fn remove_cold_snapshot(&self, label: LabelId) -> StorageResult<()>;
+
+    /// Re-export the most recent cold snapshot of `label` to `path`.
+    fn export_cold_snapshot(&self, label: LabelId, path: &Path)
+        -> StorageResult<ColdSnapshotInfo>;
+
+    /// Consolidate every registered version of each given label into a
+    /// single snapshot at the newest timestamp, replacing the label's shelf.
+    /// Returns the merged snapshots' metadata.
+    fn merge_cold_snapshots(&self, labels: &[LabelId]) -> StorageResult<Vec<ColdSnapshotInfo>>;
+
+    /// Resolve the directory that cold snapshots are served from, when the
+    /// engine is configured with one. Used to expose `.lkcs` files over the
+    /// gRPC snapshot share.
+    fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+/// Metadata describing one registered cold snapshot.
+#[derive(Debug, Clone)]
+pub struct ColdSnapshotInfo {
+    pub label: LabelId,
+    pub label_name: String,
+    pub snapshot_ts: Timestamp,
+    pub edge_count: u64,
+    pub file_path: String,
+    pub file_size: u64,
+    pub checksum: u32,
 }
 
 /// Storing statistical information

@@ -10,7 +10,8 @@ use crate::api::server::http::AppState;
 use crate::config::Config;
 
 use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 use crate::transaction::{
     DurabilityLevel, IsolationLevel, TransactionError, TransactionErrorKind, TransactionId,
@@ -903,6 +904,7 @@ pub async fn run_server<
         + StorageSchemaContextOps
         + StorageSyncContextOps
         + StorageOperationContextOps
+        + StorageSnapshotOps
         + Clone
         + Send
         + Sync
@@ -912,14 +914,24 @@ pub async fn run_server<
     config: Config,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = GraphDBService::new(app_state, config);
+    let service = GraphDBService::new(app_state.clone(), config);
 
     tracing::info!("GraphDB gRPC service listening on {}", addr);
 
-    Server::builder()
-        .add_service(GraphDbServiceServer::new(service))
-        .serve(addr)
-        .await?;
+    let mut builder = Server::builder().add_service(GraphDbServiceServer::new(service));
+
+    // Serve the cold snapshot share alongside the main service when the
+    // engine has a snapshot directory configured.
+    if let Some(dir) = app_state.server.get_storage().read().cold_snapshot_dir() {
+        tracing::info!("Cold snapshot gRPC share serving from {}", dir.display());
+        builder = builder.add_service(
+            crate::api::server::grpc::proto::coldsnapshot::cold_snapshot_service_server::ColdSnapshotServiceServer::new(
+                crate::api::server::grpc::ColdSnapshotServer::new(dir),
+            ),
+        );
+    }
+
+    builder.serve(addr).await?;
 
     Ok(())
 }

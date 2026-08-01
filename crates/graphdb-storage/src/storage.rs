@@ -8,7 +8,7 @@
 
 pub(crate) mod cache;
 pub(crate) mod client;
-pub(crate) mod cold;
+pub mod cold;
 pub(crate) mod column_stats;
 pub(crate) mod compression;
 pub(crate) mod cursor;
@@ -31,8 +31,8 @@ pub(crate) mod vertex;
 mod test_mock;
 
 pub use client::{
-    CatalogStore, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
-    StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
+    CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
+    StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
     StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
     StorageSyncContextOps, StorageWriter,

@@ -20,7 +20,7 @@ mod tests;
 
 pub use context::GraphStorageContext;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
@@ -31,6 +31,7 @@ use crate::core::types::{
     UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use crate::storage::client::ColdSnapshotInfo;
 use crate::storage::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
@@ -294,6 +295,116 @@ impl GraphStorage {
         }
         Ok(count)
     }
+
+    // ── Time Travel (multi-version shelves) ──
+
+    /// Time-travel view over the registered cold snapshots: a per-label
+    /// shelf of immutable versions keyed by snapshot timestamp.
+    pub fn cold_time_machine(
+        &self,
+    ) -> crate::storage::cold::ColdSnapshotTimeMachine {
+        self.ctx.cold_time_machine()
+    }
+
+    /// Most recent cold snapshot of `label` not newer than `ts`, or `None`
+    /// when the label has no snapshot that old.
+    pub fn cold_snapshot_at(
+        &self,
+        label: LabelId,
+        ts: Timestamp,
+    ) -> Option<Arc<crate::storage::cold::ColdSnapshot>> {
+        self.ctx.cold_snapshot_at(label, ts)
+    }
+
+    // ── Delta (CDC) export ──
+
+    /// Export a cold delta (`.lkcd` file) capturing the difference of one
+    /// edge type between `from_ts` and `to_ts` (both inclusive as snapshot
+    /// timestamps). Requires `to_ts >= from_ts`.
+    pub fn export_cold_delta<P: AsRef<std::path::Path>>(
+        &self,
+        space: &str,
+        edge_type: &str,
+        from_ts: Timestamp,
+        to_ts: Timestamp,
+        path: P,
+    ) -> StorageResult<crate::storage::cold::ColdDelta> {
+        let edge_info = self
+            .ctx
+            .schema_manager()
+            .get_edge_type(space, edge_type)?
+            .ok_or_else(|| {
+                StorageError::not_found(format!(
+                    "Edge type {} not found in space {}",
+                    edge_type, space
+                ))
+            })?;
+        let src_label = crate::storage::engine::graph_storage::ops::endpoint_label_id(
+            &self.ctx,
+            space,
+            &edge_info.src_tag_name,
+        )?
+        .ok_or_else(|| StorageError::not_found(format!("No source tag for edge {}", edge_type)))?;
+        let dst_label = crate::storage::engine::graph_storage::ops::endpoint_label_id(
+            &self.ctx,
+            space,
+            &edge_info.dst_tag_name,
+        )?
+        .ok_or_else(|| StorageError::not_found(format!("No destination tag for edge {}", edge_type)))?;
+        let key = crate::storage::engine::data_store::EdgeTableKey::new(
+            src_label,
+            dst_label,
+            edge_info.edge_type_id,
+        );
+
+        let base = self.ctx.data_store().with_single_edge_table(
+            &key,
+            |table| table.export_snapshot(from_ts),
+        )?;
+        let latest = self.ctx.data_store().with_single_edge_table(
+            &key,
+            |table| table.export_snapshot(to_ts),
+        )?;
+
+        let base_snapshot = cold_snapshot_from_export(&base)?;
+        let latest_snapshot = cold_snapshot_from_export(&latest)?;
+        let delta = crate::storage::cold::ColdDelta::build(&base_snapshot, &latest_snapshot)?;
+        delta.write(path)?;
+        Ok(delta)
+    }
+
+    /// Apply a `.lkcd` delta file to the most recent registered snapshot of
+    /// its label and register the reconstructed state as a new version.
+    ///
+    /// No snapshot of the label must be newer than the delta's base
+    /// timestamp; the reconstruction is built from the newest snapshot not
+    /// newer than the base, then the delta chain is replayed.
+    pub fn apply_cold_delta<P: AsRef<std::path::Path>>(
+        &self,
+        label: LabelId,
+        path: P,
+    ) -> StorageResult<crate::storage::cold::ColdSnapshot> {
+        let delta = crate::storage::cold::ColdDelta::open(path)?;
+        if delta.label != label {
+            return Err(StorageError::invalid_operation(format!(
+                "delta label {} does not match requested label {}",
+                delta.label, label
+            )));
+        }
+        let base = self
+            .ctx
+            .cold_snapshot_at(label, delta.base_ts)
+            .ok_or_else(|| {
+                StorageError::not_found(format!(
+                    "no cold snapshot of label {} at or before delta base {}",
+                    label, delta.base_ts
+                ))
+            })?;
+        let reconstructed = base.apply_delta(&delta)?;
+        self.ctx.load_cold_snapshot(reconstructed.clone());
+        Ok(reconstructed)
+    }
+
 
     /// Remove old published checkpoints while retaining the newest recovery points.
     pub fn cleanup_old_checkpoints(&self, max_checkpoints: usize) -> StorageResult<usize> {
@@ -1564,6 +1675,120 @@ impl crate::storage::client::StorageSnapshotOps for GraphStorage {
     fn trigger_background_freeze(&self) -> StorageResult<()> {
         self.ctx.trigger_background_freeze()
     }
+
+    fn list_cold_snapshots(&self) -> StorageResult<Vec<ColdSnapshotInfo>> {
+        let mut infos = Vec::new();
+        for (label, snapshots) in self.ctx.cold_snapshots().read().iter() {
+            for snapshot in snapshots {
+                infos.push(cold_snapshot_info(snapshot)?);
+            }
+            let _ = label;
+        }
+        Ok(infos)
+    }
+
+    fn load_cold_snapshot(&self, path: &Path) -> StorageResult<ColdSnapshotInfo> {
+        let snapshot = crate::storage::cold::ColdSnapshot::open(path)?;
+        let info = cold_snapshot_info(&snapshot)?;
+        self.ctx.load_cold_snapshot(snapshot);
+        Ok(info)
+    }
+
+    fn remove_cold_snapshot(&self, label: LabelId) -> StorageResult<()> {
+        let removed = self.ctx.remove_cold_snapshot(label);
+        log::info!(
+            "Cold snapshot removal: label {} unregistered ({} snapshot(s))",
+            label,
+            removed.as_ref().map(|v| v.len()).unwrap_or(0)
+        );
+        Ok(())
+    }
+
+    fn export_cold_snapshot(
+        &self,
+        label: LabelId,
+        path: &Path,
+    ) -> StorageResult<ColdSnapshotInfo> {
+        let snapshot = self
+            .ctx
+            .cold_snapshot_at(label, Timestamp::MAX)
+            .ok_or_else(|| StorageError::not_found(format!("no cold snapshot for label {}", label)))?;
+        let exported = snapshot.export_to_path(path)?;
+        cold_snapshot_info(&exported)
+    }
+
+    fn merge_cold_snapshots(&self, labels: &[LabelId]) -> StorageResult<Vec<ColdSnapshotInfo>> {
+        let machine = self.ctx.cold_time_machine();
+        let mut merged_infos = Vec::new();
+        for &label in labels {
+            let versions = machine.versions(label);
+            if versions.is_empty() {
+                continue;
+            }
+            // Fold the version chain newest-first into a single snapshot:
+            // apply each successor's delta onto the previous state.
+            let mut merged = versions[0].as_ref().clone();
+            for successor in &versions[1..] {
+                let delta = merged.diff(successor)?;
+                merged = merged.apply_delta(&delta)?;
+            }
+            let snapshot_dir = self.ctx.cold_snapshot_dir();
+            std::fs::create_dir_all(&snapshot_dir)?;
+            let path = snapshot_dir.join(format!(
+                "{}_merged_{}.lkcs",
+                merged.schema().label_name,
+                merged.snapshot_ts()
+            ));
+            let merged_info = {
+                let exported = merged.export_to_path(&path)?;
+                cold_snapshot_info(&exported)?
+            };
+            // Replace the label's shelf with the consolidated version.
+            self.ctx.remove_cold_snapshot(label);
+            self.ctx.load_cold_snapshot(merged);
+            merged_infos.push(merged_info);
+            log::info!(
+                "Cold snapshot merge: label {} consolidated into {}",
+                label,
+                path.display()
+            );
+        }
+        Ok(merged_infos)
+    }
+
+    fn cold_snapshot_dir(&self) -> Option<PathBuf> {
+        Some(self.ctx.cold_snapshot_dir())
+    }
+}
+
+/// Build `ColdSnapshotInfo` from a snapshot, reading file metadata when a
+/// backing file exists.
+fn cold_snapshot_info(snapshot: &crate::storage::cold::ColdSnapshot) -> StorageResult<ColdSnapshotInfo> {
+    let (file_path, file_size) = match snapshot.backing_path() {
+        Some(path) => {
+            let size = std::fs::metadata(path)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            (path.display().to_string(), size)
+        }
+        None => (String::new(), 0),
+    };
+    let checksum = if file_size > 0 {
+        std::fs::read(snapshot.backing_path().unwrap())
+            .map(|bytes| crc32fast::hash(&bytes))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(ColdSnapshotInfo {
+        label: snapshot.label(),
+        label_name: snapshot.schema().label_name.clone(),
+        snapshot_ts: snapshot.snapshot_ts(),
+        edge_count: snapshot.edge_count(),
+        file_path,
+        file_size,
+        checksum,
+    })
 }
 
 impl crate::transaction::UndoTarget for GraphStorage {
@@ -1715,4 +1940,12 @@ impl crate::transaction::UndoTarget for GraphStorage {
             original_names,
         )
     }
+}
+
+/// Convert an exported edge snapshot into an in-memory `ColdSnapshot`
+/// without writing a file (delta computation only).
+fn cold_snapshot_from_export(
+    exported: &crate::storage::edge::edge_table::snapshot::ExportedEdgeSnapshot,
+) -> StorageResult<crate::storage::cold::ColdSnapshot> {
+    crate::storage::cold::ColdSnapshot::from_export(exported)
 }

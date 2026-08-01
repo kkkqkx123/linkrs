@@ -119,8 +119,8 @@ mod tests {
     fn test_clear() {
         let mut indexer = NameIndexer::new();
 
-        indexer.register("weight".to_string());
-        indexer.register("since".to_string());
+        indexer.register("weight".to_string()).unwrap();
+        indexer.register("since".to_string()).unwrap();
 
         indexer.clear();
 

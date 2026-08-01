@@ -1,5 +1,5 @@
-use crate::e2e_tests::common::{create_e2e_client, ensure_deleted, test_collection};
-use crate::e2e_tests::e2e_cleanup::cleanup_old_e2e_collections;
+use crate::common::{create_e2e_client, ensure_deleted, test_collection};
+use crate::e2e_cleanup::cleanup_old_e2e_collections;
 use vector_client::types::{CollectionConfig, DistanceMetric, SearchQuery, VectorPoint};
 
 #[tokio::test]

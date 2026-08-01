@@ -124,6 +124,15 @@ pub fn create_router<
         .route("/statistics/system", get(system))
         .route("/statistics/search", get(search_stats))
         .route("/statistics/freeze", get(freeze_stats).post(trigger_freeze))
+        // Cold snapshot management
+        .route("/snapshots/cold", get(super::handlers::snapshot::list_cold_snapshots))
+        .route("/snapshots/cold/load", post(super::handlers::snapshot::load_cold_snapshot))
+        .route("/snapshots/cold/export", post(super::handlers::snapshot::export_cold_snapshot))
+        .route("/snapshots/cold/merge", post(super::handlers::snapshot::merge_cold_snapshots))
+        .route(
+            "/snapshots/cold/{label}",
+            delete(super::handlers::snapshot::remove_cold_snapshot),
+        )
         // Configure management routing.
         .route("/config", get(get_config).put(update_config))
         .route(

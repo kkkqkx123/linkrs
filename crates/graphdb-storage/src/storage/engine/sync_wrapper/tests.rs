@@ -13,6 +13,8 @@ use crate::core::Edge;
 use crate::storage::{
     GraphStorage, MockStorage, StoragePersistenceOps, StorageReader, StorageWriter,
 };
+#[cfg(feature = "fulltext-search")]
+use crate::storage::{StorageCommitOps, StorageOperationContextOps, StorageSchemaOps};
 use crate::sync::SyncManager;
 
 #[test]

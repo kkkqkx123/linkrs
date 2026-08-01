@@ -216,11 +216,6 @@ impl IdManager {
         self.keys.len() as u32
     }
 
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.key_to_id.is_empty()
-    }
-
     pub fn remove(&mut self, key: &IdKey) -> Option<u32> {
         self.key_to_id.remove(key).inspect(|&idx| {
             if (idx as usize) < self.keys.len() {
@@ -389,12 +384,6 @@ impl IdIndexer {
         manager.next_index()
     }
 
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        let manager = self.manager.lock();
-        manager.is_empty()
-    }
-
     pub fn remove(&self, key: &IdKey) -> Option<u32> {
         let mut manager = self.manager.lock();
         manager.remove(key)
@@ -412,12 +401,6 @@ impl IdIndexer {
     pub fn clear(&self) {
         let mut manager = self.manager.lock();
         manager.clear();
-    }
-
-    #[cfg(test)]
-    pub fn memory_usage(&self) -> usize {
-        let manager = self.manager.lock();
-        manager.memory_usage()
     }
 
     pub fn memory_size(&self) -> usize {

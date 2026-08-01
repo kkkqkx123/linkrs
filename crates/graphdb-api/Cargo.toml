@@ -39,6 +39,7 @@ tower-http = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
+crc32fast.workspace = true
 sqlx = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
@@ -70,3 +71,5 @@ embedded = []
 
 [dev-dependencies]
 graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

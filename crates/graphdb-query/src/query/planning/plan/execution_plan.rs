@@ -572,7 +572,7 @@ mod tests {
             Err(PartitionSpecError::Empty)
         );
         assert_eq!(
-            PartitionSpec::try_new(vec![0..0], test_source(), None),
+            PartitionSpec::try_new(std::iter::once(0..0).collect(), test_source(), None),
             Err(PartitionSpecError::EmptyRange { index: 0 })
         );
         assert_eq!(
@@ -651,7 +651,7 @@ mod tests {
             vec![AggregateFunction::Collect("x".to_string())],
         )
         .expect("aggregate plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None).expect("valid spec");
+        let spec = PartitionSpec::try_new(std::iter::once(0..10).collect(), test_source(), None).expect("valid spec");
         let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
 
         assert!(
@@ -741,7 +741,7 @@ mod tests {
             Vec::new(),
         )
         .expect("hash inner join should build");
-        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None).expect("valid spec");
+        let spec = PartitionSpec::try_new(std::iter::once(0..10).collect(), test_source(), None).expect("valid spec");
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
 
@@ -826,7 +826,7 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let topn = TopNNode::new(start, vec![SortItem::column_asc("x".to_string())], 0)
             .expect("topn plan should build");
-        let spec = PartitionSpec::try_new(vec![0..5], test_source(), None).expect("valid spec");
+        let spec = PartitionSpec::try_new(std::iter::once(0..5).collect(), test_source(), None).expect("valid spec");
         let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
 
         assert!(

@@ -44,6 +44,7 @@ fn parse_meta_command(input: &str) -> Result<MetaCommand, String> {
         "show_indexes" | "di" => crate::command::parser::meta::schema::parse_show_indexes(arg),
         "show_users" | "du" => Ok(MetaCommand::ShowUsers),
         "show_functions" | "df" => Ok(MetaCommand::ShowFunctions),
+        "snapshot" => crate::command::parser::meta::snapshot::parse(arg),
         "describe" | "d" => crate::command::parser::meta::schema::parse_describe(arg),
         "describe_edge" => crate::command::parser::meta::schema::parse_describe_edge(arg),
         "format" => crate::command::parser::meta::control::parse_format(arg),

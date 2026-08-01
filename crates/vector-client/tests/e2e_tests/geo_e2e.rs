@@ -1,4 +1,4 @@
-use crate::e2e_tests::common::{create_e2e_client, ensure_deleted, test_collection};
+use crate::common::{create_e2e_client, ensure_deleted, test_collection};
 use vector_client::types::{
     CollectionConfig, DistanceMetric, FilterCondition, GeoPoint, GeoRadius, PayloadSchemaType,
     SearchQuery, VectorFilter, VectorPoint,

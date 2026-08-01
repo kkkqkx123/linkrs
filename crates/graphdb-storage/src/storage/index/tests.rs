@@ -634,12 +634,12 @@ fn included_columns_survive_rebuild_from_snapshot() {
         64 * 1024 * 1024,
     );
     crate::storage::index::chunk::serialize::write_chunked_index_checkpoint(
-        &checkpoint_dir.join("forward_chunks"),
+        checkpoint_dir.join("forward_chunks"),
         &fwd_idx,
     )
     .expect("flush forward checkpoint");
     crate::storage::index::chunk::serialize::write_chunked_index_checkpoint(
-        &checkpoint_dir.join("reverse_chunks"),
+        checkpoint_dir.join("reverse_chunks"),
         &rev_idx,
     )
     .expect("flush reverse checkpoint");

@@ -997,4 +997,13 @@ impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static>
     forward_methods!(inner;
         fn trigger_background_freeze(&self) -> crate::core::StorageResult<()>;
     );
+
+    forward_methods!(inner;
+        fn list_cold_snapshots(&self) -> crate::core::StorageResult<Vec<crate::storage::client::ColdSnapshotInfo>>;
+        fn load_cold_snapshot(&self, path: &std::path::Path) -> crate::core::StorageResult<crate::storage::client::ColdSnapshotInfo>;
+        fn remove_cold_snapshot(&self, label: crate::core::types::LabelId) -> crate::core::StorageResult<()>;
+        fn export_cold_snapshot(&self, label: crate::core::types::LabelId, path: &std::path::Path) -> crate::core::StorageResult<crate::storage::client::ColdSnapshotInfo>;
+        fn merge_cold_snapshots(&self, labels: &[crate::core::types::LabelId]) -> crate::core::StorageResult<Vec<crate::storage::client::ColdSnapshotInfo>>;
+        fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf>;
+    );
 }

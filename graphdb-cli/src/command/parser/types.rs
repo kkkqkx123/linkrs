@@ -161,6 +161,31 @@ pub enum MetaCommand {
     ImportSchema {
         file_path: String,
     },
+    Snapshot {
+        action: SnapshotAction,
+    },
+}
+
+/// Sub-actions of the `\snapshot` meta command.
+#[derive(Debug)]
+pub enum SnapshotAction {
+    List,
+    Info {
+        label: u32,
+    },
+    Load {
+        path: String,
+    },
+    Remove {
+        label: u32,
+    },
+    Export {
+        label: u32,
+        path: String,
+    },
+    Merge {
+        labels: Vec<u32>,
+    },
 }
 
 #[derive(Debug, Clone)]
