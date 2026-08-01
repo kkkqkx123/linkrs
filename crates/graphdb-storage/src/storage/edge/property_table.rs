@@ -1533,6 +1533,16 @@ impl PropertyTable {
         let mut result = Vec::with_capacity(self.schema.len());
 
         for schema in &self.schema {
+            // The row format still contains a per-column null marker; it must be
+            // consumed before the value bytes.
+            let mut null_marker = [0u8; 1];
+            if cursor.read_exact(&mut null_marker).is_err() {
+                return None;
+            }
+            if null_marker[0] == 0 {
+                result.push((schema.name.clone(), None));
+                continue;
+            }
             match &schema.data_type {
                 DataType::Bool => {
                     let mut b = [0u8; 1];

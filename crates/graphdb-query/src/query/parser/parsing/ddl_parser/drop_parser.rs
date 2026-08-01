@@ -20,7 +20,7 @@ impl DdlParser {
                 ctx.expect_token(TokenKind::Exists)?;
                 if_exists = true;
             }
-            let space_name = ctx.expect_identifier()?;
+            let space_name = ctx.expect_dcl_name()?;
             return Ok(Stmt::Drop(DropStmt {
                 span: start_span,
                 target: DropTarget::Space(space_name),
@@ -102,7 +102,7 @@ impl DdlParser {
                 ctx.expect_token(TokenKind::Exists)?;
                 if_exists = true;
             }
-            let username = ctx.expect_identifier()?;
+            let username = ctx.expect_dcl_name()?;
 
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);

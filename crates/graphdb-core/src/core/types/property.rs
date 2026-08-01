@@ -64,7 +64,8 @@ impl PropertyDef {
         Self {
             name,
             data_type,
-            nullable: false,
+            // Columns are nullable by default; NOT NULL is declared explicitly.
+            nullable: true,
             default: None,
             comment: None,
         }

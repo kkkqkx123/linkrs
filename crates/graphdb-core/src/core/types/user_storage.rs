@@ -166,6 +166,9 @@ impl UserStorage {
     pub fn alter_user(&self, info: &UserAlterInfo) -> Result<bool, StorageError> {
         let mut users = self.users.write();
         if let Some(user) = users.get_mut(&info.username) {
+            if let Some(new_password) = &info.new_password {
+                user.change_password(new_password.clone())?;
+            }
             if let Some(is_locked) = info.is_locked {
                 user.is_locked = is_locked;
             }
@@ -205,6 +208,13 @@ impl UserStorage {
     /// Check whether the user exists.
     pub fn user_exists(&self, username: &str) -> bool {
         self.users.write().contains_key(username)
+    }
+
+    /// List all usernames, sorted.
+    pub fn list_users(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.users.write().keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Grant roles to user (only verifies user existence; actual authorization is handled by PermissionManager).

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::Expression;
+use crate::core::types::expr::{ContextualExpression, Expression};
 use crate::core::types::operators::AggregateFunction;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
@@ -76,6 +76,13 @@ pub enum IndexProjection {
 pub enum SourceSpec {
     ScanVertices {
         rows: Vec<Vec<Value>>,
+        col_names: Vec<String>,
+    },
+    /// Standalone DML values — evaluated once per execution in the source
+    /// operator so that volatile expressions (e.g. `now()`) are resolved at
+    /// execution time, not at plan build time.
+    StandaloneValues {
+        values: Vec<Vec<ContextualExpression>>,
         col_names: Vec<String>,
     },
     StorageScanVertices {
@@ -371,6 +378,9 @@ pub enum SinkSpec {
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
+        /// Property column names for each tag, aligned with `tags`.
+        tag_property_names: Vec<Vec<String>>,
+        if_not_exists: bool,
     },
     InsertEdges {
         space_name: String,
@@ -378,11 +388,14 @@ pub enum SinkSpec {
         dst_col: String,
         edge_type: String,
         edge_properties: Vec<(String, Expression)>,
+        if_not_exists: bool,
     },
     UpdateVertices {
         space_name: String,
         tag_name: String,
         updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
     },
     UpdateEdges {
         space_name: String,
@@ -390,6 +403,8 @@ pub enum SinkSpec {
         dst_col: String,
         edge_type: String,
         updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
     },
     DeleteVertices {
         space_name: String,

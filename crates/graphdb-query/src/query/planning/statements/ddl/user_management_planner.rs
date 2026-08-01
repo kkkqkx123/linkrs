@@ -43,6 +43,9 @@ impl Planner for UserManagementPlanner {
                     2,
                     alter_stmt.username.clone(),
                 );
+                if let Some(ref password) = alter_stmt.password {
+                    node = node.with_password(password.clone());
+                }
                 if let Some(ref role) = alter_stmt.new_role {
                     node = node.with_role(role.clone());
                 }

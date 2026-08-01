@@ -23,6 +23,8 @@ pub enum SinkOperator {
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
+        tag_property_names: Vec<Vec<String>>,
+        if_not_exists: bool,
         rows_inserted: u64,
         summary_returned: bool,
     },
@@ -33,6 +35,7 @@ pub enum SinkOperator {
         dst_col: String,
         edge_type: String,
         edge_properties: Vec<(String, Expression)>,
+        if_not_exists: bool,
         rows_inserted: u64,
         summary_returned: bool,
     },
@@ -41,6 +44,8 @@ pub enum SinkOperator {
         space_name: String,
         tag_name: String,
         updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
         rows_updated: u64,
         summary_returned: bool,
     },
@@ -51,6 +56,8 @@ pub enum SinkOperator {
         dst_col: String,
         edge_type: String,
         updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
         rows_updated: u64,
         summary_returned: bool,
     },
@@ -109,6 +116,39 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
 }
 
+/// Row predicate semantics for update conditions (`WHEN`/`WHERE`), matching
+/// the filter operator: false/null/zero/empty reject the row.
+fn condition_matches(value: &Value) -> bool {
+    match value {
+        Value::Bool(b) => *b,
+        Value::Null(_) => false,
+        Value::Int(i) => *i != 0,
+        Value::SmallInt(i) => *i != 0,
+        Value::BigInt(i) => *i != 0,
+        Value::Float(f) => *f != 0.0,
+        Value::Double(f) => *f != 0.0,
+        Value::String(s) => !s.is_empty(),
+        _ => true,
+    }
+}
+
+/// Resolve edge endpoints from row values.
+///
+/// When the row carries an `Edge` value (e.g. `MATCH ... DELETE EDGE e`), the
+/// endpoints are taken from the edge itself; otherwise both values are
+/// converted to vertex ids directly.
+fn resolve_edge_endpoints(src_val: &Value, dst_val: &Value) -> Option<(VertexId, VertexId)> {
+    match (src_val, dst_val) {
+        (Value::Edge(edge), _) => Some((edge.src, edge.dst)),
+        (_, Value::Edge(edge)) => Some((edge.src, edge.dst)),
+        _ => {
+            let src = VertexId::try_from(src_val).ok()?;
+            let dst = VertexId::try_from(dst_val).ok()?;
+            Some((src, dst))
+        }
+    }
+}
+
 impl SinkOperator {
     pub fn from_spec(
         spec: &super::spec::SinkSpec,
@@ -119,11 +159,15 @@ impl SinkOperator {
                 space_name,
                 vertex_properties,
                 tags,
+                tag_property_names,
+                if_not_exists,
             } => Self::InsertVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_properties: vertex_properties.clone(),
                 tags: tags.clone(),
+                tag_property_names: tag_property_names.clone(),
+                if_not_exists: *if_not_exists,
                 rows_inserted: 0,
                 summary_returned: false,
             },
@@ -133,6 +177,7 @@ impl SinkOperator {
                 dst_col,
                 edge_type,
                 edge_properties,
+                if_not_exists,
             } => Self::InsertEdges {
                 storage,
                 space_name: space_name.clone(),
@@ -140,6 +185,7 @@ impl SinkOperator {
                 dst_col: dst_col.clone(),
                 edge_type: edge_type.clone(),
                 edge_properties: edge_properties.clone(),
+                if_not_exists: *if_not_exists,
                 rows_inserted: 0,
                 summary_returned: false,
             },
@@ -147,11 +193,15 @@ impl SinkOperator {
                 space_name,
                 tag_name,
                 updates,
+                condition,
+                is_upsert,
             } => Self::UpdateVertices {
                 storage,
                 space_name: space_name.clone(),
                 tag_name: tag_name.clone(),
                 updates: updates.clone(),
+                condition: condition.clone(),
+                is_upsert: *is_upsert,
                 rows_updated: 0,
                 summary_returned: false,
             },
@@ -161,6 +211,8 @@ impl SinkOperator {
                 dst_col,
                 edge_type,
                 updates,
+                condition,
+                is_upsert,
             } => Self::UpdateEdges {
                 storage,
                 space_name: space_name.clone(),
@@ -168,6 +220,8 @@ impl SinkOperator {
                 dst_col: dst_col.clone(),
                 edge_type: edge_type.clone(),
                 updates: updates.clone(),
+                condition: condition.clone(),
+                is_upsert: *is_upsert,
                 rows_updated: 0,
                 summary_returned: false,
             },
@@ -291,6 +345,8 @@ impl SinkOperator {
                 space_name,
                 vertex_properties,
                 tags,
+                tag_property_names,
+                if_not_exists,
                 rows_inserted,
                 summary_returned,
                 ..
@@ -324,18 +380,35 @@ impl SinkOperator {
                                 ));
                             };
 
-                            let mut props = HashMap::new();
-                            for (prop_name, expr) in vertex_properties.iter().skip(1) {
-                                let val = eval_expr(expr, &mut context)?;
-                                props.insert(prop_name.clone(), val);
+                            if *if_not_exists
+                                && writer
+                                    .get_vertex(space_name, &vid)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?
+                                    .is_some()
+                            {
+                                continue;
                             }
 
                             let tag_list: Vec<Tag> = tags
                                 .iter()
-                                .map(|tag_name| Tag::new(tag_name.clone(), props.clone()))
+                                .zip(tag_property_names.iter())
+                                .map(|(tag_name, prop_names)| {
+                                    let mut props = HashMap::new();
+                                    for name in prop_names {
+                                        if let Some((_n, expr)) = vertex_properties
+                                            .iter()
+                                            .find(|(n, _)| n == name)
+                                        {
+                                            if let Ok(val) = eval_expr(expr, &mut context) {
+                                                props.insert(name.clone(), val);
+                                            }
+                                        }
+                                    }
+                                    Tag::new(tag_name.clone(), props)
+                                })
                                 .collect();
 
-                            let vertex = Vertex::new_with_properties(vid, tag_list, props);
+                            let vertex = Vertex::new_with_properties(vid, tag_list, HashMap::new());
                             StorageWriter::insert_vertex(&mut *writer, space_name, vertex)
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
                             *rows_inserted += 1;
@@ -361,6 +434,7 @@ impl SinkOperator {
                 dst_col,
                 edge_type,
                 edge_properties,
+                if_not_exists,
                 rows_inserted,
                 summary_returned,
                 ..
@@ -390,6 +464,18 @@ impl SinkOperator {
                             if let (Ok(src), Ok(dst)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
+                                if let Some(_existing) = writer
+                                    .get_edge(space_name, &src, &dst, edge_type, 0)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?
+                                {
+                                    if *if_not_exists {
+                                        continue;
+                                    }
+                                    return Err(QueryError::execution(format!(
+                                        "Edge already exists: {} -> {} of {}",
+                                        src, dst, edge_type
+                                    )));
+                                }
                                 let mut props = HashMap::new();
                                 for (prop_name, expr) in edge_properties.iter() {
                                     let val = eval_expr(expr, &mut context)?;
@@ -420,6 +506,8 @@ impl SinkOperator {
                 space_name,
                 tag_name,
                 updates,
+                condition,
+                is_upsert,
                 rows_updated,
                 summary_returned,
                 ..
@@ -451,13 +539,50 @@ impl SinkOperator {
                                     .map_err(|e| QueryError::execution(e.to_string()))?;
                                 let existing = match existing {
                                     Some(ev) => ev,
-                                    None => continue,
+                                    None => {
+                                        if *is_upsert {
+                                            let mut props = HashMap::new();
+                                            for (prop_name, expr) in updates.iter() {
+                                                let val = eval_expr(expr, &mut context)?;
+                                                props.insert(prop_name.clone(), val);
+                                            }
+                                            let tags = vec![Tag::new(
+                                                tag_name.clone(),
+                                                props.clone(),
+                                            )];
+                                            let vertex = Vertex::new_with_properties(
+                                                vid,
+                                                tags,
+                                                props,
+                                            );
+                                            StorageWriter::insert_vertex(
+                                                &mut *writer,
+                                                space_name,
+                                                vertex,
+                                            )
+                                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                                            *rows_updated += 1;
+                                        } else {
+                                            return Err(QueryError::execution(format!(
+                                                "Vertex not found: {}",
+                                                vid
+                                            )));
+                                        }
+                                        continue;
+                                    }
                                 };
                                 // Load existing properties into context so expressions
-                                // like `SET stock = stock - 1` can resolve `stock`.
+                                // like `SET stock = stock - 1` and conditions like
+                                // `WHEN age > 100` can resolve existing columns.
                                 for tag in &existing.tags {
                                     for (k, v) in &tag.properties {
                                         context.set_variable(k.clone(), v.clone());
+                                    }
+                                }
+                                if let Some(cond) = condition {
+                                    let keep = eval_expr(cond, &mut context)?;
+                                    if !condition_matches(&keep) {
+                                        continue;
                                     }
                                 }
                                 let mut props = HashMap::new();
@@ -507,6 +632,8 @@ impl SinkOperator {
                 dst_col,
                 edge_type,
                 updates,
+                condition,
+                is_upsert,
                 rows_updated,
                 summary_returned,
                 ..
@@ -538,13 +665,54 @@ impl SinkOperator {
                             if let (Ok(src), Ok(dst)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
+                                let existing = writer
+                                    .get_edge(space_name, &src, &dst, edge_type, 0)
+                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                                let existing = match existing {
+                                    Some(edge) => edge,
+                                    None => {
+                                        if *is_upsert {
+                                            let mut props = HashMap::new();
+                                            for (prop_name, expr) in updates.iter() {
+                                                let val = eval_expr(expr, &mut context)?;
+                                                props.insert(prop_name.clone(), val);
+                                            }
+                                            let edge = Edge::new(
+                                                src,
+                                                dst,
+                                                edge_type.clone(),
+                                                0,
+                                                props,
+                                            );
+                                            StorageWriter::insert_edge(
+                                                &mut *writer,
+                                                space_name,
+                                                edge,
+                                            )
+                                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                                            *rows_updated += 1;
+                                        } else {
+                                            return Err(QueryError::execution(format!(
+                                                "Edge not found: {} -> {} of {}",
+                                                src, dst, edge_type
+                                            )));
+                                        }
+                                        continue;
+                                    }
+                                };
+                                for (k, v) in &existing.props {
+                                    context.set_variable(k.clone(), v.clone());
+                                }
+                                if let Some(cond) = condition {
+                                    let keep = eval_expr(cond, &mut context)?;
+                                    if !condition_matches(&keep) {
+                                        continue;
+                                    }
+                                }
                                 let mut props = HashMap::new();
                                 for (prop_name, expr) in updates.iter() {
-                                    if let Ok(val) =
-                                        ExpressionEvaluator::evaluate(expr, &mut context)
-                                    {
-                                        props.insert(prop_name.clone(), val);
-                                    }
+                                    let val = eval_expr(expr, &mut context)?;
+                                    props.insert(prop_name.clone(), val);
                                 }
                                 let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
                                 edge.props = props;
@@ -593,8 +761,12 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
-                                    StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    StorageWriter::delete_vertex_with_edges(
+                                        &mut *writer,
+                                        space_name,
+                                        &vid,
+                                    )
+                                    .map_err(|e| QueryError::execution(e.to_string()))?;
                                     *rows_deleted += 1;
                                 }
                             }
@@ -644,9 +816,7 @@ impl SinkOperator {
                             let dst_val = context
                                 .get_variable(dst_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            if let (Ok(src), Ok(dst)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
-                            {
+                            if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
                                 StorageWriter::delete_edge(
                                     &mut *writer,
                                     space_name,
@@ -706,9 +876,7 @@ impl SinkOperator {
                             let dst_val = context
                                 .get_variable(dst_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            if let (Ok(src), Ok(dst)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
-                            {
+                            if let Some((src, dst)) = resolve_edge_endpoints(&src_val, &dst_val) {
                                 StorageWriter::delete_edge(
                                     &mut *writer,
                                     space_name,
@@ -762,8 +930,12 @@ impl SinkOperator {
                             let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
-                                    StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
-                                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                                    StorageWriter::delete_vertex_with_edges(
+                                        &mut *writer,
+                                        space_name,
+                                        &vid,
+                                    )
+                                    .map_err(|e| QueryError::execution(e.to_string()))?;
                                     *rows_deleted += 1;
                                 }
                             }

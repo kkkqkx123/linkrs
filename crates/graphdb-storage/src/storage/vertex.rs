@@ -97,14 +97,6 @@ impl VertexSchema {
 
         let primary_key_prop = &self.properties[self.primary_key_index];
 
-        // Validate primary key is not nullable
-        if primary_key_prop.nullable {
-            return Err(format!(
-                "Primary key '{}' cannot be nullable",
-                primary_key_prop.name
-            ));
-        }
-
         // Validate primary key type is suitable for keys (must be comparable and hashable)
         Self::validate_key_type(&primary_key_prop.data_type, &primary_key_prop.name)?;
 
@@ -173,37 +165,36 @@ impl VertexSchema {
     fn validate_key_type(data_type: &crate::core::DataType, prop_name: &str) -> Result<(), String> {
         use crate::core::DataType;
 
-        // Valid key types - scalar, comparable types
-        let valid_key_types = [
-            DataType::Bool,
-            DataType::SmallInt,
-            DataType::Int,
-            DataType::BigInt,
-            DataType::Float,
-            DataType::Double,
-            DataType::Decimal128,
-            DataType::String,
-            DataType::Date,
-            DataType::Time,
-            DataType::DateTime,
-            DataType::Timestamp,
-            DataType::VID,
-            DataType::Uuid,
+        // Composite and structural types cannot be used as keys. The vertex id
+        // itself is the actual storage key, so extended scalar types (Geography,
+        // VectorDense, Timestamp, ...) remain valid key candidates.
+        let invalid_key_types = [
+            DataType::Empty,
+            DataType::Null,
+            DataType::List,
+            DataType::Map,
+            DataType::Set,
+            DataType::DataSet,
+            DataType::Json,
+            DataType::JsonB,
+            DataType::Vertex,
+            DataType::Edge,
+            DataType::Path,
+            DataType::Vector,
         ];
 
-        for valid_type in &valid_key_types {
-            if std::mem::discriminant(data_type) == std::mem::discriminant(valid_type) {
-                return Ok(());
+        for invalid_type in &invalid_key_types {
+            if std::mem::discriminant(data_type) == std::mem::discriminant(invalid_type) {
+                return Err(format!(
+                    "Primary key '{}' has invalid type '{:?}'. \
+                     Allowed types: Bool, SmallInt, Int, BigInt, Float, Double, Decimal128, \
+                     String, Date, Time, DateTime, Timestamp, VID, Uuid",
+                    prop_name, data_type
+                ));
             }
         }
 
-        // If we get here, the type is not valid for keys
-        Err(format!(
-            "Primary key '{}' has invalid type '{:?}'. \
-             Allowed types: Bool, SmallInt, Int, BigInt, Float, Double, Decimal128, \
-             String, Date, Time, DateTime, Timestamp, VID, Uuid",
-            prop_name, data_type
-        ))
+        Ok(())
     }
 
     /// Validate that a property data type is allowed

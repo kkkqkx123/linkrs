@@ -1173,9 +1173,20 @@ impl StorageSchemaOps for GraphStorage {
         new_name: &str,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
-        self.ctx
+        let renamed = self
+            .ctx
             .schema_manager()
-            .rename_tag_property(space, tag, old_name, new_name)
+            .rename_tag_property(space, tag, old_name, new_name)?;
+        if renamed {
+            let label_id = crate::storage::engine::graph_storage::ops::tag_label_id(
+                &self.ctx,
+                space,
+                tag,
+            )?
+            .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+            schema_engine::rename_vertex_property(&self.ctx, label_id, old_name, new_name)?;
+        }
+        Ok(renamed)
     }
 
     fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError> {

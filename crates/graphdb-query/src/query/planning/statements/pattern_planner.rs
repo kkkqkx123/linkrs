@@ -447,11 +447,12 @@ pub fn plan_match_delete(
                 .iter()
                 .map(|e| (e.clone(), e.clone(), None))
                 .collect();
+            let edge_type = extract_edge_type_from_patterns(&match_stmt.patterns);
 
             let info = EdgeDeleteInfo {
                 space_name: space_name.to_string(),
                 edges,
-                edge_type: None,
+                edge_type,
                 condition: None,
             };
             PipeDeleteEdgesNode::new(next_node_id(), info, input_node.clone()).into_enum()

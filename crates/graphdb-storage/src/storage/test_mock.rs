@@ -181,6 +181,7 @@ impl StorageAuthOps for MockStorage {
     mock_stub!(&mut self, alter_user(_info: &UserAlterInfo) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, drop_user(_username: &str) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&self, user_exists(_username: &str) -> bool, false);
+    mock_stub!(&self, list_users() -> Vec<String>, Vec::new());
     mock_stub!(&mut self, grant_role(_username: &str, _space_id: u64, _role: RoleType) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, revoke_role(_username: &str, _space_id: u64) -> Result<bool, StorageError>, Ok(true));
 }

@@ -82,6 +82,10 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
+            SourceSpec::StandaloneValues { col_names, .. } => SourceState::ScanVertices {
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
             SourceSpec::StorageScanVertices { col_names, .. } => SourceState::StorageScanVertices {
                 partition_id: 0,
                 partition_range: None,

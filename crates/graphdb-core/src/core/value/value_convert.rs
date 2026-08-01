@@ -624,6 +624,19 @@ impl Value {
             return Ok(self.clone());
         }
 
+        // Boolean values cannot be coerced into numeric types.
+        if matches!(self, Value::Bool(_))
+            && matches!(
+                target,
+                DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::Float | DataType::Double
+            )
+        {
+            return Err(StorageError::type_mismatch(
+                target.clone(),
+                self.data_type(),
+            ));
+        }
+
         let result = match target {
             DataType::Null | DataType::Empty => Value::Null(NullType::Null),
             DataType::Bool => self.to_bool(),
@@ -637,7 +650,13 @@ impl Value {
                         self.data_type(),
                     ));
                 }
-                other => other,
+                Value::Null(_) if self.is_null() => Value::Null(NullType::Null),
+                _ => {
+                    return Err(StorageError::type_mismatch(
+                        DataType::SmallInt,
+                        self.data_type(),
+                    ));
+                }
             },
             DataType::Int => match self.to_int() {
                 Value::BigInt(i) if i >= i32::MIN as i64 && i <= i32::MAX as i64 => {
@@ -646,14 +665,41 @@ impl Value {
                 Value::BigInt(_) => {
                     return Err(StorageError::type_mismatch(DataType::Int, self.data_type()));
                 }
+                Value::Null(_) if self.is_null() => Value::Null(NullType::Null),
+                _ => {
+                    return Err(StorageError::type_mismatch(DataType::Int, self.data_type()));
+                }
+            },
+            DataType::BigInt => match self.to_int() {
+                Value::Null(_) if self.is_null() => Value::Null(NullType::Null),
+                Value::Null(_) => {
+                    return Err(StorageError::type_mismatch(
+                        DataType::BigInt,
+                        self.data_type(),
+                    ));
+                }
                 other => other,
             },
-            DataType::BigInt => self.to_int(),
             DataType::Float => match self.to_float() {
                 Value::Double(f) => Value::Float(f as f32),
+                Value::Null(_) if self.is_null() => Value::Null(NullType::Null),
+                _ => {
+                    return Err(StorageError::type_mismatch(
+                        DataType::Float,
+                        self.data_type(),
+                    ));
+                }
+            },
+            DataType::Double => match self.to_float() {
+                Value::Null(_) if self.is_null() => Value::Null(NullType::Null),
+                Value::Null(_) => {
+                    return Err(StorageError::type_mismatch(
+                        DataType::Double,
+                        self.data_type(),
+                    ));
+                }
                 other => other,
             },
-            DataType::Double => self.to_float(),
             DataType::String => match self.to_string() {
                 Ok(s) => Value::string(s),
                 Err(_) => Value::Null(NullType::BadData),

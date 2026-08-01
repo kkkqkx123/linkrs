@@ -238,7 +238,8 @@ impl StreamingExecutor {
         match self {
             Source(_, op) => match op {
                 SourceOperator::ScanVertices { .. }
-                | SourceOperator::StorageScanVertices { .. } => "ScanVertices",
+                | SourceOperator::StorageScanVertices { .. }
+                | SourceOperator::StandaloneValues { .. } => "ScanVertices",
                 SourceOperator::ScanEdges { .. } | SourceOperator::StorageScanEdges { .. } => {
                     "ScanEdges"
                 }

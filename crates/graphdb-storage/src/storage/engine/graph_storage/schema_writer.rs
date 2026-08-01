@@ -275,16 +275,11 @@ pub(crate) fn create_tag(
         schema: schema_properties(&tag.properties),
     };
 
-    let mut properties: Vec<StoragePropertyDef> = tag
+    let properties: Vec<StoragePropertyDef> = tag
         .properties
         .iter()
         .map(StoragePropertyDef::from_core)
         .collect();
-
-    // Ensure the primary key property is non-nullable (required by VertexSchema validation)
-    if let Some(prop) = properties.first_mut() {
-        prop.nullable = false;
-    }
 
     let primary_key = tag
         .properties
@@ -325,6 +320,23 @@ pub(crate) fn drop_tag(
     let space_id = ctx.schema_manager().get_space_id(space)?;
     if ctx.schema_manager().get_tag(space, tag_name)?.is_none() {
         return Ok(false);
+    }
+
+    // A tag that still contains data cannot be dropped.
+    let has_data = ctx.data_store().with_vertex_tables(|vertex_tables| {
+        ctx.schema_manager()
+            .get_tag(space, tag_name)
+            .ok()
+            .flatten()
+            .and_then(|tag| vertex_tables.get(&tag.tag_id))
+            .map(|table| table.id_hole_stats(crate::transaction::wal::Timestamp::MAX).0 > 0)
+            .unwrap_or(false)
+    });
+    if has_data {
+        return Err(StorageError::invalid_operation(format!(
+            "Tag '{}' still has data and cannot be dropped",
+            tag_name
+        )));
     }
 
     append_schema_redo(

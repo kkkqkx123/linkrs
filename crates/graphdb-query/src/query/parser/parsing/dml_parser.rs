@@ -180,6 +180,25 @@ impl DmlParser {
                     UpdateTarget::Vertex(vid)
                 }
             } else {
+                // A reserved keyword cannot start the update target.  Consume
+                // the keyword so error recovery cannot reinterpret the rest
+                // of the input as a different statement.
+                if matches!(
+                    ctx.current_token().kind,
+                    TokenKind::Set
+                        | TokenKind::Where
+                        | TokenKind::When
+                        | TokenKind::Yield
+                        | TokenKind::On
+                        | TokenKind::Of
+                ) {
+                    ctx.next_token();
+                    return Err(ParseError::new(
+                        crate::query::parser::core::error::ParseErrorKind::UnexpectedToken,
+                        "Expected vertex id or edge target after UPDATE".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
                 // Check for old-style edge update syntax: src -> dst OF edge_type
                 // Try to parse as expression first, then check if followed by ->
                 let expr = self.parse_expression(ctx)?;

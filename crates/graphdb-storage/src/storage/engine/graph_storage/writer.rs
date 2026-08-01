@@ -253,6 +253,7 @@ fn insert_vertex_at_timestamp(
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let props = apply_tag_constraints(ctx, space, &tag.name, props)?;
         let redo = InsertVertexRedo {
             label: label_id,
             vid: vertex.vid,
@@ -291,6 +292,64 @@ fn insert_vertex_at_timestamp(
     }
 
     Ok(vertex.vid)
+}
+
+/// Apply tag schema constraints (DEFAULT values and NOT NULL) to a property
+/// list before persisting a vertex tag.
+fn apply_tag_constraints(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+    props: Vec<(String, Value)>,
+) -> StorageResult<Vec<(String, Value)>> {
+    let tag = ctx
+        .schema_manager()
+        .get_tag(space, tag_name)?
+        .ok_or_else(|| StorageError::label_not_found(tag_name.to_string()))?;
+    let mut result = props;
+    for prop_def in &tag.properties {
+        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+            if !prop_def.nullable && value.is_null() {
+                return Err(StorageError::null_value_not_allowed(&prop_def.name));
+            }
+            continue;
+        }
+        if let Some(default) = &prop_def.default {
+            result.push((prop_def.name.clone(), default.clone()));
+        } else if !prop_def.nullable {
+            return Err(StorageError::null_value_not_allowed(&prop_def.name));
+        }
+    }
+    Ok(result)
+}
+
+/// Apply edge schema constraints (DEFAULT values and NOT NULL) to a property
+/// list before persisting an edge.
+fn apply_edge_type_constraints(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+    props: Vec<(String, Value)>,
+) -> StorageResult<Vec<(String, Value)>> {
+    let et = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+    let mut result = props;
+    for prop_def in &et.properties {
+        if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
+            if !prop_def.nullable && value.is_null() {
+                return Err(StorageError::null_value_not_allowed(&prop_def.name));
+            }
+            continue;
+        }
+        if let Some(default) = &prop_def.default {
+            result.push((prop_def.name.clone(), default.clone()));
+        } else if !prop_def.nullable {
+            return Err(StorageError::null_value_not_allowed(&prop_def.name));
+        }
+    }
+    Ok(result)
 }
 
 fn rollback_vertex_tags(
@@ -669,6 +728,7 @@ fn insert_edge_at_timestamp(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let props = apply_edge_type_constraints(ctx, space, &edge.edge_type, props)?;
     let src_value = Value::from(edge.src);
     let dst_value = Value::from(edge.dst);
     let redo = InsertEdgeRedo {
@@ -813,10 +873,8 @@ pub(crate) fn delete_edge_at_timestamp(
     }
 
     if !deleted {
-        return Err(StorageError::not_found(format!(
-            "Edge type {} not found in space {}",
-            edge_type, space
-        )));
+        // Deleting a nonexistent edge is a no-op.
+        return Ok(None);
     }
 
     Ok(redo_entry)

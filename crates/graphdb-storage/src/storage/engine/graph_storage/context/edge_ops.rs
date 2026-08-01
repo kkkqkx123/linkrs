@@ -233,8 +233,10 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let (src_internal, dst_internal, key) = self.persistent.data_store.with_vertex_tables(
-            |vertex_tables| -> StorageResult<(u32, u32, EdgeTableKey)> {
+        let Some((src_internal, dst_internal, key)) = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
                 let src_internal = helpers::resolve_internal_id(
                     self,
                     vertex_tables,
@@ -244,8 +246,7 @@ impl GraphStorageContext {
                 )
                 .or_else(|| {
                     helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
-                })
-                .ok_or(StorageError::vertex_not_found())?;
+                })?;
                 let dst_internal = helpers::resolve_internal_id(
                     self,
                     vertex_tables,
@@ -255,8 +256,7 @@ impl GraphStorageContext {
                 )
                 .or_else(|| {
                     helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
-                })
-                .ok_or(StorageError::vertex_not_found())?;
+                })?;
                 let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
                     vertex_tables,
                     src_id: &params.src_id,
@@ -266,9 +266,12 @@ impl GraphStorageContext {
                     edge_label: params.edge_label,
                     ts,
                 });
-                Ok((src_internal, dst_internal, key))
-            },
-        )?;
+                Some((src_internal, dst_internal, key))
+            })
+        else {
+            // Deleting an edge whose endpoints do not exist is a no-op.
+            return Ok(false);
+        };
 
         let deleted =
             self.persistent

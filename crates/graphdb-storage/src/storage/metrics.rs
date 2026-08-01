@@ -136,6 +136,7 @@ impl<S: StorageClient> StorageAuthOps for MetricsStorage<S> {
 
     forward_methods!(inner;
         fn user_exists(&self, username: &str) -> bool;
+        fn list_users(&self) -> Vec<String>;
     );
 }
 

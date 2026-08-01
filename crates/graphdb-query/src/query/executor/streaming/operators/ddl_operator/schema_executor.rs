@@ -217,19 +217,35 @@ pub(super) fn execute_tag_manage(
     let tag_name = extract_tag_manage_name(command);
     let properties = extract_tag_manage_properties(command);
     let result = match command {
-        TagManageNode::Create(_) => super::exec_ddl(storage, |s| {
+        TagManageNode::Create(node) => super::exec_ddl(storage, |s| {
             let name = tag_name.as_deref().unwrap_or("unnamed");
             let mut info = TagInfo::new(name.to_string());
             info.properties = properties.clone();
-            StorageSchemaOps::create_tag(s, space_name, &info)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
+            match StorageSchemaOps::create_tag(s, space_name, &info) {
+                Ok(_) => Ok(()),
+                Err(e)
+                    if node.info().if_not_exists
+                        && e.kind()
+                            == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(QueryError::execution(e.to_string())),
+            }
         }),
-        TagManageNode::Drop(_) => super::exec_ddl(storage, |s| {
+        TagManageNode::Drop(node) => super::exec_ddl(storage, |s| {
             let name = tag_name.as_deref().unwrap_or("");
-            StorageSchemaOps::drop_tag(s, space_name, name)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
+            match StorageSchemaOps::drop_tag(s, space_name, name) {
+                Ok(_) => Ok(()),
+                Err(e)
+                    if node.if_exists()
+                        && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(QueryError::execution(e.to_string())),
+            }
         }),
         TagManageNode::Alter(node) => super::exec_ddl(storage, |s| {
             let name = tag_name.as_deref().unwrap_or("");
@@ -237,6 +253,16 @@ pub(super) fn execute_tag_manage(
             let deletions = node.info().deletions.clone();
             StorageSchemaOps::alter_tag(s, space_name, name, additions, deletions)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
+            for change in &node.info().changes {
+                StorageSchemaOps::rename_tag_property(
+                    s,
+                    space_name,
+                    name,
+                    &change.old_name,
+                    &change.new_name,
+                )
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            }
             Ok(())
         }),
         TagManageNode::Desc(_) => {
@@ -247,48 +273,53 @@ pub(super) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?
             {
                 Some(tag) => {
-                    let props_str: String = tag
-                        .properties
-                        .iter()
-                        .map(|p| format!("{}:{:?}", p.name, p.data_type))
-                        .collect::<Vec<_>>()
-                        .join(", ");
                     let schema = Arc::new(Schema::new(vec![
                         ColumnInfo {
-                            name: "name".to_string(),
+                            name: "Field".to_string(),
                             data_type: "string".to_string(),
                         },
                         ColumnInfo {
-                            name: "id".to_string(),
-                            data_type: "bigint".to_string(),
-                        },
-                        ColumnInfo {
-                            name: "properties".to_string(),
+                            name: "Type".to_string(),
                             data_type: "string".to_string(),
                         },
                         ColumnInfo {
-                            name: "comment".to_string(),
+                            name: "Nullable".to_string(),
+                            data_type: "bool".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "Default".to_string(),
+                            data_type: "string".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "Comment".to_string(),
                             data_type: "string".to_string(),
                         },
                     ]));
-                    Ok(Some(super::make_single_row(
-                        schema,
-                        vec![
-                            Value::string(tag.tag_name),
-                            Value::BigInt(tag.tag_id as i64),
-                            Value::string(props_str),
-                            tag.comment
-                                .clone()
-                                .map(Value::string)
-                                .unwrap_or(Value::Null(NullType::Null)),
-                        ],
-                    )))
+                    let rows: Vec<Vec<Value>> = tag
+                        .properties
+                        .iter()
+                        .map(|p| {
+                            vec![
+                                Value::string(&p.name),
+                                Value::string(p.data_type.to_string()),
+                                Value::Bool(p.nullable),
+                                p.default
+                                    .as_ref()
+                                    .map(|v| Value::string(format!("{}", v)))
+                                    .unwrap_or_else(|| Value::string("")),
+                                p.comment
+                                    .as_ref()
+                                    .map(|c| Value::string(c.clone()))
+                                    .unwrap_or_else(|| Value::string("")),
+                            ]
+                        })
+                        .collect();
+                    Ok(Some(DataChunk::new(rows, schema)))
                 }
-                None => Ok(Some(super::make_manage_result(
-                    "desc_tag",
-                    Some(name),
-                    "not-found",
-                ))),
+                None => {
+                    let schema = super::make_single_col_schema("Field", "string");
+                    Ok(Some(DataChunk::new(vec![], schema)))
+                }
             }
         }
         TagManageNode::Show(_) => {
@@ -380,19 +411,35 @@ pub(super) fn execute_edge_manage(
     let edge_type = extract_edge_manage_name(command);
     let properties = extract_edge_manage_properties(command);
     let result = match command {
-        EdgeManageNode::Create(_) => super::exec_ddl(storage, |s| {
+        EdgeManageNode::Create(node) => super::exec_ddl(storage, |s| {
             let et = edge_type.as_deref().unwrap_or("unnamed");
             let mut info = EdgeTypeInfo::new(et.to_string());
             info.properties = properties.clone();
-            StorageSchemaOps::create_edge_type(s, space_name, &info)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
+            match StorageSchemaOps::create_edge_type(s, space_name, &info) {
+                Ok(_) => Ok(()),
+                Err(e)
+                    if node.info().if_not_exists
+                        && e.kind()
+                            == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(QueryError::execution(e.to_string())),
+            }
         }),
-        EdgeManageNode::Drop(_) => super::exec_ddl(storage, |s| {
+        EdgeManageNode::Drop(node) => super::exec_ddl(storage, |s| {
             let name = edge_type.as_deref().unwrap_or("");
-            StorageSchemaOps::drop_edge_type(s, space_name, name)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
+            match StorageSchemaOps::drop_edge_type(s, space_name, name) {
+                Ok(_) => Ok(()),
+                Err(e)
+                    if node.if_exists()
+                        && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(QueryError::execution(e.to_string())),
+            }
         }),
         EdgeManageNode::Alter(node) => super::exec_ddl(storage, |s| {
             let name = edge_type.as_deref().unwrap_or("");
@@ -410,58 +457,53 @@ pub(super) fn execute_edge_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?
             {
                 Some(et) => {
-                    let props_str: String = et
-                        .properties
-                        .iter()
-                        .map(|p| format!("{}:{:?}", p.name, p.data_type))
-                        .collect::<Vec<_>>()
-                        .join(", ");
                     let schema = Arc::new(Schema::new(vec![
                         ColumnInfo {
-                            name: "name".to_string(),
+                            name: "Field".to_string(),
                             data_type: "string".to_string(),
                         },
                         ColumnInfo {
-                            name: "id".to_string(),
-                            data_type: "bigint".to_string(),
-                        },
-                        ColumnInfo {
-                            name: "src_tag".to_string(),
+                            name: "Type".to_string(),
                             data_type: "string".to_string(),
                         },
                         ColumnInfo {
-                            name: "dst_tag".to_string(),
+                            name: "Nullable".to_string(),
+                            data_type: "bool".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "Default".to_string(),
                             data_type: "string".to_string(),
                         },
                         ColumnInfo {
-                            name: "properties".to_string(),
-                            data_type: "string".to_string(),
-                        },
-                        ColumnInfo {
-                            name: "comment".to_string(),
+                            name: "Comment".to_string(),
                             data_type: "string".to_string(),
                         },
                     ]));
-                    Ok(Some(super::make_single_row(
-                        schema,
-                        vec![
-                            Value::string(et.edge_type_name),
-                            Value::BigInt(et.edge_type_id as i64),
-                            Value::string(et.src_tag_name),
-                            Value::string(et.dst_tag_name),
-                            Value::string(props_str),
-                            et.comment
-                                .clone()
-                                .map(Value::string)
-                                .unwrap_or(Value::Null(NullType::Null)),
-                        ],
-                    )))
+                    let rows: Vec<Vec<Value>> = et
+                        .properties
+                        .iter()
+                        .map(|p| {
+                            vec![
+                                Value::string(&p.name),
+                                Value::string(p.data_type.to_string()),
+                                Value::Bool(p.nullable),
+                                p.default
+                                    .as_ref()
+                                    .map(|v| Value::string(format!("{}", v)))
+                                    .unwrap_or_else(|| Value::string("")),
+                                p.comment
+                                    .as_ref()
+                                    .map(|c| Value::string(c.clone()))
+                                    .unwrap_or_else(|| Value::string("")),
+                            ]
+                        })
+                        .collect();
+                    Ok(Some(DataChunk::new(rows, schema)))
                 }
-                None => Ok(Some(super::make_manage_result(
-                    "desc_edge",
-                    Some(name),
-                    "not-found",
-                ))),
+                None => {
+                    let schema = super::make_single_col_schema("Field", "string");
+                    Ok(Some(DataChunk::new(vec![], schema)))
+                }
             }
         }
         EdgeManageNode::Show(_) => {

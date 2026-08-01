@@ -28,11 +28,18 @@ pub enum StatementClass {
 
 /// Check whether a statement performs any write operations to storage.
 ///
-/// This detects both standalone DML (INSERT/DELETE/UPDATE) and MATCH
-/// statements with embedded DELETE clauses.
+/// This detects both standalone DML (INSERT/DELETE/UPDATE), MATCH statements
+/// with embedded DELETE clauses, and DML nested inside pipe or set-operation
+/// statements.
 pub fn requires_write_storage(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Match(m) => m.delete_clause.is_some(),
+        Stmt::Pipe(pipe) => {
+            requires_write_storage(&pipe.left) || requires_write_storage(&pipe.right)
+        }
+        Stmt::SetOperation(set_op) => {
+            requires_write_storage(&set_op.left) || requires_write_storage(&set_op.right)
+        }
         _ => requires_auto_commit(stmt),
     }
 }
@@ -78,15 +85,21 @@ pub fn is_analyze(stmt: &Stmt) -> bool {
 }
 
 pub fn requires_auto_commit(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
+    match stmt {
         Stmt::Insert(..)
-            | Stmt::Update(..)
-            | Stmt::Delete(..)
-            | Stmt::Set(..)
-            | Stmt::Remove(..)
-            | Stmt::Merge(..)
-    )
+        | Stmt::Update(..)
+        | Stmt::Delete(..)
+        | Stmt::Set(..)
+        | Stmt::Remove(..)
+        | Stmt::Merge(..) => true,
+        Stmt::Pipe(pipe) => {
+            requires_auto_commit(&pipe.left) || requires_auto_commit(&pipe.right)
+        }
+        Stmt::SetOperation(set_op) => {
+            requires_auto_commit(&set_op.left) || requires_auto_commit(&set_op.right)
+        }
+        _ => false,
+    }
 }
 
 pub fn is_transaction(stmt: &Stmt) -> bool {
@@ -116,30 +129,38 @@ pub fn is_diagnostic(stmt: &Stmt) -> bool {
 }
 
 pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
-    !matches!(
-        stmt,
-        Stmt::Insert(_)
-            | Stmt::Update(_)
-            | Stmt::Delete(_)
-            | Stmt::Set(_)
-            | Stmt::Remove(_)
-            | Stmt::Merge(_)
-            | Stmt::Create(_)
-            | Stmt::Drop(_)
-            | Stmt::Alter(_)
-            | Stmt::ClearSpace(_)
-            | Stmt::CreateFulltextIndex(_)
-            | Stmt::DropFulltextIndex(_)
-            | Stmt::AlterFulltextIndex(_)
-            | Stmt::CreateVectorIndex(_)
-            | Stmt::DropVectorIndex(_)
-            | Stmt::BeginTransaction(_)
-            | Stmt::CommitTransaction(_)
-            | Stmt::RollbackTransaction(_)
-            | Stmt::Explain(_)
-            | Stmt::Profile(_)
-            | Stmt::Analyze(_)
-    )
+    match stmt {
+        Stmt::Pipe(pipe) => {
+            is_read_only_cacheable(&pipe.left) && is_read_only_cacheable(&pipe.right)
+        }
+        Stmt::SetOperation(set_op) => {
+            is_read_only_cacheable(&set_op.left) && is_read_only_cacheable(&set_op.right)
+        }
+        _ => !matches!(
+            stmt,
+            Stmt::Insert(_)
+                | Stmt::Update(_)
+                | Stmt::Delete(_)
+                | Stmt::Set(_)
+                | Stmt::Remove(_)
+                | Stmt::Merge(_)
+                | Stmt::Create(_)
+                | Stmt::Drop(_)
+                | Stmt::Alter(_)
+                | Stmt::ClearSpace(_)
+                | Stmt::CreateFulltextIndex(_)
+                | Stmt::DropFulltextIndex(_)
+                | Stmt::AlterFulltextIndex(_)
+                | Stmt::CreateVectorIndex(_)
+                | Stmt::DropVectorIndex(_)
+                | Stmt::BeginTransaction(_)
+                | Stmt::CommitTransaction(_)
+                | Stmt::RollbackTransaction(_)
+                | Stmt::Explain(_)
+                | Stmt::Profile(_)
+                | Stmt::Analyze(_)
+        ),
+    }
 }
 
 /// Build a minimal `ValidatedStatement` for the `plan_bound` → `transform` fallback path.

@@ -230,23 +230,6 @@ fn index_limit_to_predicate(
     }
 }
 
-fn contextual_to_value(
-    expr: &crate::core::types::expr::ContextualExpression,
-) -> Result<crate::core::Value, PlanBuildError> {
-    if let Some(value) = expr.constant_value() {
-        return Ok(value);
-    }
-    if let Some(value) = expr.as_literal() {
-        return Ok(value);
-    }
-    Err(PlanBuildError::expression(
-        "DataModification",
-        0,
-        format!("{expr:?}"),
-        "Standalone data modification requires constant values",
-    ))
-}
-
 pub(super) fn build_standalone_write_source(
     node: &PlanNodeEnum,
 ) -> Result<SourceSpec, PlanBuildError> {
@@ -259,10 +242,10 @@ pub(super) fn build_standalone_write_source(
                 .collect::<Vec<_>>();
             let mut rows = Vec::with_capacity(insert.values().len());
             for (vertex_id, tag_values) in insert.values() {
-                let mut row = vec![contextual_to_value(vertex_id)?];
+                let mut row = vec![vertex_id.clone()];
                 for values in tag_values {
                     for value in values {
-                        row.push(contextual_to_value(value)?);
+                        row.push(value.clone());
                     }
                 }
                 rows.push(row);
@@ -272,15 +255,24 @@ pub(super) fn build_standalone_write_source(
             (rows, names)
         }
         PlanNodeEnum::InsertEdges(insert) => {
+            use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
             let mut rows = Vec::with_capacity(insert.edges().len());
             for (src, dst, rank, properties) in insert.edges() {
-                let mut row = vec![contextual_to_value(src)?, contextual_to_value(dst)?];
-                row.push(match rank {
-                    Some(value) => contextual_to_value(value)?,
-                    None => crate::core::Value::BigInt(0),
-                });
+                let mut row = vec![src.clone(), dst.clone()];
+                let rank_expr = match rank {
+                    Some(value) => value.clone(),
+                    None => {
+                        let id = src
+                            .context()
+                            .register_expression(ExpressionMeta::new(Expression::literal(
+                                crate::core::Value::BigInt(0),
+                            )));
+                        ContextualExpression::new(id, src.context().clone())
+                    }
+                };
+                row.push(rank_expr);
                 for property in properties {
-                    row.push(contextual_to_value(property)?);
+                    row.push(property.clone());
                 }
                 rows.push(row);
             }
@@ -292,30 +284,27 @@ pub(super) fn build_standalone_write_source(
             delete
                 .vertex_ids()
                 .iter()
-                .map(|value| contextual_to_value(value).map(|value| vec![value]))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|value| vec![value.clone()])
+                .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
         PlanNodeEnum::DeleteEdges(delete) => (
             delete
                 .edges()
                 .iter()
-                .map(|(src, dst, _)| Ok(vec![contextual_to_value(src)?, contextual_to_value(dst)?]))
-                .collect::<Result<Vec<_>, PlanBuildError>>()?,
+                .map(|(src, dst, _)| vec![src.clone(), dst.clone()])
+                .collect::<Vec<_>>(),
             vec!["src".to_string(), "dst".to_string()],
         ),
         PlanNodeEnum::Update(update) => {
             use crate::query::planning::plan::core::nodes::data_modification::info::UpdateTargetType;
             match update.info() {
                 UpdateTargetType::Vertex(info) => (
-                    vec![vec![contextual_to_value(&info.vertex_id)?]],
+                    vec![vec![info.vertex_id.clone()]],
                     vec!["vid".to_string()],
                 ),
                 UpdateTargetType::Edge(info) => (
-                    vec![vec![
-                        contextual_to_value(&info.src)?,
-                        contextual_to_value(&info.dst)?,
-                    ]],
+                    vec![vec![info.src.clone(), info.dst.clone()]],
                     vec!["src".to_string(), "dst".to_string()],
                 ),
             }
@@ -324,29 +313,24 @@ pub(super) fn build_standalone_write_source(
             update
                 .updates()
                 .iter()
-                .map(|value| contextual_to_value(&value.vertex_id).map(|value| vec![value]))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|value| vec![value.vertex_id.clone()])
+                .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
         PlanNodeEnum::UpdateEdges(update) => (
             update
                 .updates()
                 .iter()
-                .map(|value| {
-                    Ok(vec![
-                        contextual_to_value(&value.src)?,
-                        contextual_to_value(&value.dst)?,
-                    ])
-                })
-                .collect::<Result<Vec<_>, PlanBuildError>>()?,
+                .map(|value| vec![value.src.clone(), value.dst.clone()])
+                .collect::<Vec<_>>(),
             vec!["src".to_string(), "dst".to_string()],
         ),
         PlanNodeEnum::DeleteTags(delete) => (
             delete
                 .vertex_ids()
                 .iter()
-                .map(|value| contextual_to_value(value).map(|value| vec![value]))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|value| vec![value.clone()])
+                .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
         _ => {
@@ -357,7 +341,7 @@ pub(super) fn build_standalone_write_source(
             ));
         }
     };
-    Ok(SourceSpec::ScanVertices { rows, col_names })
+    Ok(SourceSpec::StandaloneValues { values: rows, col_names })
 }
 
 // ── Unary spec builders ───────────────────────────────────────────────────────
@@ -984,6 +968,11 @@ pub(super) fn build_insert_vertices_spec(
     node: &crate::query::planning::plan::core::nodes::data_modification::insert_nodes::InsertVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let tag_property_names: Vec<Vec<String>> = node
+        .tags()
+        .iter()
+        .map(|tag| tag.prop_names.clone())
+        .collect();
     Ok(SinkSpec::InsertVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_properties: std::iter::once((
@@ -991,13 +980,15 @@ pub(super) fn build_insert_vertices_spec(
             Expression::Variable("vid".to_string()),
         ))
         .chain(
-            node.tags()
+            tag_property_names
                 .iter()
-                .flat_map(|tag| tag.prop_names.iter())
+                .flatten()
                 .map(|name| (name.clone(), Expression::Variable(name.clone()))),
         )
         .collect(),
         tags: node.tag_names(),
+        tag_property_names,
+        if_not_exists: node.info().if_not_exists,
     })
 }
 
@@ -1015,6 +1006,7 @@ pub(super) fn build_insert_edges_spec(
             .iter()
             .map(|name| (name.clone(), Expression::Variable(name.clone())))
             .collect(),
+        if_not_exists: node.info().if_not_exists,
     })
 }
 
@@ -1026,6 +1018,23 @@ pub(super) fn build_delete_vertices_spec(
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_id_col: "vid".to_string(),
     })
+}
+
+fn pipe_reference_column(expr: &crate::core::types::expr::ContextualExpression) -> Option<String> {
+    use crate::core::types::expr::Expression;
+    let inner = expr.expression()?;
+    match inner.inner() {
+        Expression::Variable(name) if name != "$-" => Some(name.clone()),
+        Expression::Property { object, property } => {
+            if let Expression::Variable(base) = object.as_ref() {
+                if base == "$-" {
+                    return Some(property.clone());
+                }
+            }
+            Some(property.clone())
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn build_delete_edges_spec(
@@ -1053,12 +1062,17 @@ pub(super) fn build_delete_tags_spec(
 }
 
 pub(super) fn build_pipe_delete_vertices_spec(
-    _node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::PipeDeleteVerticesNode,
+    node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::PipeDeleteVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let vertex_id_col = node
+        .vertex_ids()
+        .first()
+        .and_then(pipe_reference_column)
+        .unwrap_or_else(|| "vid".to_string());
     Ok(SinkSpec::PipeDeleteVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        vertex_id_col: "vid".to_string(),
+        vertex_id_col,
     })
 }
 
@@ -1067,10 +1081,20 @@ pub(super) fn build_pipe_delete_edges_spec(
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
     let edge_type = node.edge_type().unwrap_or("").to_string();
+    let (src_col, dst_col) = node
+        .edges()
+        .first()
+        .map(|(src, dst, _)| {
+            (
+                pipe_reference_column(src).unwrap_or_else(|| "src".to_string()),
+                pipe_reference_column(dst).unwrap_or_else(|| "dst".to_string()),
+            )
+        })
+        .unwrap_or_else(|| ("src".to_string(), "dst".to_string()));
     Ok(SinkSpec::PipeDeleteEdges {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        src_col: "src".to_string(),
-        dst_col: "dst".to_string(),
+        src_col,
+        dst_col,
         edge_type,
     })
 }
@@ -1089,6 +1113,12 @@ pub(super) fn build_update_spec(
                 .iter()
                 .filter_map(|(name, value)| value.get_expression().map(|expr| (name.clone(), expr)))
                 .collect(),
+            condition: info
+                .condition
+                .as_ref()
+                .map(contextual_to_expression)
+                .transpose()?,
+            is_upsert: info.is_upsert,
         }),
         UpdateTargetType::Edge(info) => Ok(SinkSpec::UpdateEdges {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
@@ -1100,6 +1130,12 @@ pub(super) fn build_update_spec(
                 .iter()
                 .filter_map(|(name, value)| value.get_expression().map(|expr| (name.clone(), expr)))
                 .collect(),
+            condition: info
+                .condition
+                .as_ref()
+                .map(contextual_to_expression)
+                .transpose()?,
+            is_upsert: info.is_upsert,
         }),
     }
 }
@@ -1122,6 +1158,17 @@ pub(super) fn build_update_vertices_spec(
             .flat_map(|update| update.properties.iter())
             .map(|(name, value)| (name.clone(), value.clone().into_expression()))
             .collect(),
+        condition: node
+            .updates()
+            .first()
+            .and_then(|update| update.condition.as_ref())
+            .map(contextual_to_expression)
+            .transpose()?,
+        is_upsert: node
+            .updates()
+            .first()
+            .map(|update| update.is_upsert)
+            .unwrap_or(false),
     })
 }
 
@@ -1144,6 +1191,17 @@ pub(super) fn build_update_edges_spec(
             .flat_map(|update| update.properties.iter())
             .map(|(name, value)| (name.clone(), value.clone().into_expression()))
             .collect(),
+        condition: node
+            .updates()
+            .first()
+            .and_then(|update| update.condition.as_ref())
+            .map(contextual_to_expression)
+            .transpose()?,
+        is_upsert: node
+            .updates()
+            .first()
+            .map(|update| update.is_upsert)
+            .unwrap_or(false),
     })
 }
 

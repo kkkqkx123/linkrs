@@ -15,7 +15,7 @@ impl DdlParser {
         }
 
         let target = if ctx.match_token(TokenKind::Space) {
-            DescTarget::Space(ctx.expect_identifier()?)
+            DescTarget::Space(ctx.expect_dcl_name()?)
         } else if ctx.match_token(TokenKind::Tag) {
             let tag_name = ctx.expect_identifier()?;
             let space_name = if ctx.match_token(TokenKind::In) {
@@ -59,7 +59,7 @@ impl DdlParser {
     ) -> Result<Stmt, ParseError> {
         ctx.expect_token(TokenKind::User)?;
 
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);

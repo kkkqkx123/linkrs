@@ -256,6 +256,7 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
         SourceSpec::ScanVertices { rows, .. } | SourceSpec::ScanEdges { rows, .. } => {
             Some(rows.len() as f64)
         }
+        SourceSpec::StandaloneValues { values, .. } => Some(values.len() as f64),
         SourceSpec::StorageScanVertices { limit, .. }
         | SourceSpec::StorageScanEdges { limit, .. } => limit.map(|value| value as f64),
         SourceSpec::GetVertices { vertex_ids, .. } => {
@@ -457,6 +458,7 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::Start => SlotLayout::new(vec![]),
         SourceSpec::Argument => SlotLayout::new(vec![]),
         SourceSpec::ScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
+        SourceSpec::StandaloneValues { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StorageScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::ScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StorageScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
@@ -475,6 +477,7 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::Start => "Start",
         SourceSpec::Argument => "Argument",
         SourceSpec::ScanVertices { .. } => "ScanVertices",
+        SourceSpec::StandaloneValues { .. } => "StandaloneValues",
         SourceSpec::StorageScanVertices { .. } => "StorageScanVertices",
         SourceSpec::ScanEdges { .. } => "ScanEdges",
         SourceSpec::StorageScanEdges { .. } => "StorageScanEdges",

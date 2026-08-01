@@ -65,7 +65,7 @@ impl DdlParser {
                 ctx.expect_token(TokenKind::Exists)?;
                 if_not_exists = true;
             }
-            let name = ctx.expect_identifier()?;
+            let name = ctx.expect_dcl_name()?;
 
             let mut vid_type = "INT64".to_string();
             let mut comment = None;
@@ -92,6 +92,8 @@ impl DdlParser {
                 }
             }
 
+            self.parse_space_with_params(ctx, &mut comment)?;
+
             Ok(Stmt::Create(CreateStmt {
                 span: start_span,
                 target: CreateTarget::Space {
@@ -108,7 +110,7 @@ impl DdlParser {
                 ctx.expect_token(TokenKind::Exists)?;
                 if_not_exists = true;
             }
-            let username = ctx.expect_identifier()?;
+            let username = ctx.expect_dcl_name()?;
             ctx.expect_token(TokenKind::With)?;
             ctx.expect_token(TokenKind::Password)?;
             let password = ctx.expect_string_literal()?;
@@ -257,7 +259,7 @@ impl DdlParser {
                 ctx.expect_token(TokenKind::Exists)?;
                 if_not_exists = true;
             }
-            let name = ctx.expect_identifier()?;
+            let name = ctx.expect_dcl_name()?;
 
             let mut vid_type = "INT64".to_string();
             let mut comment = None;
@@ -283,6 +285,8 @@ impl DdlParser {
                     }
                 }
             }
+
+            self.parse_space_with_params(ctx, &mut comment)?;
 
             Ok(Stmt::Create(CreateStmt {
                 span: start_span,
@@ -436,5 +440,28 @@ impl DdlParser {
         } else {
             Ok((None, None))
         }
+    }
+
+    /// Parse optional space parameters: (vid_type=..., comment='...') and
+    /// WITH key=value clauses (e.g. WITH DIMENSION=128).
+    fn parse_space_with_params(
+        &mut self,
+        ctx: &mut ParseContext,
+        comment: &mut Option<String>,
+    ) -> Result<(), ParseError> {
+        while ctx.match_token(TokenKind::With) {
+            let key = ctx.expect_identifier()?;
+            ctx.expect_token(TokenKind::Assign)?;
+            let value = if let TokenKind::StringLiteral(s) = ctx.current_token().kind.clone() {
+                ctx.next_token();
+                s
+            } else {
+                ctx.expect_integer_literal()?.to_string()
+            };
+            if key.eq_ignore_ascii_case("comment") {
+                *comment = Some(value);
+            }
+        }
+        Ok(())
     }
 }

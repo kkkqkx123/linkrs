@@ -88,6 +88,15 @@ pub enum SourceOperator {
         current_index: usize,
         col_names: Vec<String>,
     },
+    /// Standalone DML values. Expressions are evaluated once in `open()`
+    /// (i.e. once per execution) so volatile expressions such as `now()`
+    /// are resolved at execution time.
+    StandaloneValues {
+        values: Vec<Vec<crate::core::types::expr::ContextualExpression>>,
+        buffer: Vec<Vec<Value>>,
+        current_index: usize,
+        col_names: Vec<String>,
+    },
     /// Storage-backed vertex scan — rows come from a storage cursor.
     StorageScanVertices {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -210,6 +219,14 @@ impl SourceOperator {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
+            super::spec::SourceSpec::StandaloneValues { values, col_names } => {
+                Self::StandaloneValues {
+                    values: values.clone(),
+                    buffer: Vec::new(),
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }
+            }
             super::spec::SourceSpec::StorageScanVertices {
                 space_name,
                 limit,
@@ -359,6 +376,43 @@ impl SourceOperator {
                 col_names,
                 ..
             } => {
+                *current_index = 0;
+                base.insert_state(GlobalState::Source(SourceState::ScanVertices {
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }));
+            }
+            Self::StandaloneValues {
+                values,
+                buffer,
+                current_index,
+                col_names,
+            } => {
+                use crate::query::executor::expression::evaluation_context::default_context::DefaultExpressionContext;
+                use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+                let mut context = DefaultExpressionContext::new();
+                let mut rows = Vec::with_capacity(values.len());
+                for row in values {
+                    let mut evaluated = Vec::with_capacity(row.len());
+                    for expr in row {
+                        let expression = expr.get_expression().ok_or_else(|| {
+                            QueryError::execution(
+                                "StandaloneValues expression not found in context".to_string(),
+                            )
+                        })?;
+                        evaluated.push(
+                            ExpressionEvaluator::evaluate(&expression, &mut context).map_err(
+                                |error| {
+                                    QueryError::execution(format!(
+                                        "StandaloneValues expression evaluation failed: {error}"
+                                    ))
+                                },
+                            )?,
+                        );
+                    }
+                    rows.push(evaluated);
+                }
+                *buffer = rows;
                 *current_index = 0;
                 base.insert_state(GlobalState::Source(SourceState::ScanVertices {
                     current_index: 0,
@@ -632,6 +686,12 @@ impl SourceOperator {
     pub fn next(&mut self, base: &mut OperatorBase) -> Result<Option<DataChunk>, QueryError> {
         match self {
             Self::ScanVertices {
+                buffer,
+                current_index,
+                col_names,
+                ..
+            }
+            | Self::StandaloneValues {
                 buffer,
                 current_index,
                 col_names,

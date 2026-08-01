@@ -105,6 +105,8 @@ pub struct UserAlterInfo {
     pub username: String,
     /// New lock status
     pub is_locked: Option<bool>,
+    /// New password (plain text, hashed before storage)
+    pub new_password: Option<String>,
     /// New maximum number of queries per hour
     pub max_queries_per_hour: Option<i32>,
     /// New maximum number of updates per hour
@@ -120,6 +122,7 @@ impl UserAlterInfo {
         Self {
             username,
             is_locked: None,
+            new_password: None,
             max_queries_per_hour: None,
             max_updates_per_hour: None,
             max_connections_per_hour: None,

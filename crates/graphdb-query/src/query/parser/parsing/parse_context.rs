@@ -352,6 +352,73 @@ impl<'a> ParseContext<'a> {
         }
     }
 
+    /// Parse a DCL object name (username / space name).
+    ///
+    /// Accepts identifiers, keywords, numbers, string literals and hyphenated
+    /// sequences (e.g. `user-name-123`, `NULL`, `12345`, `"'; DROP USER --"`).
+    pub fn expect_dcl_name(&mut self) -> Result<String, ParseError> {
+        let mut name = self.expect_dcl_name_part()?;
+        while self.match_token(TokenKind::Minus) {
+            name.push('-');
+            name.push_str(&self.expect_dcl_name_part()?);
+        }
+        Ok(name)
+    }
+
+    fn expect_dcl_name_part(&mut self) -> Result<String, ParseError> {
+        let token = self.current_token().clone();
+        match &token.kind {
+            TokenKind::Identifier(s) | TokenKind::StringLiteral(s) => {
+                let s = s.clone();
+                self.next_token();
+                Ok(s)
+            }
+            TokenKind::IntegerLiteral(_) => {
+                let lexeme = token.lexeme.clone();
+                self.next_token();
+                Ok(lexeme)
+            }
+            _ => {
+                // Structural DCL keywords cannot be used as object names, so
+                // that e.g. `CREATE USER WITH PASSWORD 'x'` reports an error
+                // instead of treating WITH as the username.
+                if matches!(
+                    token.kind,
+                    TokenKind::With
+                        | TokenKind::Password
+                        | TokenKind::Role
+                        | TokenKind::To
+                        | TokenKind::From
+                        | TokenKind::On
+                        | TokenKind::In
+                        | TokenKind::If
+                        | TokenKind::Exists
+                        | TokenKind::Set
+                        | TokenKind::Locked
+                ) {
+                    let pos = self.current_position();
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken,
+                        format!("Expected name, found {:?}", self.current_token.kind),
+                        pos,
+                    ));
+                }
+                if token.lexeme.is_empty() {
+                    let pos = self.current_position();
+                    Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken,
+                        format!("Expected name, found {:?}", self.current_token.kind),
+                        pos,
+                    ))
+                } else {
+                    let lexeme = token.lexeme.clone();
+                    self.next_token();
+                    Ok(lexeme)
+                }
+            }
+        }
+    }
+
     pub fn expect_string_literal(&mut self) -> Result<String, ParseError> {
         match &self.current_token.kind {
             TokenKind::StringLiteral(s) => {

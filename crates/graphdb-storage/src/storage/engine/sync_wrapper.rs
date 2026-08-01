@@ -820,6 +820,10 @@ impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
     fn user_exists(&self, username: &str) -> bool {
         self.inner.user_exists(username)
     }
+
+    fn list_users(&self) -> Vec<String> {
+        self.inner.list_users()
+    }
 }
 
 impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {

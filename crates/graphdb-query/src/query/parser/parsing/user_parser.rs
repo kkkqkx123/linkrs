@@ -5,7 +5,6 @@
 use crate::query::parser::ast::stmt::*;
 use crate::query::parser::ast::types::Span;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
-use crate::query::parser::core::token::TokenKindExt;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 
@@ -50,7 +49,7 @@ impl UserParser {
             if_not_exists = true;
         }
 
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         // Support for the WITH PASSWORD syntax
         ctx.match_token(TokenKind::With);
@@ -94,7 +93,7 @@ impl UserParser {
     ) -> Result<Stmt, ParseError> {
         ctx.expect_token(TokenKind::User)?;
 
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let mut password = None;
         let mut new_role = None;
@@ -147,7 +146,7 @@ impl UserParser {
             if_exists = true;
         }
 
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
@@ -176,12 +175,11 @@ impl UserParser {
         ctx: &mut ParseContext,
         start_span: Span,
     ) -> Result<Stmt, ParseError> {
-        // Parse the optional username (if the next token is an identifier).
-        // At this point, the PASSWORD keyword has already been used (i.e., it has been “consumed” in the context of the program or code).
-        let username = if ctx.current_token().kind.is_identifier() {
-            Some(ctx.expect_identifier()?)
-        } else {
+        // Parse the optional username (if the next token is not the old password literal).
+        let username = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
             None
+        } else {
+            Some(ctx.expect_dcl_name()?)
         };
 
         let old_password = ctx.expect_string_literal()?;
@@ -264,13 +262,13 @@ impl UserParser {
         ctx.expect_token(TokenKind::On)?;
 
         // Analysis of the Space name
-        let space_name = ctx.expect_identifier()?;
+        let space_name = ctx.expect_dcl_name()?;
 
         // Analysis of the TO keyword
         ctx.expect_token(TokenKind::To)?;
 
         // Analyzing the username
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
@@ -299,13 +297,13 @@ impl UserParser {
         ctx.expect_token(TokenKind::On)?;
 
         // Analyzing the name “Space”
-        let space_name = ctx.expect_identifier()?;
+        let space_name = ctx.expect_dcl_name()?;
 
         // Analysis of the FROM keyword
         ctx.expect_token(TokenKind::From)?;
 
         // Analyzing the username
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
@@ -328,7 +326,7 @@ impl UserParser {
         ctx.expect_token(TokenKind::Desc)?;
         ctx.expect_token(TokenKind::User)?;
 
-        let username = ctx.expect_identifier()?;
+        let username = ctx.expect_dcl_name()?;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
@@ -364,7 +362,7 @@ impl UserParser {
 
         // Optional IN <space_name> clause
         let space_name = if ctx.match_token(TokenKind::In) {
-            Some(ctx.expect_identifier()?)
+            Some(ctx.expect_dcl_name()?)
         } else {
             None
         };

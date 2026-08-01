@@ -178,12 +178,16 @@ impl DateTimeFunction {
 }
 
 fn execute_now(_args: &[Value]) -> Result<Value, ExpressionError> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time error")
-        .as_millis();
-    Ok(Value::BigInt(now as i64))
+    let now = chrono::Utc::now();
+    Ok(Value::DateTime(DateTimeValue {
+        year: now.year(),
+        month: now.month(),
+        day: now.day(),
+        hour: now.hour(),
+        minute: now.minute(),
+        sec: now.second(),
+        microsec: now.timestamp_subsec_micros(),
+    }))
 }
 
 fn execute_date(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -802,7 +806,7 @@ mod tests {
     fn test_now() {
         let func = DateTimeFunction::Now;
         let result = func.execute(&[]).expect("Execution should succeed");
-        assert!(matches!(result, Value::BigInt(_)));
+        assert!(matches!(result, Value::DateTime(_)));
     }
 
     #[test]

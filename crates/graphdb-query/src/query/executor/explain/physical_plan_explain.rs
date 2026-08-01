@@ -139,7 +139,9 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             &op_spec.spec
         {
             let col_names: Vec<String> = match src_spec {
-                crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. } => col_names.clone(),
+                crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. }
+                | crate::query::executor::streaming::operators::spec::SourceSpec::StandaloneValues { col_names, .. }
+                => col_names.clone(),
                 crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { col_names, .. } => col_names.clone(),
                 crate::query::executor::streaming::operators::spec::SourceSpec::ScanEdges { col_names, .. } => col_names.clone(),
                 crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { col_names, .. } => col_names.clone(),

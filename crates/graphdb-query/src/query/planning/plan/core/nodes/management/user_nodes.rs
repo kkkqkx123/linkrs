@@ -60,6 +60,7 @@ impl CreateUserNode {
 define_plan_node! {
     pub struct AlterUserNode {
         username: String,
+        new_password: Option<String>,
         new_role: Option<String>,
         is_locked: Option<bool>,
     }
@@ -72,12 +73,18 @@ impl AlterUserNode {
         Self {
             id,
             username,
+            new_password: None,
             new_role: None,
             is_locked: None,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn with_password(mut self, password: String) -> Self {
+        self.new_password = Some(password);
+        self
     }
 
     pub fn with_role(mut self, role: String) -> Self {
@@ -92,6 +99,10 @@ impl AlterUserNode {
 
     pub fn username(&self) -> &str {
         &self.username
+    }
+
+    pub fn new_password(&self) -> Option<&String> {
+        self.new_password.as_ref()
     }
 
     pub fn new_role(&self) -> Option<&String> {

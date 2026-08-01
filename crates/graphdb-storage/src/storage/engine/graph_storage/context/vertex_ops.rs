@@ -41,6 +41,12 @@ impl GraphStorageContext {
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
+        if external_id < 0 {
+            return Err(StorageError::invalid_input(format!(
+                "Vertex id cannot be negative: {}",
+                external_id
+            )));
+        }
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
