@@ -265,21 +265,57 @@ impl ShardedVertexTable {
         all
     }
 
-    /// Scan all valid vertices at `ts`, fetching only the projected columns.
-    pub fn scan_projected(
-        &self,
-        ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<VertexRecord> {
-        let mut all = Vec::new();
+    /// Live global internal IDs (shard-encoded), in shard order.
+    ///
+    /// Mirrors the ordering of the previous `scan_projected` so lazy
+    /// paginated scans yield records in a stable order.
+    pub fn live_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
             let table = shard.table.lock();
-            for mut record in table.scan_projected(ts, projection) {
-                record.internal_id = self.encode_id(shard_idx, record.internal_id);
-                all.push(record);
+            ids.extend(
+                table
+                    .live_ids()
+                    .into_iter()
+                    .map(|local_id| self.encode_id(shard_idx, local_id)),
+            );
+        }
+        ids
+    }
+
+    /// Batch variant of [`get_projected_by_internal_id`].
+    ///
+    /// Input ids are grouped by shard, decoded with one lock acquisition and
+    /// one batch call per shard, then re-encoded to global ids. The output is
+    /// aligned with the input order; invalid ids yield `None`.
+    pub fn get_projected_batch(
+        &self,
+        global_ids: &[u32],
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<Option<VertexRecord>> {
+        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
+        for (out_idx, &global_id) in global_ids.iter().enumerate() {
+            let (shard_idx, local_id) = self.decode_id(global_id);
+            groups[shard_idx].push((out_idx, local_id));
+        }
+
+        let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
+        for (shard_idx, group) in groups.into_iter().enumerate() {
+            if group.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
+            let table = self.shards[shard_idx].table.lock();
+            let records = table.get_projected_batch(&locals, ts, projection);
+            for ((out_idx, _), record) in group.into_iter().zip(records) {
+                out[out_idx] = record.map(|mut rec| {
+                    rec.internal_id = self.encode_id(shard_idx, rec.internal_id);
+                    rec
+                });
             }
         }
-        all
+        out
     }
 
     // ==================== MVCC ====================

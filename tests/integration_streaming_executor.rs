@@ -12,6 +12,7 @@ use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::executor::StreamingExecutor;
 use graphdb::query::executor::streaming::operators::base::OperatorBase;
 use graphdb::query::executor::streaming::operators::blocking::BlockingOperator;
+use graphdb::query::executor::streaming::operators::join_operator::HashJoinBuildSide;
 use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
 use graphdb::query::executor::streaming::operators::source_operator::SourceOperator;
@@ -358,8 +359,7 @@ fn test_hash_join_in_chain() {
             join_condition: None,
             hash_keys: vec![],
             probe_keys: vec![],
-            build_side_hash: std::collections::HashMap::new(),
-            all_right_rows: Vec::new(),
+            build_side: HashJoinBuildSide::new(),
             left_consumed: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],

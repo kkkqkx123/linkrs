@@ -42,7 +42,7 @@ pub use cursor::{
     IndexRow, IndexScanPlan, PartitionSelector, RequiredProperty, ScanOptions, ScanTarget,
     VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
-pub use engine::config::{PropertyGraphConfig, ResourceConfig};
+pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::GraphStorage;
 pub use engine::persistence_coordinator::{
     CatalogLockDiagnostic, CheckpointStats, PersistenceConfig, PersistenceDiagnostics,

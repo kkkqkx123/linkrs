@@ -60,9 +60,10 @@ impl OptimizationBatch {
 }
 
 /// Reason why a batch stopped
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum BatchStopReason {
     /// Converged: no more changes
+    #[default]
     Converged,
     /// Hit iteration limit
     IterationLimit(usize),
@@ -72,14 +73,8 @@ pub enum BatchStopReason {
     Error(String),
 }
 
-impl Default for BatchStopReason {
-    fn default() -> Self {
-        BatchStopReason::Converged
-    }
-}
-
 /// Statistics for a single batch execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BatchStatistics {
     /// Number of iterations performed
     pub iterations: usize,
@@ -95,20 +90,6 @@ pub struct BatchStatistics {
     pub converged: bool,
     /// Stop reason
     pub stop_reason: BatchStopReason,
-}
-
-impl Default for BatchStatistics {
-    fn default() -> Self {
-        Self {
-            iterations: 0,
-            rules_applied: 0,
-            rule_hit_counts: std::collections::HashMap::new(),
-            fingerprints_before: Vec::new(),
-            fingerprints_after: Vec::new(),
-            converged: false,
-            stop_reason: BatchStopReason::default(),
-        }
-    }
 }
 
 /// Batch optimizer - applies rules in phases with diagnostics
@@ -398,16 +379,13 @@ impl BatchOptimizer {
         // Apply all rules in the batch
         for rule in rules {
             if rule.matches(&current_plan) {
-                match rule.apply(&mut ctx, &current_plan)? {
-                    Some(result) => {
-                        if let Some(new_node) = result.first_new_node() {
-                            current_plan = new_node.clone();
-                            rules_applied += 1;
-                            let rule_name = rule.name().to_string();
-                            *rule_hits.entry(rule_name).or_insert(0) += 1;
-                        }
+                if let Some(result) = rule.apply(&mut ctx, &current_plan)? {
+                    if let Some(new_node) = result.first_new_node() {
+                        current_plan = new_node.clone();
+                        rules_applied += 1;
+                        let rule_name = rule.name().to_string();
+                        *rule_hits.entry(rule_name).or_insert(0) += 1;
                     }
-                    None => {}
                 }
             }
         }

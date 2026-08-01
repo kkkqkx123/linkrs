@@ -247,6 +247,12 @@ impl GraphStorageContext {
             }
         }
 
+        // Automatic cold-hot tiering after the delta-freeze pass so both
+        // freeze operations run serially under each table's write lock.
+        if let Err(err) = self.maybe_freeze_cold_tier() {
+            log::warn!("Cold-tier freeze evaluation failed: {}", err);
+        }
+
         Ok(())
     }
 

@@ -22,46 +22,6 @@ impl GraphStorageContext {
             .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(ts)))
     }
 
-    pub fn scan_edges(
-        &self,
-        src_label: LabelId,
-        dst_label: LabelId,
-        edge_label: LabelId,
-        ts: Timestamp,
-    ) -> Vec<crate::storage::edge::EdgeRecord> {
-        use crate::storage::engine::data_store::EdgeTableKey;
-        self.persistent
-            .data_store
-            .catalog_read_snapshot()
-            .with_edge_tables(|tables| {
-                tables
-                    .get(&EdgeTableKey::new(src_label, dst_label, edge_label))
-                    .map(|arc| arc.read().scan(ts))
-                    .unwrap_or_default()
-            })
-    }
-
-    pub fn scan_edges_by_label(
-        &self,
-        edge_label: LabelId,
-        ts: Timestamp,
-    ) -> Vec<crate::storage::edge::EdgeRecord> {
-        self.persistent
-            .data_store
-            .catalog_read_snapshot()
-            .with_edge_tables(|tables| {
-                let mut records = Vec::new();
-                for table in tables
-                    .values()
-                    .map(|arc| arc.read())
-                    .filter(|table| table.label() == edge_label)
-                {
-                    records.extend(table.scan(ts));
-                }
-                records
-            })
-    }
-
     pub fn total_vertex_count(&self) -> usize {
         self.persistent
             .data_store

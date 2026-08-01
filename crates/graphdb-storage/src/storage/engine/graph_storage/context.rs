@@ -342,6 +342,8 @@ struct GraphStorageRuntime {
     background_freeze_running: Arc<AtomicBool>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Wall-clock time of the last write per edge label, for cold-tier idle checks
+    last_edge_write: Arc<Mutex<HashMap<LabelId, std::time::Instant>>>,
 }
 
 struct WriteTimestampLease {
@@ -381,6 +383,7 @@ impl GraphStorageRuntime {
             deferred_wal_ops: DeferredWalOps::new(),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
             last_auto_compact: Arc::new(Mutex::new(None)),
+            last_edge_write: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -400,6 +403,7 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            last_edge_write: self.last_edge_write.clone(),
         }
     }
 
@@ -418,6 +422,7 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            last_edge_write: self.last_edge_write.clone(),
         }
     }
 
@@ -429,6 +434,7 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            last_edge_write: self.last_edge_write.clone(),
         }
     }
 
@@ -471,15 +477,18 @@ impl GraphStorageRuntime {
     }
 }
 
+/// Per-edge-label list of registered cold snapshots, oldest first.
+pub(crate) type ColdSnapshotMap = HashMap<LabelId, Vec<Arc<ColdSnapshot>>>;
+
 #[derive(Clone)]
 pub struct GraphStorageContext {
     persistent: GraphStoragePersistent,
     runtime: GraphStorageRuntime,
     operation_context: Option<Arc<StorageOperationContext>>,
     write_timestamp_lease: Option<Arc<WriteTimestampLease>>,
-    /// Read-only cold snapshots indexed by edge label ID.
+    /// Read-only cold snapshots indexed by edge label ID, newest last.
     /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
-    cold_snapshots: Arc<RwLock<HashMap<LabelId, ColdSnapshot>>>,
+    cold_snapshots: Arc<RwLock<ColdSnapshotMap>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -488,6 +497,7 @@ pub struct GraphStorageContext {
 
 mod accessors;
 mod cache_index;
+mod cold_tier;
 mod edge_ops;
 mod freeze;
 pub(crate) mod helpers;

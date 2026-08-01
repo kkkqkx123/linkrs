@@ -3,6 +3,7 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::data_store::EdgeTableKey;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use super::GraphStorageContext;
 
@@ -109,22 +110,24 @@ impl GraphStorageContext {
             // rebuildable cache, so a persist failure only degrades to a
             // stale file (logged, not fatal).
             let mut cold_snapshots = self.cold_snapshots().write();
-            for snapshot in cold_snapshots.values_mut() {
-                let schema = snapshot.schema();
-                let src_label = schema.src_label;
-                let dst_label = schema.dst_label;
-                let src_mapping = mapping_for(src_label);
-                let dst_mapping = mapping_for(dst_label);
-                if src_mapping.is_none() && dst_mapping.is_none() {
-                    continue;
-                }
-                snapshot.remap_vertex_ids(src_mapping, dst_mapping)?;
-                if let Err(e) = snapshot.persist() {
-                    log::warn!(
-                        "Failed to persist cold snapshot (label={}) after remap: {}",
-                        src_label,
-                        e
-                    );
+            for snapshots in cold_snapshots.values_mut() {
+                for snapshot in snapshots.iter_mut() {
+                    let schema = snapshot.schema();
+                    let src_label = schema.src_label;
+                    let dst_label = schema.dst_label;
+                    let src_mapping = mapping_for(src_label);
+                    let dst_mapping = mapping_for(dst_label);
+                    if src_mapping.is_none() && dst_mapping.is_none() {
+                        continue;
+                    }
+                    Arc::make_mut(snapshot).remap_vertex_ids(src_mapping, dst_mapping)?;
+                    if let Err(e) = snapshot.persist() {
+                        log::warn!(
+                            "Failed to persist cold snapshot (label={}) after remap: {}",
+                            src_label,
+                            e
+                        );
+                    }
                 }
             }
             drop(cold_snapshots);

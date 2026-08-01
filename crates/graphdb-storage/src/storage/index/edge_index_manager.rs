@@ -416,6 +416,11 @@ impl EdgePropertyIndex {
         self.indexes.contains_key(prop_name)
     }
 
+    /// Names of all properties currently indexed by this index.
+    pub fn indexed_property_names(&self) -> Vec<String> {
+        self.indexes.keys().cloned().collect()
+    }
+
     /// Pool capacity used when constructing chunked index files.
     pub fn pool_capacity(&self) -> u64 {
         self.pool_capacity

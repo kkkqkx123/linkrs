@@ -1237,6 +1237,44 @@ impl ColumnStore {
             .collect()
     }
 
+    /// Batch read of all columns for multiple rows.
+    ///
+    /// Column references are resolved once per batch and each column is
+    /// decoded continuously for all requested rows (column-at-a-time),
+    /// which is cache-friendlier than the row-at-a-time `get` path.
+    /// The result is aligned with the input row order.
+    pub fn get_batch(&self, rows: &[usize]) -> Vec<Vec<(String, Option<Value>)>> {
+        let mut out = vec![Vec::with_capacity(self.columns.len()); rows.len()];
+        for col in &self.columns {
+            for (ri, &row) in rows.iter().enumerate() {
+                out[ri].push((col.name.clone(), col.get(row)));
+            }
+        }
+        out
+    }
+
+    /// Batch variant of [`get_projected`]: decodes only the requested
+    /// columns for multiple rows, resolving column references once per batch
+    /// and decoding column-at-a-time.
+    ///
+    /// The result is aligned with the input row order; unrequested columns
+    /// are never touched.
+    pub fn get_projected_batch(
+        &self,
+        rows: &[usize],
+        projection: &[String],
+    ) -> Vec<Vec<(String, Option<Value>)>> {
+        let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
+        for name in projection {
+            if let Some(column) = self.get_column(name) {
+                for (ri, &row) in rows.iter().enumerate() {
+                    out[ri].push((name.clone(), column.get(row)));
+                }
+            }
+        }
+        out
+    }
+
     pub fn set_property(
         &mut self,
         row_idx: usize,
@@ -1434,6 +1472,58 @@ mod tests {
         assert_eq!(col.get(0), Some(Value::string("Alice")));
         assert_eq!(col.get(1), Some(Value::string("Bob")));
         assert_eq!(col.len(), 2);
+    }
+
+    #[test]
+    fn test_column_store_batch_reads() {
+        let mut store = ColumnStore::new();
+
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, true);
+
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+            )
+            .unwrap();
+        store
+            .set(
+                1,
+                &[
+                    ("name".to_string(), Value::string("Bob")),
+                    ("age".to_string(), Value::Int(25)),
+                ],
+            )
+            .unwrap();
+        store
+            .set(2, &[("name".to_string(), Value::string("Carol"))])
+            .unwrap();
+
+        // Full batch read, aligned with input order.
+        let all = store.get_batch(&[1, 0, 2]);
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all[0].iter().find(|(n, _)| n == "name").unwrap().1,
+            Some(Value::string("Bob"))
+        );
+        assert_eq!(all[1][1], ("age".to_string(), Some(Value::Int(30))));
+        assert_eq!(all[2][1], ("age".to_string(), None));
+
+        // Projected batch read only touches the requested columns.
+        let projected = store.get_projected_batch(&[0, 1], &["age".to_string()]);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected[0],
+            vec![("age".to_string(), Some(Value::Int(30)))]
+        );
+        assert_eq!(
+            projected[1],
+            vec![("age".to_string(), Some(Value::Int(25)))]
+        );
     }
 
     #[test]

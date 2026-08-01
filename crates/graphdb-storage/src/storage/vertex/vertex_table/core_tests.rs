@@ -54,6 +54,82 @@ fn test_insert_and_get() {
 }
 
 #[test]
+fn test_batch_projected_read() {
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+
+    table
+        .insert(
+            "v1",
+            &[
+                ("name".to_string(), Value::string("Alice")),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
+        .unwrap();
+    table
+        .insert(
+            "v2",
+            &[
+                ("name".to_string(), Value::string("Bob")),
+                ("age".to_string(), Value::Int(25)),
+            ],
+            100,
+        )
+        .unwrap();
+    table
+        .insert("v3", &[("name".to_string(), Value::string("Carol"))], 100)
+        .unwrap();
+
+    let ids = table.live_ids();
+    assert_eq!(ids, vec![0, 1, 2]);
+
+    // Full read, aligned with input order.
+    let all = table.get_projected_batch(&[1, 0, 2], 100, None);
+    let names: Vec<Option<Value>> = all
+        .iter()
+        .map(|r| {
+            r.as_ref()
+                .and_then(|rec| rec.properties.iter().find(|(n, _)| n == "name"))
+                .map(|(_, v)| v.clone())
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            Some(Value::string("Bob")),
+            Some(Value::string("Alice")),
+            Some(Value::string("Carol"))
+        ]
+    );
+
+    // Projection only decodes the requested column.
+    let projected = table.get_projected_batch(&[0, 1], 100, Some(&["age".to_string()]));
+    let projected: Vec<Vec<String>> = projected
+        .into_iter()
+        .flatten()
+        .map(|rec| {
+            rec.properties
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        projected,
+        vec![vec!["age".to_string()], vec!["age".to_string()]]
+    );
+
+    // Invalid (deleted) id yields None in its input position.
+    table.delete("v2", 100).unwrap();
+    let with_gap = table.get_projected_batch(&[0, 1, 2], 100, None);
+    assert!(with_gap[0].is_some());
+    assert!(with_gap[1].is_none());
+    assert!(with_gap[2].is_some());
+}
+
+#[test]
 fn test_delete() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema);

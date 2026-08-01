@@ -135,14 +135,103 @@ fn close_common(
     }
 }
 
+/// Columnar build side for hash joins.
+///
+/// Build rows are accumulated column-major (one `Vec<Value>` per input
+/// column) and the hash index maps each key to its row indices. Build costs
+/// a single columnar copy per value — no per-row clones — and probe reads
+/// rows back by index.
+#[derive(Debug)]
+pub struct HashJoinBuildSide {
+    columns: Vec<Vec<Value>>,
+    index: HashMap<JoinKeyValue, Vec<u32>>,
+}
+
+impl Default for HashJoinBuildSide {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HashJoinBuildSide {
+    pub fn new() -> Self {
+        Self {
+            columns: Vec::new(),
+            index: HashMap::new(),
+        }
+    }
+
+    /// Append one input chunk: join keys are evaluated per row using the
+    /// column fast path, chunk columns are moved into the column store, and
+    /// each row is indexed by its key.
+    pub fn insert_chunk(
+        &mut self,
+        chunk: &mut DataChunk,
+        col_names: &[String],
+        key_expressions: &[Expression],
+    ) -> Result<(), QueryError> {
+        chunk.materialize_columns();
+        let cols = chunk.columns.as_deref().unwrap();
+        debug_assert_eq!(
+            chunk.rows.len(),
+            cols.first().map_or(0, Vec::len),
+            "row/column count mismatch: chunk has rows without columnar data"
+        );
+        let base = self.columns.first().map_or(0, |c| c.len());
+        for (row_idx, row) in chunk.rows.iter().enumerate() {
+            let key = evaluate_join_key(row, col_names, key_expressions, Some((cols, row_idx)))?;
+            self.index
+                .entry(key)
+                .or_default()
+                .push((base + row_idx) as u32);
+        }
+        let chunk_cols = chunk
+            .columns
+            .take()
+            .ok_or_else(|| QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string()))?;
+        if self.columns.is_empty() {
+            self.columns = chunk_cols;
+        } else {
+            if self.columns.len() != chunk_cols.len() {
+                return Err(QueryError::execution(format!(
+                    "HashJoinBuildSide: chunk column count {} differs from build side column count {}",
+                    chunk_cols.len(),
+                    self.columns.len()
+                )));
+            }
+            for (target, src) in self.columns.iter_mut().zip(chunk_cols) {
+                target.extend(src);
+            }
+        }
+        Ok(())
+    }
+
+    /// Row indices matching a probe key.
+    pub fn matching(&self, key: &JoinKeyValue) -> Option<&[u32]> {
+        self.index.get(key).map(|v| v.as_slice())
+    }
+
+    /// Materialize the row at the given index by cloning column values.
+    pub fn row_at(&self, row_idx: u32) -> Vec<Value> {
+        self.columns
+            .iter()
+            .map(|col| col[row_idx as usize].clone())
+            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.columns.clear();
+        self.index.clear();
+    }
+}
+
 #[derive(Debug)]
 pub enum JoinOperator {
     HashJoin {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
-        build_side_hash: HashMap<JoinKeyValue, Vec<Vec<Value>>>,
-        all_right_rows: Vec<Vec<Value>>,
+        build_side: HashJoinBuildSide,
         left_consumed: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
@@ -151,8 +240,7 @@ pub enum JoinOperator {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
-        build_side_hash: HashMap<JoinKeyValue, Vec<Vec<Value>>>,
-        all_right_rows: Vec<Vec<Value>>,
+        build_side: HashJoinBuildSide,
         left_consumed: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
@@ -226,8 +314,7 @@ impl JoinOperator {
                 join_condition: join_condition.clone(),
                 hash_keys: hash_keys.clone(),
                 probe_keys: probe_keys.clone(),
-                build_side_hash: std::collections::HashMap::new(),
-                all_right_rows: Vec::new(),
+                build_side: HashJoinBuildSide::new(),
                 left_consumed: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
@@ -242,8 +329,7 @@ impl JoinOperator {
                 join_condition: join_condition.clone(),
                 hash_keys: hash_keys.clone(),
                 probe_keys: probe_keys.clone(),
-                build_side_hash: std::collections::HashMap::new(),
-                all_right_rows: Vec::new(),
+                build_side: HashJoinBuildSide::new(),
                 left_consumed: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
@@ -369,8 +455,7 @@ impl JoinOperator {
                 join_condition,
                 hash_keys,
                 probe_keys,
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 left_consumed,
                 memory_tracker,
                 right_col_names,
@@ -378,8 +463,7 @@ impl JoinOperator {
                 join_condition,
                 hash_keys,
                 probe_keys,
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 left_consumed,
                 &mut JoinCtx {
                     base,
@@ -393,8 +477,7 @@ impl JoinOperator {
                 join_condition,
                 hash_keys,
                 probe_keys,
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 left_consumed,
                 memory_tracker,
                 right_col_names,
@@ -402,8 +485,7 @@ impl JoinOperator {
                 join_condition,
                 hash_keys,
                 probe_keys,
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 left_consumed,
                 &mut JoinCtx {
                     base,
@@ -580,27 +662,15 @@ impl JoinOperator {
     ) -> Result<(), QueryError> {
         match self {
             Self::HashJoin {
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 memory_tracker,
                 ..
-            } => hash_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_hash,
-                all_right_rows,
-            ),
+            } => hash_join::close(&mut base.lifecycle, memory_tracker, build_side),
             Self::HashLeftJoin {
-                build_side_hash,
-                all_right_rows,
+                build_side,
                 memory_tracker,
                 ..
-            } => hash_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_hash,
-                all_right_rows,
-            ),
+            } => hash_join::close(&mut base.lifecycle, memory_tracker, build_side),
             Self::NestedLoopJoin {
                 build_side_tuples,
                 memory_tracker,
@@ -660,5 +730,64 @@ impl JoinOperator {
 
     pub fn spilled_bytes(&self) -> u64 {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk_from_columns(cols: Vec<Vec<Value>>) -> DataChunk {
+        let names: Vec<String> = (0..cols.len()).map(|i| format!("c{i}")).collect();
+        DataChunk::from_columns(cols, Arc::new(SlotLayout::from_names(&names)))
+    }
+
+    #[test]
+    fn insert_chunk_accumulates_across_chunks() {
+        let mut side = HashJoinBuildSide::new();
+        let mut c1 = chunk_from_columns(vec![
+            vec![Value::Int(1), Value::Int(2)],
+            vec![Value::string("a"), Value::string("b")],
+        ]);
+        side.insert_chunk(&mut c1, &[], &[]).unwrap();
+        let mut c2 = chunk_from_columns(vec![vec![Value::Int(3)], vec![Value::string("c")]]);
+        side.insert_chunk(&mut c2, &[], &[]).unwrap();
+        assert_eq!(side.columns.len(), 2);
+        assert_eq!(
+            side.columns[0],
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+        assert_eq!(side.row_at(2), vec![Value::Int(3), Value::string("c")]);
+        let indexed_rows: usize = side.index.values().map(|v| v.len()).sum();
+        assert_eq!(indexed_rows, 3);
+    }
+
+    #[test]
+    fn insert_chunk_column_count_mismatch_is_error() {
+        let mut side = HashJoinBuildSide::new();
+        let mut c1 = chunk_from_columns(vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        side.insert_chunk(&mut c1, &[], &[]).unwrap();
+        let mut c2 = chunk_from_columns(vec![
+            vec![Value::Int(3)],
+            vec![Value::Int(4)],
+            vec![Value::Int(5)],
+        ]);
+        let err = side.insert_chunk(&mut c2, &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("column count"));
+        assert_eq!(side.columns.len(), 2);
+        assert_eq!(side.columns[0], vec![Value::Int(1)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "row/column count mismatch")]
+    fn insert_chunk_rejects_schema_less_chunk() {
+        // Rows carrying values that no schema column can address would be
+        // silently dropped from the build side; the invariant guard must fire.
+        let mut side = HashJoinBuildSide::new();
+        let mut chunk = DataChunk::new_with_layout(
+            vec![vec![Value::Int(1)]],
+            Arc::new(SlotLayout::from_names(&[])),
+        );
+        let _ = side.insert_chunk(&mut chunk, &[], &[]);
     }
 }

@@ -40,7 +40,7 @@ pub use super::{CsrBase, CsrVariant, Nbr};
 use crate::core::types::CompactConfig;
 use crate::core::types::{EdgeId, Timestamp};
 use crate::core::{StorageError, StorageResult};
-use crate::storage::cold::ColdSnapshot;
+use crate::storage::cold::{ColdPropertyIndex, ColdSnapshot};
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
 use crate::storage::edge::edge_table::snapshot::max_edge_row;
 use crate::storage::persistence::write_header_to;
@@ -344,6 +344,23 @@ impl EdgeStore {
         self.0.export_snapshot_file(ts, path)
     }
 
+    pub fn export_snapshot_file_with_retention<P: AsRef<Path>>(
+        &self,
+        ts: Timestamp,
+        keep_recent: u64,
+        path: P,
+    ) -> StorageResult<ColdSnapshot> {
+        self.0
+            .export_snapshot_file_with_retention(ts, keep_recent, path)
+    }
+
+    /// Evict frozen edges from the hot store: every edge visible at `ts`
+    /// except the `keep_recent` newest ones is MVCC-deleted at `ts`, so reads
+    /// at or after `ts` fall through to the matching cold snapshot.
+    pub fn freeze_edges_before(&mut self, ts: Timestamp, keep_recent: u64) -> StorageResult<u64> {
+        self.0.freeze_edges_before(ts, keep_recent)
+    }
+
     // ── Edge Property Index ──
     pub fn enable_property_index(&mut self, pool_capacity: u64) -> StorageResult<()> {
         self.0.enable_property_index(pool_capacity)
@@ -392,10 +409,37 @@ impl core::TimeTravelEdgeStore {
     }
 
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
+        self.export_snapshot_with_retention(ts, 0)
+    }
+
+    /// Export a snapshot at `ts`, excluding the `keep_recent` newest edges.
+    ///
+    /// Edges are ranked newest-first by (create_ts, edge_id); the same
+    /// ordering is used by [`Self::freeze_edges_before`], so the exported
+    /// set and the hot-evicted set stay identical.
+    pub fn export_snapshot_with_retention(
+        &self,
+        ts: Timestamp,
+        keep_recent: u64,
+    ) -> StorageResult<ExportedEdgeSnapshot> {
         use snapshot::SnapshotBuilder;
-        let out_edges =
+        let mut out_edges =
             self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
-        let in_edges = self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
+        let mut in_edges =
+            self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
+
+        if keep_recent > 0 {
+            let newest_first = |a: &(u32, Nbr), b: &(u32, Nbr)| {
+                b.1.create_ts
+                    .cmp(&a.1.create_ts)
+                    .then_with(|| b.1.edge_id.cmp(&a.1.edge_id))
+            };
+            out_edges.sort_by(newest_first);
+            in_edges.sort_by(newest_first);
+            let cut = out_edges.len().saturating_sub(keep_recent as usize);
+            out_edges.truncate(cut);
+            in_edges.truncate(cut);
+        }
 
         let out_csr = {
             let cap = max_edge_row(&out_edges, self.out_csr.vertex_capacity());
@@ -416,13 +460,53 @@ impl core::TimeTravelEdgeStore {
         })
     }
 
+    /// Evict every edge visible at `ts` except the `keep_recent` newest ones.
+    ///
+    /// Deletions happen at `ts` through the regular MVCC path, so reads
+    /// before `ts` still see the edges while reads at or after `ts` are
+    /// served by the matching cold snapshot. Returns the number of edges
+    /// evicted.
+    pub fn freeze_edges_before(&mut self, ts: Timestamp, keep_recent: u64) -> StorageResult<u64> {
+        let mut edges =
+            self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
+        edges.sort_by_key(|(_, nbr)| std::cmp::Reverse((nbr.create_ts, nbr.edge_id)));
+        edges.truncate(edges.len().saturating_sub(keep_recent as usize));
+
+        let mut evicted = 0u64;
+        for (src, nbr) in edges {
+            let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
+            let dst = dst_vid.as_int64().unwrap_or(0) as u32;
+            if self.delete_edge(src, dst, rank, ts)? {
+                evicted += 1;
+            }
+        }
+        Ok(evicted)
+    }
+
     pub fn export_snapshot_file<P: AsRef<Path>>(
         &self,
         ts: Timestamp,
         path: P,
     ) -> StorageResult<ColdSnapshot> {
-        let exported = self.export_snapshot(ts)?;
-        ColdSnapshot::create(&exported, path)
+        self.export_snapshot_file_with_retention(ts, 0, path)
+    }
+
+    pub fn export_snapshot_file_with_retention<P: AsRef<Path>>(
+        &self,
+        ts: Timestamp,
+        keep_recent: u64,
+        path: P,
+    ) -> StorageResult<ColdSnapshot> {
+        let exported = self.export_snapshot_with_retention(ts, keep_recent)?;
+        let index = self.property_index.as_ref().and_then(|index| {
+            let names = index.indexed_property_names();
+            if names.is_empty() {
+                None
+            } else {
+                Some(ColdPropertyIndex::build(&exported, &names))
+            }
+        });
+        ColdSnapshot::create_with_index(&exported, index, path)
     }
 
     fn collect_edges_for_snapshot_mvcc(

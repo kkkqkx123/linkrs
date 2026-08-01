@@ -1,17 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::core::types::{EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
+use crate::core::types::{EdgeId, EdgeTypeInfo, LabelId, TagInfo, Timestamp, VertexId};
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::EdgeCursor;
+use crate::storage::cold::{ColdIndexEntry, ColdSnapshot};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::storage::edge::Nbr;
 use crate::storage::engine::params::EdgeOperationParams;
 
 use super::context::helpers;
 use super::context::GraphStorageContext;
-use super::cursor_impl::GraphEdgeCursor;
 use super::ops::{
     edge_record_to_edge, endpoint_label_id, serialize_properties, value_to_string,
     vertex_record_to_vertex,
@@ -342,9 +341,9 @@ pub(crate) fn get_edge(
         return Ok(Some(edge));
     }
 
-    // Fallback: check cold snapshot if hot missed
+    // Fallback: check cold snapshots if hot missed
     if ts >= snapshot_min_ts(ctx, edge_label_id) {
-        if let Some((nbr, src_internal, dst_internal_vid)) = query_cold_edge(
+        if let Some((snapshot, nbr, src_internal, dst_internal_vid)) = query_cold_edge(
             ctx,
             edge_label_id,
             *src,
@@ -353,15 +352,13 @@ pub(crate) fn get_edge(
             dst_label_id,
             ts,
         ) {
-            if let Some(snapshot) = ctx.cold_snapshots().read().get(&edge_label_id) {
-                let record = snapshot.nbr_to_edge_record(
-                    &nbr,
-                    VertexId::from_int64(src_internal as i64),
-                    dst_internal_vid,
-                );
-                let edge = edge_record_to_edge(&record, edge_type, &src_str, &dst_str);
-                return Ok(Some(edge));
-            }
+            let record = snapshot.nbr_to_edge_record(
+                &nbr,
+                VertexId::from_int64(src_internal as i64),
+                dst_internal_vid,
+            );
+            let edge = edge_record_to_edge(&record, edge_type, &src_str, &dst_str);
+            return Ok(Some(edge));
         }
     }
 
@@ -373,15 +370,16 @@ fn snapshot_min_ts(ctx: &GraphStorageContext, label: LabelId) -> Timestamp {
     ctx.cold_snapshots()
         .read()
         .get(&label)
-        .map(|s| s.snapshot_ts())
+        .and_then(|snapshots| snapshots.iter().map(|s| s.snapshot_ts()).min())
         .unwrap_or(u64::MAX)
 }
 
 /// Look up a single edge in cold snapshots by source/dest VertexId.
 ///
-/// Returns the matched neighbor together with the internal indices of both
-/// endpoints. The cold CSR indexes vertices by vertex-table internal IDs,
-/// matching the hot edge table, so `vertex_id_to_internal` applies to both.
+/// Returns the matched neighbor together with the owning snapshot and the
+/// internal indices of both endpoints. Snapshots are probed newest-first.
+/// The cold CSR indexes vertices by vertex-table internal IDs, matching the
+/// hot edge table, so `vertex_id_to_internal` applies to both.
 fn query_cold_edge(
     ctx: &GraphStorageContext,
     edge_label: LabelId,
@@ -390,16 +388,25 @@ fn query_cold_edge(
     src_label: LabelId,
     dst_label: LabelId,
     ts: Timestamp,
-) -> Option<(Nbr, u32, VertexId)> {
+) -> Option<(Arc<crate::storage::cold::ColdSnapshot>, Nbr, u32, VertexId)> {
     let cold = ctx.cold_snapshots().read();
-    let snapshot = cold.get(&edge_label)?;
-    if ts < snapshot.snapshot_ts() {
-        return None;
-    }
+    let snapshots = cold.get(&edge_label)?;
     let src_internal = vertex_id_to_internal(ctx, src_label, &src, ts)?;
     let dst_internal = vertex_id_to_internal(ctx, dst_label, &dst, ts)?;
-    let nbr = snapshot.get_edge_to_dst(src_internal, dst_internal)?;
-    Some((nbr, src_internal, VertexId::from_int64(dst_internal as i64)))
+    for snapshot in snapshots.iter().rev() {
+        if ts < snapshot.snapshot_ts() {
+            continue;
+        }
+        if let Some(nbr) = snapshot.get_edge_to_dst(src_internal, dst_internal) {
+            return Some((
+                snapshot.clone(),
+                nbr,
+                src_internal,
+                VertexId::from_int64(dst_internal as i64),
+            ));
+        }
+    }
+    None
 }
 
 pub(crate) fn get_node_edges(
@@ -552,7 +559,9 @@ pub(crate) fn get_node_edges(
 /// edge table, so `vertex_id_to_internal` works for both. Neighbor entries
 /// are decoded from their `(endpoint_internal, rank)` encoding before being
 /// resolved to external IDs. Dedup happens in external-ID space so edges
-/// present in both hot and cold data are not returned twice.
+/// present in both hot and cold data (or in several snapshots) are not
+/// returned twice. Snapshots whose timestamp is newer than the read
+/// timestamp are skipped.
 #[allow(clippy::too_many_arguments)]
 fn append_cold_node_edges(
     ctx: &GraphStorageContext,
@@ -566,12 +575,9 @@ fn append_cold_node_edges(
     ts: Timestamp,
 ) -> StorageResult<()> {
     let cold = ctx.cold_snapshots().read();
-    let Some(snapshot) = cold.get(&edge_label) else {
+    let Some(snapshots) = cold.get(&edge_label) else {
         return Ok(());
     };
-    if ts < snapshot.snapshot_ts() {
-        return Ok(());
-    }
 
     let node_str = vid_to_string(node_id);
     let mut dedup: HashSet<(VertexId, VertexId, i64)> = HashSet::with_capacity(edges.len());
@@ -579,43 +585,12 @@ fn append_cold_node_edges(
         dedup.insert((e.src, e.dst, e.ranking));
     }
 
-    match direction {
-        EdgeDirection::Out => {
-            let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) else {
-                return Ok(());
-            };
-            for nbr in snapshot.get_out_edges(internal) {
-                let (dst_internal_vid, rank) =
-                    TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                let dst_internal = dst_internal_vid.as_int64().unwrap_or(0) as u32;
-                let dst_ext =
-                    external_id_string(ctx, dst_label, dst_internal, &dst_internal_vid, ts);
-                if dedup.insert((*node_id, vid_from_str(&dst_ext), rank)) {
-                    let record = snapshot.nbr_to_edge_record(&nbr, *node_id, dst_internal_vid);
-                    let edge = edge_record_to_edge(&record, edge_type_name, &node_str, &dst_ext);
-                    edges.push(edge);
-                }
-            }
-        }
-        EdgeDirection::In => {
-            let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) else {
-                return Ok(());
-            };
-            for nbr in snapshot.get_in_edges(internal) {
-                let (src_internal_vid, rank) =
-                    TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
-                let src_internal = src_internal_vid.as_int64().unwrap_or(0) as u32;
-                let src_ext =
-                    external_id_string(ctx, src_label, src_internal, &src_internal_vid, ts);
-                if dedup.insert((vid_from_str(&src_ext), *node_id, rank)) {
-                    let record = snapshot.nbr_to_edge_record(&nbr, src_internal_vid, *node_id);
-                    let edge = edge_record_to_edge(&record, edge_type_name, &src_ext, &node_str);
-                    edges.push(edge);
-                }
-            }
-        }
-        EdgeDirection::Both => {
-            if let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) {
+    for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
+        match direction {
+            EdgeDirection::Out => {
+                let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) else {
+                    continue;
+                };
                 for nbr in snapshot.get_out_edges(internal) {
                     let (dst_internal_vid, rank) =
                         TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
@@ -630,7 +605,10 @@ fn append_cold_node_edges(
                     }
                 }
             }
-            if let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) {
+            EdgeDirection::In => {
+                let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) else {
+                    continue;
+                };
                 for nbr in snapshot.get_in_edges(internal) {
                     let (src_internal_vid, rank) =
                         TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
@@ -642,6 +620,40 @@ fn append_cold_node_edges(
                         let edge =
                             edge_record_to_edge(&record, edge_type_name, &src_ext, &node_str);
                         edges.push(edge);
+                    }
+                }
+            }
+            EdgeDirection::Both => {
+                if let Some(internal) = vertex_id_to_internal(ctx, src_label, node_id, ts) {
+                    for nbr in snapshot.get_out_edges(internal) {
+                        let (dst_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let dst_internal = dst_internal_vid.as_int64().unwrap_or(0) as u32;
+                        let dst_ext =
+                            external_id_string(ctx, dst_label, dst_internal, &dst_internal_vid, ts);
+                        if dedup.insert((*node_id, vid_from_str(&dst_ext), rank)) {
+                            let record =
+                                snapshot.nbr_to_edge_record(&nbr, *node_id, dst_internal_vid);
+                            let edge =
+                                edge_record_to_edge(&record, edge_type_name, &node_str, &dst_ext);
+                            edges.push(edge);
+                        }
+                    }
+                }
+                if let Some(internal) = vertex_id_to_internal(ctx, dst_label, node_id, ts) {
+                    for nbr in snapshot.get_in_edges(internal) {
+                        let (src_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        let src_internal = src_internal_vid.as_int64().unwrap_or(0) as u32;
+                        let src_ext =
+                            external_id_string(ctx, src_label, src_internal, &src_internal_vid, ts);
+                        if dedup.insert((vid_from_str(&src_ext), *node_id, rank)) {
+                            let record =
+                                snapshot.nbr_to_edge_record(&nbr, src_internal_vid, *node_id);
+                            let edge =
+                                edge_record_to_edge(&record, edge_type_name, &src_ext, &node_str);
+                            edges.push(edge);
+                        }
                     }
                 }
             }
@@ -980,7 +992,7 @@ pub(crate) fn lookup_edges_by_property_range(
         })
     };
 
-    for record in records {
+    for record in &records {
         let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
         let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
         let src_external = if src_label != 0 {
@@ -1006,14 +1018,71 @@ pub(crate) fn lookup_edges_by_property_range(
                 .unwrap_or_else(|| format!("{}", record.dst_vid))
         };
         edges.push(edge_record_to_edge(
-            &record,
+            record,
             edge_type,
             &src_external,
             &dst_external,
         ));
     }
 
+    // Cold snapshot property index: same encoded bounds as the hot index.
+    // Dedup happens in internal-ID space (the CSR row indices shared by the
+    // hot lookup records and the cold index entries).
+    let cold = ctx.cold_snapshots().read();
+    if let Some(snapshots) = cold.get(&edge_label) {
+        let mut seen: HashSet<(u32, u32, i64)> = records
+            .iter()
+            .map(|r| {
+                (
+                    r.src_vid.as_int64().unwrap_or(0) as u32,
+                    r.dst_vid.as_int64().unwrap_or(0) as u32,
+                    r.rank,
+                )
+            })
+            .collect();
+        for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
+            let Some(index) = snapshot.property_index() else {
+                continue;
+            };
+            if !index.has_property(prop_name) {
+                continue;
+            }
+            for entry in index.lookup(prop_name, &value_lower, &value_upper) {
+                let key = (entry.src_internal, entry.dst_internal, entry.rank);
+                if seen.insert(key) {
+                    edges.push(cold_index_entry_to_edge(
+                        ctx, snapshot, &entry, edge_type, src_label, dst_label, ts,
+                    ));
+                }
+            }
+        }
+    }
+
     Ok(edges)
+}
+
+/// Materialize an edge from a cold property-index hit.
+fn cold_index_entry_to_edge(
+    ctx: &GraphStorageContext,
+    snapshot: &Arc<ColdSnapshot>,
+    entry: &ColdIndexEntry,
+    edge_type: &str,
+    src_label: LabelId,
+    dst_label: LabelId,
+    ts: Timestamp,
+) -> Edge {
+    let src_vid = VertexId::from_int64(entry.src_internal as i64);
+    let dst_vid = VertexId::from_int64(entry.dst_internal as i64);
+    let nbr = Nbr::new(
+        TimeTravelEdgeStore::edge_endpoint_key(entry.dst_internal, entry.rank),
+        EdgeId(0),
+        entry.prop_offset,
+        snapshot.snapshot_ts(),
+    );
+    let record = snapshot.nbr_to_edge_record(&nbr, src_vid, dst_vid);
+    let src_ext = external_id_string(ctx, src_label, entry.src_internal, &src_vid, ts);
+    let dst_ext = external_id_string(ctx, dst_label, entry.dst_internal, &dst_vid, ts);
+    edge_record_to_edge(&record, edge_type, &src_ext, &dst_ext)
 }
 
 /// Append cold snapshot edges to a scan result.
@@ -1021,7 +1090,7 @@ pub(crate) fn lookup_edges_by_property_range(
 /// Each cold record carries the CSR source index and the decoded destination
 /// VertexId; both endpoints are resolved to external IDs in the same way as
 /// the hot scan path. Dedup uses external-ID space so edges that still exist
-/// in hot data are not returned twice.
+/// in hot data (or repeat across snapshots) are not returned twice.
 fn append_cold_scan_edges(
     ctx: &GraphStorageContext,
     mut edges: Vec<Edge>,
@@ -1032,39 +1101,38 @@ fn append_cold_scan_edges(
     ts: Timestamp,
 ) -> Vec<Edge> {
     let cold = ctx.cold_snapshots().read();
-    let Some(snapshot) = cold.get(&edge_label) else {
+    let Some(snapshots) = cold.get(&edge_label) else {
         return edges;
     };
-    if ts < snapshot.snapshot_ts() {
-        return edges;
-    }
 
     let mut dedup: HashSet<(VertexId, VertexId, i64)> = HashSet::with_capacity(edges.len());
     for e in &edges {
         dedup.insert((e.src, e.dst, e.ranking));
     }
 
-    for record in snapshot.scan_edges() {
-        let src_internal = record.src_internal;
-        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
-        let rank = record.rank;
-        let src_ext = external_id_string(
-            ctx,
-            src_label,
-            src_internal,
-            &VertexId::from_int64(src_internal as i64),
-            ts,
-        );
-        let dst_ext = external_id_string(ctx, dst_label, dst_internal, &record.dst_vid, ts);
-        let key = (vid_from_str(&src_ext), vid_from_str(&dst_ext), rank);
-        if dedup.insert(key) {
-            let edge_record = snapshot.nbr_to_edge_record(
-                &record.nbr,
-                VertexId::from_int64(src_internal as i64),
-                record.dst_vid,
+    for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
+        for record in snapshot.scan_edges() {
+            let src_internal = record.src_internal;
+            let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
+            let rank = record.rank;
+            let src_ext = external_id_string(
+                ctx,
+                src_label,
+                src_internal,
+                &VertexId::from_int64(src_internal as i64),
+                ts,
             );
-            let edge = edge_record_to_edge(&edge_record, edge_type, &src_ext, &dst_ext);
-            edges.push(edge);
+            let dst_ext = external_id_string(ctx, dst_label, dst_internal, &record.dst_vid, ts);
+            let key = (vid_from_str(&src_ext), vid_from_str(&dst_ext), rank);
+            if dedup.insert(key) {
+                let edge_record = snapshot.nbr_to_edge_record(
+                    &record.nbr,
+                    VertexId::from_int64(src_internal as i64),
+                    record.dst_vid,
+                );
+                let edge = edge_record_to_edge(&edge_record, edge_type, &src_ext, &dst_ext);
+                edges.push(edge);
+            }
         }
     }
     edges
@@ -1080,7 +1148,7 @@ pub(crate) fn scan_edges_by_type_paginated(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let mut cursor = GraphEdgeCursor::new(
+    let mut cursor = super::cursor_impl::create_edge_cursor(
         Arc::new(ctx.clone()),
         space,
         &crate::storage::cursor::ScanOptions {
@@ -1172,8 +1240,13 @@ pub(crate) fn count_edges_by_type(
         .cold_snapshots()
         .read()
         .get(&edge_label_id)
-        .filter(|s| ts >= s.snapshot_ts())
-        .map(|s| s.edge_count())
+        .map(|snapshots| {
+            snapshots
+                .iter()
+                .filter(|s| ts >= s.snapshot_ts())
+                .map(|s| s.edge_count())
+                .sum::<u64>()
+        })
         .unwrap_or(0);
 
     Ok(hot_count + cold_count)
@@ -1264,6 +1337,27 @@ pub(crate) fn get_edge_with_schema(
         return Ok(Some((edge_info, data)));
     }
 
+    // Fallback: check cold snapshots if hot missed
+    if ts >= snapshot_min_ts(ctx, edge_label_id) {
+        if let Some((snapshot, nbr, src_internal, dst_internal_vid)) = query_cold_edge(
+            ctx,
+            edge_label_id,
+            src_vid,
+            dst_vid,
+            src_label_id,
+            dst_label_id,
+            ts,
+        ) {
+            let record = snapshot.nbr_to_edge_record(
+                &nbr,
+                VertexId::from_int64(src_internal as i64),
+                dst_internal_vid,
+            );
+            let data = serialize_properties(&record.properties);
+            return Ok(Some((edge_info, data)));
+        }
+    }
+
     Ok(None)
 }
 
@@ -1305,34 +1399,12 @@ pub(crate) fn scan_edges_with_schema(
             ))
         })?;
 
-    let ts = ctx.get_read_timestamp();
-    let mut results = Vec::new();
-
-    let edge_label_id = edge_info.edge_type_id;
-    let src_label_id: LabelId;
-    let dst_label_id: LabelId;
-
-    if edge_info.src_tag_name.is_empty() || edge_info.dst_tag_name.is_empty() {
-        let records = ctx.scan_edges_by_label(edge_label_id, ts);
-        for record in records {
-            let data = serialize_properties(&record.properties);
-            results.push((edge_info.clone(), data));
-        }
-    } else {
-        src_label_id = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
-            Some(id) => id,
-            None => return Ok(results),
-        };
-        dst_label_id = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
-            Some(id) => id,
-            None => return Ok(results),
-        };
-        let records = ctx.scan_edges(src_label_id, dst_label_id, edge_label_id, ts);
-        for record in records {
-            let data = serialize_properties(&record.properties);
-            results.push((edge_info.clone(), data));
-        }
+    let edges = scan_edges_by_type(ctx, space, edge_type)?;
+    let mut results = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let mut props: Vec<(String, Value)> = edge.props.into_iter().collect();
+        props.sort_by(|a, b| a.0.cmp(&b.0));
+        results.push((edge_info.clone(), serialize_properties(&props)));
     }
-
     Ok(results)
 }

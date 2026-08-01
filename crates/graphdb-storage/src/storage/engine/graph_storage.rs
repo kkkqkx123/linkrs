@@ -262,11 +262,12 @@ impl GraphStorage {
         Ok(())
     }
 
-    /// Remove a cold snapshot by edge label ID, returning the removed snapshot.
+    /// Remove all cold snapshots for an edge label, returning the removed
+    /// snapshots.
     pub fn remove_cold_snapshot(
         &self,
         label: LabelId,
-    ) -> Option<crate::storage::cold::ColdSnapshot> {
+    ) -> Option<Vec<Arc<crate::storage::cold::ColdSnapshot>>> {
         self.ctx.remove_cold_snapshot(label)
     }
 
@@ -775,8 +776,7 @@ impl StorageReader for GraphStorage {
         space: &str,
         options: &ScanOptions,
     ) -> Result<Box<dyn EdgeCursor>, StorageError> {
-        let cursor = cursor_impl::GraphEdgeCursor::new(self.ctx.clone(), space, options)?;
-        Ok(Box::new(cursor))
+        cursor_impl::create_edge_cursor(self.ctx.clone(), space, options)
     }
 
     fn create_index_cursor(

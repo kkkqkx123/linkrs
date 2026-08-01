@@ -12,7 +12,7 @@ use crate::storage::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTa
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
 
 pub const COLD_SNAPSHOT_MAGIC: [u8; 4] = *b"LKCS";
-pub const COLD_SNAPSHOT_VERSION: u32 = 1;
+pub const COLD_SNAPSHOT_VERSION: u32 = 2;
 const HEADER_SIZE: usize = 36;
 
 /// A scanned edge record from a ColdSnapshot.
@@ -26,10 +26,226 @@ pub struct ColdEdgeRecord {
     pub properties: Option<Vec<(String, Value)>>,
 }
 
+/// A property-index hit: everything needed to reconstruct an edge whose
+/// property value fell inside a lookup range.
+#[derive(Debug, Clone, Copy)]
+pub struct ColdIndexEntry {
+    pub src_internal: u32,
+    pub dst_internal: u32,
+    pub rank: i64,
+    pub prop_offset: u32,
+}
+
+/// Ordered property index over a ColdSnapshot's edge rows.
+///
+/// For each indexed property name the entries are sorted by the
+/// OrderedCodec-encoded value, so equality and range lookups use the same
+/// encoded bounds as the hot per-table edge property index. Entries point at
+/// (src_internal, dst_internal, rank, prop_offset); the property payload
+/// itself stays in the snapshot's property table.
+#[derive(Debug, Clone, Default)]
+pub struct ColdPropertyIndex {
+    /// prop_name -> sorted (encoded_value, entry)
+    entries: HashMap<String, Vec<(Vec<u8>, ColdIndexEntry)>>,
+}
+
+impl ColdPropertyIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build an index over `prop_names` from an exported snapshot.
+    pub fn build(exported: &ExportedEdgeSnapshot, prop_names: &[String]) -> Self {
+        let mut index = Self::new();
+        if prop_names.is_empty() {
+            return index;
+        }
+        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let cap = exported.out_csr.vertex_capacity();
+        for src in 0..cap {
+            let src_u32 = src as u32;
+            for nbr in exported.out_csr.edges_of(src_u32) {
+                let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
+                let Some(props) = exported.properties.read_properties(nbr.prop_offset) else {
+                    continue;
+                };
+                for (name, value) in props {
+                    if prop_names.iter().any(|n| n == &name) {
+                        if let Ok(key) = codec.encode(&value) {
+                            index.entries.entry(name).or_default().push((
+                                key,
+                                ColdIndexEntry {
+                                    src_internal: src_u32,
+                                    dst_internal,
+                                    rank,
+                                    prop_offset: nbr.prop_offset,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        for list in index.entries.values_mut() {
+            list.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        index
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn indexed_property_names(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
+    }
+
+    pub fn has_property(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    /// Range lookup with the same encoded bounds as the hot edge property
+    /// index (`value_lower <= key < value_upper`). An empty bound is
+    /// unbounded on that side.
+    pub fn lookup(
+        &self,
+        prop_name: &str,
+        value_lower: &[u8],
+        value_upper: &[u8],
+    ) -> Vec<ColdIndexEntry> {
+        let Some(entries) = self.entries.get(prop_name) else {
+            return Vec::new();
+        };
+        let start = if value_lower.is_empty() {
+            0
+        } else {
+            entries.partition_point(|(key, _)| key.as_slice() < value_lower)
+        };
+        let end = if value_upper.is_empty() {
+            entries.len()
+        } else {
+            entries.partition_point(|(key, _)| key.as_slice() < value_upper)
+        };
+        if start >= end {
+            return Vec::new();
+        }
+        entries[start..end].iter().map(|(_, e)| *e).collect()
+    }
+
+    /// Apply a vertex compaction internal-ID remap to every entry.
+    pub fn remap_vertex_ids(
+        &mut self,
+        src_mapping: Option<&HashMap<u32, u32>>,
+        dst_mapping: Option<&HashMap<u32, u32>>,
+    ) {
+        for list in self.entries.values_mut() {
+            for (_, entry) in list.iter_mut() {
+                if let Some(mapping) = src_mapping {
+                    if let Some(&next) = mapping.get(&entry.src_internal) {
+                        entry.src_internal = next;
+                    }
+                }
+                if let Some(mapping) = dst_mapping {
+                    if let Some(&next) = mapping.get(&entry.dst_internal) {
+                        entry.dst_internal = next;
+                    }
+                }
+            }
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        let mut names: Vec<&String> = self.entries.keys().collect();
+        names.sort();
+        for name in names {
+            let name_bytes = name.as_bytes();
+            buf.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(name_bytes);
+            let list = &self.entries[name];
+            buf.extend_from_slice(&(list.len() as u64).to_le_bytes());
+            for (key, entry) in list {
+                buf.extend_from_slice(&(key.len() as u32).to_le_bytes());
+                buf.extend_from_slice(key);
+                buf.extend_from_slice(&entry.src_internal.to_le_bytes());
+                buf.extend_from_slice(&entry.dst_internal.to_le_bytes());
+                buf.extend_from_slice(&entry.rank.to_le_bytes());
+                buf.extend_from_slice(&entry.prop_offset.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    fn decode(data: &[u8]) -> StorageResult<Self> {
+        let mut pos = 0usize;
+        let read_u32 = |pos: &mut usize| -> StorageResult<u32> {
+            if *pos + 4 > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "cold index truncated (u32)",
+                ));
+            }
+            let v = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
+            *pos += 4;
+            Ok(v)
+        };
+        let read_u64 = |pos: &mut usize| -> StorageResult<u64> {
+            if *pos + 8 > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "cold index truncated (u64)",
+                ));
+            }
+            let v = u64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
+            *pos += 8;
+            Ok(v)
+        };
+        let read_bytes = |pos: &mut usize| -> StorageResult<Vec<u8>> {
+            let len = read_u32(pos)? as usize;
+            if *pos + len > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "cold index truncated (bytes)",
+                ));
+            }
+            let v = data[*pos..*pos + len].to_vec();
+            *pos += len;
+            Ok(v)
+        };
+
+        let prop_count = read_u32(&mut pos)? as usize;
+        let mut entries: HashMap<String, Vec<(Vec<u8>, ColdIndexEntry)>> =
+            HashMap::with_capacity(prop_count);
+        for _ in 0..prop_count {
+            let name_bytes = read_bytes(&mut pos)?;
+            let name = String::from_utf8_lossy(&name_bytes).into_owned();
+            let entry_count = read_u64(&mut pos)? as usize;
+            let mut list = Vec::with_capacity(entry_count);
+            for _ in 0..entry_count {
+                let key = read_bytes(&mut pos)?;
+                let src_internal = read_u32(&mut pos)?;
+                let dst_internal = read_u32(&mut pos)?;
+                let rank = read_u64(&mut pos)? as i64;
+                let prop_offset = read_u32(&mut pos)?;
+                list.push((
+                    key,
+                    ColdIndexEntry {
+                        src_internal,
+                        dst_internal,
+                        rank,
+                        prop_offset,
+                    },
+                ));
+            }
+            entries.insert(name, list);
+        }
+        Ok(Self { entries })
+    }
+}
+
 /// Read-only single-file columnar snapshot for cold analytics queries.
 ///
 /// Contains CSR adjacency data (out/in), columnar property storage,
-/// snapshot metadata, and edge schema.
+/// snapshot metadata, edge schema, and an optional ordered property index.
 ///
 /// File format:
 /// ```text
@@ -44,6 +260,8 @@ pub struct ColdEdgeRecord {
 /// [8]  In CSR length (u64 LE) + [N] In CSR data
 /// [8]  Property table length (u64 LE) + [N] Property table data
 /// [8]  Schema length (u64 LE) + [N] Schema data (JSON)
+/// [8]  Index length (u64 LE, 0 = no index)
+/// [N]  Index data (ColdPropertyIndex::encode)
 /// [4]  CRC32 of all preceding bytes
 /// ```
 #[derive(Clone)]
@@ -56,6 +274,7 @@ pub struct ColdSnapshot {
     in_csr: Csr,
     properties: PropertyTable,
     schema: EdgeSchema,
+    property_index: Option<ColdPropertyIndex>,
     /// Backing `.lkcs` file when opened from or created at a path.
     path: Option<PathBuf>,
 }
@@ -112,6 +331,21 @@ impl ColdSnapshot {
         let prop_data = read_section(data, &mut pos)?;
         let schema_data = read_section(data, &mut pos)?;
 
+        // Optional property index section (length 0 = no index)
+        let index_len = u64::from_le_bytes(read_arr::<8>(data, &mut pos));
+        let property_index = if index_len > 0 {
+            if pos + index_len as usize > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "ColdSnapshot index section exceeds file size",
+                ));
+            }
+            let index_data = &data[pos..pos + index_len as usize];
+            pos += index_len as usize;
+            Some(ColdPropertyIndex::decode(index_data)?)
+        } else {
+            None
+        };
+
         // CRC32 verification
         let stored_crc = u32::from_le_bytes(read_arr::<4>(data, &mut pos));
         let computed_crc = crc32fast::hash(&data[..pos - 4]);
@@ -146,11 +380,21 @@ impl ColdSnapshot {
             in_csr,
             properties,
             schema,
+            property_index,
             path: None,
         })
     }
 
     pub fn create<P: AsRef<Path>>(exported: &ExportedEdgeSnapshot, path: P) -> StorageResult<Self> {
+        Self::create_with_index(exported, None, path)
+    }
+
+    /// Create a snapshot file with an optional property index.
+    pub fn create_with_index<P: AsRef<Path>>(
+        exported: &ExportedEdgeSnapshot,
+        index: Option<ColdPropertyIndex>,
+        path: P,
+    ) -> StorageResult<Self> {
         let buf = encode_snapshot(
             &exported.out_csr,
             &exported.in_csr,
@@ -158,6 +402,7 @@ impl ColdSnapshot {
             &exported.schema,
             exported.snapshot_ts,
             exported.label,
+            index.as_ref(),
         )?;
 
         std::fs::write(path.as_ref(), &buf)
@@ -184,6 +429,7 @@ impl ColdSnapshot {
             &self.schema,
             self.snapshot_ts,
             self.label,
+            self.property_index.as_ref(),
         )?;
         std::fs::write(path, &buf)
             .map_err(|e| StorageError::io_error(format!("failed to rewrite snapshot file: {}", e)))
@@ -219,6 +465,15 @@ impl ColdSnapshot {
 
     pub fn schema(&self) -> &EdgeSchema {
         &self.schema
+    }
+
+    pub fn property_index(&self) -> Option<&ColdPropertyIndex> {
+        self.property_index.as_ref()
+    }
+
+    /// Whether this snapshot carries a property index at all.
+    pub fn has_property_index(&self) -> bool {
+        self.property_index.as_ref().is_some_and(|i| !i.is_empty())
     }
 
     pub fn get_out_edges(&self, src: u32) -> Vec<Nbr> {
@@ -323,6 +578,10 @@ impl ColdSnapshot {
         self.vertex_capacity = out_capacity.max(in_capacity);
         self.edge_count = self.out_csr.edge_count();
 
+        if let Some(index) = self.property_index.as_mut() {
+            index.remap_vertex_ids(src_mapping, dst_mapping);
+        }
+
         log::debug!(
             "ColdSnapshot[label={}] remapped vertex IDs (src_mapping={}, dst_mapping={}); capacity={}, edges={}",
             self.label,
@@ -375,6 +634,7 @@ fn encode_snapshot(
     schema: &EdgeSchema,
     snapshot_ts: Timestamp,
     label: LabelId,
+    index: Option<&ColdPropertyIndex>,
 ) -> StorageResult<Vec<u8>> {
     let out_data = out_csr.dump();
     let in_data = in_csr.dump();
@@ -396,6 +656,14 @@ fn encode_snapshot(
     write_section(&mut buf, &in_data);
     write_section(&mut buf, &prop_data);
     write_section(&mut buf, schema_bytes);
+
+    if let Some(index) = index {
+        let index_data = index.encode();
+        buf.extend_from_slice(&(index_data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&index_data);
+    } else {
+        buf.extend_from_slice(&0u64.to_le_bytes());
+    }
 
     let checksum = crc32fast::hash(&buf);
     buf.extend_from_slice(&checksum.to_le_bytes());
@@ -748,6 +1016,105 @@ mod tests {
         assert_eq!(snapshot.get_in_edges(3).len(), 2);
         assert_eq!(snapshot.get_in_edges(4).len(), 2);
         assert_eq!(snapshot.get_in_edges(5).len(), 0);
+    }
+
+    #[test]
+    fn test_cold_snapshot_property_index_build_and_lookup() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+            .unwrap();
+        table
+            .insert_edge(3, 4, 0, &[("weight".to_string(), Value::Double(3.5))], 100)
+            .unwrap();
+
+        let exported = table.export_snapshot(100).unwrap();
+        let index = ColdPropertyIndex::build(&exported, &["weight".to_string()]);
+        assert!(!index.is_empty());
+        assert_eq!(index.indexed_property_names(), vec!["weight".to_string()]);
+
+        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        // Equality lookup: weight = 2.5
+        let key = codec.encode(&Value::Double(2.5)).unwrap();
+        let upper = crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key);
+        let hits = index.lookup("weight", &key, &upper);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].src_internal, 0);
+        assert_eq!(hits[0].dst_internal, 2);
+        assert_eq!(hits[0].rank, 0);
+
+        // Range lookup: weight >= 2.5
+        let hits = index.lookup("weight", &key, &vec![0xFF]);
+        assert_eq!(hits.len(), 2);
+
+        // Unknown property yields nothing
+        assert!(index.lookup("missing", &key, &vec![0xFF]).is_empty());
+    }
+
+    #[test]
+    fn test_cold_snapshot_property_index_roundtrip() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 5, &[("weight".to_string(), Value::Double(9.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let index = ColdPropertyIndex::build(&exported, &["weight".to_string()]);
+        let snapshot = ColdSnapshot::create_with_index(&exported, Some(index), &path).unwrap();
+        assert!(snapshot.has_property_index());
+
+        let loaded = ColdSnapshot::open(&path).unwrap();
+        assert!(loaded.has_property_index());
+        let index = loaded.property_index().unwrap();
+        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let key = codec.encode(&Value::Double(9.0)).unwrap();
+        let hits = index.lookup(
+            "weight",
+            &key,
+            &crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].src_internal, 0);
+        assert_eq!(hits[0].dst_internal, 1);
+        assert_eq!(hits[0].rank, 5);
+    }
+
+    #[test]
+    fn test_cold_snapshot_property_index_remap() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 5, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let index = ColdPropertyIndex::build(&exported, &["weight".to_string()]);
+        let mut snapshot = ColdSnapshot::create_with_index(&exported, Some(index), &path).unwrap();
+
+        let mapping: HashMap<u32, u32> = [(5, 3)].into_iter().collect();
+        snapshot
+            .remap_vertex_ids(Some(&mapping), Some(&mapping))
+            .unwrap();
+        snapshot.persist().unwrap();
+
+        let reloaded = ColdSnapshot::open(&path).unwrap();
+        let index = reloaded.property_index().unwrap();
+        let codec = crate::core::value::ordered_codec::OrderedCodec::new();
+        let key = codec.encode(&Value::Double(1.0)).unwrap();
+        let hits = index.lookup(
+            "weight",
+            &key,
+            &crate::core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&key),
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].src_internal, 0);
+        assert_eq!(hits[0].dst_internal, 3);
     }
 
     #[test]

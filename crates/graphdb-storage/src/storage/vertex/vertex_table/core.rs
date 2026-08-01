@@ -186,6 +186,67 @@ impl VertexTable {
         self.get_projected_by_internal_id(internal_id, ts, None)
     }
 
+    /// Live internal IDs (excludes vertices deleted at or before `ts`-visible
+    /// state), in allocation order. Used by lazy paginated scans.
+    pub fn live_ids(&self) -> Vec<u32> {
+        self.id_indexer.live_ids()
+    }
+
+    /// Batch variant of [`get_projected_by_internal_id`].
+    ///
+    /// Validity is checked once per id, then all requested rows are decoded
+    /// column-at-a-time in a single pass. The output is aligned with the
+    /// input order; invalid or missing ids yield `None`.
+    pub fn get_projected_batch(
+        &self,
+        internal_ids: &[u32],
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Vec<Option<VertexRecord>> {
+        if !self.is_open {
+            return internal_ids.iter().map(|_| None).collect();
+        }
+
+        let mut positions: Vec<(usize, u32)> = Vec::with_capacity(internal_ids.len());
+        for (pos, &id) in internal_ids.iter().enumerate() {
+            if self.timestamps.is_valid(id, ts) {
+                positions.push((pos, id));
+            }
+        }
+
+        let mut out: Vec<Option<VertexRecord>> = internal_ids.iter().map(|_| None).collect();
+        if positions.is_empty() {
+            return out;
+        }
+
+        let row_indices: Vec<usize> = positions.iter().map(|&(_, id)| id as usize).collect();
+        let props = match projection {
+            Some(names) => self.columns.get_projected_batch(&row_indices, names),
+            None => self.columns.get_batch(&row_indices),
+        };
+
+        for ((pos, id), prop_row) in positions.into_iter().zip(props) {
+            let key = match self.id_indexer.get_key(id) {
+                Some(key) => key,
+                None => continue,
+            };
+            let vid = match key {
+                IdKey::Int(i) => VertexId::from_int64(i),
+                IdKey::Text(s) => VertexId::from_string(&s),
+            };
+            let properties: Vec<(String, Value)> = prop_row
+                .into_iter()
+                .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
+                .collect();
+            out[pos] = Some(VertexRecord {
+                vid,
+                internal_id: id,
+                properties,
+            });
+        }
+        out
+    }
+
     pub fn get_projected_by_internal_id(
         &self,
         internal_id: u32,
@@ -473,21 +534,6 @@ impl VertexTable {
 
     pub fn scan(&self, ts: Timestamp) -> VertexIterator<'_> {
         VertexIterator::new(self, ts)
-    }
-
-    /// Scan all valid vertices at `ts`, fetching only the projected columns.
-    pub fn scan_projected(
-        &self,
-        ts: Timestamp,
-        projection: Option<&[String]>,
-    ) -> Vec<VertexRecord> {
-        let mut records = Vec::new();
-        for id in self.id_indexer.live_ids() {
-            if let Some(record) = self.get_projected_by_internal_id(id, ts, projection) {
-                records.push(record);
-            }
-        }
-        records
     }
 
     pub fn schema(&self) -> &VertexSchema {

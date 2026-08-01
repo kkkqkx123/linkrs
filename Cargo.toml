@@ -239,3 +239,7 @@ harness = false
 [[bench]]
 name = "operator_bench"
 harness = false
+
+[[bench]]
+name = "accumulation_bench"
+harness = false

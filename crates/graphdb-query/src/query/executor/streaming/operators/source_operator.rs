@@ -1384,7 +1384,9 @@ fn next_buffer_chunk(
     *current_index = end;
     let reservation = reserve_memory(base, &rows)?;
     let layout = if col_names.is_empty() {
-        Arc::clone(&base.output_layout)
+        let width = rows.first().map_or(0, Vec::len);
+        let inferred: Vec<String> = (0..width).map(|i| format!("c{i}")).collect();
+        Arc::new(SlotLayout::from_names(&inferred))
     } else {
         Arc::new(SlotLayout::from_names(col_names))
     };
@@ -1491,6 +1493,28 @@ mod tests {
             .sum();
         let expected: i64 = (0..row_count as i64).sum();
         assert_eq!(total, expected);
+    }
+
+    #[test]
+    fn scan_without_col_names_infers_layout_from_row_width() {
+        // A buffer source must never emit chunks whose rows carry values the
+        // schema cannot address: with empty col_names the layout is derived
+        // from the row width instead of falling back to an empty layout.
+        let mut base = OperatorBase::new(0);
+        let mut source = SourceOperator::ScanVertices {
+            buffer: vec![vec![Value::BigInt(1), Value::string("a")]],
+            current_index: 0,
+            col_names: Vec::new(),
+        };
+        source.open(&mut base).expect("source should open");
+        let mut chunk = source
+            .next(&mut base)
+            .expect("pull should succeed")
+            .expect("chunk should be Some");
+        assert_eq!(chunk.num_columns(), 2);
+        assert_eq!(chunk.col_names(), vec!["c0", "c1"]);
+        chunk.materialize_columns();
+        assert_eq!(chunk.columns.as_deref().unwrap()[0].len(), 1);
     }
 
     #[test]

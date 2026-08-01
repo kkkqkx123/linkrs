@@ -5,7 +5,7 @@
 //! buffers, hash tables, row iterators, and all other mutable data that
 //! must NOT be shared across concurrent executions of the same cached plan.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::core::types::expr::Expression;
 use crate::core::Value;
@@ -246,15 +246,13 @@ pub enum BlockingState {
 #[derive(Debug)]
 pub enum JoinState {
     HashJoin {
-        build_side_hash: HashMap<Vec<Value>, Vec<Vec<Value>>>,
-        all_right_rows: Vec<Vec<Value>>,
+        build_side: super::join_operator::HashJoinBuildSide,
         left_consumed: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
     },
     HashLeftJoin {
-        build_side_hash: HashMap<Vec<Value>, Vec<Vec<Value>>>,
-        all_right_rows: Vec<Vec<Value>>,
+        build_side: super::join_operator::HashJoinBuildSide,
         left_consumed: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,

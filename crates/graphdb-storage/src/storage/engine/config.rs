@@ -1,5 +1,6 @@
 //! Property Graph Configuration
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::core::error::storage::StorageErrorKind;
@@ -393,6 +394,59 @@ impl Default for FreezeConfig {
     }
 }
 
+/// Automatic cold-hot tiering of edge data.
+///
+/// When enabled, edge tables that exceed `trigger_row_count` edges and have
+/// seen no writes for `trigger_idle_seconds` are exported to `.lkcs` files
+/// and the frozen rows are evicted from the hot store (except the
+/// `preserve_recent_edges` newest ones). An empty `snapshot_dir` falls back
+/// to `{db_root}/cold_snapshots`.
+#[derive(Debug, Clone)]
+pub struct ColdTierConfig {
+    pub enabled: bool,
+    /// Freeze a label when its total live edge count exceeds this.
+    pub trigger_row_count: u64,
+    /// Freeze only labels idle (no writes) for at least this many seconds.
+    pub trigger_idle_seconds: u64,
+    /// Maximum number of snapshots kept per label; the oldest are dropped.
+    pub max_cold_snapshots_per_label: usize,
+    /// Number of newest edges that stay in the hot store after a freeze.
+    pub preserve_recent_edges: u64,
+    /// Directory for `.lkcs` files. Empty = `{db_root}/cold_snapshots`.
+    pub snapshot_dir: PathBuf,
+}
+
+impl Default for ColdTierConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trigger_row_count: 1_000_000,
+            trigger_idle_seconds: 3600,
+            max_cold_snapshots_per_label: 8,
+            preserve_recent_edges: 10_000,
+            snapshot_dir: PathBuf::new(),
+        }
+    }
+}
+
+impl ColdTierConfig {
+    pub fn validate(&self) -> Result<(), StorageError> {
+        if self.trigger_row_count == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "cold_tier trigger_row_count must be > 0",
+            ));
+        }
+        if self.max_cold_snapshots_per_label == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "cold_tier max_cold_snapshots_per_label must be > 0",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// LSM-style tiered storage levels for segments
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LSMSegmentLevel {
@@ -460,6 +514,8 @@ pub struct PropertyGraphConfig {
     pub auto_compact: AutoCompactConfig,
     /// Hash partitions per vertex label table
     pub vertex_table_shards: usize,
+    /// Automatic cold-hot tiering of edge data
+    pub cold_tier: ColdTierConfig,
 }
 
 impl Default for PropertyGraphConfig {
@@ -473,6 +529,7 @@ impl Default for PropertyGraphConfig {
             merge_config: MergeConfig::default(),
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            cold_tier: ColdTierConfig::default(),
         }
     }
 }
@@ -500,6 +557,7 @@ impl PropertyGraphConfig {
             },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            cold_tier: ColdTierConfig::default(),
         }
     }
 
@@ -523,6 +581,7 @@ impl PropertyGraphConfig {
             },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            cold_tier: ColdTierConfig::default(),
         }
     }
 
@@ -550,6 +609,7 @@ impl PropertyGraphConfig {
             },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            cold_tier: ColdTierConfig::default(),
         }
     }
 
@@ -589,6 +649,7 @@ impl PropertyGraphConfig {
             },
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            cold_tier: ColdTierConfig::default(),
         }
     }
 
@@ -646,6 +707,7 @@ impl PropertyGraphConfig {
                 "vertex_table_shards must be a power of two in [1, 16]",
             ));
         }
+        self.cold_tier.validate()?;
         Ok(())
     }
 }

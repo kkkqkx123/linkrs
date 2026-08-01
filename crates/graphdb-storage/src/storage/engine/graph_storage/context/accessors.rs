@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -220,9 +219,23 @@ impl GraphStorageContext {
     }
 
     pub fn mark_edge_modified(&self, label: LabelId) {
+        self.runtime
+            .last_edge_write
+            .lock()
+            .insert(label, std::time::Instant::now());
         self.persistent
             .table_tracker
             .mark_modified(TableId::edge(label));
+    }
+
+    /// Seconds since the last write to `label`'s edge tables (wall clock).
+    /// Labels without any recorded write report `u64::MAX`.
+    pub(crate) fn edge_idle_seconds(&self, label: LabelId) -> u64 {
+        let last_write = self.runtime.last_edge_write.lock();
+        match last_write.get(&label) {
+            Some(instant) => instant.elapsed().as_secs(),
+            None => u64::MAX,
+        }
     }
 
     pub(crate) fn storage_size(&self) -> usize {
@@ -586,20 +599,39 @@ impl GraphStorageContext {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
 
-    pub fn cold_snapshots(&self) -> &Arc<RwLock<HashMap<LabelId, ColdSnapshot>>> {
+    pub fn cold_snapshots(&self) -> &Arc<RwLock<super::ColdSnapshotMap>> {
         &self.cold_snapshots
     }
 
+    /// Register a snapshot by label, keeping at most
+    /// `cold_tier.max_cold_snapshots_per_label` snapshots per label (oldest
+    /// dropped first).
     pub fn load_cold_snapshot(&self, snapshot: ColdSnapshot) {
         let label = snapshot.label();
-        self.cold_snapshots.write().insert(label, snapshot);
+        let max_per_label = self
+            .persistent
+            .config
+            .cold_tier
+            .max_cold_snapshots_per_label;
+        let mut guard = self.cold_snapshots.write();
+        let snapshots = guard.entry(label).or_default();
+        snapshots.push(Arc::new(snapshot));
+        if max_per_label > 0 && snapshots.len() > max_per_label {
+            let excess = snapshots.len() - max_per_label;
+            snapshots.drain(..excess);
+        }
     }
 
-    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<ColdSnapshot> {
+    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<Vec<Arc<ColdSnapshot>>> {
         self.cold_snapshots.write().remove(&label)
     }
 
     pub fn list_cold_snapshots(&self) -> Vec<LabelId> {
-        self.cold_snapshots.read().keys().copied().collect()
+        self.cold_snapshots
+            .read()
+            .iter()
+            .filter(|(_, snapshots)| !snapshots.is_empty())
+            .map(|(label, _)| *label)
+            .collect()
     }
 }

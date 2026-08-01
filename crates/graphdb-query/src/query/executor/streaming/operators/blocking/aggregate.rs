@@ -3,12 +3,24 @@ use std::collections::HashMap;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
+use crate::query::executor::streaming::helpers::accumulator_states::{
+    decode_partial, AggregateAccumulator,
+};
 use crate::query::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
+
+/// Estimated in-memory overhead of one `AggregateAccumulator` instance
+/// (enum tag plus internal state) used for memory accounting. Charged once
+/// per aggregate function per group so workloads with many small keys are
+/// accounted for beyond the group key itself.
+pub const ACCUMULATOR_OVERHEAD_BYTES: usize = 64;
 
 #[derive(Debug)]
 pub struct AggregateState {
-    pub all_rows: Vec<Vec<Value>>,
+    /// Accumulator state per group key; every aggregate function has an
+    /// `AggregateAccumulator`, so no row-based fallback exists.
+    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    /// Per-group memory-budget overhead charged for accumulator instances.
+    pub accumulator_overhead: usize,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
     pub partition_spiller: Option<HashPartitionSpiller>,
@@ -69,58 +81,5 @@ pub(crate) fn value_to_partial_accumulator(
     func: &AggregateFunction,
     value: &Value,
 ) -> Option<AggregateAccumulator> {
-    match func {
-        AggregateFunction::Count(_) => {
-            if let Value::BigInt(n) = value {
-                Some(AggregateAccumulator::Count(*n as u64))
-            } else {
-                Some(AggregateAccumulator::Count(0))
-            }
-        }
-        AggregateFunction::Sum(_) => match value {
-            Value::Double(n) => Some(AggregateAccumulator::Sum(*n)),
-            Value::BigInt(n) => Some(AggregateAccumulator::Sum(*n as f64)),
-            Value::Int(n) => Some(AggregateAccumulator::Sum(*n as f64)),
-            _ => Some(AggregateAccumulator::Sum(0.0)),
-        },
-        AggregateFunction::Min(_) => {
-            if matches!(value, Value::Null(_)) {
-                Some(AggregateAccumulator::Min(None))
-            } else {
-                Some(AggregateAccumulator::Min(Some(value.clone())))
-            }
-        }
-        AggregateFunction::Max(_) => {
-            if matches!(value, Value::Null(_)) {
-                Some(AggregateAccumulator::Max(None))
-            } else {
-                Some(AggregateAccumulator::Max(Some(value.clone())))
-            }
-        }
-        AggregateFunction::Avg(_) => {
-            if let Value::List(list) = value {
-                let sum = list
-                    .values
-                    .first()
-                    .and_then(|v| match v {
-                        Value::Double(n) => Some(*n),
-                        Value::BigInt(n) => Some(*n as f64),
-                        _ => None,
-                    })
-                    .unwrap_or(0.0);
-                let count = list
-                    .values
-                    .get(1)
-                    .and_then(|v| match v {
-                        Value::BigInt(n) => Some(*n as u64),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-                Some(AggregateAccumulator::Avg { sum, count })
-            } else {
-                Some(AggregateAccumulator::Avg { sum: 0.0, count: 0 })
-            }
-        }
-        _ => None,
-    }
+    decode_partial(func, value)
 }

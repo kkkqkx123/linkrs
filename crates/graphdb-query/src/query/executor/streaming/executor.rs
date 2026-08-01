@@ -9,7 +9,7 @@ use crate::core::error::QueryError;
 use crate::query::executor::base::{MemoryTracker, Spillable};
 
 pub use super::context::ValueRowContext;
-pub use super::helpers::{aggregation, comparison, conversion};
+pub use super::helpers::{comparison, conversion};
 pub use super::operators::base::OperatorBase;
 use super::operators::base::OperatorLifecycle;
 use super::operators::state::ExchangeState;
@@ -795,6 +795,9 @@ mod tests {
         SortDirection, SourceOperator, StreamingExecutor, UnaryOperator,
     };
     use crate::core::Value;
+    use crate::query::executor::streaming::helpers::compare_values;
+    use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+    use std::sync::Arc;
 
     fn create_test_buffer() -> Vec<Vec<Value>> {
         (0..100)
@@ -1041,5 +1044,131 @@ mod tests {
             entry.peak_memory_bytes
         );
         assert_eq!(entry.output_rows, 50);
+    }
+
+    /// Run an Aggregate operator over `rows` and return all result rows.
+    ///
+    /// When `spill_budget_bytes` is `Some`, a tiny memory budget plus a spill
+    /// manager force the accumulator spill path; otherwise a large budget
+    /// keeps everything in memory.
+    fn run_aggregate(
+        rows: Vec<Vec<Value>>,
+        col_names: Vec<String>,
+        spill_budget_bytes: Option<usize>,
+    ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
+        use crate::core::types::expr::Expression;
+        use crate::core::types::operators::AggregateFunction;
+        use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
+
+        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let rt = Arc::new(ExecutionRuntime::new(
+            super::super::runtime::QueryIdentity {
+                query_id: 4242,
+                session_id: None,
+                space_name: None,
+            },
+            budget.clone(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        if spill_budget_bytes.is_some() {
+            let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4242).unwrap());
+            rt.set_spill_manager(Some(sm));
+        }
+
+        let scan = Box::new(scan_executor(rows, col_names));
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10)
+                .with_runtime(Some(rt.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(43))
+                .with_output_layout(output_layout),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::Aggregate {
+                    group_by_expressions: vec![Expression::variable("g".to_string())],
+                    aggregate_functions: vec![
+                        (
+                            AggregateFunction::Count(None),
+                            Expression::Literal(Value::Int(1)),
+                        ),
+                        (
+                            AggregateFunction::Sum("v".to_string()),
+                            Expression::variable("v".to_string()),
+                        ),
+                        (
+                            AggregateFunction::Min("v".to_string()),
+                            Expression::variable("v".to_string()),
+                        ),
+                        (
+                            AggregateFunction::Max("v".to_string()),
+                            Expression::variable("v".to_string()),
+                        ),
+                        (
+                            AggregateFunction::Collect("v".to_string()),
+                            Expression::variable("v".to_string()),
+                        ),
+                    ],
+                    output_col_names: vec![],
+                },
+                &budget,
+            ),
+        );
+
+        executor.open().unwrap();
+        let mut result = Vec::new();
+        while let Some(chunk) = executor.advance().unwrap() {
+            result.extend(chunk.rows);
+        }
+        executor.close().unwrap();
+
+        result.sort_by(|a, b| compare_values(&a[0], &b[0]));
+        (result, rt)
+    }
+
+    #[test]
+    fn test_aggregate_spill_matches_in_memory() {
+        let rows: Vec<Vec<Value>> = (0..2000)
+            .map(|i| {
+                vec![
+                    Value::BigInt((i % 40) as i64),
+                    Value::BigInt((i as i64) * 3 - 1000),
+                ]
+            })
+            .collect();
+        let col_names = vec!["g".to_string(), "v".to_string()];
+
+        let (spilled, rt) = run_aggregate(rows.clone(), col_names.clone(), Some(4096));
+        let (in_memory, _) = run_aggregate(rows, col_names, None);
+
+        // Spilled results must match the in-memory baseline for every group.
+        assert_eq!(spilled.len(), in_memory.len());
+        for (spilled_row, in_mem_row) in spilled.iter().zip(in_memory.iter()) {
+            assert_eq!(spilled_row.len(), in_mem_row.len());
+            for (s, m) in spilled_row.iter().zip(in_mem_row.iter()) {
+                match (s, m) {
+                    (Value::List(a), Value::List(b)) => {
+                        assert_eq!(a.values, b.values);
+                    }
+                    _ => assert_eq!(s, m, "group {:?} value mismatch", spilled_row[0]),
+                }
+            }
+        }
+
+        // The spill path must actually have spilled to disk.
+        let prof = rt.profile().flush_to_collector();
+        let key = OperatorProfileKey::new(PhysicalOperatorId(43), None);
+        let entry = prof.operators.get(&key).expect("profile entry exists");
+        assert!(
+            entry.spilled_bytes > 0,
+            "expected spilled_bytes > 0, got {}",
+            entry.spilled_bytes
+        );
     }
 }

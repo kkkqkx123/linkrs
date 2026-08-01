@@ -33,6 +33,7 @@ impl PartialEq for Value {
             (Value::Map(a), Value::Map(b)) => a == b,
             (Value::Set(a), Value::Set(b)) => a == b,
             (Value::Geography(a), Value::Geography(b)) => a == b,
+            (Value::Vector(a), Value::Vector(b)) => a == b,
             (Value::Json(a), Value::Json(b)) => a == b,
             (Value::JsonB(a), Value::JsonB(b)) => a == b,
             // JSON and JSONB can be compared
