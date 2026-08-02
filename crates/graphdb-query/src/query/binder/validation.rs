@@ -58,7 +58,6 @@ pub struct ValidationInfo {
     pub path_analysis: Vec<PathAnalysis>,
     pub optimization_hints: Vec<OptimizationHint>,
     pub variable_definitions: HashMap<String, Span>,
-    pub index_hints: Vec<IndexHint>,
     pub validated_clauses: Vec<ClauseKind>,
     pub semantic_info: SemanticInfo,
 }
@@ -78,10 +77,6 @@ impl ValidationInfo {
 
     pub fn add_optimization_hint(&mut self, hint: OptimizationHint) {
         self.optimization_hints.push(hint);
-    }
-
-    pub fn add_index_hint(&mut self, hint: IndexHint) {
-        self.index_hints.push(hint);
     }
 
     pub fn get_alias_type(&self, name: &str) -> Option<&AliasType> {
@@ -168,17 +163,6 @@ pub enum HintSeverity {
     Info,
     Warning,
     Critical,
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexHint {
-    pub index_name: String,
-    pub index_id: u64,
-    pub table_name: String,
-    pub columns: Vec<String>,
-    pub applicable_conditions: Vec<ContextualExpression>,
-    pub estimated_selectivity: f64,
-    pub is_edge: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

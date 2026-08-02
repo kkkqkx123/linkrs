@@ -265,7 +265,6 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
         SourceSpec::Argument | SourceSpec::Start => Some(1.0),
         SourceSpec::GetEdges { .. }
         | SourceSpec::GetNeighbors { .. }
-        | SourceSpec::EdgeIndexScan { .. }
         | SourceSpec::IndexScan { .. }
         | SourceSpec::GetProp { .. } => None,
     }
@@ -456,7 +455,6 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::GetVertices { .. } => SlotLayout::from_names(&["vertex".to_string()]),
         SourceSpec::GetEdges { .. } => SlotLayout::from_names(&["edge".to_string()]),
         SourceSpec::GetNeighbors { .. } => SlotLayout::from_names(&["vertex".to_string()]),
-        SourceSpec::EdgeIndexScan { .. } => SlotLayout::new(vec![]),
         SourceSpec::IndexScan { output_layout, .. } => (**output_layout).clone(),
         SourceSpec::GetProp { output_layout, .. } => (**output_layout).clone(),
     }
@@ -474,7 +472,6 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::GetVertices { .. } => "GetVertices",
         SourceSpec::GetEdges { .. } => "GetEdges",
         SourceSpec::GetNeighbors { .. } => "GetNeighbors",
-        SourceSpec::EdgeIndexScan { .. } => "EdgeIndexScan",
         SourceSpec::IndexScan { .. } => "IndexScan",
         SourceSpec::GetProp { .. } => "GetProp",
     }

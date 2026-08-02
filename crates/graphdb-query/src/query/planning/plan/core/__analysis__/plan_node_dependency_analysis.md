@@ -18,7 +18,6 @@
 | StartNode | 执行计划入口 | 无 | start_node.rs |
 | ScanVerticesNode | 全表扫描顶点 | 无 | graph_scan_node.rs |
 | ScanEdgesNode | 全表扫描边 | 无 | graph_scan_node.rs |
-| EdgeIndexScanNode | 边索引扫描 | 无 | graph_scan_node.rs |
 
 **特点**：
 - 作为叶子节点出现在执行计划中
@@ -181,7 +180,6 @@ define_plan_node_with_deps! {
 | PatternApplyNode | 模式应用 | 模式匹配依赖 | data_processing_node.rs |
 | IndexScanNode | 索引扫描 | 依赖索引 | graph_scan_node.rs |
 | FulltextIndexScanNode | 全文索引扫描 | 依赖索引 | graph_scan_node.rs |
-| EdgeIndexScanNode | 边索引扫描 | 依赖索引 | graph_scan_node.rs |
 
 **LoopNode 特殊依赖**：
 ```rust
@@ -637,7 +635,7 @@ src/query/planner/plan/core/nodes/
 ├── plan_node_enum.rs         # 节点枚举
 │
 ├── start_node.rs             # ZeroInputNode: Start
-├── graph_scan_node.rs        # ZeroInputNode: ScanVertices, ScanEdges, EdgeIndexScan
+├── graph_scan_node.rs        # ZeroInputNode: ScanVertices, ScanEdges
 │                              # SingleInputNode: GetVertices, GetEdges, GetNeighbors
 │                              # Special: IndexScan, FulltextIndexScan
 ├── space_nodes.rs            # ZeroInputNode: 4 个空间管理节点

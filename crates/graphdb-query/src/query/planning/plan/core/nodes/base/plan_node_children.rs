@@ -30,7 +30,6 @@ impl PlanNodeEnum {
             | PlanNodeEnum::IndexScan(_)
             | PlanNodeEnum::ScanVertices(_)
             | PlanNodeEnum::ScanEdges(_)
-            | PlanNodeEnum::EdgeIndexScan(_)
             | PlanNodeEnum::GetVertices(_)
             | PlanNodeEnum::GetEdges(_)
             | PlanNodeEnum::GetNeighbors(_)

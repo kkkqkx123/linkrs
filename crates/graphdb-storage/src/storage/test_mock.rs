@@ -33,6 +33,8 @@ pub struct MockStorage {
     fail_insert_edge: Arc<RwLock<bool>>,
     fail_delete_edge: Arc<RwLock<bool>>,
     fail_batch_insert_edges: Arc<RwLock<bool>>,
+    edge_types: Arc<RwLock<Vec<EdgeTypeInfo>>>,
+    edges: Arc<RwLock<Vec<Edge>>>,
 }
 
 impl MockStorage {
@@ -44,6 +46,8 @@ impl MockStorage {
             fail_insert_edge: Arc::new(RwLock::new(false)),
             fail_delete_edge: Arc::new(RwLock::new(false)),
             fail_batch_insert_edges: Arc::new(RwLock::new(false)),
+            edge_types: Arc::new(RwLock::new(Vec::new())),
+            edges: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -57,6 +61,14 @@ impl MockStorage {
 
     pub fn set_fail_delete_edge(&self, enabled: bool) {
         *self.fail_delete_edge.write() = enabled;
+    }
+
+    pub fn set_edge_types(&self, edge_types: Vec<EdgeTypeInfo>) {
+        *self.edge_types.write() = edge_types;
+    }
+
+    pub fn set_edges(&self, edges: Vec<Edge>) {
+        *self.edges.write() = edges;
     }
 
     pub fn set_fail_batch_insert_edges(&self, enabled: bool) {
@@ -75,7 +87,26 @@ impl StorageReader for MockStorage {
     mock_stub!(&self, scan_vertices(_space: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_vertices_by_tag(_space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_vertices_by_prop(_space: &str, _tag: &str, _prop: &str, _value: &Value) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_edge(_space: &str, _src: &VertexId, _dst: &VertexId, _edge_type: &str, _rank: i64) -> Result<Option<Edge>, StorageError>, Ok(None));
+    fn get_edge(
+        &self,
+        _space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+    ) -> Result<Option<Edge>, StorageError> {
+        Ok(self
+            .edges
+            .read()
+            .iter()
+            .find(|edge| {
+                edge.src == *src
+                    && edge.dst == *dst
+                    && edge.edge_type == edge_type
+                    && edge.ranking == rank
+            })
+            .cloned())
+    }
     mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
@@ -94,7 +125,9 @@ impl StorageReader for MockStorage {
     mock_stub!(&self, get_tag(_space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError>, Ok(None));
     mock_stub!(&self, list_tags(_space: &str) -> Result<Vec<TagInfo>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_edge_type(_space: &str, _edge_type: &str) -> Result<Option<EdgeTypeSchema>, StorageError>, Ok(None));
-    mock_stub!(&self, list_edge_types(_space: &str) -> Result<Vec<EdgeTypeSchema>, StorageError>, Ok(Vec::new()));
+    fn list_edge_types(&self, _space: &str) -> Result<Vec<EdgeTypeSchema>, StorageError> {
+        Ok(self.edge_types.read().clone())
+    }
     mock_stub!(&self, get_tag_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
     mock_stub!(&self, list_tag_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_edge_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));

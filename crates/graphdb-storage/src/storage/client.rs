@@ -201,6 +201,31 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Option<EdgeTypeInfo>, StorageError>;
     fn list_edge_types(&self, space: &str) -> Result<Vec<EdgeTypeInfo>, StorageError>;
 
+    /// Resolve an edge type name from the storage-level edge type hash.
+    ///
+    /// Edge index rows carry the edge type as a truncated FNV-1a hash of the
+    /// type name (see `edge_entity_ref` in `index/helpers.rs`).  This default
+    /// implementation enumerates the space's edge types and matches the hash
+    /// using the same shared FNV-1a implementation as the index write path so
+    /// the two sides stay consistent.
+    fn resolve_edge_type_name(
+        &self,
+        space: &str,
+        hash: u32,
+    ) -> Result<Option<String>, StorageError> {
+        let edge_types = self.list_edge_types(space)?;
+        Ok(edge_types.into_iter().find_map(|edge_type| {
+            if crate::storage::index::helpers::stable_hash(edge_type.edge_type_name.as_bytes())
+                as u32
+                == hash
+            {
+                Some(edge_type.edge_type_name)
+            } else {
+                None
+            }
+        }))
+    }
+
     fn get_tag_index(&self, space: &str, index: &str) -> Result<Option<Index>, StorageError>;
     fn list_tag_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
 
@@ -749,8 +774,7 @@ pub trait StorageSnapshotOps: Send + Sync + std::fmt::Debug {
     fn remove_cold_snapshot(&self, label: LabelId) -> StorageResult<()>;
 
     /// Re-export the most recent cold snapshot of `label` to `path`.
-    fn export_cold_snapshot(&self, label: LabelId, path: &Path)
-        -> StorageResult<ColdSnapshotInfo>;
+    fn export_cold_snapshot(&self, label: LabelId, path: &Path) -> StorageResult<ColdSnapshotInfo>;
 
     /// Consolidate every registered version of each given label into a
     /// single snapshot at the newest timestamp, replacing the label's shelf.

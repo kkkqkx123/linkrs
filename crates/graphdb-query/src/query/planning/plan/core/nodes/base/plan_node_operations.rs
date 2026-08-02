@@ -25,7 +25,6 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::FullOuterJoin(node) => node.$method(),
             PlanNodeEnum::SemiJoin(node) => node.$method(),
             PlanNodeEnum::IndexScan(node) => node.$method(),
-            PlanNodeEnum::EdgeIndexScan(node) => node.$method(),
             PlanNodeEnum::GetVertices(node) => node.$method(),
             PlanNodeEnum::GetEdges(node) => node.$method(),
             PlanNodeEnum::GetNeighbors(node) => node.$method(),
@@ -152,7 +151,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::DeleteIndex(_) => "DeleteIndex",
             PlanNodeEnum::Minus(_) => "Minus",
             PlanNodeEnum::Intersect(_) => "Intersect",
-            PlanNodeEnum::EdgeIndexScan(_) => "EdgeIndexScan",
             PlanNodeEnum::PipeDeleteVertices(_) => "PipeDeleteVertices",
             PlanNodeEnum::PipeDeleteEdges(_) => "PipeDeleteEdges",
             PlanNodeEnum::Materialize(_) => "Materialize",
@@ -233,7 +231,6 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ScanVertices(_)
             | PlanNodeEnum::ScanEdges(_)
             | PlanNodeEnum::IndexScan(_)
-            | PlanNodeEnum::EdgeIndexScan(_)
             | PlanNodeEnum::MultiShortestPath(_)
             | PlanNodeEnum::BFSShortest(_)
             | PlanNodeEnum::AllPaths(_)

@@ -233,9 +233,6 @@ impl FingerprintCalculator {
             PlanNodeEnum::ScanEdges(_) => {
                 // Leaf node
             }
-            PlanNodeEnum::EdgeIndexScan(_) => {
-                // Leaf node
-            }
             PlanNodeEnum::IndexScan(_) => {
                 // Leaf node
             }

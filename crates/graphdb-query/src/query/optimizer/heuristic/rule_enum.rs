@@ -154,7 +154,7 @@ define_rewrite_rules! {
         PushFilterDownAllPaths(predicate_pushdown::PushFilterDownAllPathsRule),
 
         // ==================== Projection Pushdown Rules ====================
-        // NOTE: PushProjectDown{GetVertices,GetEdges,GetNeighbors,EdgeIndexScan}
+        // NOTE: PushProjectDown{GetVertices,GetEdges,GetNeighbors}
         // are intentionally excluded. Those rules erase the Project node and
         // treat output aliases as raw property references, which is unsound
         // for computed expressions, aliases, and functions. Re-enable only

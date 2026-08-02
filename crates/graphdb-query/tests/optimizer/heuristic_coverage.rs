@@ -9,7 +9,7 @@
 //! - Row collect elimination
 //! - Merge rules (MergeGetVertices/GetNeighbors + Project/Dedup)
 //! - Predicate pushdown (EFilter, VFilter, GetNeighbors)
-//! - Projection pushdown (GetEdges, GetNeighbors, EdgeIndexScan, ScanEdges)
+//! - Projection pushdown (GetEdges, GetNeighbors, ScanEdges)
 //! - Limit pushdown (GetVertices, GetEdges, ScanEdges, IndexScan, TopN on IndexScan)
 //! - Join rules (PushProject, LeftJoinToInner, JoinToExpand, JoinElimination, IndexJoin, JoinReorder)
 //! - Sort elimination (EliminateSort)

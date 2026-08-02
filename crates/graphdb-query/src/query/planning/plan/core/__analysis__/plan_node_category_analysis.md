@@ -23,7 +23,6 @@ GraphDB 当前共有 **69** 个 PlanNode 类型，按功能分为 8 个类别。
 | GetEdgesNode | 按ID/属性获取边 | 索引 | GetEdges |
 | GetNeighborsNode | 获取顶点的邻居节点 | 顶点 | GetNeighbors |
 | IndexScan | 索引扫描节点 | 索引 | IndexScan |
-| EdgeIndexScan | 边索引扫描节点 | 索引 | EdgeIndexScan |
 | FulltextIndexScan | 全文索引扫描 | 索引 | FulltextIndexScan |
 
 ### 2. 操作层（Operation Layer）- 8 个节点
@@ -263,7 +262,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::GetEdges(_) => PlanNodeCategory::Access,
             PlanNodeEnum::GetNeighbors(_) => PlanNodeCategory::Access,
             PlanNodeEnum::IndexScan(_) => PlanNodeCategory::Access,
-            PlanNodeEnum::EdgeIndexScan(_) => PlanNodeCategory::Access,
             PlanNodeEnum::FulltextIndexScan(_) => PlanNodeCategory::Access,
 
             // 操作层
@@ -311,7 +309,7 @@ impl PlanNodeEnum {
 | 文件 | 包含节点 | 数量 |
 |-----|---------|-----|
 | start_node.rs | StartNode | 1 |
-| graph_scan_node.rs | ScanVerticesNode, ScanEdgesNode, GetVerticesNode, GetEdgesNode, GetNeighborsNode, IndexScanNode, EdgeIndexScanNode, FulltextIndexScanNode | 8 |
+| graph_scan_node.rs | ScanVerticesNode, ScanEdgesNode, GetVerticesNode, GetEdgesNode, GetNeighborsNode, IndexScanNode, FulltextIndexScanNode | 7 |
 | filter_node.rs | FilterNode | 1 |
 | project_node.rs | ProjectNode | 1 |
 | aggregate_node.rs | AggregateNode | 1 |

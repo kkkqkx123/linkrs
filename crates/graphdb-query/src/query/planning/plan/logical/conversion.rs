@@ -1,7 +1,7 @@
 //! Conversion from `PlanNodeEnum` to `LogicalNodeEnum`.
 //!
 //! This module implements the physical-to-logical stripping pass:
-//! - Physical operators (IndexScan, HashInnerJoin, HashLeftJoin, EdgeIndexScan)
+//! - Physical operators (IndexScan, HashInnerJoin, HashLeftJoin)
 //!   are mapped to their logical equivalents.
 //! - All other operators are recursively converted.
 
@@ -32,7 +32,6 @@ impl std::error::Error for ConversionError {}
 ///
 /// # Physical-to-Logical Mapping
 /// - `IndexScan` → `ScanVertices`
-/// - `EdgeIndexScan` → `ScanEdges`
 /// - `HashInnerJoin` → `InnerJoin`
 /// - `HashLeftJoin` → `LeftJoin`
 /// - All other logical operators are preserved with recursive child conversion.
@@ -129,20 +128,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                 space_id: n.space_id(),
                 space_name: String::new(),
                 tag: None,
-                expression: None,
-                limit: n.limit(),
-                projected_properties: vec![],
-                output_var: n.output_var().map(|s| s.to_string()),
-                col_names: n.col_names().to_vec(),
-                column_types: n.column_types().to_vec(),
-            },
-        )),
-
-        PlanNodeEnum::EdgeIndexScan(n) => Ok(LogicalNodeEnum::ScanEdges(
-            crate::query::planning::plan::logical::logical_nodes::access::LogicalScanEdgesNode {
-                id: n.id(),
-                space_id: n.space_id(),
-                edge_type: Some(n.edge_type().to_string()),
                 expression: None,
                 limit: n.limit(),
                 projected_properties: vec![],

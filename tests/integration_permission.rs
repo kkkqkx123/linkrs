@@ -396,6 +396,7 @@ fn create_test_config() -> AuthConfig {
         default_username: "root".to_string(),
         default_password: "root".to_string(),
         force_change_default_password: true,
+        bcrypt_cost: 12,
     }
 }
 
@@ -657,6 +658,7 @@ fn test_password_authenticator_default() {
         default_username: "admin".to_string(),
         default_password: "admin123".to_string(),
         force_change_default_password: false,
+        bcrypt_cost: 12,
     };
 
     let auth = PasswordAuthenticator::new_default(config);
@@ -706,6 +708,7 @@ fn test_password_authenticator_login_attempts_limit() {
         default_username: "root".to_string(),
         default_password: "root".to_string(),
         force_change_default_password: false,
+        bcrypt_cost: 12,
     };
 
     let auth = PasswordAuthenticator::new(|_username: &str, _password: &str| Ok(false), config);

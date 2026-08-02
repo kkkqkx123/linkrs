@@ -698,9 +698,14 @@ pub(crate) fn create_edge_index(
         .index_metadata_manager()
         .create_edge_index(space_id, index)?;
     if created {
+        // Retrieve the stored index to get the assigned ID.
+        let stored = ctx
+            .index_metadata_manager()
+            .get_edge_index(space_id, &index.name)?
+            .unwrap_or_else(|| index.clone());
         ctx.index_data_manager()
             .read()
-            .register_native_index(space_id, index)?;
+            .register_native_index(space_id, &stored)?;
     }
     Ok(created)
 }

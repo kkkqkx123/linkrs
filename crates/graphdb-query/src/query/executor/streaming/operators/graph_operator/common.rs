@@ -79,7 +79,6 @@ pub(super) fn expand_on_chunk(
     }
 
     let mut out_rows = Vec::new();
-    let mut out_edges = 0usize;
     for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
         let config = if step_limit > 1 {
             TraversalConfig {
@@ -103,7 +102,6 @@ pub(super) fn expand_on_chunk(
         }
 
         while let Some(event) = runtime.next_event() {
-            out_edges += 1;
             let mut out_row = row.clone();
             if let Some(ref edge) = event.edge {
                 out_row.push(Value::Edge(Box::new(edge.clone())));

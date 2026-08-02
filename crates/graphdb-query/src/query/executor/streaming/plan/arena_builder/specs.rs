@@ -136,15 +136,6 @@ pub(super) fn build_source_spec(
             direction: get_node.direction().to_string(),
             projected_properties: get_node.projected_properties().to_vec(),
         }),
-        PlanNodeEnum::EdgeIndexScan(scan_node) => Ok(SourceSpec::EdgeIndexScan {
-            space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-            edge_type: Some(scan_node.edge_type().to_string()),
-            index_name: scan_node.index_name().to_string(),
-            predicate: scan_node
-                .scan_limits()
-                .first()
-                .map(index_limit_to_predicate),
-        }),
         PlanNodeEnum::IndexScan(scan_node) => {
             let index_name = scan_node.index_name().to_string();
             if scan_node.filter().is_some() && scan_node.scan_limits().is_empty() {
@@ -176,7 +167,7 @@ pub(super) fn build_source_spec(
                 space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 index_name,
                 index_id: scan_node.index_id(),
-                predicate,
+                predicate: Box::new(predicate),
                 projection,
                 residual_filter: None,
                 output_layout,

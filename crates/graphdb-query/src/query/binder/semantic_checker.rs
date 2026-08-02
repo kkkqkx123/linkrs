@@ -635,4 +635,3 @@ fn check_map_duplicate_keys(expr: &Expression, depth: usize) -> DBResult<()> {
     }
     Ok(())
 }
-

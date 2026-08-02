@@ -3,7 +3,7 @@
 //! These rules push projection operations towards the data source, reducing
 //! the amount of data that needs to be transmitted.
 //!
-//! Only scan-level rules are enabled. Get/EdgeIndexScan-level rules are
+//! Only scan-level rules are enabled. Get-level rules are
 //! deferred to Phase 4 (typed required-property pruning).
 
 pub mod push_project_down_scan_edges;

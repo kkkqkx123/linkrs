@@ -33,8 +33,7 @@ use crate::query::planning::plan::core::nodes::search::vector::data_access::{
 
 // Import and re-export all specific node types.
 pub use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
-    EdgeIndexScanNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode,
-    ScanVerticesNode,
+    GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
 pub use crate::query::planning::plan::core::nodes::access::index_scan::{
     IndexLimit, IndexScanNode, OrderByItem, ScanType,
@@ -138,7 +137,6 @@ pub enum PlanNodeEnum {
     GetNeighbors(GetNeighborsNode),
     ScanVertices(ScanVerticesNode),
     ScanEdges(ScanEdgesNode),
-    EdgeIndexScan(EdgeIndexScanNode),
     IndexScan(IndexScanNode),
 
     // Operation Node
@@ -260,7 +258,6 @@ crate::define_enum_is_methods! {
     (GetNeighbors, is_get_neighbors),
     (ScanVertices, is_scan_vertices),
     (ScanEdges, is_scan_edges),
-    (EdgeIndexScan, is_edge_index_scan),
     (IndexScan, is_index_scan),
     // Operation node
     (Project, is_project),
@@ -360,7 +357,6 @@ crate::define_enum_as_methods! {
     (GetNeighbors, as_get_neighbors, GetNeighborsNode),
     (ScanVertices, as_scan_vertices, ScanVerticesNode),
     (ScanEdges, as_scan_edges, ScanEdgesNode),
-    (EdgeIndexScan, as_edge_index_scan, EdgeIndexScanNode),
     (IndexScan, as_index_scan, IndexScanNode),
     // Operation node
     (Project, as_project, ProjectNode),
@@ -459,7 +455,6 @@ crate::define_enum_as_mut_methods! {
     (GetNeighbors, as_get_neighbors_mut, GetNeighborsNode),
     (ScanVertices, as_scan_vertices_mut, ScanVerticesNode),
     (ScanEdges, as_scan_edges_mut, ScanEdgesNode),
-    (EdgeIndexScan, as_edge_index_scan_mut, EdgeIndexScanNode),
     (IndexScan, as_index_scan_mut, IndexScanNode),
     // Operation node
     (Project, as_project_mut, ProjectNode),
@@ -558,7 +553,6 @@ crate::define_enum_type_name! {
     (GetNeighbors, "GetNeighbors"),
     (ScanVertices, "ScanVertices"),
     (ScanEdges, "ScanEdges"),
-    (EdgeIndexScan, "EdgeIndexScan"),
     (IndexScan, "IndexScan"),
     // Operation node
     (Project, "Project"),
@@ -660,7 +654,6 @@ crate::define_enum_category! {
     (GetNeighbors, PlanNodeCategory::Access),
     (ScanVertices, PlanNodeCategory::Access),
     (ScanEdges, PlanNodeCategory::Access),
-    (EdgeIndexScan, PlanNodeCategory::Access),
     (IndexScan, PlanNodeCategory::Access),
     // Operation node
     (Project, PlanNodeCategory::Operation),
@@ -762,7 +755,6 @@ crate::define_enum_describe! {
     (GetNeighbors, "GetNeighbors"),
     (ScanVertices, "ScanVertices"),
     (ScanEdges, "ScanEdges"),
-    (EdgeIndexScan, "EdgeIndexScan"),
     (IndexScan, "IndexScan"),
     // Operation node
     (Project, "Project"),

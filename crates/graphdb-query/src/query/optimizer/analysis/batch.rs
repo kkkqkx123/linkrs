@@ -326,7 +326,6 @@ impl BatchPlanAnalyzer {
             | PlanNodeEnum::GetNeighbors(_)
             | PlanNodeEnum::ScanVertices(_)
             | PlanNodeEnum::ScanEdges(_)
-            | PlanNodeEnum::EdgeIndexScan(_)
             | PlanNodeEnum::IndexScan(_)
             | PlanNodeEnum::Argument(_) => 0,
 

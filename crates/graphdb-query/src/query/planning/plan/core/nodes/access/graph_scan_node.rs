@@ -7,7 +7,6 @@ use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::define_plan_node;
 use crate::query::planning::plan::core::common::{EdgeProp, TagProp};
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
-use crate::query::planning::plan::core::nodes::access::index_scan::{IndexLimit, ScanType};
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
 
 define_plan_node! {
@@ -147,96 +146,6 @@ impl GetVerticesNode {
 
     pub fn set_deps(&mut self, deps: Vec<PlanNodeEnum>) {
         self.deps = deps;
-    }
-}
-
-define_plan_node! {
-    pub struct EdgeIndexScanNode {
-        space_id: u64,
-        edge_type: String,
-        index_name: String,
-        expression: Option<ContextualExpression>,
-        limit: Option<i64>,
-        scan_type: ScanType,
-        scan_limits: Vec<IndexLimit>,
-        return_columns: Vec<String>,
-    }
-    enum: EdgeIndexScan
-    input: ZeroInputNode
-}
-
-impl EdgeIndexScanNode {
-    pub fn new(space_id: u64, edge_type: &str, index_name: &str) -> Self {
-        Self {
-            id: next_node_id(),
-            space_id,
-            edge_type: edge_type.to_string(),
-            index_name: index_name.to_string(),
-            expression: None,
-            limit: None,
-            scan_type: ScanType::Full,
-            scan_limits: Vec::new(),
-            return_columns: Vec::new(),
-            output_var: None,
-            col_names: Vec::new(),
-            column_types: vec![],
-        }
-    }
-
-    pub fn set_limit(&mut self, limit: i64) {
-        self.limit = Some(limit);
-    }
-
-    pub fn space_id(&self) -> u64 {
-        self.space_id
-    }
-
-    pub fn edge_type(&self) -> &str {
-        &self.edge_type
-    }
-
-    pub fn schema_name(&self) -> &str {
-        &self.edge_type
-    }
-
-    pub fn index_name(&self) -> &str {
-        &self.index_name
-    }
-
-    pub fn filter(&self) -> Option<&ContextualExpression> {
-        self.expression.as_ref()
-    }
-
-    pub fn set_filter(&mut self, filter: ContextualExpression) {
-        self.expression = Some(filter);
-    }
-
-    pub fn limit(&self) -> Option<i64> {
-        self.limit
-    }
-
-    pub fn scan_type(&self) -> ScanType {
-        self.scan_type
-    }
-
-    pub fn set_scan_type(&mut self, scan_type: ScanType) {
-        self.scan_type = scan_type;
-    }
-
-    pub fn scan_limits(&self) -> &[IndexLimit] {
-        &self.scan_limits
-    }
-
-    pub fn set_scan_limits(&mut self, scan_limits: Vec<IndexLimit>) {
-        self.scan_limits = scan_limits;
-    }
-
-    pub fn return_columns(&self) -> &[String] {
-        &self.return_columns
-    }
-
-    pub fn set_return_columns(&mut self, columns: Vec<String>) {
-        self.return_columns = columns;
     }
 }
 

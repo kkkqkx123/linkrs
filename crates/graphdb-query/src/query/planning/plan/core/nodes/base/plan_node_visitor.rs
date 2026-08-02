@@ -23,8 +23,7 @@ use crate::query::planning::plan::core::nodes::search::vector::data_access::{
 };
 
 pub use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
-    EdgeIndexScanNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode,
-    ScanVerticesNode,
+    GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
 pub use crate::query::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::{
@@ -100,7 +99,6 @@ pub trait PlanNodeVisitor {
         GetNeighbors, GetNeighborsNode, visit_get_neighbors;
         ScanVertices, ScanVerticesNode, visit_scan_vertices;
         ScanEdges, ScanEdgesNode, visit_scan_edges;
-        EdgeIndexScan, EdgeIndexScanNode, visit_edge_index_scan;
     );
 
     impl_visitor_methods!(
@@ -230,7 +228,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::GetNeighbors(node) => visitor.visit_get_neighbors(node),
             PlanNodeEnum::ScanVertices(node) => visitor.visit_scan_vertices(node),
             PlanNodeEnum::ScanEdges(node) => visitor.visit_scan_edges(node),
-            PlanNodeEnum::EdgeIndexScan(node) => visitor.visit_edge_index_scan(node),
             PlanNodeEnum::HashInnerJoin(node) => visitor.visit_hash_inner_join(node),
             PlanNodeEnum::HashLeftJoin(node) => visitor.visit_hash_left_join(node),
             PlanNodeEnum::FullOuterJoin(node) => visitor.visit_full_outer_join(node),

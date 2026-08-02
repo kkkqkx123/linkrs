@@ -194,8 +194,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_context: &QueryContext,
     ) -> Option<crate::query::metadata::MetadataContext> {
         use crate::query::metadata::{
-            IndexMetadata, IndexType, MetadataContext, PropertyDefinition, PropertyType,
-            TagMetadata,
+            EdgeTypeMetadata, IndexMetadata, IndexType, MetadataContext, PropertyDefinition,
+            PropertyType, TagMetadata,
         };
 
         let space_name = query_context
@@ -218,12 +218,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     metadata.set_tag_metadata(tag.tag_name.clone(), tag_metadata);
                 }
             }
+            if let Ok(edge_types) = schema_manager.list_edge_types(&space_name) {
+                for edge_type in edge_types {
+                    let mut edge_metadata =
+                        EdgeTypeMetadata::new(edge_type.edge_type_name.clone(), space_id);
+                    for prop in &edge_type.properties {
+                        edge_metadata.properties.push(PropertyDefinition::new(
+                            prop.name.clone(),
+                            PropertyType::from(prop.data_type.clone()),
+                        ));
+                    }
+                    metadata
+                        .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
+                }
+            }
         }
 
         let index_manager = self.index_manager.clone().or_else(|| {
-            self.storage.as_ref().and_then(|storage| {
-                storage.read().get_index_metadata_manager()
-            })
+            self.storage
+                .as_ref()
+                .and_then(|storage| storage.read().get_index_metadata_manager())
         });
         if let Some(index_manager) = index_manager {
             if let Ok(indexes) = index_manager.list_tag_indexes(space_id) {
@@ -244,6 +258,25 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     metadata.set_index_metadata(index.name.clone(), index_metadata);
                 }
             }
+            if let Ok(indexes) = index_manager.list_edge_indexes(space_id) {
+                for index in indexes {
+                    let field_name = index
+                        .fields
+                        .first()
+                        .map(|f| f.name.clone())
+                        .unwrap_or_default();
+                    let mut index_metadata = IndexMetadata::new(
+                        index.name.clone(),
+                        space_id,
+                        index.schema_name.clone(),
+                        field_name,
+                        IndexType::Property,
+                    );
+                    index_metadata.index_id = index.id;
+                    index_metadata.is_edge = true;
+                    metadata.set_index_metadata(index.name.clone(), index_metadata);
+                }
+            }
         }
 
         let tag_names: Vec<String> = metadata
@@ -253,11 +286,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         for tag_name in tag_names {
             let indexes: Vec<String> = metadata
                 .get_all_indexes()
-                .filter(|i| i.tag_name == tag_name)
+                .filter(|i| !i.is_edge && i.tag_name == tag_name)
                 .map(|i| i.index_name.clone())
                 .collect();
             if let Some(tag_metadata) = metadata.get_tag_metadata_mut(&tag_name) {
                 tag_metadata.indexes = indexes;
+            }
+        }
+
+        let edge_type_names: Vec<String> = metadata
+            .get_all_edge_types()
+            .map(|t| t.edge_type.clone())
+            .collect();
+        for edge_type_name in edge_type_names {
+            let indexes: Vec<String> = metadata
+                .get_all_indexes()
+                .filter(|i| i.is_edge && i.tag_name == edge_type_name)
+                .map(|i| i.index_name.clone())
+                .collect();
+            if let Some(edge_metadata) = metadata.get_edge_type_metadata_mut(&edge_type_name) {
+                edge_metadata.indexes = indexes;
             }
         }
 

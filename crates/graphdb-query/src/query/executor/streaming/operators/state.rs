@@ -55,9 +55,6 @@ pub enum SourceState {
     GetNeighbors {
         state: NeighborScanState,
     },
-    EdgeIndexScan {
-        cursor: Option<Box<dyn EdgeCursor>>,
-    },
     IndexScan {
         cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
     },
@@ -108,7 +105,6 @@ impl SourceState {
             SourceSpec::GetNeighbors { .. } => SourceState::GetNeighbors {
                 state: NeighborScanState::Init,
             },
-            SourceSpec::EdgeIndexScan { .. } => SourceState::EdgeIndexScan { cursor: None },
             SourceSpec::IndexScan { .. } => SourceState::IndexScan { cursor: None },
             SourceSpec::Argument => SourceState::Argument,
             SourceSpec::GetProp {

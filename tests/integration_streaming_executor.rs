@@ -429,6 +429,7 @@ fn test_intersect_in_chain() {
             right_rows: std::collections::HashSet::new(),
             left_buffered: false,
             right_buffered: false,
+            emitted: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         },
     );

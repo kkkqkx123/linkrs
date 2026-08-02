@@ -41,13 +41,15 @@ impl ExplainPlanner {
             )),
         }
     }
-}
 
-impl Planner for ExplainPlanner {
-    fn transform(
-        &mut self,
+    /// Plan the inner statement, optionally forwarding the metadata context
+    /// so index-aware planners (e.g. LOOKUP) produce the same plan under
+    /// EXPLAIN as they do in normal execution.
+    fn plan_inner(
+        &self,
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
+        metadata_context: Option<&crate::query::metadata::MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
         let (inner_stmt, format) = self.extract_inner_stmt(validated.stmt())?;
 
@@ -67,7 +69,11 @@ impl Planner for ExplainPlanner {
                 ))
             })?;
 
-        let inner_plan = inner_planner.transform(&inner_validated, qctx)?;
+        let inner_plan = match metadata_context {
+            Some(metadata) => inner_planner
+                .transform_with_metadata(&inner_validated, qctx, metadata)?,
+            None => inner_planner.transform(&inner_validated, qctx)?,
+        };
 
         let mode = if self.is_profile {
             "PROFILE"
@@ -81,6 +87,25 @@ impl Planner for ExplainPlanner {
         );
 
         Ok(inner_plan)
+    }
+}
+
+impl Planner for ExplainPlanner {
+    fn transform(
+        &mut self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        self.plan_inner(validated, qctx, None)
+    }
+
+    fn transform_with_metadata(
+        &mut self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+        metadata_context: &crate::query::metadata::MetadataContext,
+    ) -> Result<SubPlan, PlannerError> {
+        self.plan_inner(validated, qctx, Some(metadata_context))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

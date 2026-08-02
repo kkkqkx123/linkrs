@@ -40,7 +40,6 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::GetVertices(_)
             | PlanNodeEnum::GetEdges(_)
             | PlanNodeEnum::GetNeighbors(_)
-            | PlanNodeEnum::EdgeIndexScan(_)
             | PlanNodeEnum::IndexScan(_) => {
                 let spec = build_source_spec(node, exec_ctx)?;
                 let op_id = op_alloc.allocate();

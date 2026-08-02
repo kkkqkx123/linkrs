@@ -176,8 +176,7 @@ impl CostAssigner {
             // Scanning operation
             PlanNodeEnum::ScanVertices(_)
             | PlanNodeEnum::ScanEdges(_)
-            | PlanNodeEnum::IndexScan(_)
-            | PlanNodeEnum::EdgeIndexScan(_) => {
+            | PlanNodeEnum::IndexScan(_) => {
                 let estimator = ScanEstimator::new(&self.cost_calculator);
                 estimator.estimate(stats, node, child_estimates)
             }

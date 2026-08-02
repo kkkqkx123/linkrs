@@ -11,8 +11,7 @@ pub mod search;
 pub mod traversal;
 
 pub use access::{
-    EdgeIndexScanNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode,
-    ScanVerticesNode,
+    GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
 pub use access::{IndexLimit, IndexScanNode, OrderByItem, ScanType};
 pub use base::plan_node_traits::*;

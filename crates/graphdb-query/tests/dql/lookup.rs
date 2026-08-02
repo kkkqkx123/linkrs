@@ -207,13 +207,18 @@ fn test_lookup_with_index_edge() {
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(name STRING)")
-        .exec_ddl("CREATE EDGE KNOWS(since DATE)")
+        .exec_ddl("CREATE EDGE KNOWS(since STRING)")
         .exec_ddl("CREATE EDGE INDEX idx_knows_since ON KNOWS(since)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
         .query("LOOKUP ON KNOWS WHERE KNOWS.since == '2024-01-01'")
-        .assert_success();
+        .assert_success()
+        .assert_result_count(1)
+        .assert_vertex_or_edge_has_property(
+            "since",
+            graphdb_query::core::Value::string("2024-01-01"),
+        );
 }
 
 #[test]
@@ -234,4 +239,58 @@ fn test_lookup_after_drop_index() {
         .query("LOOKUP ON Person WHERE Person.age == 30")
         .assert_success()
         .assert_result_count(1);
+}
+
+// ==================== EXPLAIN Plan Tests ====================
+
+#[test]
+fn test_lookup_explain_with_index_shows_index_scan() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(name STRING, age INT)")
+        .exec_ddl("CREATE TAG INDEX idx_person_age ON Person(age)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
+        .assert_success()
+        // With an index on the filtered column, the plan must use IndexScan.
+        .query("EXPLAIN LOOKUP ON Person WHERE Person.age == 30")
+        .assert_success()
+        .assert_plan_contains("IndexScan");
+}
+
+#[test]
+fn test_lookup_explain_edge_with_index_shows_index_scan() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since STRING)")
+        .exec_ddl("CREATE EDGE INDEX idx_knows_since ON KNOWS(since)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
+        .assert_success()
+        // Edge index lookup must also produce an IndexScan plan.
+        .query("EXPLAIN LOOKUP ON KNOWS WHERE KNOWS.since == '2024-01-01'")
+        .assert_success()
+        .assert_plan_contains("IndexScan");
+}
+
+#[test]
+fn test_lookup_explain_without_index_has_no_index_scan() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        // No index exists: the plan must fall back to a full scan.
+        .query("EXPLAIN LOOKUP ON Person WHERE Person.age == 30")
+        .assert_success();
+
+    let plan_text = scenario.get_plan_string().unwrap_or_default();
+    assert!(
+        !plan_text.contains("IndexScan"),
+        "Plan without an index should not contain IndexScan, got: {}",
+        plan_text
+    );
 }

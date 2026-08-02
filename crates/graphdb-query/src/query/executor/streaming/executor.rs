@@ -246,7 +246,6 @@ impl StreamingExecutor {
                 SourceOperator::GetVertices { .. } => "GetVertices",
                 SourceOperator::GetEdges { .. } => "GetEdges",
                 SourceOperator::GetNeighbors { .. } => "GetNeighbors",
-                SourceOperator::EdgeIndexScan { .. } => "EdgeIndexScan",
                 SourceOperator::IndexScan { .. } => "IndexScan",
                 SourceOperator::Argument => "Argument",
                 SourceOperator::GetProp { .. } => "GetProp",

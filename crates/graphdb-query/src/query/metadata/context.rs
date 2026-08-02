@@ -64,6 +64,11 @@ impl MetadataContext {
         self.edge_type_metadata.get(edge_type)
     }
 
+    /// Get edge type metadata (mutable)
+    pub fn get_edge_type_metadata_mut(&mut self, edge_type: &str) -> Option<&mut EdgeTypeMetadata> {
+        self.edge_type_metadata.get_mut(edge_type)
+    }
+
     /// Check if index metadata exists
     pub fn has_index_metadata(&self, index_name: &str) -> bool {
         self.index_metadata.contains_key(index_name)

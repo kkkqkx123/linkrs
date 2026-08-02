@@ -57,7 +57,6 @@ impl RemoveNoopProjectRule {
         allowed_child_types.insert("IndexScan");
         allowed_child_types.insert("ScanVertices");
         allowed_child_types.insert("ScanEdges");
-        allowed_child_types.insert("EdgeIndexScan");
         allowed_child_types.insert("Union");
         allowed_child_types.insert("Project");
         allowed_child_types.insert("Unwind");

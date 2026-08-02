@@ -66,22 +66,24 @@ impl Planner for PathPlanner {
         let end_vertex_ids = self.extract_vertex_ids_from_expr(&find_path_stmt.to);
 
         let root_node = if self.is_shortest_path_stmt(find_path_stmt) {
-            self.build_shortest_path_plan(
-                start_node_enum.clone(),
+            self.build_shortest_path_plan(PathPlanParams {
+                left_input: start_node_enum.clone(),
                 space_id,
                 edge_types,
                 max_steps,
                 start_vertex_ids,
                 end_vertex_ids,
-            )?
+            })?
         } else {
             self.build_all_paths_plan(
-                start_node_enum.clone(),
-                space_id,
-                edge_types,
-                max_steps,
-                start_vertex_ids,
-                end_vertex_ids,
+                PathPlanParams {
+                    left_input: start_node_enum.clone(),
+                    space_id,
+                    edge_types,
+                    max_steps,
+                    start_vertex_ids,
+                    end_vertex_ids,
+                },
                 find_path_stmt,
             )?
         };
@@ -99,35 +101,40 @@ impl Planner for PathPlanner {
     }
 }
 
+/// Shared inputs for building a path plan.
+struct PathPlanParams {
+    left_input: PlanNodeEnum,
+    space_id: u64,
+    edge_types: Vec<String>,
+    max_steps: usize,
+    start_vertex_ids: Vec<Value>,
+    end_vertex_ids: Vec<Value>,
+}
+
 impl PathPlanner {
     fn build_shortest_path_plan(
         &self,
-        left_input: PlanNodeEnum,
-        space_id: u64,
-        edge_types: Vec<String>,
-        max_steps: usize,
-        start_vertex_ids: Vec<Value>,
-        end_vertex_ids: Vec<Value>,
+        params: PathPlanParams,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let right_node = StartNode::new();
         let right_node_enum = PlanNodeEnum::Start(right_node);
 
-        let mut shortest_path_node =
-            ShortestPathNode::new(left_input, right_node_enum, space_id, edge_types, max_steps);
-        shortest_path_node.set_start_vertex_ids(start_vertex_ids);
-        shortest_path_node.set_end_vertex_ids(end_vertex_ids);
+        let mut shortest_path_node = ShortestPathNode::new(
+            params.left_input,
+            right_node_enum,
+            params.space_id,
+            params.edge_types,
+            params.max_steps,
+        );
+        shortest_path_node.set_start_vertex_ids(params.start_vertex_ids);
+        shortest_path_node.set_end_vertex_ids(params.end_vertex_ids);
 
         Ok(shortest_path_node.into_enum())
     }
 
     fn build_all_paths_plan(
         &self,
-        left_input: PlanNodeEnum,
-        space_id: u64,
-        edge_types: Vec<String>,
-        max_steps: usize,
-        start_vertex_ids: Vec<Value>,
-        end_vertex_ids: Vec<Value>,
+        params: PathPlanParams,
         stmt: &crate::query::parser::ast::FindPathStmt,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let right_node = StartNode::new();
@@ -143,21 +150,23 @@ impl PathPlanner {
             .unwrap_or(crate::core::EdgeDirection::Out);
 
         let mut all_paths_node = AllPathsNode::new(
-            left_input,
+            params.left_input,
             right_node_enum,
-            space_id,
-            max_steps,
-            edge_types,
+            params.space_id,
+            params.max_steps,
+            params.edge_types,
             1,
-            max_steps,
+            params.max_steps,
             acyclic,
         );
         all_paths_node.set_direction(direction);
-        let start_vids: Vec<VertexId> = start_vertex_ids
+        let start_vids: Vec<VertexId> = params
+            .start_vertex_ids
             .iter()
             .filter_map(|v| VertexId::try_from(v).ok())
             .collect();
-        let end_vids: Vec<VertexId> = end_vertex_ids
+        let end_vids: Vec<VertexId> = params
+            .end_vertex_ids
             .iter()
             .filter_map(|v| VertexId::try_from(v).ok())
             .collect();

@@ -20,8 +20,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_visitor::PlanNode
 use crate::query::planning::plan::PlanNodeEnum;
 
 use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
-    EdgeIndexScanNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode,
-    ScanVerticesNode,
+    GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
@@ -245,7 +244,6 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_get_edges => GetEdgesNode, GetEdges,
         visit_scan_vertices => ScanVerticesNode, ScanVertices,
         visit_scan_edges => ScanEdgesNode, ScanEdges,
-        visit_edge_index_scan => EdgeIndexScanNode, EdgeIndexScan,
         visit_argument => ArgumentNode, Argument,
         visit_pass_through => PassThroughNode, PassThrough,
         visit_start => StartNode, Start,

@@ -130,13 +130,6 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
             50000
         }
         PlanNodeEnum::IndexScan(_) => 5000,
-        PlanNodeEnum::EdgeIndexScan(n) => {
-            let count = stats.edge_count(n.edge_type());
-            if count > 0 {
-                return count;
-            }
-            5000
-        }
         PlanNodeEnum::Filter(n) => {
             let child = estimate_leaf_rows(n.input(), stats);
             (child / 10).max(1)
@@ -300,10 +293,7 @@ pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatsView) {
 }
 
 fn has_index_scan(node: &PlanNodeEnum) -> bool {
-    matches!(
-        node,
-        PlanNodeEnum::IndexScan(_) | PlanNodeEnum::EdgeIndexScan(_)
-    )
+    matches!(node, PlanNodeEnum::IndexScan(_))
 }
 
 pub fn build_optimizer_input(chain: &FlattenedJoinChain) -> (Vec<TableInfo>, Vec<JoinCondition>) {

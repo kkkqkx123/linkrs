@@ -12,8 +12,7 @@ use crate::query::planning::plan::explain::description::PlanNodeDescription;
 
 // Import all node types
 use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
-    EdgeIndexScanNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode,
-    ScanVerticesNode,
+    GetEdgesNode, GetNeighborsNode, GetVerticesNode, ScanEdgesNode, ScanVerticesNode,
 };
 use crate::query::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::{
@@ -578,23 +577,6 @@ impl PlanNodeVisitor for DescribeVisitor {
         if let Some(edge_type) = node.edge_type() {
             desc.add_description("edge_type", edge_type);
         }
-        if let Some(limit) = node.limit() {
-            desc.add_description("limit", limit.to_string());
-        }
-
-        self.descriptions.push(desc);
-        self.visited_ids.insert(node.id());
-    }
-
-    fn visit_edge_index_scan(&mut self, node: &EdgeIndexScanNode) {
-        let mut desc = PlanNodeDescription::new("EdgeIndexScan", node.id());
-        if let Some(var) = node.output_var() {
-            desc = desc.with_output_var(var.to_string());
-        }
-
-        desc.add_description("edge_type", node.edge_type().to_string());
-        desc.add_description("index", node.index_name().to_string());
-        desc.add_description("scan_type", format!("{:?}", node.scan_type()));
         if let Some(limit) = node.limit() {
             desc.add_description("limit", limit.to_string());
         }

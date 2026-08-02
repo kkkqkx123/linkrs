@@ -16,6 +16,8 @@ pub struct IndexMetadata {
     pub tag_name: String,
     pub field_name: String,
     pub index_type: IndexType,
+    /// Whether this index belongs to an edge type (true) or a tag (false).
+    pub is_edge: bool,
     pub properties: HashMap<String, Value>,
 }
 
@@ -34,6 +36,7 @@ impl IndexMetadata {
             tag_name,
             field_name,
             index_type,
+            is_edge: false,
             properties: HashMap::new(),
         }
     }

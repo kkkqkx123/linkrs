@@ -4,14 +4,12 @@
 //! - ScanVertices
 //! - ScanEdges
 //! - IndexScan
-//! - EdgeIndexScan
 
 use super::NodeEstimator;
 use crate::query::optimizer::cost::estimate::NodeCostEstimate;
 use crate::query::optimizer::cost::CostCalculator;
 use crate::query::optimizer::error::CostError;
 use crate::query::optimizer::stats::StatsView;
-use crate::query::planning::plan::core::nodes::access::EdgeIndexScanNode;
 use crate::query::planning::plan::core::nodes::access::{IndexScanNode, ScanType};
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -28,25 +26,6 @@ impl<'a> ScanEstimator<'a> {
 
     /// Estimating the selectivity of index scans
     pub fn estimate_index_scan_selectivity(&self, node: &IndexScanNode) -> f64 {
-        if node.scan_limits().is_empty() {
-            return 0.1;
-        }
-
-        let mut total_selectivity: f64 = 1.0;
-        for limit in node.scan_limits() {
-            let sel = match limit.scan_type {
-                ScanType::Unique => 0.01,
-                ScanType::Prefix => 0.05,
-                ScanType::Range => 0.1,
-                ScanType::Full => 1.0,
-            };
-            total_selectivity *= sel;
-        }
-        total_selectivity.min(1.0)
-    }
-
-    /// Estimating the selectivity of edge index scans
-    pub fn estimate_edge_index_scan_selectivity(&self, node: &EdgeIndexScanNode) -> f64 {
         if node.scan_limits().is_empty() {
             return 0.1;
         }
@@ -140,21 +119,6 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
                     space,
                     &tag_name,
                     &property_name,
-                    selectivity,
-                );
-                Ok((cost, output_rows))
-            }
-            PlanNodeEnum::EdgeIndexScan(n) => {
-                let edge_type = n.edge_type();
-                let selectivity = self.estimate_edge_index_scan_selectivity(n);
-                let edge_count = self
-                    .cost_calculator
-                    .statistics_manager()
-                    .get_edge_count(space, edge_type);
-                let output_rows = (selectivity * edge_count as f64).max(1.0) as u64;
-                let cost = self.cost_calculator.calculate_edge_index_scan_cost(
-                    space,
-                    edge_type,
                     selectivity,
                 );
                 Ok((cost, output_rows))
@@ -291,28 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_index_scan_estimation() {
-        let calculator = create_test_calculator_with_stats();
-        let estimator = ScanEstimator::new(&calculator);
-
-        let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", Value::string("1"))]);
-        let plan_node = PlanNodeEnum::EdgeIndexScan(node);
-
-        let child_estimates = vec![];
-        let result = estimator.estimate(
-            &calculator.stats_view(Some("test")),
-            &plan_node,
-            &child_estimates,
-        );
-
-        assert!(result.is_ok());
-        let (cost, output_rows) = result.expect("Estimates should be successful");
-        assert!(cost > 0.0);
-        assert!(output_rows >= 1);
-    }
-
-    #[test]
     fn test_unsupported_node_type() {
         let calculator = create_test_calculator();
         let estimator = ScanEstimator::new(&calculator);
@@ -429,27 +371,6 @@ mod tests {
         ]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.0001);
-    }
-
-    #[test]
-    fn test_estimate_edge_index_scan_selectivity_empty() {
-        let calculator = create_test_calculator();
-        let estimator = ScanEstimator::new(&calculator);
-
-        let node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        let selectivity = estimator.estimate_edge_index_scan_selectivity(&node);
-        assert_eq!(selectivity, 0.1);
-    }
-
-    #[test]
-    fn test_estimate_edge_index_scan_selectivity_unique() {
-        let calculator = create_test_calculator();
-        let estimator = ScanEstimator::new(&calculator);
-
-        let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", Value::string("1"))]);
-        let selectivity = estimator.estimate_edge_index_scan_selectivity(&node);
-        assert_eq!(selectivity, 0.01);
     }
 
     #[test]

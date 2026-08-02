@@ -72,6 +72,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_edge_type_name_round_trips_with_index_write_path() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        setup_knows_edge(&mut storage);
+
+        let hash = crate::storage::index::helpers::stable_hash(b"KNOWS") as u32;
+        let resolved = storage
+            .resolve_edge_type_name("test_space", hash)
+            .expect("resolve should succeed")
+            .expect("KNOWS must resolve");
+        assert_eq!(resolved, "KNOWS");
+
+        let missing = storage
+            .resolve_edge_type_name("test_space", 0xdead_beef)
+            .expect("resolve should succeed");
+        assert!(missing.is_none(), "unknown hash must not resolve");
+    }
+
+    #[test]
     fn test_snapshot_admin_methods() {
         let (_temp_dir, storage) = create_persistent_storage();
 
@@ -2200,9 +2220,7 @@ mod tests {
             .with_src_tag("Person".to_string())
             .with_dst_tag("Person".to_string())
             .with_properties(vec![PropertyDef::new("since".to_string(), DataType::Int)]);
-        storage
-            .create_edge_type("test_space", &edge_type)
-            .unwrap();
+        storage.create_edge_type("test_space", &edge_type).unwrap();
         insert_test_vertex(&mut storage, 1, "Alice");
         insert_test_vertex(&mut storage, 2, "Bob");
         insert_test_vertex(&mut storage, 3, "Carol");
@@ -2220,13 +2238,9 @@ mod tests {
                     .collect(),
             )
         };
-        storage
-            .insert_edge("test_space", make_edge(1, 2))
-            .unwrap();
+        storage.insert_edge("test_space", make_edge(1, 2)).unwrap();
         let ts_after_edge1 = storage.version_manager().read_timestamp();
-        storage
-            .insert_edge("test_space", make_edge(1, 3))
-            .unwrap();
+        storage.insert_edge("test_space", make_edge(1, 3)).unwrap();
         let ts_after_edge2 = storage.version_manager().read_timestamp();
 
         // v6: export two snapshots and a delta between them.
@@ -2245,7 +2259,13 @@ mod tests {
 
         let delta_path = snap_dir.join("knows_1_2.lkcd");
         let delta = storage
-            .export_cold_delta("test_space", "KNOWS", ts_after_edge1, ts_after_edge2, &delta_path)
+            .export_cold_delta(
+                "test_space",
+                "KNOWS",
+                ts_after_edge1,
+                ts_after_edge2,
+                &delta_path,
+            )
             .unwrap();
         assert_eq!(delta.added.len(), 1);
         assert_eq!(delta.removed.len(), 0);
@@ -2265,7 +2285,9 @@ mod tests {
         // v7: time machine routes to the most recent snapshot not newer than ts.
         let machine = storage.cold_time_machine();
         assert_eq!(machine.version_count(base.label()), 2);
-        assert!(machine.snapshot_at(base.label(), ts_after_edge1 - 1).is_none());
+        assert!(machine
+            .snapshot_at(base.label(), ts_after_edge1 - 1)
+            .is_none());
         assert_eq!(
             machine
                 .snapshot_at(base.label(), ts_after_edge1)
@@ -2302,8 +2324,7 @@ mod tests {
         assert_eq!(edge_set(&reconstructed), edge_set(&latest));
 
         // v9: consolidate the shelf into a single merged snapshot.
-        let merged =
-            StorageSnapshotOps::merge_cold_snapshots(&storage, &[base.label()]).unwrap();
+        let merged = StorageSnapshotOps::merge_cold_snapshots(&storage, &[base.label()]).unwrap();
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].edge_count, 2);
         assert_eq!(merged[0].snapshot_ts, ts_after_edge2);
@@ -2313,14 +2334,18 @@ mod tests {
 
         // Re-export of the merged snapshot is portable.
         let reexport_path = temp_dir.path().join("reexport.lkcs");
-        let info =
-            StorageSnapshotOps::export_cold_snapshot(&storage, base.label(), &reexport_path)
-                .unwrap();
+        let info = StorageSnapshotOps::export_cold_snapshot(&storage, base.label(), &reexport_path)
+            .unwrap();
         assert_eq!(info.edge_count, 2);
-        assert_eq!(info.file_size, std::fs::metadata(&reexport_path).unwrap().len());
+        assert_eq!(
+            info.file_size,
+            std::fs::metadata(&reexport_path).unwrap().len()
+        );
 
         // Remove unregisters the shelf.
         StorageSnapshotOps::remove_cold_snapshot(&storage, base.label()).unwrap();
-        assert!(StorageSnapshotOps::list_cold_snapshots(&storage).unwrap().is_empty());
+        assert!(StorageSnapshotOps::list_cold_snapshots(&storage)
+            .unwrap()
+            .is_empty());
     }
 }

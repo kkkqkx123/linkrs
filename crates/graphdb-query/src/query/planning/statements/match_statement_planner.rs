@@ -187,12 +187,6 @@ impl MatchStatementPlanner {
         let stmt = validated.stmt();
         match stmt {
             Stmt::Match(match_stmt) => {
-                for hint in &validation_info.index_hints {
-                    if hint.estimated_selectivity < 0.1 {
-                        log::debug!("Using highly selective indexing: {}", hint.index_name);
-                    }
-                }
-
                 let referenced_tags = &validation_info.semantic_info.referenced_tags;
                 if !referenced_tags.is_empty() {
                     log::debug!("Quoted tags: {:?}", referenced_tags);

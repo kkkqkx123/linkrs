@@ -336,17 +336,6 @@ impl PlanNodeFactory {
         );
         Ok(PlanNodeEnum::IndexScan(index_scan_node))
     }
-
-    /// Create a border index scanning node.
-    pub fn create_edge_index_scan(
-        space_id: u64,
-        edge_type: &str,
-        index_name: &str,
-    ) -> Result<PlanNodeEnum, crate::query::planning::planner::PlannerError> {
-        use crate::query::planning::plan::core::nodes::access::graph_scan_node::EdgeIndexScanNode;
-        let edge_index_scan_node = EdgeIndexScanNode::new(space_id, edge_type, index_name);
-        Ok(PlanNodeEnum::EdgeIndexScan(edge_index_scan_node))
-    }
 }
 
 #[cfg(test)]

@@ -108,12 +108,6 @@ pub enum SourceSpec {
         direction: String,
         projected_properties: Vec<String>,
     },
-    EdgeIndexScan {
-        space_name: String,
-        edge_type: Option<String>,
-        index_name: String,
-        predicate: Option<BoundIndexPredicate>,
-    },
     /// Index scan with typed predicate and projection.
     ///
     /// The predicate and projection are validated at build time against
@@ -122,7 +116,7 @@ pub enum SourceSpec {
         space_name: String,
         index_name: String,
         index_id: u64,
-        predicate: BoundIndexPredicate,
+        predicate: Box<BoundIndexPredicate>,
         projection: IndexProjection,
         residual_filter: Option<crate::core::types::expr::Expression>,
         output_layout: Arc<SlotLayout>,
