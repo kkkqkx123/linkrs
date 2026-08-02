@@ -66,9 +66,6 @@ pub enum SourceState {
         entity_slot: usize,
         prop_names: Vec<String>,
     },
-    LookupIndex {
-        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
-    },
     Start {
         emitted: bool,
     },
@@ -122,64 +119,7 @@ impl SourceState {
                 entity_slot: *entity_slot,
                 prop_names: prop_names.clone(),
             },
-            SourceSpec::LookupIndex { .. } => SourceState::LookupIndex { cursor: None },
             SourceSpec::Start => SourceState::Start { emitted: false },
-        }
-    }
-}
-
-// ── Unary state ──────────────────────────────────────────────────────────────
-
-/// Mutable execution state for unary operators.
-#[derive(Debug)]
-pub enum UnaryState {
-    Filter,
-    Project,
-    Limit {
-        skipped: u32,
-        consumed: u32,
-    },
-    Dedup {
-        seen_rows: HashSet<Vec<Value>>,
-    },
-    Assign,
-    Remove,
-    Unwind {
-        col_index: Option<usize>,
-        all_rows: Vec<Vec<Value>>,
-        current_row_index: usize,
-        current_unwind_index: usize,
-    },
-    AppendVertices,
-    Sample {
-        consumed: u64,
-    },
-}
-
-impl UnaryState {
-    /// Create a fresh state for the given spec variant.
-    pub fn from_spec_variant(spec_name: &str) -> Self {
-        match spec_name {
-            "Filter" => UnaryState::Filter,
-            "Project" => UnaryState::Project,
-            "Limit" => UnaryState::Limit {
-                skipped: 0,
-                consumed: 0,
-            },
-            "Dedup" => UnaryState::Dedup {
-                seen_rows: HashSet::new(),
-            },
-            "Assign" => UnaryState::Assign,
-            "Remove" => UnaryState::Remove,
-            "Unwind" => UnaryState::Unwind {
-                col_index: None,
-                all_rows: Vec::new(),
-                current_row_index: 0,
-                current_unwind_index: 0,
-            },
-            "AppendVertices" => UnaryState::AppendVertices,
-            "Sample" => UnaryState::Sample { consumed: 0 },
-            _ => UnaryState::Filter,
         }
     }
 }

@@ -13,7 +13,7 @@
 
 use super::operators::state::{
     BlockingState, ExchangeState, FulltextState, GraphState, JoinState, SetState, SinkState,
-    SourceState, TxnState, UnaryState, VectorState,
+    SourceState, TxnState, VectorState,
 };
 
 /// A task identifier within a fragment execution.
@@ -27,7 +27,6 @@ pub type TaskId = usize;
 #[derive(Debug)]
 pub enum GlobalState {
     Source(SourceState),
-    Unary(UnaryState),
     Blocking(BlockingState),
     Join(JoinState),
     Graph(GraphState),
@@ -51,7 +50,6 @@ pub enum GlobalState {
 #[derive(Debug)]
 pub enum LocalState {
     Source(SourceState),
-    Unary(UnaryState),
     Blocking(BlockingState),
     Join(JoinState),
     Graph(GraphState),

@@ -250,7 +250,6 @@ impl StreamingExecutor {
                 SourceOperator::IndexScan { .. } => "IndexScan",
                 SourceOperator::Argument => "Argument",
                 SourceOperator::GetProp { .. } => "GetProp",
-                SourceOperator::LookupIndex { .. } => "LookupIndex",
                 SourceOperator::Start => "Start",
             },
             Unary(_, _, op) => match op {
@@ -313,10 +312,6 @@ impl StreamingExecutor {
                 GraphOperator::TraverseAll { .. } => "TraverseAll",
                 GraphOperator::BiExpand { .. } => "BiExpand",
                 GraphOperator::BiTraverse { .. } => "BiTraverse",
-                GraphOperator::ShortestPath { .. } => "ShortestPath",
-                GraphOperator::BFSShortest { .. } => "BFSShortest",
-                GraphOperator::AllPaths { .. } => "AllPaths",
-                GraphOperator::MultiShortestPath { .. } => "MultiShortestPath",
                 GraphOperator::Subgraph { .. } => "Subgraph",
             },
             RecursiveFragment(_, _, op) => match op {

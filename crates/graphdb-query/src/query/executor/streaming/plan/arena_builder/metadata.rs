@@ -267,7 +267,6 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
         | SourceSpec::GetNeighbors { .. }
         | SourceSpec::EdgeIndexScan { .. }
         | SourceSpec::IndexScan { .. }
-        | SourceSpec::LookupIndex { .. }
         | SourceSpec::GetProp { .. } => None,
     }
 }
@@ -412,18 +411,6 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
                 "_traverse_depth".to_string(),
             ],
         ),
-        OperatorKindSpec::Graph(GraphSpec::ShortestPath { .. }) => {
-            layout_with_added_names(&input, ["_shortest_path".to_string()])
-        }
-        OperatorKindSpec::Graph(GraphSpec::BFSShortest { .. }) => {
-            layout_with_added_names(&input, ["_bfs_shortest".to_string()])
-        }
-        OperatorKindSpec::Graph(GraphSpec::AllPaths { .. }) => {
-            layout_with_added_names(&input, ["_all_paths".to_string()])
-        }
-        OperatorKindSpec::Graph(GraphSpec::MultiShortestPath { .. }) => {
-            layout_with_added_names(&input, ["_multi_shortest_path".to_string()])
-        }
         OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::ShortestPath { .. }) => {
             layout_with_added_names(&input, ["path".to_string()])
         }
@@ -471,7 +458,6 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::GetNeighbors { .. } => SlotLayout::from_names(&["vertex".to_string()]),
         SourceSpec::EdgeIndexScan { .. } => SlotLayout::new(vec![]),
         SourceSpec::IndexScan { output_layout, .. } => (**output_layout).clone(),
-        SourceSpec::LookupIndex { output_layout, .. } => (**output_layout).clone(),
         SourceSpec::GetProp { output_layout, .. } => (**output_layout).clone(),
     }
 }
@@ -490,7 +476,6 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
         SourceSpec::GetNeighbors { .. } => "GetNeighbors",
         SourceSpec::EdgeIndexScan { .. } => "EdgeIndexScan",
         SourceSpec::IndexScan { .. } => "IndexScan",
-        SourceSpec::LookupIndex { .. } => "LookupIndex",
         SourceSpec::GetProp { .. } => "GetProp",
     }
 }
@@ -546,10 +531,6 @@ pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
         GraphSpec::Traverse { .. } => "Traverse",
         GraphSpec::BiExpand { .. } => "BiExpand",
         GraphSpec::BiTraverse { .. } => "BiTraverse",
-        GraphSpec::ShortestPath { .. } => "ShortestPath",
-        GraphSpec::BFSShortest { .. } => "BFSShortest",
-        GraphSpec::AllPaths { .. } => "AllPaths",
-        GraphSpec::MultiShortestPath { .. } => "MultiShortestPath",
     }
 }
 

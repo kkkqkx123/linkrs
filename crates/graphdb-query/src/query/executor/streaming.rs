@@ -43,7 +43,7 @@ pub use executor::StreamingExecutor;
 
 pub use operators::base::OperatorBase;
 pub use operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
-pub use operators::state::{BlockingState, ExchangeState, JoinState, SourceState, UnaryState};
+pub use operators::state::{BlockingState, ExchangeState, JoinState, SourceState};
 pub use partition::PartitionView;
 
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};

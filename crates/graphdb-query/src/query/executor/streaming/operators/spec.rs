@@ -17,17 +17,6 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-// ── Capability-unavailable sentinel ──────────────────────────────────────────
-
-/// Returned by builders when a required storage/index capability is not
-/// available, instead of silently producing empty results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Capability {
-    IndexScan { index_id: u64 },
-    IndexCursor,
-    PropertyBatchRead,
-}
-
 // ── Bound index predicate types ─────────────────────────────────────────────
 
 /// A predicate that has been validated and bound to an index schema.
@@ -154,17 +143,6 @@ pub enum SourceSpec {
         /// Whether the entity is a vertex or edge.
         is_vertex: bool,
         /// Output layout (input columns + new property columns).
-        output_layout: Arc<SlotLayout>,
-    },
-    /// Alias for `IndexScan` — kept for backward compat; new code should
-    /// use `IndexScan` directly.  Both variants are identical in semantics.
-    LookupIndex {
-        space_name: String,
-        index_name: String,
-        index_id: u64,
-        predicate: BoundIndexPredicate,
-        projection: IndexProjection,
-        residual_filter: Option<crate::core::types::expr::Expression>,
         output_layout: Arc<SlotLayout>,
     },
     /// Produces one zero-column row on first `next()`, then `None`.
@@ -330,43 +308,6 @@ pub enum GraphSpec {
         direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
-    },
-    ShortestPath {
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        start_vertices: Vec<Value>,
-        target_vertices: Vec<Value>,
-    },
-    BFSShortest {
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        allow_loops: bool,
-    },
-    AllPaths {
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        min_depth: usize,
-        max_depth: usize,
-        acyclic: bool,
-        limit: Option<usize>,
-        offset: usize,
-        filter: Option<Expression>,
-        start_vertices: Vec<Value>,
-        target_vertices: Vec<Value>,
-    },
-    MultiShortestPath {
-        target_vertices: Vec<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        left_vertex_column: String,
-        right_vertex_column: String,
-        single_shortest: bool,
     },
 }
 

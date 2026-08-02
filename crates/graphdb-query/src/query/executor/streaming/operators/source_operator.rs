@@ -189,18 +189,6 @@ pub enum SourceOperator {
         is_vertex: bool,
         output_layout: Arc<SlotLayout>,
     },
-    /// Alias for IndexScan (same semantics, kept for transitional compat).
-    LookupIndex {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        index_name: String,
-        index_id: u64,
-        predicate: BoundIndexPredicate,
-        projection: IndexProjection,
-        output_layout: Arc<SlotLayout>,
-        partition_range: Option<Range<i64>>,
-        cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
-    },
     Start,
 }
 
@@ -345,25 +333,6 @@ impl SourceOperator {
                 prop_names: prop_names.clone(),
                 is_vertex: *is_vertex,
                 output_layout: output_layout.clone(),
-            },
-            super::spec::SourceSpec::LookupIndex {
-                space_name,
-                index_name,
-                index_id,
-                predicate,
-                projection,
-                output_layout,
-                ..
-            } => Self::LookupIndex {
-                storage: storage.clone(),
-                space_name: space_name.clone(),
-                index_name: index_name.clone(),
-                index_id: *index_id,
-                predicate: predicate.clone(),
-                projection: projection.clone(),
-                output_layout: output_layout.clone(),
-                partition_range: None,
-                cursor: None,
             },
             super::spec::SourceSpec::Start => Self::Start,
         }
@@ -645,34 +614,6 @@ impl SourceOperator {
                 base.insert_state(GlobalState::Source(SourceState::GetProp {
                     entity_slot: *entity_slot,
                     prop_names: prop_names.clone(),
-                }));
-            }
-            Self::LookupIndex {
-                storage,
-                space_name,
-                index_id,
-                predicate,
-                projection,
-                partition_range,
-                cursor,
-                ..
-            } => {
-                let storage_ref = storage.as_ref().ok_or_else(|| {
-                    QueryError::execution("LookupIndex requires storage".to_string())
-                })?;
-                let plan = build_index_scan_plan(
-                    storage_ref,
-                    space_name,
-                    *index_id,
-                    predicate,
-                    projection,
-                    partition_range.clone(),
-                )?;
-                *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
-                    storage_error("LookupIndex", "open cursor", space_name, error)
-                })?);
-                base.insert_state(GlobalState::Source(SourceState::LookupIndex {
-                    cursor: None,
                 }));
             }
             Self::Start => {
@@ -1076,30 +1017,6 @@ impl SourceOperator {
                      use the unary GetProp (coming in M2)"
                         .to_string(),
                 ))
-            }
-            Self::LookupIndex {
-                storage,
-                space_name,
-                output_layout,
-                projection,
-                cursor,
-                ..
-            } => {
-                let vertex_projection = match projection {
-                    IndexProjection::Columns(cols) => cols.clone(),
-                    _ => Vec::new(),
-                };
-                next_index_chunk(
-                    storage.as_ref().ok_or_else(|| {
-                        QueryError::execution("LookupIndex requires storage".to_string())
-                    })?,
-                    space_name,
-                    cursor,
-                    output_layout,
-                    base,
-                    "LookupIndex",
-                    &vertex_projection,
-                )
             }
             Self::EdgeIndexScan {
                 space_name, cursor, ..

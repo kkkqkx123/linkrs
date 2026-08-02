@@ -15,10 +15,8 @@ use super::super::runtime::ExecutionRuntime;
 use super::spec::GraphSpec;
 use super::visited_set::VisitedSet;
 
-mod all_paths;
 mod common;
 mod expand;
-mod shortest_path;
 mod subgraph;
 mod traverse;
 
@@ -29,18 +27,6 @@ pub(super) struct GraphCtx<'a> {
     pub(super) direction: EdgeDirection,
     pub(super) base: &'a mut OperatorBase,
     pub(super) input: &'a mut StreamingExecutor,
-}
-
-pub(super) struct AllPathsParams<'a> {
-    pub(super) target_vertex: &'a Option<Expression>,
-    pub(super) min_depth: usize,
-    pub(super) max_depth: usize,
-    pub(super) acyclic: bool,
-    pub(super) limit: &'a Option<usize>,
-    pub(super) offset: usize,
-    pub(super) filter: &'a Option<Expression>,
-    pub(super) start_vertices: &'a [Value],
-    pub(super) target_vertices: &'a [Value],
 }
 
 pub(super) struct ExpandCtx<'a> {
@@ -106,57 +92,6 @@ pub enum GraphOperator {
         max_depth: u32,
         visited: VisitedSet,
     },
-    ShortestPath {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        start_vertices: Vec<Value>,
-        target_vertices: Vec<Value>,
-    },
-    BFSShortest {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        allow_loops: bool,
-        frontier: Vec<Vec<Value>>,
-        visited: VisitedSet,
-    },
-    AllPaths {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        target_vertex: Option<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        min_depth: usize,
-        max_depth: usize,
-        acyclic: bool,
-        limit: Option<usize>,
-        offset: usize,
-        filter: Option<Expression>,
-        start_vertices: Vec<Value>,
-        target_vertices: Vec<Value>,
-        all_paths: Vec<Vec<Value>>,
-        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    },
-    MultiShortestPath {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        target_vertices: Vec<Expression>,
-        edge_types: Vec<String>,
-        direction: EdgeDirection,
-        max_depth: usize,
-        left_vertex_column: String,
-        right_vertex_column: String,
-        single_shortest: bool,
-        all_paths: Vec<Vec<Value>>,
-        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-    },
     Subgraph {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -197,26 +132,6 @@ impl GraphOperator {
                 ..
             }
             | Self::BiTraverse {
-                storage: target_storage,
-                space_name: target_space,
-                ..
-            }
-            | Self::ShortestPath {
-                storage: target_storage,
-                space_name: target_space,
-                ..
-            }
-            | Self::BFSShortest {
-                storage: target_storage,
-                space_name: target_space,
-                ..
-            }
-            | Self::AllPaths {
-                storage: target_storage,
-                space_name: target_space,
-                ..
-            }
-            | Self::MultiShortestPath {
                 storage: target_storage,
                 space_name: target_space,
                 ..
@@ -306,90 +221,6 @@ impl GraphOperator {
                 max_depth: *max_depth,
                 visited: VisitedSet::new(),
             },
-            GraphSpec::ShortestPath {
-                target_vertex,
-                edge_types,
-                direction,
-                max_depth,
-                start_vertices,
-                target_vertices,
-            } => Self::ShortestPath {
-                storage: storage.clone(),
-                space_name: space_name.clone(),
-                target_vertex: target_vertex.clone(),
-                edge_types: edge_types.clone(),
-                direction: *direction,
-                max_depth: *max_depth,
-                start_vertices: start_vertices.clone(),
-                target_vertices: target_vertices.clone(),
-            },
-            GraphSpec::BFSShortest {
-                target_vertex,
-                edge_types,
-                direction,
-                max_depth,
-                allow_loops,
-            } => Self::BFSShortest {
-                storage: storage.clone(),
-                space_name: space_name.clone(),
-                target_vertex: target_vertex.clone(),
-                edge_types: edge_types.clone(),
-                direction: *direction,
-                max_depth: *max_depth,
-                allow_loops: *allow_loops,
-                frontier: Vec::new(),
-                visited: VisitedSet::new(),
-            },
-            GraphSpec::AllPaths {
-                target_vertex,
-                edge_types,
-                direction,
-                min_depth,
-                max_depth,
-                acyclic,
-                limit,
-                offset,
-                filter,
-                start_vertices,
-                target_vertices,
-            } => Self::AllPaths {
-                storage: storage.clone(),
-                space_name: space_name.clone(),
-                target_vertex: target_vertex.clone(),
-                edge_types: edge_types.clone(),
-                direction: *direction,
-                min_depth: *min_depth,
-                max_depth: *max_depth,
-                acyclic: *acyclic,
-                limit: *limit,
-                offset: *offset,
-                filter: filter.clone(),
-                start_vertices: start_vertices.clone(),
-                target_vertices: target_vertices.clone(),
-                all_paths: Vec::new(),
-                result_iter: None,
-            },
-            GraphSpec::MultiShortestPath {
-                target_vertices,
-                edge_types,
-                direction,
-                max_depth,
-                left_vertex_column,
-                right_vertex_column,
-                single_shortest,
-            } => Self::MultiShortestPath {
-                storage,
-                space_name,
-                target_vertices: target_vertices.clone(),
-                edge_types: edge_types.clone(),
-                direction: *direction,
-                max_depth: *max_depth,
-                left_vertex_column: left_vertex_column.clone(),
-                right_vertex_column: right_vertex_column.clone(),
-                single_shortest: *single_shortest,
-                all_paths: Vec::new(),
-                result_iter: None,
-            },
         }
     }
 
@@ -405,10 +236,6 @@ impl GraphOperator {
             | Self::TraverseAll { .. }
             | Self::BiExpand { .. }
             | Self::BiTraverse { .. }
-            | Self::ShortestPath { .. }
-            | Self::BFSShortest { .. }
-            | Self::AllPaths { .. }
-            | Self::MultiShortestPath { .. }
             | Self::Subgraph { .. } => {
                 input.open()?;
                 base.lifecycle.mark_opened();
@@ -517,112 +344,6 @@ impl GraphOperator {
                 },
             ),
 
-            Self::ShortestPath {
-                storage,
-                space_name,
-                target_vertex,
-                edge_types,
-                direction,
-                max_depth,
-                start_vertices,
-                target_vertices,
-                ..
-            } => shortest_path::handle_shortest_path(
-                &*target_vertex,
-                *max_depth,
-                &*start_vertices,
-                &*target_vertices,
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: *direction,
-                    base,
-                    input,
-                },
-            ),
-
-            Self::BFSShortest {
-                storage,
-                space_name,
-                edge_types,
-                direction,
-                max_depth,
-                ..
-            } => shortest_path::handle_bfs_shortest(
-                &*storage,
-                &*space_name,
-                &*edge_types,
-                *direction,
-                *max_depth,
-                base,
-                input,
-            ),
-
-            Self::AllPaths {
-                storage,
-                space_name,
-                target_vertex,
-                edge_types,
-                direction,
-                min_depth,
-                max_depth,
-                acyclic,
-                limit,
-                offset,
-                filter,
-                start_vertices,
-                target_vertices,
-                ..
-            } => all_paths::handle_all_paths(
-                &mut AllPathsParams {
-                    target_vertex,
-                    min_depth: *min_depth,
-                    max_depth: *max_depth,
-                    acyclic: *acyclic,
-                    limit,
-                    offset: *offset,
-                    filter,
-                    start_vertices,
-                    target_vertices,
-                },
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: *direction,
-                    base,
-                    input,
-                },
-            ),
-
-            Self::MultiShortestPath {
-                storage,
-                space_name,
-                target_vertices,
-                edge_types,
-                direction,
-                max_depth,
-                left_vertex_column,
-                right_vertex_column,
-                single_shortest,
-                ..
-            } => all_paths::handle_multi_shortest_path(
-                &*target_vertices,
-                *max_depth,
-                &*left_vertex_column,
-                &*right_vertex_column,
-                *single_shortest,
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: *direction,
-                    base,
-                    input,
-                },
-            ),
-
             Self::Subgraph {
                 storage,
                 space_name,
@@ -654,10 +375,6 @@ impl GraphOperator {
                 | Self::TraverseAll { .. }
                 | Self::BiExpand { .. }
                 | Self::BiTraverse { .. }
-                | Self::ShortestPath { .. }
-                | Self::BFSShortest { .. }
-                | Self::AllPaths { .. }
-                | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
                     base.lifecycle.mark_stopped();
                 }
@@ -679,10 +396,6 @@ impl GraphOperator {
                 | Self::TraverseAll { .. }
                 | Self::BiExpand { .. }
                 | Self::BiTraverse { .. }
-                | Self::ShortestPath { .. }
-                | Self::BFSShortest { .. }
-                | Self::AllPaths { .. }
-                | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
                     base.lifecycle.mark_closed();
                 }
