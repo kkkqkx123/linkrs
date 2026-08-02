@@ -235,7 +235,7 @@ pub use self::schema_change::{
     SchemaFieldChange,
 };
 pub use self::space::CharsetInfo;
-pub use self::user::{PasswordInfo, UserAlterInfo, UserInfo};
+pub use self::user::{PasswordInfo, UserAlterInfo, UserInfo, set_bcrypt_cost};
 
 pub use self::expr::{ContextualExpression, Expression, ExpressionMeta, SerializableExpression};
 pub use self::graph_schema::{

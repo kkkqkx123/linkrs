@@ -1,6 +1,40 @@
 //! User Management Type Definition
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+/// Default bcrypt cost factor for password hashing
+const DEFAULT_BCRYPT_COST: u32 = bcrypt::DEFAULT_COST;
+/// Minimum supported bcrypt cost factor
+const MIN_BCRYPT_COST: u32 = 4;
+/// Maximum supported bcrypt cost factor
+const MAX_BCRYPT_COST: u32 = 12;
+
+/// Process-wide bcrypt cost factor, resolved on the first password hash
+static BCRYPT_COST: OnceLock<u32> = OnceLock::new();
+
+/// Resolve the bcrypt cost factor from the `GRAPHDBC_BCRYPT_COST` environment
+/// variable, falling back to the default cost when absent or invalid.
+fn resolve_bcrypt_cost() -> u32 {
+    std::env::var("GRAPHDBC_BCRYPT_COST")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|cost| (MIN_BCRYPT_COST..=MAX_BCRYPT_COST).contains(cost))
+        .unwrap_or(DEFAULT_BCRYPT_COST)
+}
+
+/// Effective bcrypt cost factor used for password hashing
+fn bcrypt_cost() -> u32 {
+    *BCRYPT_COST.get_or_init(resolve_bcrypt_cost)
+}
+
+/// Override the bcrypt cost factor for password hashing.
+///
+/// Must be called before the first password hash in the process; later calls
+/// are ignored. The cost is clamped to the supported range [4, 12].
+pub fn set_bcrypt_cost(cost: u32) {
+    let _ = BCRYPT_COST.set(cost.clamp(MIN_BCRYPT_COST, MAX_BCRYPT_COST));
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PasswordInfo {
@@ -37,7 +71,7 @@ pub struct UserInfo {
 impl UserInfo {
     /// Create a new user (using plaintext passwords, internal autohashing)
     pub fn new(username: String, password: String) -> Result<Self, crate::core::StorageError> {
-        let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| {
+        let password_hash = bcrypt::hash(password, bcrypt_cost()).map_err(|e| {
             crate::core::StorageError::db_error(format!("Password encryption failed: {}", e))
         })?;
 
@@ -67,7 +101,7 @@ impl UserInfo {
         &mut self,
         new_password: String,
     ) -> Result<(), crate::core::StorageError> {
-        self.password_hash = bcrypt::hash(new_password, bcrypt::DEFAULT_COST).map_err(|e| {
+        self.password_hash = bcrypt::hash(new_password, bcrypt_cost()).map_err(|e| {
             crate::core::StorageError::db_error(format!("Password encryption failed: {}", e))
         })?;
         self.password_changed_at = chrono::Utc::now().timestamp_millis();
