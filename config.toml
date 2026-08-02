@@ -34,6 +34,8 @@ default_username = "root"
 default_password = "root"
 # 是否强制修改默认密码（首次登录时）
 force_change_default_password = true
+# bcrypt 密码哈希成本（4-12，越高越安全但越慢，本地低配机器可适当调低）
+bcrypt_cost = 12
 
 [bootstrap]
 # 是否自动创建默认Space

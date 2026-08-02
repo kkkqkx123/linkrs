@@ -217,6 +217,17 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
   - `false`: 允许使用默认密码
 - **配置建议**: 生产环境建议启用
 
+### 4.7 bcrypt_cost
+- **类型**: u32
+- **默认值**: `12`
+- **说明**: bcrypt 密码哈希成本因子（范围 4-12），进程启动时生效，需重启后应用
+- **实际效果**: 
+  - 成本越高，密码哈希越安全，但每次创建用户/修改密码耗时越长（成本 12 约 200-300ms）
+  - 成本 4-6 约 1ms 级别，适合本地开发与低配置机器
+- **配置建议**: 
+  - 生产环境: `12`（默认值）
+  - 本地开发/低配置机器: `4` 或 `6` 可显著降低延迟
+
 ---
 
 ## 5. 初始化配置 [bootstrap]
@@ -615,6 +626,7 @@ session_idle_timeout_secs = 7200
 default_username = "root"
 default_password = "root"
 force_change_default_password = false
+bcrypt_cost = 6  # 本地开发可调低，生产建议 12
 
 [bootstrap]
 auto_create_default_space = true
@@ -702,6 +714,7 @@ session_idle_timeout_secs = 3600
 default_username = "admin"
 default_password = "changeme"
 force_change_default_password = true
+bcrypt_cost = 12
 
 [bootstrap]
 auto_create_default_space = true

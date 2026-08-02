@@ -462,6 +462,7 @@ mod tests {
             default_username: "root".to_string(),
             default_password: "root".to_string(),
             force_change_default_password: true,
+            bcrypt_cost: 12,
         }
     }
 

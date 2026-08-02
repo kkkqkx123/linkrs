@@ -52,6 +52,7 @@ pub async fn get<
             "session_idle_timeout_secs": config.server.auth.session_idle_timeout_secs,
             "force_change_default_password": config.server.auth.force_change_default_password,
             "default_username": config.server.auth.default_username,
+            "bcrypt_cost": config.server.auth.bcrypt_cost,
         },
         "bootstrap": {
             "auto_create_default_space": config.server.bootstrap.auto_create_default_space,
@@ -237,6 +238,7 @@ fn get_config_value(config: &crate::config::Config, section: &str, key: &str) ->
                 serde_json::json!(config.server.auth.force_change_default_password)
             }
             "default_username" => serde_json::json!(config.server.auth.default_username),
+            "bcrypt_cost" => serde_json::json!(config.server.auth.bcrypt_cost),
             _ => serde_json::Value::Null,
         },
         "bootstrap" => match key {
@@ -286,7 +288,7 @@ fn is_restart_required(section: &str, key: &str) -> bool {
         "database" => matches!(key, "host" | "port" | "storage_path" | "max_connections"),
         "transaction" => false,
         "log" => matches!(key, "dir" | "file"),
-        "auth" => matches!(key, "default_username"),
+        "auth" => matches!(key, "default_username" | "bcrypt_cost"),
         "bootstrap" => true,
         "optimizer" => false,
         "monitoring" => false,

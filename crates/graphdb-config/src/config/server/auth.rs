@@ -17,6 +17,14 @@ pub struct AuthConfig {
     pub default_username: String,
     /// Default password (used only on first start or in single-user mode)
     pub default_password: String,
+    /// Bcrypt cost factor for password hashing (4-12, higher is slower but safer)
+    #[serde(default = "default_bcrypt_cost")]
+    pub bcrypt_cost: u32,
+}
+
+/// Default bcrypt cost factor (bcrypt::DEFAULT_COST)
+fn default_bcrypt_cost() -> u32 {
+    12
 }
 
 impl Default for AuthConfig {
@@ -28,6 +36,7 @@ impl Default for AuthConfig {
             force_change_default_password: true,
             default_username: "root".to_string(),
             default_password: "root".to_string(),
+            bcrypt_cost: default_bcrypt_cost(),
         }
     }
 }
@@ -41,6 +50,10 @@ impl AuthConfig {
 
         if self.default_password.is_empty() {
             return Err("Default password cannot be empty".to_string());
+        }
+
+        if !(4..=12).contains(&self.bcrypt_cost) {
+            return Err("Bcrypt cost must be between 4 and 12".to_string());
         }
 
         Ok(())
@@ -60,6 +73,7 @@ mod tests {
         assert!(config.force_change_default_password);
         assert_eq!(config.default_username, "root");
         assert_eq!(config.default_password, "root");
+        assert_eq!(config.bcrypt_cost, 12);
     }
 
     #[test]
@@ -72,5 +86,11 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+
+        let invalid_cost = AuthConfig {
+            bcrypt_cost: 3,
+            ..Default::default()
+        };
+        assert!(invalid_cost.validate().is_err());
     }
 }

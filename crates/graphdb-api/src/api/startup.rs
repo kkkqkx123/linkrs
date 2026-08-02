@@ -17,6 +17,7 @@ use vector_client::VectorManager;
 use crate::api::server::{GraphService, HttpServer};
 use crate::config::Config;
 use crate::core::error::DBResult;
+use crate::core::types::set_bcrypt_cost;
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
     StorageCommitOps, SyncWrapper,
@@ -39,6 +40,10 @@ pub async fn start_service() -> DBResult<()> {
 pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     info!("Initializing GraphDB service...");
     info!("Configuration loaded: {:?}", config);
+
+    // Apply the bcrypt cost factor before any password hashing happens.
+    // Only the first call in the process takes effect.
+    set_bcrypt_cost(config.server.auth.bcrypt_cost);
 
     info!(
         "Log system has been initialized: {}/{}",

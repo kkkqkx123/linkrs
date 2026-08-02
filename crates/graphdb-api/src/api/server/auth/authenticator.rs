@@ -161,6 +161,7 @@ mod tests {
             default_username: "test".to_string(),
             default_password: "test123".to_string(),
             force_change_default_password: true,
+            bcrypt_cost: 12,
         }
     }
 
@@ -189,6 +190,7 @@ mod tests {
             default_username: "admin".to_string(),
             default_password: "admin123".to_string(),
             force_change_default_password: false,
+            bcrypt_cost: 12,
         };
 
         let auth = PasswordAuthenticator::new_default(config);
@@ -209,6 +211,7 @@ mod tests {
             default_username: "test".to_string(),
             default_password: "test123".to_string(),
             force_change_default_password: false,
+            bcrypt_cost: 12,
         };
 
         let auth = PasswordAuthenticator::new(|_username: &str, _password: &str| Ok(false), config);
@@ -251,6 +254,7 @@ mod tests {
             default_username: "test".to_string(),
             default_password: "test123".to_string(),
             force_change_default_password: false,
+            bcrypt_cost: 12,
         };
 
         let success = Arc::new(AtomicBool::new(false));
@@ -290,6 +294,7 @@ mod tests {
             default_username: "test".to_string(),
             default_password: "test123".to_string(),
             force_change_default_password: false,
+            bcrypt_cost: 12,
         };
 
         let _auth =
