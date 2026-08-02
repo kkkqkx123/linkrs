@@ -137,6 +137,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::VectorManage(node) => node.name(),
 
             PlanNodeEnum::ShowStats(_) => "ShowStats",
+            PlanNodeEnum::ShowConfigs(_) => "ShowConfigs",
+            PlanNodeEnum::ShowQueries(_) => "ShowQueries",
+            PlanNodeEnum::ShowSessions(_) => "ShowSessions",
             PlanNodeEnum::InsertVertices(_) => "InsertVertices",
             PlanNodeEnum::InsertEdges(_) => "InsertEdges",
             PlanNodeEnum::Remove(_) => "Remove",
@@ -249,6 +252,9 @@ impl PlanNodeEnum {
             | PlanNodeEnum::FulltextManage(_)
             | PlanNodeEnum::VectorManage(_)
             | PlanNodeEnum::ShowStats(_)
+            | PlanNodeEnum::ShowConfigs(_)
+            | PlanNodeEnum::ShowQueries(_)
+            | PlanNodeEnum::ShowSessions(_)
             | PlanNodeEnum::InsertVertices(_)
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)

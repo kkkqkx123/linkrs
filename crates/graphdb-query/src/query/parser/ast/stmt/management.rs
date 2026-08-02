@@ -130,6 +130,20 @@ pub struct WithStmt {
     pub recursive: bool,
 }
 
+/// A standalone WHERE stage used as a pipe suffix (e.g. `GO ... | WHERE age > 25`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterStmt {
+    pub span: Span,
+    pub expression: ContextualExpression,
+}
+
+/// A standalone COLLECT stage used as a pipe suffix (e.g. `| COLLECT LIST(name) AS names`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectStmt {
+    pub span: Span,
+    pub items: Vec<super::YieldItem>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShowSessionsStmt {
     pub span: Span,

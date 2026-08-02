@@ -230,29 +230,41 @@ fn execute_range(args: &[Value]) -> Result<Value, ExpressionError> {
             "range requires 2 or 3 arguments",
         ));
     }
-    let start = match &args[0] {
-        Value::Int(i) => *i,
-        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
-        _ => {
+    let to_i64 = |value: &Value| -> Option<i64> {
+        match value {
+            Value::SmallInt(i) => Some(*i as i64),
+            Value::Int(i) => Some(*i as i64),
+            Value::BigInt(i) => Some(*i),
+            _ => None,
+        }
+    };
+    let start = match to_i64(&args[0]) {
+        Some(v) => v,
+        None if args[0].is_null() => return Ok(Value::Null(NullType::Null)),
+        None => {
             return Err(ExpressionError::type_error(
                 "range requires integer arguments",
             ))
         }
     };
-    let end = match &args[1] {
-        Value::Int(i) => *i,
-        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
-        _ => {
+    let end = match to_i64(&args[1]) {
+        Some(v) => v,
+        None if args[1].is_null() => return Ok(Value::Null(NullType::Null)),
+        None => {
             return Err(ExpressionError::type_error(
                 "The range function takes integer arguments",
             ))
         }
     };
     let step = if args.len() > 2 {
-        match &args[2] {
-            Value::Int(i) => *i,
-            Value::Null(_) => return Ok(Value::Null(NullType::Null)),
-            _ => return Err(ExpressionError::type_error("range step must be an integer")),
+        match to_i64(&args[2]) {
+            Some(v) => v,
+            None if args[2].is_null() => return Ok(Value::Null(NullType::Null)),
+            None => {
+                return Err(ExpressionError::type_error(
+                    "range step must be an integer",
+                ))
+            }
         }
     } else {
         1
@@ -269,13 +281,13 @@ fn execute_range(args: &[Value]) -> Result<Value, ExpressionError> {
     if step > 0 {
         let mut i = start;
         while i <= end {
-            result.push(Value::Int(i));
+            result.push(Value::BigInt(i));
             i += step;
         }
     } else {
         let mut i = start;
         while i >= end {
-            result.push(Value::Int(i));
+            result.push(Value::BigInt(i));
             i += step;
         }
     }

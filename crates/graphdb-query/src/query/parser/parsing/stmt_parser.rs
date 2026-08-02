@@ -107,7 +107,7 @@ impl StmtParser {
     fn parse_pipe_suffix(ctx: &mut ParseContext, left: Stmt) -> Result<Stmt, ParseError> {
         if ctx.match_token(TokenKind::Pipe) {
             let start_span = left.span();
-            let right = Self::parse_single_statement(ctx)?;
+            let right = Self::parse_pipe_stage(ctx)?;
             let end_span = right.span();
             let span = ctx.merge_span(start_span.start, end_span.end);
 
@@ -157,10 +157,69 @@ impl StmtParser {
             });
 
             Self::parse_pipe_suffix(ctx, pipe_stmt)
+        } else if ctx.current_token().kind == TokenKind::Group {
+            // A GROUP BY may follow the previous stage without a pipe
+            // operator, e.g. MATCH ... WITH ... GROUP BY ...
+            let start_span = left.span();
+            let right = Self::parse_group_by_statement(ctx)?;
+            let end_span = right.span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+
+            let pipe_stmt = Stmt::Pipe(PipeStmt {
+                span,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+
+            Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else {
             // Check whether it is a set operation.
             Self::parse_set_operation_suffix(ctx, left)
         }
+    }
+
+    /// Parse the right-hand side of a `|` pipe operator.
+    ///
+    /// Most stages are ordinary statements, but WHERE / GROUP BY / COLLECT are
+    /// standalone clause stages that only appear as pipe suffixes.
+    fn parse_pipe_stage(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        if ctx.current_token().kind == TokenKind::Where {
+            // A standalone WHERE stage filters the rows of the previous stage.
+            let start_span = ctx.current_span();
+            ctx.next_token();
+            let expression = Self::parse_expression(ctx)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::Filter(FilterStmt { span, expression }));
+        }
+        if ctx.current_token().kind == TokenKind::Group {
+            return Self::parse_group_by_statement(ctx);
+        }
+        if matches!(
+            ctx.current_token().kind,
+            TokenKind::Identifier(ref word) if word.eq_ignore_ascii_case("COLLECT")
+        ) {
+            // A standalone COLLECT stage aggregates all input rows into one.
+            let start_span = ctx.current_span();
+            ctx.next_token();
+            let mut items = Vec::new();
+            loop {
+                let expression = Self::parse_expression(ctx)?;
+                let alias = if ctx.match_token(TokenKind::As) {
+                    Some(ctx.expect_identifier()?)
+                } else {
+                    None
+                };
+                items.push(YieldItem { expression, alias });
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
+            return Ok(Stmt::Collect(CollectStmt { span, items }));
+        }
+        Self::parse_single_statement(ctx)
     }
 
     /// Analyzing the EXPLAIN statement (special handling is required, as it contains sub-statements)

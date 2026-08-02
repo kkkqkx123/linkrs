@@ -446,6 +446,28 @@ impl Planner for MaintainPlanner {
 
             Stmt::Desc(desc_stmt) => self.plan_desc(desc_stmt, validated),
 
+            Stmt::ShowConfigs(show_configs_stmt) => {
+                let node = crate::query::planning::plan::core::nodes::ShowConfigsNode::new(
+                    next_node_id(),
+                    show_configs_stmt.module.clone(),
+                );
+                PlanNodeEnum::ShowConfigs(node)
+            }
+
+            Stmt::ShowQueries(_) => {
+                let node = crate::query::planning::plan::core::nodes::ShowQueriesNode::new(
+                    next_node_id(),
+                );
+                PlanNodeEnum::ShowQueries(node)
+            }
+
+            Stmt::ShowSessions(_) => {
+                let node = crate::query::planning::plan::core::nodes::ShowSessionsNode::new(
+                    next_node_id(),
+                );
+                PlanNodeEnum::ShowSessions(node)
+            }
+
             Stmt::BeginTransaction(_) => {
                 let node = BeginTransactionNode::new(next_node_id());
                 PlanNodeEnum::BeginTransaction(node)
@@ -485,6 +507,9 @@ impl Planner for MaintainPlanner {
                 | Stmt::ClearSpace(_)
                 | Stmt::Desc(_)
                 | Stmt::Drop(_)
+                | Stmt::ShowConfigs(_)
+                | Stmt::ShowQueries(_)
+                | Stmt::ShowSessions(_)
                 | Stmt::BeginTransaction(_)
                 | Stmt::CommitTransaction(_)
                 | Stmt::RollbackTransaction(_)

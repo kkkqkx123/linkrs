@@ -913,11 +913,28 @@ impl ParameterizedQueryHandler {
     /// # Returns
     /// Parameter Location List
     pub fn extract_params(&self, query: &str) -> Vec<ParamPosition> {
+        self.extract_param_matches(query)
+            .into_iter()
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    /// Extract the parameter matches from the query together with their end
+    /// offsets. Assignment left-hand sides (`$var = ...`) are excluded.
+    fn extract_param_matches(&self, query: &str) -> Vec<(ParamPosition, usize)> {
         let mut positions = Vec::new();
 
         for (idx, cap) in self.placeholder_pattern.captures_iter(query).enumerate() {
             let full_match = cap.get(0).expect("Full match should exist");
             let param_str = cap.get(1).expect("Parameter group should exist").as_str();
+
+            // Skip the left-hand side of a variable assignment, e.g.
+            // `$result = GO ...` defines a session variable instead of
+            // declaring a named query parameter.
+            let after_match = &query[full_match.end()..];
+            if after_match.trim_start().starts_with('=') {
+                continue;
+            }
 
             let (index, name) = if param_str.chars().all(|c| c.is_ascii_digit()) {
                 (param_str.parse::<usize>().unwrap_or(idx), None)
@@ -925,12 +942,15 @@ impl ParameterizedQueryHandler {
                 (idx, Some(param_str.to_string()))
             };
 
-            positions.push(ParamPosition {
-                index,
-                name,
-                position: full_match.start(),
-                expected_type: None,
-            });
+            positions.push((
+                ParamPosition {
+                    index,
+                    name,
+                    position: full_match.start(),
+                    expected_type: None,
+                },
+                full_match.end(),
+            ));
         }
 
         positions
@@ -944,9 +964,22 @@ impl ParameterizedQueryHandler {
     /// # Returns
     /// (parameterized query, parameter list)
     pub fn parameterize(&self, query: &str) -> (String, Vec<ParamPosition>) {
-        let positions = self.extract_params(query);
-        let parameterized = self.placeholder_pattern.replace_all(query, "?").to_string();
+        let matches = self.extract_param_matches(query);
+        let positions = matches
+            .iter()
+            .map(|(position, _)| position.clone())
+            .collect::<Vec<_>>();
 
+        // Replace only the matches that were accepted as parameters so that
+        // assignment left-hand sides ($var = ...) stay intact in the template.
+        let mut parameterized = String::with_capacity(query.len());
+        let mut last_end = 0;
+        for (position, end) in matches {
+            parameterized.push_str(&query[last_end..position.position]);
+            parameterized.push('?');
+            last_end = end;
+        }
+        parameterized.push_str(&query[last_end..]);
         (parameterized, positions)
     }
 }

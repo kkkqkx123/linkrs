@@ -68,6 +68,8 @@ pub enum Stmt {
     Return(ReturnStmt),
     With(WithStmt),
     Yield(YieldStmt),
+    Filter(FilterStmt),
+    Collect(CollectStmt),
     Set(SetStmt),
     Remove(RemoveStmt),
     Pipe(PipeStmt),
@@ -135,6 +137,8 @@ impl Stmt {
             Stmt::Return(s) => s.span,
             Stmt::With(s) => s.span,
             Stmt::Yield(s) => s.span,
+            Stmt::Filter(s) => s.span,
+            Stmt::Collect(s) => s.span,
             Stmt::Set(s) => s.span,
             Stmt::Remove(s) => s.span,
             Stmt::Pipe(s) => s.span,
@@ -208,6 +212,8 @@ impl Stmt {
             Stmt::Return(_) => "RETURN",
             Stmt::With(_) => "WITH",
             Stmt::Yield(_) => "YIELD",
+            Stmt::Filter(_) => "WHERE",
+            Stmt::Collect(_) => "COLLECT",
             Stmt::Set(_) => "SET",
             Stmt::Remove(_) => "REMOVE",
             Stmt::Pipe(_) => "PIPE",
@@ -374,6 +380,18 @@ impl Stmt {
     pub fn as_yield(&self) -> Option<&YieldStmt> {
         match self {
             Stmt::Yield(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_filter(&self) -> Option<&FilterStmt> {
+        match self {
+            Stmt::Filter(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_collect(&self) -> Option<&CollectStmt> {
+        match self {
+            Stmt::Collect(s) => Some(s),
             _ => None,
         }
     }

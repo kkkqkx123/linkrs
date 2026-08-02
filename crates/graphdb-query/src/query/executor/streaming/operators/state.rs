@@ -484,6 +484,9 @@ pub enum DdlState {
     IndexManage,
     UserManage,
     ShowStats,
+    ShowConfigs,
+    ShowQueries,
+    ShowSessions,
     Analyze,
     Migrate,
 }
@@ -498,6 +501,9 @@ impl DdlState {
             super::spec::DdlSpec::DeleteIndex { .. } => DdlState::IndexManage,
             super::spec::DdlSpec::UserManage { .. } => DdlState::UserManage,
             super::spec::DdlSpec::ShowStats { .. } => DdlState::ShowStats,
+            super::spec::DdlSpec::ShowConfigs { .. } => DdlState::ShowConfigs,
+            super::spec::DdlSpec::ShowQueries { .. } => DdlState::ShowQueries,
+            super::spec::DdlSpec::ShowSessions { .. } => DdlState::ShowSessions,
             super::spec::DdlSpec::Analyze { .. } => DdlState::Analyze,
             super::spec::DdlSpec::Migrate { .. } => DdlState::Migrate,
         }

@@ -73,6 +73,19 @@ impl Planner for PipePlanner {
             PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
         })?;
 
+        // When a standalone GO (no inline YIELD clause) is the left side of a
+        // pipe, the GoPlanner appends a default projection (dst, edge) and a
+        // trivial filter (true) to its plan. In a pipe context these are
+        // redundant: the pipe stages build their own projections and the
+        // filter is a no-op. Elide them so that downstream stages resolve
+        // their variables (e.g. target) against the ExpandAll output layout
+        // directly.
+        let left_root = if matches!(*pipe_stmt.left, Stmt::Go(_)) {
+            elide_go_default_adapter(left_root)
+        } else {
+            left_root
+        };
+
         let combined_root = replace_argument_node(right_root, left_root);
 
         Ok(SubPlan::new(Some(combined_root), None))
@@ -89,14 +102,74 @@ impl Default for PipePlanner {
     }
 }
 
+/// Strip the default projection (dst, edge) and trivial filter (true) that the
+/// GoPlanner attaches to a standalone GO plan. Returns the plan unchanged when
+/// its shape does not match the GO default adapter.
+fn elide_go_default_adapter(plan: PlanNodeEnum) -> PlanNodeEnum {
+    let PlanNodeEnum::Project(project) = plan else {
+        return plan;
+    };
+
+    let columns = project.columns();
+    let is_default_project = columns.len() == 2
+        && columns[0].alias == "dst"
+        && columns[1].alias == "edge"
+        && columns[0].expression.as_variable().as_deref() == Some("dst")
+        && columns[1].expression.as_variable().as_deref() == Some("edge");
+    if !is_default_project {
+        return PlanNodeEnum::Project(project);
+    }
+
+    let PlanNodeEnum::Filter(filter) = project.input().clone() else {
+        return PlanNodeEnum::Project(project);
+    };
+
+    let is_true_filter = filter
+        .condition()
+        .as_literal()
+        .is_some_and(|value| matches!(value, crate::core::Value::Bool(true)));
+    if !is_true_filter {
+        return PlanNodeEnum::Project(project);
+    }
+
+    if let PlanNodeEnum::ExpandAll(_) = filter.input().clone() {
+        filter.input().clone()
+    } else {
+        PlanNodeEnum::Project(project)
+    }
+}
+
 fn replace_argument_node(plan: PlanNodeEnum, replacement: PlanNodeEnum) -> PlanNodeEnum {
     match plan {
         PlanNodeEnum::Argument(_) => replacement,
+        PlanNodeEnum::Start(_) => replacement,
         PlanNodeEnum::Project(mut project) => {
             let input = project.input().clone();
             let new_input = replace_argument_node(input, replacement);
             project.set_input(new_input);
             PlanNodeEnum::Project(project)
+        }
+        PlanNodeEnum::Aggregate(mut aggregate) => {
+            // A standalone GROUP BY is planned as Aggregate -> Project -> Scan.
+            // When the GROUP BY appears on the right side of a pipe, replace the
+            // whole adapter with the left plan so the aggregate consumes the
+            // piped rows directly.
+            let input = aggregate.input().clone();
+            let new_input = match input {
+                PlanNodeEnum::Project(mut project) => {
+                    if matches!(project.input().clone(), PlanNodeEnum::ScanVertices(_)) {
+                        replacement
+                    } else {
+                        let project_input = project.input().clone();
+                        let new_project_input = replace_argument_node(project_input, replacement);
+                        project.set_input(new_project_input);
+                        PlanNodeEnum::Project(project)
+                    }
+                }
+                other => replace_argument_node(other, replacement),
+            };
+            aggregate.set_input(new_input);
+            PlanNodeEnum::Aggregate(aggregate)
         }
         PlanNodeEnum::Filter(mut filter) => {
             let input = filter.input().clone();

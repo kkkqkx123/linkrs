@@ -155,6 +155,21 @@ pub enum DdlOperator {
         space_name: String,
         emitted: bool,
     },
+    ShowConfigs {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
+    ShowQueries {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
+    ShowSessions {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        emitted: bool,
+    },
     Analyze {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -228,6 +243,21 @@ impl DdlOperator {
                 space_name: space_name.clone(),
                 emitted: false,
             },
+            super::spec::DdlSpec::ShowConfigs { space_name } => DdlOperator::ShowConfigs {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ShowQueries { space_name } => DdlOperator::ShowQueries {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ShowSessions { space_name } => DdlOperator::ShowSessions {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
             super::spec::DdlSpec::Analyze { space_name } => DdlOperator::Analyze {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -262,6 +292,9 @@ impl DdlOperator {
             | DdlOperator::DeleteIndex { .. }
             | DdlOperator::UserManage { .. }
             | DdlOperator::ShowStats { .. }
+            | DdlOperator::ShowConfigs { .. }
+            | DdlOperator::ShowQueries { .. }
+            | DdlOperator::ShowSessions { .. }
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 input.open()?;
@@ -316,6 +349,21 @@ impl DdlOperator {
             DdlOperator::ShowStats {
                 storage, emitted, ..
             } => maintenance_executor::execute_show_stats(storage, emitted, base),
+            DdlOperator::ShowConfigs {
+                storage,
+                space_name,
+                emitted,
+            } => maintenance_executor::execute_show_configs(storage, space_name, emitted, base),
+            DdlOperator::ShowQueries {
+                storage,
+                space_name,
+                emitted,
+            } => maintenance_executor::execute_show_queries(storage, space_name, emitted, base),
+            DdlOperator::ShowSessions {
+                storage,
+                space_name,
+                emitted,
+            } => maintenance_executor::execute_show_sessions(storage, space_name, emitted, base),
             DdlOperator::Analyze {
                 storage,
                 space_name,
@@ -353,6 +401,9 @@ impl DdlOperator {
             | DdlOperator::DeleteIndex { .. }
             | DdlOperator::UserManage { .. }
             | DdlOperator::ShowStats { .. }
+            | DdlOperator::ShowConfigs { .. }
+            | DdlOperator::ShowQueries { .. }
+            | DdlOperator::ShowSessions { .. }
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 if base.lifecycle.can_close() {
@@ -376,6 +427,9 @@ impl DdlOperator {
             | DdlOperator::DeleteIndex { .. }
             | DdlOperator::UserManage { .. }
             | DdlOperator::ShowStats { .. }
+            | DdlOperator::ShowConfigs { .. }
+            | DdlOperator::ShowQueries { .. }
+            | DdlOperator::ShowSessions { .. }
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 if base.lifecycle.can_close() {

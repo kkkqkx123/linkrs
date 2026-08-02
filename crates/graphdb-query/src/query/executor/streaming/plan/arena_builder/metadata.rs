@@ -386,6 +386,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
                 name_to_slot.insert(col_names[2].clone(), dst_slot_id);
                 name_to_slot.insert("$$".to_string(), dst_slot_id);
                 name_to_slot.insert("$^".to_string(), src_slot_id);
+                name_to_slot.insert("target".to_string(), dst_slot_id);
                 for extra_name in col_names.iter().skip(3) {
                     if let Some(slot) = slots.get_mut(edge_slot_id) {
                         if slot.alias.is_none() {
@@ -602,6 +603,9 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
         DdlSpec::DeleteIndex { .. } => "DeleteIndex",
         DdlSpec::UserManage { .. } => "UserManage",
         DdlSpec::ShowStats { .. } => "ShowStats",
+        DdlSpec::ShowConfigs { .. } => "ShowConfigs",
+        DdlSpec::ShowQueries { .. } => "ShowQueries",
+        DdlSpec::ShowSessions { .. } => "ShowSessions",
         DdlSpec::Analyze { .. } => "Analyze",
         DdlSpec::Migrate { .. } => "Migrate",
     }

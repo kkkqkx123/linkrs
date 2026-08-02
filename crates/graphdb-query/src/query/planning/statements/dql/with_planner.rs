@@ -5,8 +5,9 @@
 use crate::core::YieldColumn;
 use crate::query::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
 use crate::query::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{ArgumentNode, DedupNode, FilterNode, LimitNode, LoopNode, ProjectNode, SortNode},
+    next_node_id, nodes::{
+        DedupNode, FilterNode, LimitNode, LoopNode, ProjectNode, SortNode, StartNode,
+    },
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -81,9 +82,9 @@ impl Planner for WithPlanner {
 
         let with_stmt = self.extract_with_stmt(validated.stmt())?;
 
-        // Create a parameter node as the input.
-        let arg_node = ArgumentNode::new(next_node_id(), "with_input");
-        let mut current_node = PlanNodeEnum::Argument(arg_node.clone());
+        // A single empty row seeds a standalone WITH statement.
+        let start_node = StartNode::new();
+        let mut current_node = PlanNodeEnum::Start(start_node.clone());
 
         let yield_columns: Vec<YieldColumn> = with_stmt
             .items
@@ -185,7 +186,7 @@ impl Planner for WithPlanner {
         }
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
 
         Ok(sub_plan)
     }

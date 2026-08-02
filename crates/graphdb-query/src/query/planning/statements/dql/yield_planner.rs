@@ -5,8 +5,7 @@
 use crate::core::YieldColumn;
 use crate::query::parser::ast::stmt::{OrderDirection, Stmt, YieldItem, YieldStmt};
 use crate::query::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{ArgumentNode, DedupNode, FilterNode, LimitNode, ProjectNode, SortNode},
+    nodes::{DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode},
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -79,9 +78,9 @@ impl Planner for YieldPlanner {
 
         let yield_stmt = self.extract_yield_stmt(validated.stmt())?;
 
-        // Create a parameter node as the input.
-        let arg_node = ArgumentNode::new(next_node_id(), "yield_input");
-        let mut current_node = PlanNodeEnum::Argument(arg_node.clone());
+        // A single empty row seeds a standalone YIELD statement.
+        let start_node = StartNode::new();
+        let mut current_node = PlanNodeEnum::Start(start_node.clone());
 
         let yield_columns: Vec<YieldColumn> = yield_stmt
             .items
@@ -165,7 +164,7 @@ impl Planner for YieldPlanner {
         }
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Argument(arg_node)));
+        let sub_plan = SubPlan::new(Some(current_node), Some(PlanNodeEnum::Start(start_node)));
 
         Ok(sub_plan)
     }

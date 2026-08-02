@@ -20,6 +20,9 @@ use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     UserManageNode, VectorManageNode,
 };
 use crate::query::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
+use crate::query::planning::plan::core::nodes::management::system_nodes::{
+    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+};
 use crate::query::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
 };
@@ -92,6 +95,10 @@ pub use crate::query::planning::plan::core::nodes::management::space_nodes::{
 };
 pub use crate::query::planning::plan::core::nodes::management::stats_nodes::{
     ShowStatsNode as ShowStatsNodeType, ShowStatsType,
+};
+pub use crate::query::planning::plan::core::nodes::management::system_nodes::{
+    ShowConfigsNode as ShowConfigsNodeType, ShowQueriesNode as ShowQueriesNodeType,
+    ShowSessionsNode as ShowSessionsNodeType,
 };
 pub use crate::query::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
@@ -218,6 +225,11 @@ pub enum PlanNodeEnum {
     // Statistics Nodes ============
     ShowStats(ShowStatsNode),
 
+    // System Information Nodes ============
+    ShowConfigs(ShowConfigsNode),
+    ShowQueries(ShowQueriesNode),
+    ShowSessions(ShowSessionsNode),
+
     // Full-text Search Nodes
     FulltextSearch(FulltextSearchNode),
     FulltextLookup(FulltextLookupNode),
@@ -320,6 +332,9 @@ crate::define_enum_is_methods! {
     (UpdateEdges, is_update_edges),
     // Statistical nodes
     (ShowStats, is_show_stats),
+    (ShowConfigs, is_show_configs),
+    (ShowQueries, is_show_queries),
+    (ShowSessions, is_show_sessions),
     // Full-text Search Nodes
     (FulltextSearch, is_fulltext_search),
     (FulltextLookup, is_fulltext_lookup),
@@ -416,6 +431,9 @@ crate::define_enum_as_methods! {
     (UpdateEdges, as_update_edges, UpdateEdgesNode),
     // Statistical node
     (ShowStats, as_show_stats, ShowStatsNode),
+    (ShowConfigs, as_show_configs, ShowConfigsNode),
+    (ShowQueries, as_show_queries, ShowQueriesNode),
+    (ShowSessions, as_show_sessions, ShowSessionsNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup, FulltextLookupNode),
@@ -512,6 +530,9 @@ crate::define_enum_as_mut_methods! {
     (UpdateEdges, as_update_edges_mut, UpdateEdgesNode),
     // Statistical node
     (ShowStats, as_show_stats_mut, ShowStatsNode),
+    (ShowConfigs, as_show_configs_mut, ShowConfigsNode),
+    (ShowQueries, as_show_queries_mut, ShowQueriesNode),
+    (ShowSessions, as_show_sessions_mut, ShowSessionsNode),
     // Full-text Search Nodes
     (FulltextSearch, as_fulltext_search_mut, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup_mut, FulltextLookupNode),
@@ -613,6 +634,9 @@ crate::define_enum_type_name! {
     (UpdateEdges, "UpdateEdges"),
     // Statistical nodes
     (ShowStats, "ShowStats"),
+    (ShowConfigs, "ShowConfigs"),
+    (ShowQueries, "ShowQueries"),
+    (ShowSessions, "ShowSessions"),
     // Full-text Search Nodes
     (FulltextSearch, "FulltextSearch"),
     (FulltextLookup, "FulltextLookup"),
@@ -712,6 +736,9 @@ crate::define_enum_category! {
     (UpdateEdges, PlanNodeCategory::Management),
     // Statistical nodes
     (ShowStats, PlanNodeCategory::Management),
+    (ShowConfigs, PlanNodeCategory::Management),
+    (ShowQueries, PlanNodeCategory::Management),
+    (ShowSessions, PlanNodeCategory::Management),
     // Full-text Search Nodes
     (FulltextSearch, PlanNodeCategory::DataAccess),
     (FulltextLookup, PlanNodeCategory::DataAccess),
@@ -811,6 +838,9 @@ crate::define_enum_describe! {
     (UpdateEdges, "UpdateEdges"),
     // Statistical nodes
     (ShowStats, "ShowStats"),
+    (ShowConfigs, "ShowConfigs"),
+    (ShowQueries, "ShowQueries"),
+    (ShowSessions, "ShowSessions"),
     // Full-text Search Nodes
     (FulltextSearch, "FulltextSearch"),
     (FulltextLookup, "FulltextLookup"),
@@ -848,6 +878,9 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::UpdateVertices(_)
                 | PlanNodeEnum::UpdateEdges(_)
                 | PlanNodeEnum::ShowStats(_)
+                | PlanNodeEnum::ShowConfigs(_)
+                | PlanNodeEnum::ShowQueries(_)
+                | PlanNodeEnum::ShowSessions(_)
         )
     }
 }

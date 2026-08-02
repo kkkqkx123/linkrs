@@ -535,13 +535,19 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
         }
         TokenKind::List => {
             ctx.next_token();
-            let elements = parse_expression_list(ctx)?;
-            ctx.expect_token(TokenKind::RBracket)?;
-            let span = ctx.merge_span(start_pos, ctx.current_position());
-            Ok(ParseResult {
-                expr: Expression::list(elements.into_iter().map(|e| e.expr).collect()),
-                span,
-            })
+            if ctx.match_token(TokenKind::LParen) {
+                // LIST(...) used as a function call (e.g. COLLECT LIST(name)).
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                parse_function_call("list".to_string(), span, ctx)
+            } else {
+                let elements = parse_expression_list(ctx)?;
+                ctx.expect_token(TokenKind::RBracket)?;
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                Ok(ParseResult {
+                    expr: Expression::list(elements.into_iter().map(|e| e.expr).collect()),
+                    span,
+                })
+            }
         }
         TokenKind::LBracket => {
             ctx.next_token();

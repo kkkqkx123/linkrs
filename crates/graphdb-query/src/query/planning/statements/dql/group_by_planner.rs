@@ -3,12 +3,12 @@
 //! Query planning for statements that involve the GROUP BY clause
 
 use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::parser::ast::{GroupingType, Stmt};
 use crate::query::planning::plan::core::{
-    node_id_generator::next_node_id,
-    nodes::{AggregateNode, ArgumentNode, FilterNode},
+    nodes::{AggregateNode, FilterNode, ProjectNode, ScanVerticesNode},
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -184,7 +184,7 @@ impl Planner for GroupByPlanner {
     fn transform(
         &mut self,
         validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let group_by_stmt = match validated.stmt() {
             Stmt::GroupBy(group_by_stmt) => group_by_stmt,
@@ -195,17 +195,13 @@ impl Planner for GroupByPlanner {
             }
         };
 
-        // Create a parameter node as the input.
-        let arg_node = ArgumentNode::new(next_node_id(), "group_by_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-
-        // Extract the group key – Use an expression to describe the key.
+        // The group keys resolve against the input columns by name, e.g.
+        // GROUP BY city produces the key "city".
         let num_group_items = group_by_stmt.group_items.len();
         let group_keys: Vec<String> = group_by_stmt
             .group_items
             .iter()
-            .enumerate()
-            .map(|(i, _)| format!("group_key_{}", i))
+            .map(|item| item.to_expression_string())
             .collect();
 
         // Extract the aggregate functions with distinct flags and filters
@@ -220,6 +216,16 @@ impl Planner for GroupByPlanner {
                 aggregation_filters.push(filter);
             }
         }
+
+        // Build the input plan. A standalone GROUP BY aggregates over every
+        // vertex of the current space; when the GROUP BY is the right side of
+        // a pipe, PipePlanner replaces this adapter with the piped rows.
+        let (input_enum, input_tail) = self.build_standalone_input(
+            validated,
+            &group_keys,
+            &aggregation_functions,
+            qctx,
+        )?;
 
         // Generate grouping sets from GroupingType
         let grouping_sets = match &group_by_stmt.grouping_type {
@@ -280,7 +286,7 @@ impl Planner for GroupByPlanner {
 
         // Create an aggregate node.
         let mut aggregate_node = AggregateNode::new(
-            arg_node_enum.clone(),
+            input_enum.clone(),
             group_keys,
             aggregation_functions,
         )
@@ -306,13 +312,105 @@ impl Planner for GroupByPlanner {
         }
 
         // Create a SubPlan
-        let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
+        let sub_plan = SubPlan::new(Some(final_node), Some(input_tail));
 
         Ok(sub_plan)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
         matches!(stmt, Stmt::GroupBy(_))
+    }
+}
+
+impl GroupByPlanner {
+    /// Build the input plan for a standalone GROUP BY statement.
+    ///
+    /// The input is planned as ScanVertices -> Project(v.<property> AS <name>),
+    /// so the aggregate evaluates its group keys and aggregate function fields
+    /// against flat property columns. When the GROUP BY appears on the right
+    /// side of a pipe, PipePlanner replaces this adapter with the piped rows.
+    fn build_standalone_input(
+        &self,
+        validated: &ValidatedStatement,
+        group_keys: &[String],
+        aggregation_functions: &[AggregateFunction],
+        qctx: Arc<QueryContext>,
+    ) -> Result<(PlanNodeEnum, PlanNodeEnum), PlannerError> {
+        let space_name = qctx
+            .space_name()
+            .or_else(|| validated.validation_info.semantic_info.space_name.clone())
+            .unwrap_or_default();
+
+        // Collect the property names referenced by the group keys and the
+        // aggregate function fields.
+        let mut properties: Vec<String> = group_keys.to_vec();
+        for func in aggregation_functions {
+            if let Some(field) = Self::aggregate_field(func) {
+                properties.push(field);
+            }
+        }
+        properties.sort();
+        properties.dedup();
+
+        let mut scan_node = ScanVerticesNode::new(0, &space_name);
+        scan_node.set_col_names(vec!["v".to_string()]);
+        scan_node.set_projected_properties(properties.clone());
+        let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
+
+        // Project the needed vertex properties into flat columns.
+        let expr_ctx = validated.expr_context();
+        let mut yield_columns = Vec::new();
+        for property in &properties {
+            let expression = Expression::Property {
+                object: Box::new(Expression::Variable("v".to_string())),
+                property: property.clone(),
+            };
+            let expr_id = expr_ctx.register_expression(ExpressionMeta::new(expression));
+            let ctx_expr = ContextualExpression::new(expr_id, expr_ctx.clone());
+            yield_columns.push(crate::core::YieldColumn {
+                expression: ctx_expr,
+                alias: property.clone(),
+                is_matched: false,
+            });
+        }
+
+        let project_node = ProjectNode::new(scan_enum.clone(), yield_columns).map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+        })?;
+
+        Ok((PlanNodeEnum::Project(project_node), scan_enum))
+    }
+
+    /// Return the input field name referenced by an aggregate function, if any.
+    fn aggregate_field(func: &AggregateFunction) -> Option<String> {
+        match func {
+            AggregateFunction::Count(None) => None,
+            AggregateFunction::Count(Some(field))
+            | AggregateFunction::Sum(field)
+            | AggregateFunction::Avg(field)
+            | AggregateFunction::Min(field)
+            | AggregateFunction::Max(field)
+            | AggregateFunction::Collect(field)
+            | AggregateFunction::CollectSet(field)
+            | AggregateFunction::Distinct(field)
+            | AggregateFunction::Std(field)
+            | AggregateFunction::StddevPop(field)
+            | AggregateFunction::StddevSamp(field)
+            | AggregateFunction::Variance(field)
+            | AggregateFunction::Product(field)
+            | AggregateFunction::Median(field)
+            | AggregateFunction::Mode(field)
+            | AggregateFunction::BitAnd(field)
+            | AggregateFunction::BitOr(field)
+            | AggregateFunction::BoolAnd(field)
+            | AggregateFunction::BoolOr(field)
+            | AggregateFunction::VecSum(field)
+            | AggregateFunction::VecAvg(field)
+            | AggregateFunction::Percentile(field, _)
+            | AggregateFunction::PercentileCont(field, _)
+            | AggregateFunction::GroupConcat(field, _)
+            | AggregateFunction::GroupConcatWithOrder(field, _, _) => Some(field.clone()),
+        }
     }
 }
 

@@ -81,6 +81,69 @@ pub(super) fn execute_show_stats(
     }
 }
 
+pub(super) fn execute_show_configs(
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
+    _space_name: &str,
+    emitted: &mut bool,
+    base: &mut OperatorBase,
+) -> Result<Option<DataChunk>, QueryError> {
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    if !base.lifecycle.is_opened() {
+        return Ok(None);
+    }
+    base.lifecycle.mark_closed();
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("module", "string"),
+        vec![Value::string("graphdb")],
+    )))
+}
+
+pub(super) fn execute_show_queries(
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
+    _space_name: &str,
+    emitted: &mut bool,
+    base: &mut OperatorBase,
+) -> Result<Option<DataChunk>, QueryError> {
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    if !base.lifecycle.is_opened() {
+        return Ok(None);
+    }
+    base.lifecycle.mark_closed();
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("queries", "string"),
+        vec![],
+    )))
+}
+
+pub(super) fn execute_show_sessions(
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
+    _space_name: &str,
+    emitted: &mut bool,
+    base: &mut OperatorBase,
+) -> Result<Option<DataChunk>, QueryError> {
+    let _ = storage;
+    if *emitted {
+        return Ok(None);
+    }
+    *emitted = true;
+    if !base.lifecycle.is_opened() {
+        return Ok(None);
+    }
+    base.lifecycle.mark_closed();
+    Ok(Some(super::make_single_row(
+        super::make_single_col_schema("sessions", "string"),
+        vec![],
+    )))
+}
+
 pub(super) fn execute_analyze(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,

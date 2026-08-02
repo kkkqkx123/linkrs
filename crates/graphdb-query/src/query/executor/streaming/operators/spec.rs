@@ -570,6 +570,15 @@ pub enum DdlSpec {
     ShowStats {
         space_name: String,
     },
+    ShowConfigs {
+        space_name: String,
+    },
+    ShowQueries {
+        space_name: String,
+    },
+    ShowSessions {
+        space_name: String,
+    },
     Analyze {
         space_name: String,
     },

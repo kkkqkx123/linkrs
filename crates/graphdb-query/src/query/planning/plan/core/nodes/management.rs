@@ -3,6 +3,7 @@ pub mod index_nodes;
 pub mod manage_node_enums;
 pub mod space_nodes;
 pub mod stats_nodes;
+pub mod system_nodes;
 pub mod tag_nodes;
 pub mod user_nodes;
 
@@ -25,6 +26,7 @@ pub use space_nodes::{
     ShowCreateSpaceNode, ShowSpacesNode, SpaceAlterOption, SpaceManageInfo, SwitchSpaceNode,
 };
 pub use stats_nodes::{ShowStatsNode, ShowStatsType};
+pub use system_nodes::{ShowConfigsNode, ShowQueriesNode, ShowSessionsNode};
 pub use tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, ShowCreateTagNode, ShowTagsNode,
     TagAlterInfo, TagManageInfo,

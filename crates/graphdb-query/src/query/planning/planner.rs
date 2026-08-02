@@ -34,6 +34,8 @@ use crate::query::planning::statements::dql::fetch_edges_planner::FetchEdgesPlan
 use crate::query::planning::statements::dql::fetch_vertices_planner::FetchVerticesPlanner;
 use crate::query::planning::statements::dql::go_planner::GoPlanner;
 use crate::query::planning::statements::dql::group_by_planner::GroupByPlanner;
+use crate::query::planning::statements::dql::collect_planner::CollectPlanner;
+use crate::query::planning::statements::dql::filter_planner::FilterPlanner;
 use crate::query::planning::statements::dql::lookup_planner::LookupPlanner;
 use crate::query::planning::statements::dql::path_planner::PathPlanner;
 use crate::query::planning::statements::dql::pipe_planner::PipePlanner;
@@ -164,6 +166,8 @@ pub enum PlannerEnum {
     Set(SetPlanner),
     Merge(MergePlanner),
     GroupBy(GroupByPlanner),
+    Filter(FilterPlanner),
+    Collect(CollectPlanner),
     SetOperation(SetOperationPlanner),
     Use(UsePlanner),
     Unwind(UnwindPlanner),
@@ -203,6 +207,8 @@ impl PlannerEnum {
             Stmt::Merge(_) => Some(PlannerEnum::Merge(MergePlanner::new())),
             Stmt::Assignment(_) => Some(PlannerEnum::Assignment(AssignmentPlanner::new())),
             Stmt::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
+            Stmt::Filter(_) => Some(PlannerEnum::Filter(FilterPlanner::new())),
+            Stmt::Collect(_) => Some(PlannerEnum::Collect(CollectPlanner::new())),
             Stmt::SetOperation(_) => Some(PlannerEnum::SetOperation(SetOperationPlanner::new())),
             Stmt::Use(_) => Some(PlannerEnum::Use(UsePlanner::new())),
             Stmt::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
@@ -296,6 +302,8 @@ impl PlannerEnum {
             PlannerEnum::Set(planner) => planner.transform(validated, qctx),
             PlannerEnum::Merge(planner) => planner.transform(validated, qctx),
             PlannerEnum::GroupBy(planner) => planner.transform(validated, qctx),
+            PlannerEnum::Filter(planner) => planner.transform(validated, qctx),
+            PlannerEnum::Collect(planner) => planner.transform(validated, qctx),
             PlannerEnum::SetOperation(planner) => planner.transform(validated, qctx),
             PlannerEnum::Use(planner) => planner.transform(validated, qctx),
             PlannerEnum::Unwind(planner) => planner.transform(validated, qctx),
@@ -357,6 +365,8 @@ impl PlannerEnum {
             PlannerEnum::Set(_) => "SetPlanner",
             PlannerEnum::Merge(_) => "MergePlanner",
             PlannerEnum::GroupBy(_) => "GroupByPlanner",
+            PlannerEnum::Filter(_) => "FilterPlanner",
+            PlannerEnum::Collect(_) => "CollectPlanner",
             PlannerEnum::SetOperation(_) => "SetOperationPlanner",
             PlannerEnum::Use(_) => "UsePlanner",
             PlannerEnum::Unwind(_) => "UnwindPlanner",
@@ -392,6 +402,8 @@ impl PlannerEnum {
             PlannerEnum::Set(planner) => planner.match_planner(stmt),
             PlannerEnum::Merge(planner) => planner.match_planner(stmt),
             PlannerEnum::GroupBy(planner) => planner.match_planner(stmt),
+            PlannerEnum::Filter(planner) => planner.match_planner(stmt),
+            PlannerEnum::Collect(planner) => planner.match_planner(stmt),
             PlannerEnum::SetOperation(planner) => planner.match_planner(stmt),
             PlannerEnum::Use(planner) => planner.match_planner(stmt),
             PlannerEnum::Unwind(planner) => planner.match_planner(stmt),
@@ -431,6 +443,8 @@ impl PlannerEnum {
             PlannerEnum::Set(planner) => planner.plan_bound(bound, qctx),
             PlannerEnum::Merge(planner) => planner.plan_bound(bound, qctx),
             PlannerEnum::GroupBy(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Filter(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Collect(planner) => planner.plan_bound(bound, qctx),
             PlannerEnum::SetOperation(planner) => planner.plan_bound(bound, qctx),
             PlannerEnum::Use(planner) => planner.plan_bound(bound, qctx),
             PlannerEnum::Unwind(planner) => planner.plan_bound(bound, qctx),
@@ -505,6 +519,12 @@ impl PlannerEnum {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::GroupBy(planner) => {
+                planner.transform_with_metadata(validated, qctx, metadata_context)
+            }
+            PlannerEnum::Filter(planner) => {
+                planner.transform_with_metadata(validated, qctx, metadata_context)
+            }
+            PlannerEnum::Collect(planner) => {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::SetOperation(planner) => {

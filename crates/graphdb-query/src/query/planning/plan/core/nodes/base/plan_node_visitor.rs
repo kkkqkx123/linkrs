@@ -11,6 +11,9 @@ use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     UserManageNode, VectorManageNode,
 };
 use crate::query::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
+use crate::query::planning::plan::core::nodes::management::system_nodes::{
+    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+};
 use crate::query::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
 };
@@ -163,6 +166,9 @@ pub trait PlanNodeVisitor {
 
     impl_visitor_methods!(
         ShowStats, ShowStatsNode, visit_show_stats;
+        ShowConfigs, ShowConfigsNode, visit_show_configs;
+        ShowQueries, ShowQueriesNode, visit_show_queries;
+        ShowSessions, ShowSessionsNode, visit_show_sessions;
     );
 
     impl_visitor_methods!(
@@ -271,6 +277,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::VectorManage(node) => visitor.visit_vector_manage(node),
 
             PlanNodeEnum::ShowStats(node) => visitor.visit_show_stats(node),
+            PlanNodeEnum::ShowConfigs(node) => visitor.visit_show_configs(node),
+            PlanNodeEnum::ShowQueries(node) => visitor.visit_show_queries(node),
+            PlanNodeEnum::ShowSessions(node) => visitor.visit_show_sessions(node),
             PlanNodeEnum::InsertVertices(node) => visitor.visit_insert_vertices(node),
             PlanNodeEnum::InsertEdges(node) => visitor.visit_insert_edges(node),
             PlanNodeEnum::DeleteVertices(node) => visitor.visit_delete_vertices(node),
