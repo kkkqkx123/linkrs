@@ -1349,6 +1349,10 @@ impl StorageAuthOps for GraphStorage {
         self.ctx.user_storage().user_exists(username)
     }
 
+    fn list_users(&self) -> Vec<String> {
+        self.ctx.user_storage().list_users()
+    }
+
     fn grant_role(
         &mut self,
         username: &str,

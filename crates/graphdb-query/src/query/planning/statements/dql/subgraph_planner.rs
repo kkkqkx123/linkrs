@@ -13,6 +13,7 @@ use crate::core::types::EdgeDirection;
 use crate::core::Expression;
 use crate::query::parser::ast::stmt::Steps;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 use crate::query::planning::plan::core::nodes::{
     ArgumentNode as Argument, ExpandAllNode, FilterNode, GetVerticesNode, PlanNodeEnum,
     ProjectNode as Project,
@@ -152,7 +153,7 @@ impl SubgraphPlanner {
     /// Create an extended node.
     fn create_expand_node(
         &self,
-        _input: PlanNodeEnum,
+        input: PlanNodeEnum,
         edge_types: &[String],
         direction: &str,
         _current_step: u32,
@@ -160,6 +161,7 @@ impl SubgraphPlanner {
     ) -> Result<PlanNodeEnum, PlannerError> {
         let mut expand_node = ExpandAllNode::new(1, edge_types.to_vec(), direction);
         expand_node.set_step_limit(max_step);
+        expand_node.add_input(input);
 
         Ok(PlanNodeEnum::ExpandAll(expand_node))
     }

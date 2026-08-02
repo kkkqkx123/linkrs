@@ -54,6 +54,11 @@ impl MetadataContext {
         self.tag_metadata.get(tag_name)
     }
 
+    /// Get tag metadata (mutable)
+    pub fn get_tag_metadata_mut(&mut self, tag_name: &str) -> Option<&mut TagMetadata> {
+        self.tag_metadata.get_mut(tag_name)
+    }
+
     /// Get edge type metadata
     pub fn get_edge_type_metadata(&self, edge_type: &str) -> Option<&EdgeTypeMetadata> {
         self.edge_type_metadata.get(edge_type)

@@ -208,8 +208,8 @@ impl RecursiveFragmentOperator {
                                     space_name,
                                     edge_type_filter: et_ref,
                                     max_depth: *max_depth,
-                                    single_shortest: true,
-                                    limit: 1,
+                                    single_shortest: false,
+                                    limit: 1000,
                                     direction: *direction,
                                 },
                                 cancel_token.as_deref(),
@@ -233,7 +233,7 @@ impl RecursiveFragmentOperator {
                         })
                         .collect();
                     new_cols.push(ColumnInfo {
-                        name: "_shortest_path".to_string(),
+                        name: "path".to_string(),
                         data_type: "path".to_string(),
                     });
                     let _schema = Arc::new(Schema::new(new_cols));
@@ -493,7 +493,7 @@ impl RecursiveFragmentOperator {
                         })
                         .collect();
                     new_cols.push(ColumnInfo {
-                        name: "_all_paths".to_string(),
+                        name: "path".to_string(),
                         data_type: "path".to_string(),
                     });
                     let _schema = Arc::new(Schema::new(new_cols));

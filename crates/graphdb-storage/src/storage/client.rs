@@ -414,6 +414,7 @@ pub trait StorageAuthOps: Send + Sync + std::fmt::Debug {
     fn alter_user(&mut self, info: &UserAlterInfo) -> Result<bool, StorageError>;
     fn drop_user(&mut self, username: &str) -> Result<bool, StorageError>;
     fn user_exists(&self, username: &str) -> bool;
+    fn list_users(&self) -> Vec<String>;
     fn grant_role(
         &mut self,
         username: &str,

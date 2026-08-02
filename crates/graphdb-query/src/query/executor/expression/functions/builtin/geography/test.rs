@@ -30,7 +30,7 @@ fn test_st_distance() {
     let result = func
         .execute(&[Value::Geography(geo1), Value::Geography(geo2)])
         .expect("Implementation should not fail");
-    assert!(matches!(result, Value::Double(_)));
+    assert!(matches!(result, Value::Float(_)));
 }
 
 #[test]

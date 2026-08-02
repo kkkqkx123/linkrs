@@ -23,6 +23,7 @@ pub enum SetOperator {
         right_rows: HashSet<String>,
         left_buffered: bool,
         right_buffered: bool,
+        emitted: bool,
         memory_tracker: MemoryTracker,
     },
     Except {
@@ -53,6 +54,7 @@ impl SetOperator {
                 right_rows: std::collections::HashSet::new(),
                 left_buffered: false,
                 right_buffered: false,
+                emitted: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
             super::spec::SetSpec::Except => Self::Except {
@@ -193,9 +195,13 @@ impl SetOperator {
                 right_rows,
                 left_buffered,
                 right_buffered,
+                emitted,
                 memory_tracker,
                 ..
             } => {
+                if *emitted {
+                    return Ok(None);
+                }
                 if !*left_buffered {
                     while let Some(chunk) = left.advance()? {
                         base.ensure_not_cancelled()?;
@@ -228,6 +234,7 @@ impl SetOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
+                    *emitted = true;
                     Ok(Some(DataChunk::new_with_layout(
                         result_rows,
                         Arc::clone(&base.output_layout),

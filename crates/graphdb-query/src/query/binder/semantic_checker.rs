@@ -44,9 +44,6 @@ pub fn validate_expression(expr: &ContextualExpression) -> DBResult<()> {
     check_collection_limits(inner, 0)?;
     check_map_duplicate_keys(inner, 0)?;
 
-    let mut visited = HashSet::new();
-    check_cyclic_refs(inner, &mut visited, 0)?;
-
     Ok(())
 }
 
@@ -639,44 +636,3 @@ fn check_map_duplicate_keys(expr: &Expression, depth: usize) -> DBResult<()> {
     Ok(())
 }
 
-fn check_cyclic_refs(
-    expr: &Expression,
-    visited: &mut HashSet<String>,
-    depth: usize,
-) -> DBResult<()> {
-    if depth > MAX_EXPR_DEPTH {
-        return Err(DBError::from(QueryError::invalid_query(
-            "Expression Cyclic Dependency Detection Depth Overrun".to_string(),
-        )));
-    }
-    match expr {
-        Expression::Variable(name) => {
-            if visited.contains(name) {
-                return Err(DBError::from(QueryError::invalid_query(format!(
-                    "Variable loop dependency detected: {:?}",
-                    name
-                ))));
-            }
-            visited.insert(name.clone());
-        }
-        Expression::Binary { left, right, .. } => {
-            check_cyclic_refs(left, visited, depth + 1)?;
-            check_cyclic_refs(right, visited, depth + 1)?;
-        }
-        Expression::Unary { operand, .. } => {
-            check_cyclic_refs(operand, visited, depth + 1)?;
-        }
-        Expression::Function { args, .. } => {
-            for arg in args {
-                check_cyclic_refs(arg, visited, depth + 1)?;
-            }
-        }
-        Expression::Aggregate { args, .. } => {
-            for arg in args {
-                check_cyclic_refs(arg, visited, depth + 1)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}

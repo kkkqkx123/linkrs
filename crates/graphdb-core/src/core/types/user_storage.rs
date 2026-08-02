@@ -346,6 +346,7 @@ mod tests {
 
         let alter_info = UserAlterInfo {
             username: "test_user".to_string(),
+            new_password: None,
             is_locked: Some(true),
             max_queries_per_hour: Some(100),
             max_updates_per_hour: None,

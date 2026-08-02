@@ -202,7 +202,7 @@ fn test_rank_function() {
 
     let result = registry.execute("rank", &[Value::Edge(Box::new(edge))]);
     assert!(result.is_ok());
-    assert_eq!(result.expect("rank函数应该成功"), Value::Int(42));
+    assert_eq!(result.expect("rank函数应该成功"), Value::BigInt(42));
 }
 
 // ==================== Testing of Container Operation Functions ====================
@@ -731,7 +731,7 @@ fn test_timestamp_function() {
     assert!(result.is_ok());
     assert!(matches!(
         result.expect("timestamp函数应该成功"),
-        Value::Int(_)
+        Value::BigInt(_)
     ));
 
     // 测试 timestamp(datetime)
@@ -748,7 +748,7 @@ fn test_timestamp_function() {
     assert!(result.is_ok());
     assert!(matches!(
         result.expect("timestamp函数应该成功"),
-        Value::Int(_)
+        Value::BigInt(_)
     ));
 }
 
@@ -855,7 +855,7 @@ fn test_rand64_function() {
 
     let result = registry.execute("rand64", &[]);
     assert!(result.is_ok());
-    assert!(matches!(result.expect("rand64函数应该成功"), Value::Int(_)));
+    assert!(matches!(result.expect("rand64函数应该成功"), Value::BigInt(_)));
 }
 
 #[test]

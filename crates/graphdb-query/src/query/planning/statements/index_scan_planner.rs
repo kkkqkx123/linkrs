@@ -1,4 +1,4 @@
-use crate::core::types::expr::Expression;
+use crate::core::types::expr::{ContextualExpression, Expression};
 use crate::core::types::operators::BinaryOperator;
 use crate::core::Value;
 use crate::query::metadata::{IndexMetadata, MetadataContext};
@@ -17,6 +17,7 @@ pub fn try_create_index_scan_plan(
     var_name: &str,
     enable_index_optimization: bool,
     metadata_context: Option<&MetadataContext>,
+    where_expression: Option<&ContextualExpression>,
 ) -> Result<Option<SubPlan>, PlannerError> {
     if !enable_index_optimization {
         return Ok(None);
@@ -33,14 +34,15 @@ pub fn try_create_index_scan_plan(
 
     let tag_name = &node.labels[0];
 
-    let suitable_index = find_suitable_index(metadata_ctx, tag_name, node, var_name)?;
+    let suitable_index =
+        find_suitable_index(metadata_ctx, tag_name, node, var_name, where_expression)?;
 
     match suitable_index {
         Some((index, index_limits)) => {
             let mut index_scan_node = IndexScanNode::new(
                 space_id,
                 0,
-                0,
+                index.index_id,
                 index.index_name.clone(),
                 tag_name.clone(),
                 if index_limits.len() == 1 && index_limits[0].scan_type == ScanType::Unique {
@@ -71,6 +73,7 @@ fn find_suitable_index(
     tag_name: &str,
     node: &NodePattern,
     var_name: &str,
+    where_expression: Option<&ContextualExpression>,
 ) -> Result<Option<(IndexMetadata, Vec<IndexLimit>)>, PlannerError> {
     let tag_metadata = match metadata_ctx.get_tag_metadata(tag_name) {
         Some(meta) => meta,
@@ -81,7 +84,7 @@ fn find_suitable_index(
         return Ok(None);
     }
 
-    let filter_conditions = extract_filter_conditions(node, var_name);
+    let filter_conditions = extract_filter_conditions(node, var_name, where_expression);
 
     if filter_conditions.is_empty() {
         return Ok(None);
@@ -92,13 +95,10 @@ fn find_suitable_index(
             for (field, op, value) in &filter_conditions {
                 if &index_meta.field_name == field {
                     let index_limit = match op.as_str() {
-                        "=" => Some(IndexLimit::equal(
-                            field.clone(),
-                            Value::string(value.clone()),
-                        )),
+                        "=" => Some(IndexLimit::equal(field.clone(), value.clone())),
                         ">" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(Value::string(value.clone())),
+                            Some(value.clone()),
                             None::<Value>,
                             false,
                             false,
@@ -106,13 +106,13 @@ fn find_suitable_index(
                         "<" => Some(IndexLimit::range(
                             field.clone(),
                             None::<Value>,
-                            Some(Value::string(value.clone())),
+                            Some(value.clone()),
                             false,
                             false,
                         )),
                         ">=" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(Value::string(value.clone())),
+                            Some(value.clone()),
                             None::<Value>,
                             true,
                             false,
@@ -120,7 +120,7 @@ fn find_suitable_index(
                         "<=" => Some(IndexLimit::range(
                             field.clone(),
                             None::<Value>,
-                            Some(Value::string(value.clone())),
+                            Some(value.clone()),
                             false,
                             true,
                         )),
@@ -138,7 +138,11 @@ fn find_suitable_index(
     Ok(None)
 }
 
-fn extract_filter_conditions(node: &NodePattern, var_name: &str) -> Vec<(String, String, String)> {
+fn extract_filter_conditions(
+    node: &NodePattern,
+    var_name: &str,
+    where_expression: Option<&ContextualExpression>,
+) -> Vec<(String, String, Value)> {
     let mut conditions = Vec::new();
 
     if let Some(ref props) = node.properties {
@@ -153,13 +157,19 @@ fn extract_filter_conditions(node: &NodePattern, var_name: &str) -> Vec<(String,
         }
     }
 
+    if let Some(where_expr) = where_expression {
+        if let Some(expr_meta) = where_expr.expression() {
+            extract_conditions_from_expression(expr_meta.inner(), var_name, &mut conditions);
+        }
+    }
+
     conditions
 }
 
 fn extract_conditions_from_expression(
     expr: &Expression,
     var_name: &str,
-    conditions: &mut Vec<(String, String, String)>,
+    conditions: &mut Vec<(String, String, Value)>,
 ) {
     match expr {
         Expression::Binary { left, op, right } => {
@@ -175,9 +185,7 @@ fn extract_conditions_from_expression(
                 if let Expression::Variable(obj_name) = object.as_ref() {
                     if obj_name == var_name {
                         if let Expression::Literal(lit) = right.as_ref() {
-                            if let Some(value_str) = value_to_index_string(lit) {
-                                conditions.push((property.clone(), op_str.clone(), value_str));
-                            }
+                            conditions.push((property.clone(), op_str.clone(), lit.clone()));
                         }
                     }
                 }
@@ -194,9 +202,7 @@ fn extract_conditions_from_expression(
                                 BinaryOperator::LessThanOrEqual => ">=".to_string(),
                                 _ => op_str.clone(),
                             };
-                            if let Some(value_str) = value_to_index_string(lit) {
-                                conditions.push((property.clone(), reversed_op, value_str));
-                            }
+                            conditions.push((property.clone(), reversed_op, lit.clone()));
                         }
                     }
                 }
@@ -205,25 +211,10 @@ fn extract_conditions_from_expression(
         Expression::Map(pairs) => {
             for (key, value_expr) in pairs {
                 if let Expression::Literal(lit) = value_expr {
-                    if let Some(value_str) = value_to_index_string(lit) {
-                        conditions.push((key.clone(), "=".to_string(), value_str));
-                    }
+                    conditions.push((key.clone(), "=".to_string(), lit.clone()));
                 }
             }
         }
         _ => {}
-    }
-}
-
-fn value_to_index_string(value: &Value) -> Option<String> {
-    match value {
-        Value::String(s) => Some(s.to_string()),
-        Value::SmallInt(i) => Some(i.to_string()),
-        Value::Int(i) => Some(i.to_string()),
-        Value::BigInt(i) => Some(i.to_string()),
-        Value::Float(f) => Some(f.to_string()),
-        Value::Double(d) => Some(d.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
     }
 }

@@ -182,7 +182,7 @@ fn test_insert_vertex_with_all_types() {
         .exec_dml(
             r#"
             INSERT VERTEX TestTypes(str_field, int_field, double_field, bool_field) 
-            VALUES 1:('test', 42, 2.71828, true)
+            VALUES 1:('test', 42, 2.718281828459045, true)
         "#,
         )
         .assert_success()
@@ -190,7 +190,7 @@ fn test_insert_vertex_with_all_types() {
             let mut map = HashMap::new();
             map.insert("str_field", Value::string("test"));
             map.insert("int_field", Value::Int(42));
-            map.insert("double_field", Value::Double(2.71828));
+            map.insert("double_field", Value::Double(std::f64::consts::E));
             map.insert("bool_field", Value::Bool(true));
             map
         });
@@ -312,14 +312,14 @@ fn test_insert_vertex_with_numeric_types() {
         .exec_dml(
             r#"
             INSERT VERTEX NumericTypes(int_field, float_field) 
-            VALUES 1:(100, 3.14)
+            VALUES 1:(100, 3.141592653589793)
         "#,
         )
         .assert_success()
         .assert_vertex_props(1, "NumericTypes", {
             let mut map = HashMap::new();
             map.insert("int_field", Value::Int(100));
-            map.insert("float_field", Value::Float(3.14));
+            map.insert("float_field", Value::Float(std::f32::consts::PI));
             map
         });
 }

@@ -197,6 +197,7 @@ pub enum UnarySpec {
     },
     Unwind {
         unwind_column: String,
+        list_expression: Option<Expression>,
     },
     AppendVertices {
         vertex_properties: Vec<(String, Expression)>,

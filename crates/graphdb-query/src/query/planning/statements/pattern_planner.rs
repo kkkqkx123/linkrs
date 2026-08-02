@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use crate::core::types::expr::ContextualExpression;
 use crate::query::binder::validation::ValidationInfo;
 use crate::query::metadata::MetadataContext;
 use crate::query::parser::ast::pattern::{
@@ -31,6 +32,7 @@ pub struct PlanningContext<'a> {
     pub enable_index_optimization: bool,
     pub metadata_context: &'a Option<MetadataContext>,
     pub expr_context: &'a Option<Arc<ExpressionAnalysisContext>>,
+    pub where_expression: Option<&'a ContextualExpression>,
 }
 
 use super::expression_helpers;
@@ -68,6 +70,7 @@ pub fn plan_path_pattern(
                                 ctx.enable_index_optimization,
                                 ctx.metadata_context,
                                 ctx.expr_context,
+                                ctx.where_expression,
                             )?;
                             plan = if let Some(existing_root) = plan.root.take() {
                                 plan_combiner::cross_join_plans(
@@ -195,6 +198,7 @@ pub fn plan_pattern_node(
     enable_index_optimization: bool,
     metadata_context: &Option<MetadataContext>,
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    where_expression: Option<&ContextualExpression>,
 ) -> Result<SubPlan, PlannerError> {
     let var_name = node.variable.clone().unwrap_or_else(|| "n".to_string());
 
@@ -206,6 +210,7 @@ pub fn plan_pattern_node(
             &var_name,
             enable_index_optimization,
             metadata_context.as_ref(),
+            where_expression,
         )? {
             return Ok(index_plan);
         }
@@ -483,6 +488,7 @@ pub fn plan_pattern(pattern: &Pattern, ctx: &PlanningContext) -> Result<SubPlan,
             ctx.enable_index_optimization,
             ctx.metadata_context,
             ctx.expr_context,
+            ctx.where_expression,
         ),
         Pattern::Edge(edge) => {
             plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)
@@ -541,6 +547,7 @@ pub fn plan_optional_element(
             ctx.enable_index_optimization,
             ctx.metadata_context,
             ctx.expr_context,
+            ctx.where_expression,
         )?,
         PathElement::Edge(edge) => {
             plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)?
@@ -572,6 +579,7 @@ pub fn plan_repeated_element(
             enable_index_optimization,
             metadata_context,
             expr_context,
+            None,
         )?,
         PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context)?,
         _ => {

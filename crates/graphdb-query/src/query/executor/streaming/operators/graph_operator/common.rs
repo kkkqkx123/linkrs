@@ -47,7 +47,6 @@ pub(super) fn expand_on_chunk(
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
     let filter_expr = ctx.filter_expr;
-    let _chunk_col_names = chunk.col_names();
 
     // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
     let mut seed_vids: Vec<VertexId> = Vec::new();
@@ -80,6 +79,7 @@ pub(super) fn expand_on_chunk(
     }
 
     let mut out_rows = Vec::new();
+    let mut out_edges = 0usize;
     for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
         let config = if step_limit > 1 {
             TraversalConfig {
@@ -103,6 +103,7 @@ pub(super) fn expand_on_chunk(
         }
 
         while let Some(event) = runtime.next_event() {
+            out_edges += 1;
             let mut out_row = row.clone();
             if let Some(ref edge) = event.edge {
                 out_row.push(Value::Edge(Box::new(edge.clone())));

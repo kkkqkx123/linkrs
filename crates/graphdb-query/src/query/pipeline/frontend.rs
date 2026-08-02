@@ -14,9 +14,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_text: &str,
     ) -> DBResult<crate::query::parser::ParserResult> {
         let mut parser = Parser::new(query_text);
-        parser
+        let result = parser
             .parse()
-            .map_err(|e| DBError::from(QueryError::pipeline_parse_error(e)))
+            .map_err(|e| DBError::from(QueryError::pipeline_parse_error(e)))?;
+        if parser.has_errors() {
+            return Err(DBError::from(QueryError::pipeline_parse_error(
+                parser.take_errors(),
+            )));
+        }
+        Ok(result)
     }
 
     pub(crate) fn record_query_type_counter(&self, stmt: &crate::query::parser::ast::Stmt) {

@@ -9,7 +9,7 @@ pub fn execute_st_distance(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {
         (Value::Geography(geo1), Value::Geography(geo2)) => {
             let distance = calculate_distance(geo1, geo2);
-            Ok(Value::Double(distance))
+            Ok(Value::Float(distance as f32))
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(

@@ -415,6 +415,8 @@ pub(super) fn execute_edge_manage(
             let et = edge_type.as_deref().unwrap_or("unnamed");
             let mut info = EdgeTypeInfo::new(et.to_string());
             info.properties = properties.clone();
+            info.src_tag_name = node.info().src_tag_name.clone().unwrap_or_default();
+            info.dst_tag_name = node.info().dst_tag_name.clone().unwrap_or_default();
             match StorageSchemaOps::create_edge_type(s, space_name, &info) {
                 Ok(_) => Ok(()),
                 Err(e)

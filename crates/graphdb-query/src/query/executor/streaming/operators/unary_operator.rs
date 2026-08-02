@@ -45,11 +45,13 @@ pub enum UnaryOperator {
     },
     Unwind {
         unwind_column: String,
+        list_expression: Option<Expression>,
         col_index: Option<usize>,
         layout: Option<Arc<SlotLayout>>,
         all_rows: Vec<Vec<Value>>,
         current_row_index: usize,
         current_unwind_index: usize,
+        input_done: bool,
     },
     AppendVertices {
         vertex_properties: Vec<(String, Expression)>,
@@ -91,13 +93,18 @@ impl UnaryOperator {
             super::spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
                 columns_to_remove: columns_to_remove.clone(),
             },
-            super::spec::UnarySpec::Unwind { unwind_column } => Self::Unwind {
+            super::spec::UnarySpec::Unwind {
+                unwind_column,
+                list_expression,
+            } => Self::Unwind {
                 unwind_column: unwind_column.clone(),
+                list_expression: list_expression.clone(),
                 col_index: None,
                 layout: None,
                 all_rows: Vec::new(),
                 current_row_index: 0,
                 current_unwind_index: 0,
+                input_done: false,
             },
             super::spec::UnarySpec::AppendVertices { vertex_properties } => Self::AppendVertices {
                 vertex_properties: vertex_properties.clone(),
@@ -315,51 +322,72 @@ impl UnaryOperator {
             },
             Self::Unwind {
                 unwind_column,
+                list_expression,
                 col_index,
                 layout,
                 all_rows,
                 current_row_index,
                 current_unwind_index,
-            } => {
-                while *current_row_index < all_rows.len() || {
-                    if let Some(chunk) = input.advance()? {
-                        let col_names = chunk.col_names();
-                        let idx = col_names.iter().position(|c| c == unwind_column.as_str());
-                        *col_index = idx;
-                        *layout = Some(chunk.get_layout());
-                        *all_rows = chunk.rows;
-                        *current_row_index = 0;
-                        *current_unwind_index = 0;
-                        true
-                    } else {
-                        false
-                    }
-                } {
-                    if *current_row_index >= all_rows.len() {
-                        break;
-                    }
-                    let row = &all_rows[*current_row_index];
-                    if let Some(idx) = col_index {
-                        if *idx < row.len() {
-                            let list_val = &row[*idx];
-                            if let Value::List(items) = list_val {
-                                if *current_unwind_index < items.len() {
-                                    let mut result_row = row.clone();
-                                    result_row[*idx] = items[*current_unwind_index].clone();
-                                    *current_unwind_index += 1;
-                                    return Ok(Some(DataChunk::new_with_layout(
-                                        vec![result_row],
-                                        Arc::clone(&base.output_layout),
-                                    )));
-                                }
+                input_done,
+            } => loop {
+                base.ensure_not_cancelled()?;
+                if *current_row_index >= all_rows.len() && !*input_done {
+                    match input.advance()? {
+                        Some(chunk) => {
+                            let col_names = chunk.col_names();
+                            *col_index =
+                                col_names.iter().position(|c| c == unwind_column.as_str());
+                            *layout = Some(chunk.get_layout());
+                            *all_rows = chunk.rows;
+                            *current_row_index = 0;
+                            *current_unwind_index = 0;
+                        }
+                        None => {
+                            *input_done = true;
+                            if all_rows.is_empty() && list_expression.is_some() {
+                                *all_rows = vec![Vec::new()];
+                                *current_row_index = 0;
+                                *current_unwind_index = 0;
+                            } else {
+                                return Ok(None);
                             }
                         }
                     }
-                    *current_row_index += 1;
-                    *current_unwind_index = 0;
+                    continue;
                 }
-                Ok(None)
-            }
+                if *current_row_index >= all_rows.len() {
+                    return Ok(None);
+                }
+                let row = &all_rows[*current_row_index];
+                let list_val: Option<Value> = if let Some(expr) = list_expression {
+                    let row_layout = match layout {
+                        Some(l) => l.clone(),
+                        None => Arc::new(SlotLayout::new(vec![])),
+                    };
+                    let mut ctx = ValueRowContext::new(row.clone(), row_layout);
+                    ExpressionEvaluator::evaluate(expr, &mut ctx).ok()
+                } else {
+                    col_index.and_then(|idx| row.get(idx).cloned())
+                };
+                let result_row = match list_val {
+                    Some(Value::List(items)) if *current_unwind_index < items.len() => {
+                        let mut result_row = row.clone();
+                        result_row.push(items[*current_unwind_index].clone());
+                        *current_unwind_index += 1;
+                        Some(result_row)
+                    }
+                    Some(Value::List(items)) if items.is_empty() => None,
+                    _ => None,
+                };
+                if let Some(result_row) = result_row {
+                    return Ok(Some(DataChunk::new_with_layout(
+                        vec![result_row],
+                        Arc::clone(&base.output_layout),
+                    )));
+                }
+                *current_row_index += 1;
+                *current_unwind_index = 0;
+            },
             Self::AppendVertices {
                 vertex_properties,
                 state,

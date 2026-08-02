@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 pub use crate::query::planning::plan::core::nodes::{
     ArgumentNode, DedupNode, FilterNode, GetEdgesNode, GetVerticesNode, HashInnerJoinNode,
-    ProjectNode,
+    ProjectNode, ScanEdgesNode, ScanVerticesNode,
 };
 pub use crate::query::planning::plan::core::PlanNodeEnum;
 
@@ -57,6 +57,7 @@ impl Planner for LookupPlanner {
         };
 
         let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
         if space_id == 0 {
             return Err(PlannerError::PlanGenerationFailed(
@@ -153,11 +154,10 @@ impl Planner for LookupPlanner {
         };
 
         // Check if this is an edge lookup
-        let is_edge = validation_info
-            .index_hints
-            .first()
-            .map(|h| h.is_edge)
-            .unwrap_or(false);
+        let is_edge = matches!(
+            lookup_stmt.target,
+            crate::query::parser::ast::LookupTarget::Edge(_)
+        );
 
         // Extract the tag/edge name from the LOOKUP target for col_names
         let target_name = match &lookup_stmt.target {
@@ -166,8 +166,35 @@ impl Planner for LookupPlanner {
             crate::query::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
         };
 
-        // 4. Create the appropriate scan node based on whether it's an edge or tag lookup
-        let mut current_node: PlanNodeEnum = if is_edge {
+        // 4. Create the appropriate scan node based on whether an index was
+        // selected. Without an index hint (or a usable index) the lookup falls
+        // back to a full scan of the tag/edge, with WHERE filtering applied by
+        // a Filter node above the scan.
+        let mut current_node: PlanNodeEnum = if selected_index.is_none() {
+            if is_edge {
+                let mut edge_scan_node = ScanEdgesNode::new(space_id, &target_name);
+                edge_scan_node.set_col_names(vec![target_name.clone()]);
+
+                if let Some(ref yield_clause) = lookup_stmt.yield_clause {
+                    if let Some(ref limit_clause) = yield_clause.limit {
+                        edge_scan_node.set_limit(limit_clause.count as i64);
+                    }
+                }
+
+                PlanNodeEnum::ScanEdges(edge_scan_node)
+            } else {
+                let mut vertex_scan_node = ScanVerticesNode::new(space_id, &space_name);
+                vertex_scan_node.set_col_names(vec![target_name.clone()]);
+
+                if let Some(ref yield_clause) = lookup_stmt.yield_clause {
+                    if let Some(ref limit_clause) = yield_clause.limit {
+                        vertex_scan_node.set_limit(limit_clause.count as i64);
+                    }
+                }
+
+                PlanNodeEnum::ScanVertices(vertex_scan_node)
+            }
+        } else if is_edge {
             let mut edge_index_scan_node =
                 EdgeIndexScanNode::new(space_id, &schema_name, &index_name);
             edge_index_scan_node.set_scan_type(scan_type);

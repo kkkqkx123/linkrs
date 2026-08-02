@@ -206,6 +206,7 @@ impl MatchStatementPlanner {
                     enable_index_optimization: self.config.enable_index_optimization,
                     metadata_context: &self.metadata_context,
                     expr_context: &self.expr_context,
+                    where_expression: match_stmt.where_clause.as_ref(),
                 };
 
                 let mut plan = if match_stmt.patterns.is_empty() {

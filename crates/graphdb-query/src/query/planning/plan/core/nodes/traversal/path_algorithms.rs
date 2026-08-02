@@ -202,6 +202,7 @@ define_binary_input_node! {
         min_hop: usize,
         max_hop: usize,
         acyclic: bool,
+        direction: EdgeDirection,
         has_step_limit: bool,
         limit: i64,
         offset: i64,
@@ -238,6 +239,7 @@ impl AllPathsNode {
             min_hop,
             max_hop,
             acyclic,
+            direction: EdgeDirection::Both,
             has_step_limit: true,
             limit: -1,
             offset: 0,
@@ -280,6 +282,14 @@ impl AllPathsNode {
 
     pub fn is_acyclic(&self) -> bool {
         self.acyclic
+    }
+
+    pub fn direction(&self) -> EdgeDirection {
+        self.direction
+    }
+
+    pub fn set_direction(&mut self, direction: EdgeDirection) {
+        self.direction = direction;
     }
 
     pub fn limit(&self) -> i64 {

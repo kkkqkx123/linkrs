@@ -82,6 +82,7 @@ impl Planner for PathPlanner {
                 max_steps,
                 start_vertex_ids,
                 end_vertex_ids,
+                find_path_stmt,
             )?
         };
 
@@ -127,9 +128,19 @@ impl PathPlanner {
         max_steps: usize,
         start_vertex_ids: Vec<Value>,
         end_vertex_ids: Vec<Value>,
+        stmt: &crate::query::parser::ast::FindPathStmt,
     ) -> Result<PlanNodeEnum, PlannerError> {
         let right_node = StartNode::new();
         let right_node_enum = PlanNodeEnum::Start(right_node);
+
+        // By default paths must not repeat vertices; WITH LOOP/WITH CYCLE
+        // relaxes that constraint.
+        let acyclic = !(stmt.with_loop || stmt.with_cycle);
+        let direction = stmt
+            .over
+            .as_ref()
+            .map(|over| over.direction)
+            .unwrap_or(crate::core::EdgeDirection::Out);
 
         let mut all_paths_node = AllPathsNode::new(
             left_input,
@@ -139,8 +150,9 @@ impl PathPlanner {
             edge_types,
             1,
             max_steps,
-            false,
+            acyclic,
         );
+        all_paths_node.set_direction(direction);
         let start_vids: Vec<VertexId> = start_vertex_ids
             .iter()
             .filter_map(|v| VertexId::try_from(v).ok())

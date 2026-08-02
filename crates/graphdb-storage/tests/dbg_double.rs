@@ -18,8 +18,8 @@ fn debug_double_property() {
     let v = Vertex::new_with_properties(
         VertexId::from_int64(1),
         vec![Tag::new("T".to_string(), HashMap::from([
-            ("d".to_string(), Value::Double(2.718281828459045)),
-            ("f".to_string(), Value::Float(3.14)),
+            ("d".to_string(), Value::Double(std::f64::consts::E)),
+            ("f".to_string(), Value::Float(std::f32::consts::PI)),
         ]))],
         HashMap::new(),
     );

@@ -851,7 +851,18 @@ impl Binder {
                 BoundLookupTarget::Edge(e.clone())
             }
             crate::query::parser::ast::LookupTarget::Unspecified(s) => {
-                BoundLookupTarget::Tag(s.clone())
+                let is_edge = match self.resolve_tags(std::slice::from_ref(s)) {
+                    Ok(_) => false,
+                    Err(_) => {
+                        self.resolve_edge_types(std::slice::from_ref(s))?;
+                        true
+                    }
+                };
+                if is_edge {
+                    BoundLookupTarget::Edge(s.clone())
+                } else {
+                    BoundLookupTarget::Tag(s.clone())
+                }
             }
         };
 
@@ -888,6 +899,9 @@ impl Binder {
                 ids,
                 properties,
             } => {
+                if let Some(tag_name) = tag_name {
+                    self.resolve_tags(std::slice::from_ref(tag_name))?;
+                }
                 let bound_ids = ids
                     .iter()
                     .map(|id| self.bind_expr(id))

@@ -823,7 +823,7 @@ fn test_group_by_execution_basic() {
 
 #[test]
 fn test_kill_query_parser_basic() {
-    let query = "KILL QUERY 123";
+    let query = "KILL QUERY 123, 456";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -839,7 +839,7 @@ fn test_kill_query_parser_basic() {
 
 #[test]
 fn test_kill_query_parser_multiple() {
-    let query = "KILL QUERY 123, 456, 789";
+    let query = "KILL QUERY 456, 789";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -954,7 +954,7 @@ fn test_show_parser_sessions() {
     );
 
     let stmt = result.expect("SHOW语句: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
+    assert_eq!(stmt.ast.stmt.kind(), "SHOW SESSIONS");
 }
 
 #[test]
@@ -970,7 +970,7 @@ fn test_show_parser_queries() {
     );
 
     let stmt = result.expect("SHOW语句: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
+    assert_eq!(stmt.ast.stmt.kind(), "SHOW QUERIES");
 }
 
 #[test]
@@ -986,7 +986,7 @@ fn test_show_parser_configs() {
     );
 
     let stmt = result.expect("SHOW语句: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
+    assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
 #[test]
@@ -1002,7 +1002,7 @@ fn test_show_parser_configs_with_module() {
     );
 
     let stmt = result.expect("SHOW语句: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
+    assert_eq!(stmt.ast.stmt.kind(), "SHOW CONFIGS");
 }
 
 #[test]

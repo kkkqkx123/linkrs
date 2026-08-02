@@ -10,6 +10,7 @@ use std::collections::HashMap;
 /// Index metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexMetadata {
+    pub index_id: u64,
     pub index_name: String,
     pub space_id: u64,
     pub tag_name: String,
@@ -27,6 +28,7 @@ impl IndexMetadata {
         index_type: IndexType,
     ) -> Self {
         Self {
+            index_id: 0,
             index_name,
             space_id,
             tag_name,

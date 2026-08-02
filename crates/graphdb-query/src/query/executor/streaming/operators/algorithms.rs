@@ -71,6 +71,10 @@ pub(crate) fn bidir_bfs_shortest_path(
     cancel_token: Option<&AtomicBool>,
 ) -> Result<Vec<Path>, QueryError> {
     let mut result_paths = Vec::new();
+    let mut best_len: Option<usize> = None;
+    let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut left_depth: usize = 0;
+    let mut right_depth: usize = 0;
 
     let mut left_visited: HashMap<VertexId, Arc<NPath>> = HashMap::new();
     let mut right_visited: HashMap<VertexId, Arc<NPath>> = HashMap::new();
@@ -113,6 +117,16 @@ pub(crate) fn bidir_bfs_shortest_path(
         if result_paths.len() >= cfg.limit {
             break;
         }
+        // When collecting all shortest paths, stop as soon as both sides
+        // have been expanded past the best length found so far: any future
+        // meeting would be strictly longer than the best path.
+        if !cfg.single_shortest {
+            if let Some(best) = best_len {
+                if best <= left_depth && best <= right_depth {
+                    break;
+                }
+            }
+        }
 
         let left_level = left_queue.len();
         let mut left_next: Vec<(VertexId, Arc<NPath>)> = Vec::new();
@@ -154,12 +168,20 @@ pub(crate) fn bidir_bfs_shortest_path(
         for (id, np) in left_next.drain(..) {
             left_queue.push_back((id, np));
         }
+        left_depth += 1;
 
         if cfg.single_shortest && !result_paths.is_empty() {
             break;
         }
         if result_paths.len() >= cfg.limit {
             break;
+        }
+        if !cfg.single_shortest {
+            if let Some(best) = best_len {
+                if best <= left_depth && best <= right_depth {
+                    break;
+                }
+            }
         }
 
         let right_level = right_queue.len();
@@ -177,8 +199,13 @@ pub(crate) fn bidir_bfs_shortest_path(
                         let mut right_path = current_npath.to_path();
                         right_path.reverse();
                         left_path.steps.extend(right_path.steps);
-                        result_paths.push(left_path);
-                        if cfg.single_shortest || result_paths.len() >= cfg.limit {
+                        if push_shortest_path(
+                            left_path,
+                            &mut best_len,
+                            &mut seen_paths,
+                            &mut result_paths,
+                            cfg.limit,
+                        ) {
                             break;
                         }
                     }
@@ -227,8 +254,13 @@ pub(crate) fn bidir_bfs_shortest_path(
                     let mut right_path = np.to_path();
                     right_path.reverse();
                     left_path.steps.extend(right_path.steps);
-                    result_paths.push(left_path);
-                    if cfg.single_shortest || result_paths.len() >= cfg.limit {
+                    if push_shortest_path(
+                        left_path,
+                        &mut best_len,
+                        &mut seen_paths,
+                        &mut result_paths,
+                        cfg.limit,
+                    ) {
                         break;
                     }
                 }
@@ -236,6 +268,7 @@ pub(crate) fn bidir_bfs_shortest_path(
                 right_queue.push_back((id, np));
             }
         }
+        right_depth += 1;
     }
 
     if cfg.single_shortest && !result_paths.is_empty() {
@@ -244,6 +277,32 @@ pub(crate) fn bidir_bfs_shortest_path(
     }
     result_paths.truncate(cfg.limit);
     Ok(result_paths)
+}
+
+/// Add a candidate path to the result set, keeping only paths of the
+/// minimal length found so far. Returns `true` when the result limit is
+/// reached and the caller should stop searching.
+fn push_shortest_path(
+    path: Path,
+    best_len: &mut Option<usize>,
+    seen: &mut HashSet<String>,
+    result: &mut Vec<Path>,
+    limit: usize,
+) -> bool {
+    let total = path.steps.len();
+    match *best_len {
+        Some(best) if total > best => return false,
+        Some(best) if total < best => {
+            *best_len = Some(total);
+            result.clear();
+        }
+        None => *best_len = Some(total),
+        Some(_) => {}
+    }
+    if seen.insert(format!("{:?}", path)) {
+        result.push(path);
+    }
+    result.len() >= limit
 }
 
 pub(crate) struct AllPathsConfig<'a> {

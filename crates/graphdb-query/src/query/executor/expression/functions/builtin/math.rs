@@ -338,7 +338,7 @@ fn execute_sign(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_rand(_args: &[Value]) -> Result<Value, ExpressionError> {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    Ok(Value::Double(rng.gen::<f64>()))
+    Ok(Value::Float(rng.gen::<f32>()))
 }
 
 fn execute_rand32(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -380,11 +380,11 @@ fn execute_rand64(_args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_e(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::Double(std::f64::consts::E))
+    Ok(Value::Float(std::f32::consts::E))
 }
 
 fn execute_pi(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::Double(std::f64::consts::PI))
+    Ok(Value::Float(std::f32::consts::PI))
 }
 
 fn execute_bit_and(args: &[Value]) -> Result<Value, ExpressionError> {

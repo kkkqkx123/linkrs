@@ -777,6 +777,11 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
+                let set_spec = if union_node.distinct() {
+                    SetSpec::Union
+                } else {
+                    SetSpec::UnionAll
+                };
                 Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
@@ -787,7 +792,7 @@ impl ArenaPlanAssembler {
                     left_fid,
                     right_fid,
                     node.id(),
-                    SetSpec::Union,
+                    set_spec,
                 )
             }
             PlanNodeEnum::Minus(minus_node) => {

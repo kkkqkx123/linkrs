@@ -436,6 +436,7 @@ pub(super) fn build_unwind_spec(
 ) -> Result<UnarySpec, PlanBuildError> {
     Ok(UnarySpec::Unwind {
         unwind_column: node.alias().to_string(),
+        list_expression: node.list_expression().get_expression(),
     })
 }
 
@@ -731,7 +732,7 @@ pub(super) fn build_all_paths_spec(
     };
     Ok(RecursiveFragmentSpec::AllPaths {
         edge_types: node.edge_types().to_vec(),
-        direction: crate::core::EdgeDirection::Both,
+        direction: node.direction(),
         min_depth: node.min_hop(),
         max_depth: node.max_hop(),
         acyclic: node.is_acyclic(),

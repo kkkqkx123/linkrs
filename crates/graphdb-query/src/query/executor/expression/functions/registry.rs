@@ -320,6 +320,44 @@ impl FunctionRegistry {
             AggregateFunction::GroupConcatWithOrder(String::new(), String::new(), Vec::new()),
         ));
 
+        // Register window functions
+        // Window functions are only meaningful inside an OVER() clause and are
+        // computed by the window operator (see blocking/window.rs), so they are
+        // registered first to avoid shadowing graph functions with the same name.
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::RowNumber,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::Rank,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::DenseRank,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::Lead,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::Lag,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::FirstValue,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::LastValue,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::NthValue,
+        ));
+        self.register_builtin(BuiltinFunction::Window(
+            super::builtin::window::WindowFunction::Ntile,
+        ));
+
+        // Register full-text search functions
+        // Full-text functions are executed through execute_with_context directly
+        // (see fulltext.rs), so they are registered before graph functions to
+        // avoid the full-text rank() shadowing the graph rank(edge).
+        super::fulltext::register_fulltext_functions(self);
+
         // Registering functions related to graphics
         use super::GraphFunction;
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::Id));
@@ -365,48 +403,15 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListUnique));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListExtract));
 
-        // Registration path function
+        // Register path function
         use super::PathFunction;
         self.register_builtin(BuiltinFunction::Path(PathFunction::Nodes));
         self.register_builtin(BuiltinFunction::Path(PathFunction::Relationships));
 
-        // Register full-text search functions
-        super::fulltext::register_fulltext_functions(self);
-
         // Register vector functions
         super::builtin::vector::register_vector_functions(self);
-
-        // Register window functions
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::RowNumber,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::Rank,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::DenseRank,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::Lead,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::Lag,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::FirstValue,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::LastValue,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::NthValue,
-        ));
-        self.register_builtin(BuiltinFunction::Window(
-            super::builtin::window::WindowFunction::Ntile,
-        ));
     }
 }
-
 /// Global function registry instance
 pub fn global_registry() -> Arc<FunctionRegistry> {
     use std::sync::OnceLock;

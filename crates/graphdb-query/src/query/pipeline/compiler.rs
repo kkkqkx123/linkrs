@@ -76,9 +76,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             Ok(plan) => plan,
             Err(PlannerError::UnsupportedOperation(_)) => {
                 let validated = super::prepared::build_validated_fallback(ast);
-                planner_enum
-                    .transform(&validated, query_context.clone())
-                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+                if let Some(metadata) = self.build_metadata_context(&query_context) {
+                    planner_enum
+                        .transform_with_metadata(&validated, query_context.clone(), &metadata)
+                        .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+                } else {
+                    planner_enum
+                        .transform(&validated, query_context.clone())
+                        .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+                }
             }
             Err(e) => return Err(DBError::from(QueryError::pipeline_planning_error(e))),
         };
@@ -179,6 +185,83 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             );
         }
         Ok(plan)
+    }
+
+    /// Build a `MetadataContext` for the current space from schema and index
+    /// managers, used for index scan selection during planning.
+    fn build_metadata_context(
+        &self,
+        query_context: &QueryContext,
+    ) -> Option<crate::query::metadata::MetadataContext> {
+        use crate::query::metadata::{
+            IndexMetadata, IndexType, MetadataContext, PropertyDefinition, PropertyType,
+            TagMetadata,
+        };
+
+        let space_name = query_context
+            .space_name()
+            .or_else(|| query_context.request_context().space_name.clone())?;
+        let space_id = query_context.space_id().unwrap_or(0);
+
+        let mut metadata = MetadataContext::new();
+
+        if let Some(schema_manager) = &self.schema_manager {
+            if let Ok(tags) = schema_manager.list_tags(&space_name) {
+                for tag in tags {
+                    let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
+                    for prop in &tag.properties {
+                        tag_metadata.properties.push(PropertyDefinition::new(
+                            prop.name.clone(),
+                            PropertyType::from(prop.data_type.clone()),
+                        ));
+                    }
+                    metadata.set_tag_metadata(tag.tag_name.clone(), tag_metadata);
+                }
+            }
+        }
+
+        let index_manager = self.index_manager.clone().or_else(|| {
+            self.storage.as_ref().and_then(|storage| {
+                storage.read().get_index_metadata_manager()
+            })
+        });
+        if let Some(index_manager) = index_manager {
+            if let Ok(indexes) = index_manager.list_tag_indexes(space_id) {
+                for index in indexes {
+                    let field_name = index
+                        .fields
+                        .first()
+                        .map(|f| f.name.clone())
+                        .unwrap_or_default();
+                    let mut index_metadata = IndexMetadata::new(
+                        index.name.clone(),
+                        space_id,
+                        index.schema_name.clone(),
+                        field_name,
+                        IndexType::Property,
+                    );
+                    index_metadata.index_id = index.id;
+                    metadata.set_index_metadata(index.name.clone(), index_metadata);
+                }
+            }
+        }
+
+        let tag_names: Vec<String> = metadata
+            .get_all_tags()
+            .map(|t| t.tag_name.clone())
+            .collect();
+        for tag_name in tag_names {
+            let indexes: Vec<String> = metadata
+                .get_all_indexes()
+                .filter(|i| i.tag_name == tag_name)
+                .map(|i| i.index_name.clone())
+                .collect();
+            if let Some(tag_metadata) = metadata.get_tag_metadata_mut(&tag_name) {
+                tag_metadata.indexes = indexes;
+            }
+        }
+
+        Some(metadata)
     }
 
     pub(crate) fn build_physical_plan(

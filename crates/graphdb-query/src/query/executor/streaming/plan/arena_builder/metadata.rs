@@ -350,8 +350,11 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         | OperatorKindSpec::Exchange(_)
         | OperatorKindSpec::Ddl(_)
         | OperatorKindSpec::Txn(_)
-        | OperatorKindSpec::Unary(_)
         | OperatorKindSpec::Blocking(_) => input,
+        OperatorKindSpec::Unary(UnarySpec::Unwind { unwind_column, .. }) => {
+            layout_with_added_names(&input, [unwind_column.clone()])
+        }
+        OperatorKindSpec::Unary(_) => input,
         OperatorKindSpec::Sink(_) => {
             SlotLayout::from_names(&["operation".to_string(), "count".to_string()])
         }
@@ -421,7 +424,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             layout_with_added_names(&input, ["_multi_shortest_path".to_string()])
         }
         OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::ShortestPath { .. }) => {
-            layout_with_added_names(&input, ["_shortest_path".to_string()])
+            layout_with_added_names(&input, ["path".to_string()])
         }
         OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::MultiShortestPath {
             ..
@@ -430,7 +433,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             layout_with_added_names(&input, ["_bfs_path".to_string()])
         }
         OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::AllPaths { .. }) => {
-            layout_with_added_names(&input, ["_all_paths".to_string()])
+            layout_with_added_names(&input, ["path".to_string()])
         }
         OperatorKindSpec::Graph(GraphSpec::BiExpand { .. } | GraphSpec::BiTraverse { .. }) => input,
         OperatorKindSpec::Fulltext(FulltextSpec::FulltextManage { .. })
