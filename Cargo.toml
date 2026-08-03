@@ -243,3 +243,7 @@ harness = false
 [[bench]]
 name = "accumulation_bench"
 harness = false
+
+[[bench]]
+name = "columnar_necessity_bench"
+harness = false

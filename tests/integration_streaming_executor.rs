@@ -6,8 +6,10 @@
 use graphdb::core::error::QueryError;
 use graphdb::core::types::expr::Expression;
 use graphdb::core::types::operators::AggregateFunction;
+use graphdb::core::types::operators::BinaryOperator;
 use graphdb::core::Value;
 use graphdb::query::executor::base::{MemoryBudget, MemoryTracker};
+use graphdb::query::executor::streaming::chunk::DataChunk;
 use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::executor::StreamingExecutor;
 use graphdb::query::executor::streaming::operators::base::OperatorBase;
@@ -704,4 +706,83 @@ mod storage_backed {
         sorted.sort();
         assert_eq!(sorted, vec!["Alice", "Bob", "Charlie", "Diana"]);
     }
+}
+
+#[test]
+fn test_columnar_stats_realistic_workload() {
+    use graphdb::query::executor::streaming::runtime::ColumnarStats;
+    use graphdb::query::executor::streaming::slot::SlotLayout;
+    use std::sync::Arc;
+
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "id".into(),
+        "name".into(),
+        "age".into(),
+        "score".into(),
+        "n.age".into(),
+    ]));
+    let rows: Vec<Vec<Value>> = (0..256)
+        .map(|i| {
+            vec![
+                Value::BigInt(i as i64),
+                Value::string(format!("user_{}", i)),
+                Value::Int(i % 80),
+                Value::Double((i as f64) * 0.1),
+                Value::Int(i % 80),
+            ]
+        })
+        .collect();
+    let stats = Arc::new(ColumnarStats::new());
+    let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+
+    let simple_pred = Expression::Binary {
+        left: Box::new(Expression::Variable("id".into())),
+        op: BinaryOperator::GreaterThan,
+        right: Box::new(Expression::Literal(Value::BigInt(50))),
+    };
+    let compound_pred = Expression::Binary {
+        left: Box::new(Expression::Binary {
+            left: Box::new(Expression::Variable("age".into())),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Value::Int(18))),
+        }),
+        op: BinaryOperator::And,
+        right: Box::new(Expression::Binary {
+            left: Box::new(Expression::Variable("score".into())),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Value::Double(5.0))),
+        }),
+    };
+    let property_pred = Expression::Property {
+        object: Box::new(Expression::Variable("n".into())),
+        property: "age".into(),
+    };
+
+    chunk.evaluate_expression(&simple_pred, None).unwrap();
+    chunk.evaluate_expression(&compound_pred, None).unwrap();
+    chunk.evaluate_expression(&property_pred, None).unwrap();
+    chunk.evaluate_expressions(&[Expression::Variable("id".into())], None).unwrap();
+
+    let hits_after_simple = stats.columnar_hits.load(std::sync::atomic::Ordering::Relaxed);
+    let misses_after_simple = stats.columnar_misses.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(hits_after_simple, 4);
+    assert_eq!(misses_after_simple, 0);
+    assert_eq!(stats.hit_rate(), 1.0);
+
+    let fn_expr = Expression::Function {
+        name: "upper".into(),
+        args: vec![Expression::Variable("name".into())],
+    };
+    chunk.evaluate_expression(&fn_expr, None).unwrap();
+    assert_eq!(
+        stats.columnar_hits.load(std::sync::atomic::Ordering::Relaxed),
+        4,
+        "function expression must miss the columnar path"
+    );
+    assert_eq!(
+        stats.columnar_misses.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "function expression records exactly one miss"
+    );
+    assert!(stats.hit_rate() < 1.0);
 }
