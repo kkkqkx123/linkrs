@@ -86,6 +86,10 @@ pub enum SourceSpec {
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,
+        /// Optional vertex-id range restricting the scan to one partition.
+        /// Set only on per-partition copies produced by the partitioned
+        /// physical-plan builder; `None` means a full scan.
+        partition_range: Option<std::ops::Range<i64>>,
     },
     ScanEdges {
         rows: Vec<Vec<Value>>,
@@ -97,6 +101,8 @@ pub enum SourceSpec {
         edge_type: Option<String>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Optional source-id range restricting the scan to one partition.
+        partition_range: Option<std::ops::Range<i64>>,
     },
     GetVertices {
         space_name: String,

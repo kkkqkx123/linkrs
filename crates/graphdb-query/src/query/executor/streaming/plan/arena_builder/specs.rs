@@ -94,6 +94,7 @@ pub(super) fn build_source_spec(
                 col_names: scan_node.col_names().to_vec(),
                 projected_properties,
                 predicate,
+                partition_range: None,
             })
         }
         PlanNodeEnum::ScanEdges(scan_node) => {
@@ -106,6 +107,7 @@ pub(super) fn build_source_spec(
                 edge_type: scan_node.edge_type().map(|s| s.to_string()),
                 col_names: scan_node.col_names().to_vec(),
                 projected_properties: scan_node.projected_properties().to_vec(),
+                partition_range: None,
             })
         }
         PlanNodeEnum::GetVertices(get_node) => {

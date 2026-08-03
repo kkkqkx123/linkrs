@@ -352,6 +352,10 @@ pub struct ExecutionPlan {
     /// Per-partition output channel capacity for P8 backpressure.
     pub max_buffered_chunks: usize,
 
+    /// Why parallel partitioning was not selected (empty = partitioning
+    /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
+    pub parallel_fallback_reason: String,
+
     /// The pure logical plan (if conversion succeeded).
     /// Used by cost-based optimization to make physical decisions.
     pub logical_plan: Option<LogicalPlan>,
@@ -368,6 +372,7 @@ impl ExecutionPlan {
             partition_spec: None,
             max_workers: 1,
             max_buffered_chunks: 10,
+            parallel_fallback_reason: String::new(),
             logical_plan: None,
         }
     }

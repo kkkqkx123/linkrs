@@ -430,9 +430,13 @@ impl PartitionHandle {
             self.worker_time_us.load(Ordering::Relaxed),
             Ordering::Relaxed,
         );
-        board
-            .parallel_workers
-            .fetch_max(self.worker_count, Ordering::Relaxed);
+        // Report the number of workers that actually executed partitions:
+        // at most one worker per partition, so it is bounded by the
+        // partition count even when the pool has more threads.
+        board.parallel_workers.fetch_max(
+            self.worker_count.min(self.partition_count),
+            Ordering::Relaxed,
+        );
         board.parallel_buffered_chunks_peak.fetch_max(
             self.buffered_chunks_peak.load(Ordering::Relaxed),
             Ordering::Relaxed,

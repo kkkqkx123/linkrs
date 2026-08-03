@@ -1,8 +1,8 @@
 //! Recursive assembly of operators and fragment DAG edges.
 
 use super::super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, FulltextSpec, GraphSpec, JoinSpec, RecursiveFragmentSpec,
-    SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::super::super::slot::SlotLayout;
 use super::super::super::properties::PhysicalProperties;
@@ -14,14 +14,15 @@ use crate::query::executor::build_error::PlanBuildError;
 
 use super::{ArenaFragmentAllocator, ArenaPlanAssembler};
 
-pub(super) struct FragmentCtx<'a> {
-    pub(super) operators: &'a mut Vec<PhysicalOperatorSpec>,
-    pub(super) fragments: &'a mut Vec<FragmentSpec>,
-    pub(super) op_alloc: &'a mut PhysicalOperatorIdAllocator,
+/// Mutable builder handles shared by the per-fragment push helpers.
+pub(crate) struct FragmentCtx<'a> {
+    pub(crate) operators: &'a mut Vec<PhysicalOperatorSpec>,
+    pub(crate) fragments: &'a mut Vec<FragmentSpec>,
+    pub(crate) op_alloc: &'a mut PhysicalOperatorIdAllocator,
 }
 
 impl ArenaPlanAssembler {
-    pub(super) fn push_source_op(
+    pub(crate) fn push_source_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,
         op_alloc: &mut PhysicalOperatorIdAllocator,
@@ -58,7 +59,7 @@ impl ArenaPlanAssembler {
         (fid, op_id)
     }
 
-    pub(super) fn push_unary_op(
+    pub(crate) fn push_unary_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut [FragmentSpec],
         op_alloc: &mut PhysicalOperatorIdAllocator,
@@ -88,7 +89,7 @@ impl ArenaPlanAssembler {
         Ok((child_fid, op_id))
     }
 
-    pub(super) fn push_blocking_op(
+    pub(crate) fn push_blocking_op(
         ctx: &mut FragmentCtx,
         child_fid: FragmentId,
         node_id: i64,
@@ -116,6 +117,121 @@ impl ArenaPlanAssembler {
         fragment.operators.push(op_id);
         fragment.root_operator = op_id;
         Ok((child_fid, op_id))
+    }
+
+    /// Create the gather/exchange fragment that consumes one executor per
+    /// partition through a `PartitionedInputs` contract.
+    pub(crate) fn push_exchange_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        partition_fids: Vec<FragmentId>,
+        partition_count: usize,
+    ) -> (FragmentId, PhysicalOperatorId) {
+        let op_id = op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: None,
+            spec: OperatorKindSpec::Exchange(ExchangeSpec::Concatenate { partition_count }),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_blocking(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name: "Exchange",
+        });
+        fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Exchange,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: partition_fids,
+            output: None,
+            exchange_layout: None,
+        });
+        (fid, op_id)
+    }
+
+    /// Create a new fragment holding one global unary operator that consumes
+    /// `child_fid` (the partition exchange fragment).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_global_unary_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        child_fid: FragmentId,
+        node_id: i64,
+        spec: UnarySpec,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        let op_id = op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::unary_explain_name(&spec);
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: Some(LogicalNodeId(node_id)),
+            spec: OperatorKindSpec::Unary(spec),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name,
+        });
+        fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Streaming,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: vec![child_fid],
+            output: None,
+            exchange_layout: None,
+        });
+        Ok((fid, op_id))
+    }
+
+    /// Create a new fragment holding one global blocking operator that
+    /// consumes `child_fid` (the partition exchange fragment).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_global_blocking_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        child_fid: FragmentId,
+        node_id: i64,
+        spec: BlockingSpec,
+        properties: PhysicalProperties,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        let op_id = op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::blocking_explain_name(&spec);
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: Some(LogicalNodeId(node_id)),
+            spec: OperatorKindSpec::Blocking(spec),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties,
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name,
+        });
+        fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Blocking,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: vec![child_fid],
+            output: None,
+            exchange_layout: None,
+        });
+        Ok((fid, op_id))
     }
 
     pub(super) fn push_graph_op(
@@ -425,14 +541,14 @@ impl ArenaPlanAssembler {
         Ok((fid, op_id))
     }
 }
-pub(super) enum BinaryOperatorSpec {
+pub(crate) enum BinaryOperatorSpec {
     Join(JoinSpec),
     Set(SetSpec),
     Apply(ApplySpec),
 }
 
 impl BinaryOperatorSpec {
-    fn into_parts(self) -> (OperatorKindSpec, FragmentKind) {
+    pub(super) fn into_parts(self) -> (OperatorKindSpec, FragmentKind) {
         match self {
             Self::Join(spec) => (OperatorKindSpec::Join(spec), FragmentKind::Streaming),
             Self::Set(spec) => (OperatorKindSpec::Set(spec), FragmentKind::Streaming),

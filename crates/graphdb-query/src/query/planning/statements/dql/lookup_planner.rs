@@ -250,6 +250,7 @@ impl LookupPlanner {
             None => {
                 let mut vertex_scan_node = ScanVerticesNode::new(space_id, &space_name);
                 vertex_scan_node.set_col_names(vec![target_name.clone()]);
+                vertex_scan_node.set_tag(&target_name);
 
                 if let Some(ref yield_clause) = lookup_stmt.yield_clause {
                     if let Some(ref limit_clause) = yield_clause.limit {

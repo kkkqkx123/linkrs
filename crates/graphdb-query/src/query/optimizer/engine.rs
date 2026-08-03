@@ -375,6 +375,10 @@ impl OptimizerEngine {
         if let Some(spec) = decision.partition_spec {
             log::debug!("Selected partition layout: {}", decision.reason);
             plan.set_partition_spec(spec);
+        } else if !decision.reason.is_empty() {
+            // Keep the decision observable: EXPLAIN ANALYZE / PROFILE report
+            // the reason whenever the plan falls back to serial execution.
+            plan.parallel_fallback_reason = decision.reason;
         }
         plan
     }

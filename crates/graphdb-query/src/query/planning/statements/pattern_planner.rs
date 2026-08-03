@@ -219,6 +219,9 @@ pub fn plan_pattern_node(
     let mut scan_node = ScanVerticesNode::new(space_id, space_name);
     scan_node.set_col_names(vec![var_name.clone()]);
     scan_node.set_output_var(var_name.clone());
+    if let Some(label) = node.labels.first() {
+        scan_node.set_tag(label);
+    }
     let mut plan = SubPlan::from_root(scan_node.into_enum());
 
     if !node.labels.is_empty() {

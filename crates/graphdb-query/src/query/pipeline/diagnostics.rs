@@ -339,7 +339,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan_desc.parallel_work_time_us = work_us;
         plan_desc.parallel_buffered_chunks_peak = chunks_peak;
         plan_desc.parallel_buffered_bytes_peak = bytes_peak;
-        if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
+        if plan_desc.actual_workers == 0
+            && plan_desc.requested_workers > 1
+            && plan_desc.parallel_fallback_reason.is_empty()
+        {
             plan_desc.parallel_fallback_reason = "serial fallback (P8 not activated)".to_string();
         }
     }

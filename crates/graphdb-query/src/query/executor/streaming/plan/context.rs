@@ -77,6 +77,11 @@ pub struct PhysicalPlanBuildContext {
     /// fragments and exchange/gather fragments instead of a single linear chain.
     pub partition_spec: Option<PartitionSpec>,
 
+    /// Why parallel partitioning was not applied (empty = partitioning
+    /// active or not requested). Copied into the built [`PhysicalPlan`] so
+    /// EXPLAIN / PROFILE diagnostics can surface it.
+    pub parallel_fallback_reason: String,
+
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
@@ -104,6 +109,7 @@ impl PhysicalPlanBuildContext {
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
+            parallel_fallback_reason: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }
@@ -118,6 +124,7 @@ impl PhysicalPlanBuildContext {
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
+            parallel_fallback_reason: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }

@@ -111,9 +111,11 @@ pub struct ScanOptions {
     pub offset: usize,
     /// Batch size for cursor reads.
     pub batch_size: usize,
-    /// Optional vertex ID range filter. Only vertices whose `id` falls in
-    /// this range (inclusive of start, exclusive of end) are returned.
-    /// When set, this filter is applied at scan time, not as a post-filter.
+    /// Optional vertex ID range filter over the **external** vertex ID
+    /// (the same i64 domain as `PartitionSpec` ranges). Only vertices whose
+    /// external ID falls in this range (inclusive of start, exclusive of
+    /// end) are returned. When set, this filter is applied at scan time,
+    /// not as a post-filter.
     pub vertex_id_range: Option<std::ops::Range<i64>>,
     /// Optional edge source ID range filter. Only edges whose source ID
     /// (parsed as `i64`) falls in this range are returned.

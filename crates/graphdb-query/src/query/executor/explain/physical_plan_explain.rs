@@ -19,6 +19,7 @@ use crate::query::planning::plan::explain::{Pair, PlanDescription, PlanNodeDescr
 pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription {
     let mut desc = PlanDescription::new();
     desc.requested_workers = 1;
+    desc.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
 
     // Build a reverse dependency map: operator_id → list of operator ids that depend on it.
     // Also track which fragment each operator belongs to.

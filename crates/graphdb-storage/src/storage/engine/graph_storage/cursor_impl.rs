@@ -73,15 +73,6 @@ impl GraphVertexCursor {
         let ts = options
             .read_timestamp
             .unwrap_or_else(|| ctx.get_read_timestamp());
-        if options
-            .vertex_id_range
-            .as_ref()
-            .is_some_and(|range| range.start < 0 || range.end < 0 || range.end > u32::MAX as i64)
-        {
-            return Err(StorageError::invalid_operation(
-                "vertex_id_range must fit non-negative u32 internal IDs",
-            ));
-        }
         let tag_infos = ctx.schema_manager().list_tags(&space)?;
         let tags = TagCache {
             labels: tag_infos.iter().map(|t| t.tag_id).collect(),
@@ -212,33 +203,28 @@ impl GraphVertexCursor {
                 let ids = &self.pending_ids[self.pending_idx..end];
                 self.pending_idx = end;
 
-                // Pre-filter ids before decoding: out-of-range rows are
-                // skipped without any column decode.
-                let mut to_read: Vec<u32> = Vec::with_capacity(ids.len());
-                for &internal_id in ids {
-                    if let Some(ref range) = self.id_range {
-                        if !((range.start as u32)..(range.end as u32)).contains(&internal_id) {
-                            continue;
-                        }
-                    }
-                    to_read.push(internal_id);
-                }
-                if to_read.is_empty() {
-                    continue;
-                }
-
                 let Some(table) = self.current_table.clone() else {
                     continue;
                 };
                 let label_id = self.current_label;
-                let records =
-                    table.get_projected_batch(&to_read, self.ts, self.projection.as_deref());
+                let records = table.get_projected_batch(ids, self.ts, self.projection.as_deref());
                 let tag_name = label_id
                     .and_then(|l| names.get(&l))
                     .map(|s| s.as_str())
                     .unwrap_or("unknown");
 
                 for record in records.into_iter().flatten() {
+                    // The vertex-id range is applied to the external vertex ID
+                    // (the same domain as `PartitionSpec` ranges). Internal IDs
+                    // are shard-local and cannot be addressed by a global
+                    // range. Non-numeric IDs never match an i64 range.
+                    if let Some(ref range) = self.id_range {
+                        let vid = record.vid.as_int64();
+                        match vid {
+                            Some(vid) if (range.start..range.end).contains(&vid) => {}
+                            _ => continue,
+                        }
+                    }
                     if !self.predicate.is_empty()
                         && !self.predicate.iter().all(|p| p.matches(&record.properties))
                     {

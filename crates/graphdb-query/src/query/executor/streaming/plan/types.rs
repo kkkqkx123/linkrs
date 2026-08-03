@@ -433,6 +433,9 @@ pub struct PhysicalPlan {
     pub required_capabilities: CapabilitySet,
     /// Parameter schema for this plan (empty if no parameters).
     pub parameter_schema: ParameterSchema,
+    /// Why parallel partitioning was not applied (empty = partitioning
+    /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
+    pub parallel_fallback_reason: String,
 }
 
 impl PhysicalPlan {

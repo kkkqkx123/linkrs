@@ -3,7 +3,9 @@
 use super::super::types::FragmentId;
 
 mod conversion;
-mod fragment_ops;
+pub(super) mod fragment_ops;
+
+pub(super) use fragment_ops::FragmentCtx;
 
 pub(super) struct ArenaPlanAssembler;
 

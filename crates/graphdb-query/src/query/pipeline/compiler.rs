@@ -329,6 +329,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .load(std::sync::atomic::Ordering::Relaxed);
         }
         build_ctx.parameter_schema = self.parameter_schema(query_context);
+        build_ctx.partition_spec = plan.partition_spec().cloned();
+        build_ctx.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
         let physical_plan = PhysicalPlanBuilder::build(root_node, &mut build_ctx, &exec_ctx)
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 

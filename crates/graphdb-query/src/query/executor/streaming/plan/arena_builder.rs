@@ -17,6 +17,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 
 mod assembler;
 mod metadata;
+mod partition;
 mod specs;
 
 use assembler::{ArenaFragmentAllocator, ArenaPlanAssembler};
@@ -28,12 +29,61 @@ impl PhysicalPlanBuilder {
     /// Build a complete [`PhysicalPlan`] from a plan node.
     ///
     /// Walks the [`PlanNodeEnum`] tree directly, creating arena operators
-    /// and a fragment DAG.
+    /// and a fragment DAG.  When `ctx.partition_spec` is set and the tree is
+    /// partitionable, a partitioned plan (N local source fragments + one
+    /// exchange fragment + global fragments) is produced instead; otherwise
+    /// the single-tree path is used and the reason is recorded in
+    /// `ctx.parallel_fallback_reason`.
     pub fn build(
         node: &PlanNodeEnum,
         ctx: &mut PhysicalPlanBuildContext,
         exec_ctx: &ExecutionContext,
     ) -> Result<PhysicalPlan, PlanBuildError> {
+        let mut partitioned = None;
+        if let Some(spec) = ctx.partition_spec.clone() {
+            match partition::build_partitioned(node, &spec, exec_ctx) {
+                Ok(Some(result)) => {
+                    ctx.parallel_fallback_reason.clear();
+                    partitioned = Some(result);
+                }
+                Ok(None) => {
+                    if ctx.parallel_fallback_reason.is_empty() {
+                        ctx.parallel_fallback_reason =
+                            "plan shape does not support partitioned execution".to_string();
+                    }
+                }
+                Err(error) => {
+                    if ctx.parallel_fallback_reason.is_empty() {
+                        ctx.parallel_fallback_reason =
+                            format!("partitioned execution unavailable ({error})");
+                    }
+                }
+            }
+        }
+
+        let (mut operators, mut fragments, root_fid, root_op_id) = match partitioned {
+            Some((operators, fragments, root_fid, root_op_id)) => {
+                (operators, fragments, root_fid, root_op_id)
+            }
+            None => Self::build_serial(node, exec_ctx)?,
+        };
+
+        Self::finalize(&mut operators, &mut fragments, root_fid, root_op_id, ctx)
+    }
+
+    /// Build the single linear fragment DAG for an unpartitioned plan.
+    fn build_serial(
+        node: &PlanNodeEnum,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<
+        (
+            Vec<PhysicalOperatorSpec>,
+            Vec<FragmentSpec>,
+            super::types::FragmentId,
+            PhysicalOperatorId,
+        ),
+        PlanBuildError,
+    > {
         let mut operators: Vec<PhysicalOperatorSpec> = Vec::new();
         let mut fragments: Vec<FragmentSpec> = Vec::new();
         let mut op_alloc = PhysicalOperatorIdAllocator::new();
@@ -48,9 +98,20 @@ impl PhysicalPlanBuilder {
             exec_ctx,
         )?;
 
-        metadata::propagate_layouts(&mut operators, &fragments)?;
-        metadata::populate_input_contracts(&mut operators, &fragments)?;
-        metadata::populate_runtime_metadata(&mut operators);
+        Ok((operators, fragments, root_fid, root_op_id))
+    }
+
+    /// Run the shared metadata passes and assemble the final plan.
+    fn finalize(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        root_fid: super::types::FragmentId,
+        root_op_id: PhysicalOperatorId,
+        ctx: &PhysicalPlanBuildContext,
+    ) -> Result<PhysicalPlan, PlanBuildError> {
+        metadata::propagate_layouts(operators, fragments)?;
+        metadata::populate_input_contracts(operators, fragments)?;
+        metadata::populate_runtime_metadata(operators);
 
         let output = operators
             .iter()
@@ -67,7 +128,7 @@ impl PhysicalPlanBuilder {
 
         let mut logical_to_physical: HashMap<LogicalNodeId, Vec<PhysicalOperatorId>> =
             HashMap::new();
-        for operator in &operators {
+        for operator in &*operators {
             if let Some(logical_id) = operator.logical_node_id {
                 logical_to_physical
                     .entry(logical_id)
@@ -75,17 +136,17 @@ impl PhysicalPlanBuilder {
                     .push(operator.operator_id);
             }
         }
-        let fingerprint = PlanFingerprint::compute(&operators);
+        let fingerprint = PlanFingerprint::compute(operators);
 
         let mut required_capabilities = CapabilitySet::EMPTY;
-        for operator in &operators {
+        for operator in &*operators {
             required_capabilities.insert(metadata::capability_for_operator(&operator.spec));
         }
 
         let plan = PhysicalPlan {
-            operators,
+            operators: std::mem::take(operators),
             logical_to_physical,
-            fragments: FragmentGraph::new(fragments, root_fid),
+            fragments: FragmentGraph::new(std::mem::take(fragments), root_fid),
             root_fragment: root_fid,
             output,
             compatibility: PlanCompatibility {
@@ -97,6 +158,7 @@ impl PhysicalPlanBuilder {
             },
             required_capabilities,
             parameter_schema: ctx.parameter_schema.clone(),
+            parallel_fallback_reason: ctx.parallel_fallback_reason.clone(),
         };
 
         Ok(plan)
