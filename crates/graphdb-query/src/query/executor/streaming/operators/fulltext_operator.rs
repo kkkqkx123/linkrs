@@ -462,7 +462,8 @@ impl FulltextOperator {
                     }
                 }
 
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     return Ok(Some(chunk));
                 }
                 Ok(None)
@@ -514,7 +515,8 @@ impl FulltextOperator {
                     }
                 }
 
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     return Ok(Some(chunk));
                 }
                 Ok(None)
@@ -564,7 +566,8 @@ impl FulltextOperator {
                     }
                 }
 
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }

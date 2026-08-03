@@ -19,6 +19,7 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::parser::ast::vector::VectorDistance;
+use crate::storage::ScanPredicate;
 
 // ── Bound index predicate types ─────────────────────────────────────────────
 
@@ -82,6 +83,9 @@ pub enum SourceSpec {
         limit: Option<usize>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Scan predicates pushed into the storage layer (pure pre-filter;
+        /// the original filter still runs on top).
+        predicate: Vec<ScanPredicate>,
     },
     ScanEdges {
         rows: Vec<Vec<Value>>,

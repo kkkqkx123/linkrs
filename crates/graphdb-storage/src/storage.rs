@@ -40,7 +40,7 @@ pub use client::{
 pub use cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, FlatVertexRecord, IndexCursor,
     IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector, RequiredProperty, ScanOptions,
-    ScanTarget, VecEdgeCursor, VecVertexCursor, VertexCursor,
+    ScanPredicate, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::GraphStorage;

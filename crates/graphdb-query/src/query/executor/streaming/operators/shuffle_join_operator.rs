@@ -139,7 +139,8 @@ impl HashShuffleJoinOperator {
         right_trees: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         for tree in left_trees.iter_mut() {
-            while let Some(chunk) = tree.advance()? {
+            while let Some(mut chunk) = tree.advance()? {
+                chunk.materialize_selection();
                 base.ensure_not_cancelled()?;
                 let col_names = chunk.col_names();
                 for row in &chunk.rows {
@@ -155,7 +156,8 @@ impl HashShuffleJoinOperator {
             }
         }
         for tree in right_trees.iter_mut() {
-            while let Some(chunk) = tree.advance()? {
+            while let Some(mut chunk) = tree.advance()? {
+                chunk.materialize_selection();
                 base.ensure_not_cancelled()?;
                 let col_names = chunk.col_names();
                 for row in &chunk.rows {

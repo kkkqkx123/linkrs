@@ -947,6 +947,7 @@ mod tests {
                 partition_range: None,
                 col_names: vec![],
                 projected_properties: vec![],
+                predicate: Vec::new(),
                 cursor: None,
             },
         );

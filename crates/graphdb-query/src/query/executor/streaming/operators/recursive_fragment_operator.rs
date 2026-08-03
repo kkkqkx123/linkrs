@@ -169,9 +169,10 @@ impl RecursiveFragmentOperator {
                 start_vertices,
                 target_vertices,
             } => loop {
-                let Some(chunk) = input.advance()? else {
+                let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
-                };
+                    };
+                    chunk.materialize_selection();
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -257,9 +258,10 @@ impl RecursiveFragmentOperator {
                 single_shortest,
                 ..
             } => loop {
-                let Some(chunk) = input.advance()? else {
+                let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
-                };
+                    };
+                    chunk.materialize_selection();
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -344,9 +346,10 @@ impl RecursiveFragmentOperator {
                 max_depth,
                 allow_loops,
             } => loop {
-                let Some(chunk) = input.advance()? else {
+                let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
-                };
+                    };
+                    chunk.materialize_selection();
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -434,9 +437,10 @@ impl RecursiveFragmentOperator {
                 start_vertices,
                 target_vertices,
             } => loop {
-                let Some(chunk) = input.advance()? else {
+                let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
-                };
+                    };
+                    chunk.materialize_selection();
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();

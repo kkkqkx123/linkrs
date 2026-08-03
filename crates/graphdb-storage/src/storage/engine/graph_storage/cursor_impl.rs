@@ -43,6 +43,8 @@ pub(crate) struct GraphVertexCursor {
     emitted: usize,
     id_range: Option<Range<i64>>,
     projection: Option<Vec<String>>,
+    /// Pushed conjunctive scan predicates evaluated on decoded rows.
+    predicate: Vec<crate::storage::cursor::ScanPredicate>,
     exhausted: bool,
     /// Read timestamp captured when the cursor is opened.
     ts: Timestamp,
@@ -112,6 +114,7 @@ impl GraphVertexCursor {
                 .projection
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
+            predicate: options.predicate.clone().unwrap_or_default(),
             exhausted,
             ts,
         })
@@ -207,18 +210,14 @@ impl GraphVertexCursor {
                 let ids = &self.pending_ids[self.pending_idx..end];
                 self.pending_idx = end;
 
-                // Pre-filter ids before decoding: out-of-range and offset rows
-                // are skipped without any column decode.
+                // Pre-filter ids before decoding: out-of-range rows are
+                // skipped without any column decode.
                 let mut to_read: Vec<u32> = Vec::with_capacity(ids.len());
                 for &internal_id in ids {
                     if let Some(ref range) = self.id_range {
                         if !((range.start as u32)..(range.end as u32)).contains(&internal_id) {
                             continue;
                         }
-                    }
-                    if self.offset_remaining > 0 {
-                        self.offset_remaining -= 1;
-                        continue;
                     }
                     to_read.push(internal_id);
                 }
@@ -238,6 +237,15 @@ impl GraphVertexCursor {
                     .unwrap_or("unknown");
 
                 for record in records.into_iter().flatten() {
+                    if !self.predicate.is_empty()
+                        && !self.predicate.iter().all(|p| p.matches(&record.properties))
+                    {
+                        continue;
+                    }
+                    if self.offset_remaining > 0 {
+                        self.offset_remaining -= 1;
+                        continue;
+                    }
                     batch.push(build(
                         record.vid,
                         record.internal_id as i64,

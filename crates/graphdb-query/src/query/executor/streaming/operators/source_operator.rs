@@ -12,6 +12,7 @@ use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::EdgeCursor;
 use crate::storage::IndexCursor;
 use crate::storage::IndexRow;
+use crate::storage::ScanPredicate;
 use crate::storage::VertexCursor;
 
 use super::spec::{BoundIndexPredicate, IndexProjection};
@@ -55,6 +56,8 @@ pub enum SourceOperator {
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Scan predicates pushed into the storage layer.
+        predicate: Vec<ScanPredicate>,
         cursor: Option<Box<dyn VertexCursor>>,
     },
     /// Buffered edge scan — rows come from the spec.
@@ -154,6 +157,7 @@ impl SourceOperator {
                 limit,
                 col_names,
                 projected_properties,
+                predicate,
             } => Self::StorageScanVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -161,6 +165,7 @@ impl SourceOperator {
                 partition_range: None,
                 col_names: col_names.clone(),
                 projected_properties: projected_properties.clone(),
+                predicate: predicate.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::ScanEdges { rows, col_names } => Self::ScanEdges {

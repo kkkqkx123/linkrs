@@ -24,7 +24,8 @@ pub(super) fn next_nested_loop_join(
     let right = &mut *ctx.right;
     if !*left_consumed {
         let mut captured_right_names = Vec::new();
-        while let Some(chunk) = right.advance()? {
+        while let Some(mut chunk) = right.advance()? {
+            chunk.materialize_selection();
             base.ensure_not_cancelled()?;
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
@@ -38,7 +39,8 @@ pub(super) fn next_nested_loop_join(
         *left_consumed = true;
     }
 
-    while let Some(left_chunk) = left.advance()? {
+    while let Some(mut left_chunk) = left.advance()? {
+        left_chunk.materialize_selection();
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 

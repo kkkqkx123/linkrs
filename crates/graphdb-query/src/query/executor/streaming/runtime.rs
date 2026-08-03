@@ -29,16 +29,27 @@ pub struct QueryIdentity {
     pub space_name: Option<String>,
 }
 
-/// Query-level columnar fast-path counters (T5 observability).
+/// Query-level columnar fast-path counters (observability).
 ///
 /// Shared via `Arc` with the chunks produced by source operators; every
 /// `DataChunk::evaluate_expression` call records a hit (columnar batch path
 /// succeeded) or a miss (fell back to per-row evaluation). The miss rate
 /// exposes how much of the flat-column promise is actually kept.
+///
+/// `columnar_typed_hits` additionally counts evaluations served by the typed
+/// batch fast path (raw `Vec<i64>`/`Vec<f64>`/`Vec<i32>` buffers).
+/// Selection-vector counters record how often chunks are handed downstream
+/// with a selection attached vs. materialized at a boundary.
 #[derive(Debug, Default)]
 pub struct ColumnarStats {
     pub columnar_hits: AtomicU64,
     pub columnar_misses: AtomicU64,
+    /// Evaluations served by the typed batch fast path.
+    pub columnar_typed_hits: AtomicU64,
+    /// Chunks handed downstream with a selection vector attached.
+    pub selection_attached: AtomicU64,
+    /// Chunks materialized at a selection boundary.
+    pub selection_materialized: AtomicU64,
 }
 
 impl ColumnarStats {
@@ -54,6 +65,21 @@ impl ColumnarStats {
         self.columnar_misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record an evaluation served by the typed batch fast path.
+    pub fn record_typed_hit(&self) {
+        self.columnar_typed_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk handed downstream with a selection vector.
+    pub fn record_selection_attached(&self) {
+        self.selection_attached.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk materialized at a selection boundary.
+    pub fn record_selection_materialized(&self) {
+        self.selection_materialized.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Fraction of evaluation calls that hit the columnar fast path.
     /// Returns 1.0 when nothing was evaluated (vacuous).
     pub fn hit_rate(&self) -> f64 {
@@ -64,6 +90,30 @@ impl ColumnarStats {
             1.0
         } else {
             hits as f64 / total as f64
+        }
+    }
+
+    /// Fraction of evaluations served by the typed batch fast path.
+    pub fn typed_hit_rate(&self) -> f64 {
+        let hits = self.columnar_hits.load(Ordering::Relaxed);
+        let typed = self.columnar_typed_hits.load(Ordering::Relaxed);
+        if hits == 0 {
+            0.0
+        } else {
+            typed as f64 / hits as f64
+        }
+    }
+
+    /// Selection passthrough rate: attached / (attached + materialized).
+    /// 1.0 means every selected chunk reached its consumer without materializing.
+    pub fn selection_passthrough_rate(&self) -> f64 {
+        let attached = self.selection_attached.load(Ordering::Relaxed);
+        let materialized = self.selection_materialized.load(Ordering::Relaxed);
+        let total = attached + materialized;
+        if total == 0 {
+            0.0
+        } else {
+            attached as f64 / total as f64
         }
     }
 }

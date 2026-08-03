@@ -24,6 +24,10 @@ fn build_side_loop(
     let right = &mut *ctx.right;
     while let Some(mut chunk) = right.advance()? {
         base.ensure_not_cancelled()?;
+        // The build side materializes any propagated selection — it must
+        // hash every (visible) build row once, so there is no benefit in
+        // carrying a selection into the build store.
+        chunk.materialize_selection();
         let col_names = chunk.col_names();
         if right_col_names.is_empty() {
             *right_col_names = col_names.clone();
@@ -65,7 +69,11 @@ pub(super) fn next_hash_join(
         };
         left_chunk.materialize_columns();
         let left_cols = left_chunk.columns.as_deref();
-        for (row_idx, left_row) in left_chunk.rows.iter().enumerate() {
+        // The probe side consumes the child's selection vector — only
+        // visible rows are probed, while the materialized columnar cache
+        // stays valid across the Filter boundary (no re-transpose).
+        for row_idx in left_chunk.visible_indices() {
+            let left_row = &left_chunk.rows[row_idx];
             let probe_key = evaluate_join_key(
                 left_row,
                 &left_col_names,
@@ -141,7 +149,9 @@ pub(super) fn next_hash_left_join(
         };
         left_chunk.materialize_columns();
         let left_cols = left_chunk.columns.as_deref();
-        for (row_idx, left_row) in left_chunk.rows.iter().enumerate() {
+        // Consume the child's selection vector (see next_hash_join).
+        for row_idx in left_chunk.visible_indices() {
+            let left_row = &left_chunk.rows[row_idx];
             let probe_key = evaluate_join_key(
                 left_row,
                 &left_col_names,

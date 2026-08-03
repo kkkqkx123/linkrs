@@ -360,7 +360,8 @@ impl SinkOperator {
                     ));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -446,7 +447,8 @@ impl SinkOperator {
                     return Err(QueryError::execution("InsertEdges not opened".to_string()));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -521,7 +523,8 @@ impl SinkOperator {
                     ));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -645,7 +648,8 @@ impl SinkOperator {
                     return Err(QueryError::execution("UpdateEdges not opened".to_string()));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -752,7 +756,8 @@ impl SinkOperator {
                     ));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -802,7 +807,8 @@ impl SinkOperator {
                     return Err(QueryError::execution("DeleteEdges not opened".to_string()));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -862,7 +868,8 @@ impl SinkOperator {
                     ));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -920,7 +927,8 @@ impl SinkOperator {
                     ));
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();

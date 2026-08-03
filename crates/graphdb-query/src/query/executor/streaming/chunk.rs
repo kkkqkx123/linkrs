@@ -32,6 +32,7 @@
 use super::slot::{SlotId, SlotLayout};
 use super::runtime::ColumnarStats;
 use crate::core::types::expr::Expression;
+use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::core::Value;
 use crate::query::executor::base::MemoryReservation;
 use crate::query::executor::expression::evaluator::operations::{
@@ -40,17 +41,129 @@ use crate::query::executor::expression::evaluator::operations::{
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::expression::ExpressionError;
 use crate::query::executor::streaming::context::BorrowedRowContext;
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 const ROW_POOL_MAX_SIZE: usize = 8;
+
+/// Runtime switch: typed column layout for produced chunks.
+///
+/// Rollback knob — set to `false` to fall back to the row-major path for
+/// every chunk (no typed columns are built, `get_column` / `eval_with_cache`
+/// behave exactly as before the typed layout existed).
+static TYPED_COLUMNS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Enable or disable the typed column layout (rollback switch).
+pub fn set_typed_columns_enabled(enabled: bool) {
+    TYPED_COLUMNS_ENABLED.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether the typed column layout is currently enabled.
+pub fn typed_columns_enabled() -> bool {
+    TYPED_COLUMNS_ENABLED.load(AtomicOrdering::Relaxed)
+}
+
+/// Runtime switch: selection-vector propagation across operators.
+///
+/// Rollback knob — set to `false` to make `Filter` materialise selected rows
+/// via `take_indices` exactly as before selection propagation existed.
+static SELECTION_PROPAGATION_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Enable or disable selection-vector propagation (rollback switch).
+pub fn set_selection_propagation_enabled(enabled: bool) {
+    SELECTION_PROPAGATION_ENABLED.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether selection-vector propagation is currently enabled.
+pub fn selection_propagation_enabled() -> bool {
+    SELECTION_PROPAGATION_ENABLED.load(AtomicOrdering::Relaxed)
+}
+
+/// Kind of a typed fixed-size scalar column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedKind {
+    I64,
+    F64,
+    I32,
+}
+
+/// Typed column representation for fixed-size scalar columns.
+///
+/// `I64`/`F64`/`I32` columns are stored as dense raw `Vec`s so that batch
+/// evaluation operates on scalars (auto-vectorizable) instead of constructing
+/// one `Value` per row. Columns that contain NULLs, mixed types, or
+/// non-scalar values fall back to [`TypedColumn::Fallback`].
+#[derive(Debug, Clone)]
+pub enum TypedColumn {
+    I64(Vec<i64>),
+    F64(Vec<f64>),
+    I32(Vec<i32>),
+    Fallback(Vec<Value>),
+}
+
+impl TypedColumn {
+    pub fn len(&self) -> usize {
+        match self {
+            TypedColumn::I64(v) => v.len(),
+            TypedColumn::F64(v) => v.len(),
+            TypedColumn::I32(v) => v.len(),
+            TypedColumn::Fallback(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether this column uses a typed (non-fallback) representation.
+    pub fn is_typed(&self) -> bool {
+        !matches!(self, TypedColumn::Fallback(_))
+    }
+
+    /// Materialize the value at `idx` (O(1) for typed variants).
+    pub fn value_at(&self, idx: usize) -> Option<Value> {
+        match self {
+            TypedColumn::I64(v) => v.get(idx).map(|&x| Value::BigInt(x)),
+            TypedColumn::F64(v) => v.get(idx).map(|&x| Value::Double(x)),
+            TypedColumn::I32(v) => v.get(idx).map(|&x| Value::Int(x)),
+            TypedColumn::Fallback(v) => v.get(idx).cloned(),
+        }
+    }
+
+    /// Convert the whole column into `Vec<Value>`.
+    pub fn to_values(&self) -> Vec<Value> {
+        match self {
+            TypedColumn::I64(v) => v.iter().map(|&x| Value::BigInt(x)).collect(),
+            TypedColumn::F64(v) => v.iter().map(|&x| Value::Double(x)).collect(),
+            TypedColumn::I32(v) => v.iter().map(|&x| Value::Int(x)).collect(),
+            TypedColumn::Fallback(v) => v.clone(),
+        }
+    }
+
+    /// Estimated heap bytes of this column (for memory accounting).
+    pub fn estimated_size(&self) -> usize {
+        match self {
+            TypedColumn::I64(v) => v.capacity() * std::mem::size_of::<i64>(),
+            TypedColumn::F64(v) => v.capacity() * std::mem::size_of::<f64>(),
+            TypedColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
+            TypedColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
+        }
+    }
+}
 
 /// Pool of recycled `Vec<Vec<Value>>` allocations for DataChunk construction.
 ///
 /// Reduces allocation overhead by reusing Vec buffers across chunk boundaries.
 /// Each acquired Vec is guaranteed to have `chunk_size` capacity (not length).
+/// Typed allocation pools (`Vec<i64>`/`Vec<f64>`/`Vec<i32>`) recycle
+/// typed column buffers for `TypedColumn` construction.
 pub struct RowPool {
     pool: parking_lot::Mutex<Vec<Vec<Vec<Value>>>>,
+    typed_i64: parking_lot::Mutex<Vec<Vec<i64>>>,
+    typed_f64: parking_lot::Mutex<Vec<Vec<f64>>>,
+    typed_i32: parking_lot::Mutex<Vec<Vec<i32>>>,
     chunk_size: usize,
     num_columns: usize,
 }
@@ -59,6 +172,9 @@ impl RowPool {
     pub fn new(chunk_size: usize, num_columns: usize) -> Self {
         Self {
             pool: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            typed_i64: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            typed_f64: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            typed_i32: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
             chunk_size,
             num_columns,
         }
@@ -85,6 +201,69 @@ impl RowPool {
             }
             rows.clear();
             pool.push(rows);
+        }
+    }
+
+    /// Acquire a pre-allocated typed column buffer of the given kind.
+    pub fn acquire_typed(&self, kind: TypedKind) -> TypedColumn {
+        let cap = self.chunk_size;
+        match kind {
+            TypedKind::I64 => {
+                let mut p = self.typed_i64.lock();
+                if let Some(mut buf) = p.pop() {
+                    buf.clear();
+                    TypedColumn::I64(buf)
+                } else {
+                    TypedColumn::I64(Vec::with_capacity(cap))
+                }
+            }
+            TypedKind::F64 => {
+                let mut p = self.typed_f64.lock();
+                if let Some(mut buf) = p.pop() {
+                    buf.clear();
+                    TypedColumn::F64(buf)
+                } else {
+                    TypedColumn::F64(Vec::with_capacity(cap))
+                }
+            }
+            TypedKind::I32 => {
+                let mut p = self.typed_i32.lock();
+                if let Some(mut buf) = p.pop() {
+                    buf.clear();
+                    TypedColumn::I32(buf)
+                } else {
+                    TypedColumn::I32(Vec::with_capacity(cap))
+                }
+            }
+        }
+    }
+
+    /// Return a typed column buffer to the pool for reuse.
+    /// Fallback columns are discarded (they wrap `Vec<Value>`).
+    pub fn release_typed(&self, column: TypedColumn) {
+        match column {
+            TypedColumn::I64(mut buf) => {
+                buf.clear();
+                let mut p = self.typed_i64.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::F64(mut buf) => {
+                buf.clear();
+                let mut p = self.typed_f64.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::I32(mut buf) => {
+                buf.clear();
+                let mut p = self.typed_i32.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::Fallback(_) => {}
         }
     }
 
@@ -115,6 +294,18 @@ pub struct DataChunk {
     /// When populated, each inner Vec holds all values for one column.
     /// This enables O(1) column extraction without per-row cloning.
     pub columns: Option<Vec<Vec<Value>>>,
+    /// Optional typed column layout. When populated, one entry per slot:
+    /// fixed-size scalar columns (BigInt/Double/Int) are stored as raw
+    /// `Vec<i64>`/`Vec<f64>`/`Vec<i32>`; everything else is `Fallback`.
+    /// Built eagerly by source operators, gathered by `take_indices`/`slice`,
+    /// and consumed by the typed batch evaluator. Length of every column
+    /// equals `rows.len()`.
+    pub typed_columns: Option<Vec<TypedColumn>>,
+    /// Selection vector. When `Some(indices)`, only rows at those indices
+    /// are "visible" to downstream consumers; `None` means all rows are
+    /// visible. Indices are sorted and unique. Consumers that cannot honour
+    /// a selection must call `materialize_selection()` first.
+    pub selection: Option<Vec<usize>>,
     /// Schema information (column names and types)
     pub schema: Arc<Schema>,
     /// Slot layout for slot-based value access.
@@ -124,7 +315,7 @@ pub struct DataChunk {
     /// Memory reservation for this chunk's data.
     /// Dropping the chunk releases the reserved bytes.
     pub memory_reservation: Option<MemoryReservation>,
-    /// Query-level columnar fast-path counters (T5 observability).
+    /// Query-level columnar fast-path counters (observability).
     /// Shared per query; `None` for chunks that were not produced by a source
     /// operator or whose producer had no runtime attached.
     pub columnar_stats: Option<Arc<ColumnarStats>>,
@@ -137,6 +328,8 @@ impl Clone for DataChunk {
         Self {
             rows: self.rows.clone(),
             columns: self.columns.clone(),
+            typed_columns: self.typed_columns.clone(),
+            selection: self.selection.clone(),
             schema: self.schema.clone(),
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
@@ -186,6 +379,8 @@ impl DataChunk {
         Self {
             rows,
             columns: None,
+            typed_columns: None,
+            selection: None,
             schema,
             layout,
             memory_reservation: None,
@@ -200,7 +395,7 @@ impl DataChunk {
         self
     }
 
-    /// Attach query-level columnar fast-path counters (T5 observability).
+    /// Attach query-level columnar fast-path counters (observability).
     ///
     /// Source operators attach the runtime's counters so that Filter/Project
     /// evaluation on this chunk can expose the columnar hit/miss rate.
@@ -259,6 +454,8 @@ impl DataChunk {
         Ok(Self {
             rows,
             columns: None,
+            typed_columns: None,
+            selection: None,
             schema,
             layout,
             memory_reservation: None,
@@ -338,6 +535,8 @@ impl DataChunk {
         Self {
             rows,
             columns: None,
+            typed_columns: None,
+            selection: None,
             schema,
             layout,
             memory_reservation: None,
@@ -392,6 +591,8 @@ impl DataChunk {
         Self {
             rows,
             columns: Some(columns),
+            typed_columns: None,
+            selection: None,
             schema,
             layout,
             memory_reservation: None,
@@ -473,8 +674,12 @@ impl DataChunk {
     /// returned `Vec<Value>` rather than calling `get_by_slot` per row.
     ///
     /// When no columnar representation exists yet, it is materialised and
-    /// cached here so repeated pulls do not re-transpose the rows (T4.2:
-    /// lazy single-copy storage — sources no longer proactively materialise).
+    /// cached here so repeated pulls do not re-transpose the rows (lazy
+    /// single-copy storage — sources no longer proactively materialise).
+    ///
+    /// When a typed column layout exists, the value cache is materialised
+    /// from the typed columns (raw-to-`Value` conversion) instead of per-row
+    /// cloning; the returned semantics are identical.
     ///
     /// Returns `None` if `slot` is out of range for the layout.
     pub fn get_column(&mut self, slot: SlotId) -> Option<Vec<Value>> {
@@ -501,12 +706,224 @@ impl DataChunk {
         Some(self.rows.iter().map(|row| &row[slot]).collect())
     }
 
+    /// Value at `(row_idx, slot)` served from the typed layout when present
+    /// (O(1) for typed columns). Falls back to the row-major path.
+    pub fn get_typed_by_slot(&self, row_idx: usize, slot: SlotId) -> Option<Value> {
+        if let Some(ref typed) = self.typed_columns {
+            if let Some(col) = typed.get(slot) {
+                return col.value_at(row_idx);
+            }
+        }
+        self.get_by_slot(row_idx, slot)
+    }
+
+    // ── Typed column layout ──
+
+    /// Build the typed column layout from the current rows.
+    ///
+    /// One [`TypedColumn`] per slot: pure `BigInt` columns become `I64`,
+    /// pure `Double` columns `F64`, pure `Int` columns `I32`; columns with
+    /// NULLs, mixed types, or non-scalar values fall back to `Fallback`.
+    ///
+    /// Returns the estimated additional heap bytes (for memory accounting).
+    /// No-op when the typed layout is disabled (rollback switch) or already
+    /// built, or when the chunk is empty.
+    pub fn build_typed_columns(&mut self) -> usize {
+        if !typed_columns_enabled() || self.typed_columns.is_some() {
+            return 0;
+        }
+        let num_cols = self.num_columns();
+        if self.rows.is_empty() || num_cols == 0 {
+            return 0;
+        }
+        let num_rows = self.rows.len();
+        let mut typed = Vec::with_capacity(num_cols);
+        let mut extra_bytes = 0usize;
+        for col_idx in 0..num_cols {
+            let first = &self.rows[0][col_idx];
+            let kind = match first {
+                Value::BigInt(_) => Some(TypedKind::I64),
+                Value::Double(_) => Some(TypedKind::F64),
+                Value::Int(_) => Some(TypedKind::I32),
+                _ => None,
+            };
+            let Some(kind) = kind else {
+                typed.push(TypedColumn::Fallback(
+                    self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                ));
+                continue;
+            };
+            let mut ok = true;
+            let column = match kind {
+                TypedKind::I64 => {
+                    let mut buf = Vec::with_capacity(num_rows);
+                    for row in &self.rows {
+                        match row[col_idx] {
+                            Value::BigInt(v) => buf.push(v),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        extra_bytes += buf.capacity() * std::mem::size_of::<i64>();
+                        TypedColumn::I64(buf)
+                    } else {
+                        TypedColumn::Fallback(
+                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                        )
+                    }
+                }
+                TypedKind::F64 => {
+                    let mut buf = Vec::with_capacity(num_rows);
+                    for row in &self.rows {
+                        match row[col_idx] {
+                            Value::Double(v) => buf.push(v),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        extra_bytes += buf.capacity() * std::mem::size_of::<f64>();
+                        TypedColumn::F64(buf)
+                    } else {
+                        TypedColumn::Fallback(
+                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                        )
+                    }
+                }
+                TypedKind::I32 => {
+                    let mut buf = Vec::with_capacity(num_rows);
+                    for row in &self.rows {
+                        match row[col_idx] {
+                            Value::Int(v) => buf.push(v),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        extra_bytes += buf.capacity() * std::mem::size_of::<i32>();
+                        TypedColumn::I32(buf)
+                    } else {
+                        TypedColumn::Fallback(
+                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                        )
+                    }
+                }
+            };
+            typed.push(column);
+        }
+        self.typed_columns = Some(typed);
+        extra_bytes
+    }
+
+    /// Borrow the typed column at `slot`, if present.
+    pub fn typed_column(&self, slot: SlotId) -> Option<&TypedColumn> {
+        self.typed_columns
+            .as_ref()
+            .and_then(|cols| cols.get(slot))
+    }
+
+    // ── Selection vectors ──
+
+    /// Attach a selection vector to this chunk.
+    ///
+    /// `indices` must be sorted, unique, and within `rows.len()`; only these
+    /// rows are visible to downstream consumers.
+    pub fn with_selection(mut self, indices: Vec<usize>) -> Self {
+        debug_assert!(indices.is_sorted() && indices.windows(2).all(|w| w[0] < w[1]));
+        debug_assert!(indices.last().is_none_or(|&i| i < self.rows.len()));
+        self.selection = Some(indices);
+        self
+    }
+
+    /// The attached selection vector, or `None` when all rows are visible.
+    pub fn selection(&self) -> Option<&[usize]> {
+        self.selection.as_deref()
+    }
+
+    /// Number of visible rows.
+    pub fn visible_count(&self) -> usize {
+        self.selection.as_ref().map(Vec::len).unwrap_or(self.rows.len())
+    }
+
+    /// Indices of all visible rows.
+    ///
+    /// When no selection is attached, returns `(0..rows.len())` as a fresh
+    /// Vec. Prefer iterating the returned slice when `selection()` is `Some`.
+    pub fn visible_indices(&self) -> Vec<usize> {
+        match &self.selection {
+            Some(indices) => indices.clone(),
+            None => (0..self.rows.len()).collect(),
+        }
+    }
+
+    /// Whether a row at `idx` is visible (O(1) when no selection).
+    pub fn is_visible(&self, idx: usize) -> bool {
+        match &self.selection {
+            None => idx < self.rows.len(),
+            Some(indices) => indices.binary_search(&idx).is_ok(),
+        }
+    }
+
+    /// Take the attached selection vector, leaving `None`.
+    pub fn take_selection(&mut self) -> Option<Vec<usize>> {
+        self.selection.take()
+    }
+
+    /// Materialize the selection vector in place.
+    ///
+    /// Gathers the visible rows (and the typed/columnar caches) into the
+    /// front of the chunk and clears the selection. Returns `true` when a
+    /// selection was actually materialized, `false` when nothing changed
+    /// (chunk was already fully materialized).
+    ///
+    /// Selection-aware operators (Filter/Project/Join probe/Aggregate) call
+    /// this implicitly; all other operators must call it after `advance()`
+    /// before consuming `rows`, so a selection never leaks past a boundary.
+    pub fn materialize_selection(&mut self) -> bool {
+        let Some(indices) = self.selection.take() else {
+            return false;
+        };
+        let mut selected = Vec::with_capacity(indices.len());
+        for &i in &indices {
+            selected.push(std::mem::take(&mut self.rows[i]));
+        }
+        self.rows = selected;
+        self.columns = self.columns.as_ref().map(|cols| {
+            cols.iter()
+                .map(|col| indices.iter().map(|&i| col[i].clone()).collect())
+                .collect()
+        });
+        self.typed_columns = self.typed_columns.as_ref().map(|cols| {
+            cols.iter().map(|col| gather_typed_column(col, &indices)).collect()
+        });
+        if let Some(stats) = &self.columnar_stats {
+            stats.record_selection_materialized();
+        }
+        true
+    }
+
+    /// Row `i` as a slice (rows are always fully stored; selection is
+    /// orthogonal — use `visible_indices()` to enumerate visible rows).
+    pub fn row_at(&self, i: usize) -> &[Value] {
+        &self.rows[i]
+    }
+
     /// Create a new chunk containing only rows at the given `indices`.
     ///
     /// The layout and schema are shared (cheap `Arc::clone`); rows are
     /// moved out of `self` one by one.  This is more efficient than
     /// filtering row‑by‑row in a loop because the schema/layout copy is
     /// amortised over all selected rows.
+    ///
+    /// The typed column layout is gathered by `indices` so downstream
+    /// consumers keep the typed fast path.
     ///
     /// Panics if any index is out of bounds.
     pub fn take_indices(&mut self, indices: &[usize]) -> Self {
@@ -516,11 +933,18 @@ impl DataChunk {
         for &i in indices {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
-        // T4.2: columnar cache rebuild is deferred — invalidate it here and
-        // let the next `get_column` materialise lazily from the selected rows.
+        let typed_columns = self
+            .typed_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|col| gather_typed_column(col, indices)).collect());
+        // The Value columnar cache rebuild is deferred — invalidate it here
+        // and let the next `get_column` materialise lazily from the selected
+        // rows (or from the gathered typed layout).
         Self {
             rows: selected,
             columns: None,
+            typed_columns,
+            selection: None,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
@@ -555,6 +979,8 @@ impl DataChunk {
     /// Uses `std::mem::take` to avoid cloning.  The source rows at
     /// those indices are replaced with empty `Vec`s.
     ///
+    /// The typed column layout is gathered to match.
+    ///
     /// Panics if `end > self.rows.len()`.
     pub fn slice(&mut self, start: usize, end: usize) -> Self {
         assert!(end <= self.rows.len(), "slice end out of bounds");
@@ -564,10 +990,17 @@ impl DataChunk {
         for i in start..end {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
-        // T4.2: defer columnar cache rebuild, mirroring `take_indices`.
+        let indices: Vec<usize> = (start..end).collect();
+        let typed_columns = self
+            .typed_columns
+            .as_ref()
+            .map(|cols| cols.iter().map(|col| gather_typed_column(col, &indices)).collect());
+        // Defer the Value columnar cache rebuild, mirroring `take_indices`.
         Self {
             rows: selected,
             columns: None,
+            typed_columns,
+            selection: None,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
@@ -579,9 +1012,18 @@ impl DataChunk {
     ///
     /// After calling this, `self.columns` is populated and can be accessed
     /// without per-row cloning via `get_column()`.
+    ///
+    /// When a typed column layout is present, the value cache is derived
+    /// from it (raw-to-`Value` conversion) instead of per-row cloning.
     pub fn materialize_columns(&mut self) {
         if self.columns.is_some() {
             return;
+        }
+        if let Some(ref typed) = self.typed_columns {
+            if typed.len() == self.num_columns() && !self.rows.is_empty() {
+                self.columns = Some(typed.iter().map(TypedColumn::to_values).collect());
+                return;
+            }
         }
         let num_cols = self.num_columns();
         if self.rows.is_empty() || num_cols == 0 {
@@ -673,6 +1115,13 @@ impl DataChunk {
     /// Binary, TypeCast, and Property-on-Variable), falling back to per-row evaluation
     /// for complex expressions (Function, Aggregate, Case, Subquery, etc.).
     ///
+    /// When the chunk carries a typed column layout, Binary/Unary/TypeCast
+    /// evaluation on typed columns runs directly on the raw `Vec<i64>` /
+    /// `Vec<f64>` / `Vec<i32>` buffers (batch, auto-vectorizable) and converts
+    /// the result to `Vec<Value>` once at the end. Results are always computed
+    /// for ALL rows — a chunk-level selection vector does not restrict
+    /// evaluation.
+    ///
     /// `params` provides parameter values (for `$name` resolution), shared across all rows.
     pub fn evaluate_expression(
         &mut self,
@@ -683,8 +1132,11 @@ impl DataChunk {
             return Ok(Vec::new());
         }
         // Fast columnar batch path
-        if let Ok(result) = self.try_evaluate_columnar(expression, params) {
+        if let Ok((result, typed_hit)) = self.try_evaluate_columnar(expression, params) {
             self.count_columnar(true);
+            if typed_hit {
+                self.count_typed_hit();
+            }
             return Ok(result);
         }
         self.count_columnar(false);
@@ -698,17 +1150,79 @@ impl DataChunk {
         self.evaluate_expression_per_row(expression, params)
     }
 
-    /// Columnar batch evaluation path — returns Err if the expression is too complex.
-    fn try_evaluate_columnar(
+    /// Evaluate `expression` producing one value per *visible* row.
+    ///
+    /// When the chunk carries a selection vector, only the selected rows are
+    /// evaluated (O(visible)); when no selection is attached this delegates
+    /// to [`evaluate_expression`](Self::evaluate_expression) so behaviour is
+    /// identical to the pre-selection code path.
+    ///
+    /// `params` provides parameter values (for `$name` resolution), shared across all rows.
+    pub fn evaluate_expression_visible(
         &mut self,
         expression: &Expression,
         params: Option<&Arc<HashMap<String, Value>>>,
     ) -> Result<Vec<Value>, ExpressionError> {
+        let Some(sel) = self.selection().map(|s| s.to_vec()) else {
+            return self.evaluate_expression(expression, params);
+        };
+        // Fast path: Variable / flat Property on a (typed) column — O(visible)
+        // indexed materialization instead of a full evaluation pass.
+        let slot: Option<SlotId> = match expression {
+            Expression::Variable(name) => self.layout.slot_id(name),
+            Expression::Property { object, property }
+                if matches!(object.as_ref(), Expression::Variable(_)) =>
+            {
+                if let Expression::Variable(var) = object.as_ref() {
+                    self.layout.slot_id(&format!("{}.{}", var, property))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            let mut out = Vec::with_capacity(sel.len());
+            for &i in &sel {
+                match self.get_typed_by_slot(i, slot) {
+                    Some(v) => out.push(v),
+                    None => return Err(ExpressionError::undefined_variable("column slot")),
+                }
+            }
+            self.count_columnar(true);
+            return Ok(out);
+        }
+        // General path: per visible row via a row context.
+        let layout = self.get_layout();
+        let mut out = Vec::with_capacity(sel.len());
+        for &i in &sel {
+            let row = &self.rows[i];
+            let mut ctx = match params {
+                Some(p) => BorrowedRowContext::with_parameters(row, layout.clone(), p.clone()),
+                None => BorrowedRowContext::new(row, layout.clone()),
+            };
+            out.push(ExpressionEvaluator::evaluate(expression, &mut ctx)?);
+        }
+        self.count_columnar(false);
+        Ok(out)
+    }
+
+    /// Columnar batch evaluation path — returns Err if the expression is too complex.
+    ///
+    /// The `bool` in the Ok value reports whether the typed batch fast path
+    /// served the result.
+    fn try_evaluate_columnar(
+        &mut self,
+        expression: &Expression,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<(Vec<Value>, bool), ExpressionError> {
         // Build a column cache to avoid redundant get_column calls
         // when the same variable appears in multiple sub-expressions.
         let mut col_cache: HashMap<String, Vec<Value>> = HashMap::new();
         self.collect_variables(expression, &mut col_cache);
-        self.eval_with_cache(expression, &col_cache, params)
+        let mut typed_hit = false;
+        let result = self.eval_with_cache(expression, &col_cache, params, &mut typed_hit)?;
+        Ok((result, typed_hit))
     }
 
     /// Collect all Variable references from an expression tree into col_cache.
@@ -747,12 +1261,22 @@ impl DataChunk {
     }
 
     /// Evaluate expression using a pre-populated column cache.
+    ///
+    /// First tries the typed batch fast path; when it applies
+    /// (`typed_used` is set), the whole expression tree was evaluated on raw
+    /// typed buffers and the result converted to `Vec<Value>` once.
     fn eval_with_cache(
         &mut self,
         expression: &Expression,
         col_cache: &HashMap<String, Vec<Value>>,
         params: Option<&Arc<HashMap<String, Value>>>,
+        typed_used: &mut bool,
     ) -> Result<Vec<Value>, ExpressionError> {
+        // Typed batch fast path: all leaves are typed columns/literals.
+        if let Some(batch) = self.try_eval_typed_batch(expression, col_cache, params)? {
+            *typed_used = true;
+            return Ok(batch.to_values());
+        }
         match expression {
             Expression::Literal(v) => Ok(vec![v.clone(); self.rows.len()]),
 
@@ -777,7 +1301,7 @@ impl DataChunk {
             }
 
             Expression::Unary { op, operand } => {
-                let values = self.eval_with_cache(operand, col_cache, params)?;
+                let values = self.eval_with_cache(operand, col_cache, params, typed_used)?;
                 values
                     .into_iter()
                     .map(|v| UnaryOperationEvaluator::evaluate(op, &v))
@@ -785,8 +1309,8 @@ impl DataChunk {
             }
 
             Expression::Binary { left, op, right } => {
-                let left_values = self.eval_with_cache(left, col_cache, params)?;
-                let right_values = self.eval_with_cache(right, col_cache, params)?;
+                let left_values = self.eval_with_cache(left, col_cache, params, typed_used)?;
+                let right_values = self.eval_with_cache(right, col_cache, params, typed_used)?;
                 left_values
                     .into_iter()
                     .zip(right_values)
@@ -798,7 +1322,7 @@ impl DataChunk {
                 expression,
                 target_type,
             } => {
-                let values = self.eval_with_cache(expression, col_cache, params)?;
+                let values = self.eval_with_cache(expression, col_cache, params, typed_used)?;
                 values
                     .into_iter()
                     .map(|v| ExpressionEvaluator::eval_type_cast(&v, target_type))
@@ -850,7 +1374,7 @@ impl DataChunk {
         Ok(results)
     }
 
-    /// Record a columnar fast-path hit/miss on the attached counters (T5).
+    /// Record a columnar fast-path hit/miss on the attached counters.
     fn count_columnar(&self, hit: bool) {
         if let Some(stats) = &self.columnar_stats {
             if hit {
@@ -861,12 +1385,78 @@ impl DataChunk {
         }
     }
 
+    /// Record a typed batch fast-path hit on the attached counters.
+    fn count_typed_hit(&self) {
+        if let Some(stats) = &self.columnar_stats {
+            stats.record_typed_hit();
+        }
+    }
+
+    // ── Typed batch evaluation ──
+
+    /// Evaluate `expression` on typed raw buffers, when every leaf resolves to
+    /// a typed column or a matching typed literal.
+    ///
+    /// Returns `Ok(None)` when the expression tree cannot be evaluated in
+    /// typed space (mixed kinds, non-scalar nodes, NULL columns) — the caller
+    /// then falls back to the value-based path with identical semantics.
+    fn try_eval_typed_batch(
+        &mut self,
+        expression: &Expression,
+        col_cache: &HashMap<String, Vec<Value>>,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Option<TypedBatch>, ExpressionError> {
+        match expression {
+            Expression::Literal(v) => Ok(typed_literal_batch(v, self.rows.len())),
+            Expression::Parameter(name) => {
+                let val = params
+                    .and_then(|p| p.get(name).cloned())
+                    .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
+                Ok(typed_literal_batch(&val, self.rows.len()))
+            }
+            Expression::Variable(name) => {
+                let slot = match self.layout.slot_id(name) {
+                    Some(slot) => slot,
+                    None => return Ok(None),
+                };
+                Ok(self.typed_column(slot).and_then(typed_column_batch))
+            }
+            Expression::Unary { op, operand } => {
+                let Some(batch) = self.try_eval_typed_batch(operand, col_cache, params)? else {
+                    return Ok(None);
+                };
+                Ok(typed_unary_batch(op, batch))
+            }
+            Expression::Binary { left, op, right } => {
+                let Some(left_batch) = self.try_eval_typed_batch(left, col_cache, params)? else {
+                    return Ok(None);
+                };
+                let Some(right_batch) =
+                    self.try_eval_typed_batch(right, col_cache, params)?
+                else {
+                    return Ok(None);
+                };
+                typed_binary_batch(op, &left_batch, &right_batch)
+            }
+            Expression::TypeCast {
+                expression,
+                target_type,
+            } => {
+                let Some(batch) = self.try_eval_typed_batch(expression, col_cache, params)? else {
+                    return Ok(None);
+                };
+                Ok(typed_cast_batch(batch, target_type))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Whether the whole expression tree is promised to hit the columnar path.
     ///
     /// True only when every node is supported by the columnar evaluator and
     /// every `{var}.{prop}` property access has a matching compound slot in
     /// this chunk's layout. Debug-only: a miss for such an expression means
-    /// the flat-column promise (T5) was broken and would silently regress
+    /// the flat-column promise was broken and would silently regress
     /// performance.
     #[cfg(debug_assertions)]
     fn columnar_promise_holds(&self, expr: &Expression) -> bool {
@@ -891,6 +1481,229 @@ impl DataChunk {
     #[cfg(not(debug_assertions))]
     fn columnar_promise_holds(&self, _expr: &Expression) -> bool {
         false
+    }
+}
+
+/// A batch of raw typed values produced by the typed evaluator.
+///
+/// Mirrors `Value::BigInt`/`Value::Double`/`Value::Int`/`Value::Bool` in
+/// raw space; converted to `Vec<Value>` once at the end of evaluation.
+#[derive(Debug, Clone)]
+enum TypedBatch {
+    I64(Vec<i64>),
+    F64(Vec<f64>),
+    I32(Vec<i32>),
+    Bool(Vec<bool>),
+}
+
+impl TypedBatch {
+    fn to_values(self) -> Vec<Value> {
+        match self {
+            TypedBatch::I64(v) => v.into_iter().map(Value::BigInt).collect(),
+            TypedBatch::F64(v) => v.into_iter().map(Value::Double).collect(),
+            TypedBatch::I32(v) => v.into_iter().map(Value::Int).collect(),
+            TypedBatch::Bool(v) => v.into_iter().map(Value::Bool).collect(),
+        }
+    }
+}
+
+/// Borrow a typed column as a raw batch (`Fallback` columns are not typed).
+fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
+    match column {
+        TypedColumn::I64(v) => Some(TypedBatch::I64(v.clone())),
+        TypedColumn::F64(v) => Some(TypedBatch::F64(v.clone())),
+        TypedColumn::I32(v) => Some(TypedBatch::I32(v.clone())),
+        TypedColumn::Fallback(_) => None,
+    }
+}
+
+/// Replicate a literal into a raw batch of `n` rows, when the literal has a
+/// typed scalar kind (BigInt/Double/Int/Bool).
+fn typed_literal_batch(value: &Value, n: usize) -> Option<TypedBatch> {
+    match value {
+        Value::BigInt(v) => Some(TypedBatch::I64(vec![*v; n])),
+        Value::Double(v) => Some(TypedBatch::F64(vec![*v; n])),
+        Value::Int(v) => Some(TypedBatch::I32(vec![*v; n])),
+        Value::Bool(v) => Some(TypedBatch::Bool(vec![*v; n])),
+        _ => None,
+    }
+}
+
+/// Unary operators on raw typed batches.
+///
+/// Mirrors `UnaryOperationEvaluator` for the supported subset; anything else
+/// returns `None` so the caller falls back to the value path.
+fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option<TypedBatch> {
+    match op {
+        UnaryOperator::Plus => Some(batch),
+        UnaryOperator::Minus => match batch {
+            TypedBatch::I64(v) => Some(TypedBatch::I64(v.into_iter().map(i64::wrapping_neg).collect())),
+            TypedBatch::F64(v) => Some(TypedBatch::F64(v.into_iter().map(|x| -x).collect())),
+            TypedBatch::I32(v) => Some(TypedBatch::I32(v.into_iter().map(i32::wrapping_neg).collect())),
+            TypedBatch::Bool(_) => None,
+        },
+        UnaryOperator::Not => match batch {
+            TypedBatch::Bool(v) => Some(TypedBatch::Bool(v.into_iter().map(|b| !b).collect())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Binary operators on raw typed batches.
+///
+/// Mirrors `BinaryOperationEvaluator` / `Value` comparison and arithmetic
+/// semantics for the supported subset (same-kind operands only); mixed kinds
+/// and unsupported operators return `None` so the caller falls back to the
+/// value path, which handles cross-type coercion exactly.
+fn typed_binary_batch(
+    op: &BinaryOperator,
+    left: &TypedBatch,
+    right: &TypedBatch,
+) -> Result<Option<TypedBatch>, ExpressionError> {
+    use BinaryOperator::*;
+    match op {
+        Equal | NotEqual | LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual => {
+            Ok(compare_typed_batches(op, left, right))
+        }
+        Add | Subtract | Multiply => Ok(arith_typed_batches(op, left, right)),
+        And | Or => match (left, right) {
+            (TypedBatch::Bool(l), TypedBatch::Bool(r)) => {
+                let vals = l
+                    .iter()
+                    .zip(r)
+                    .map(|(&a, &b)| match op {
+                        And => a & b,
+                        Or => a | b,
+                        _ => unreachable!("matched And/Or above"),
+                    })
+                    .collect();
+                Ok(Some(TypedBatch::Bool(vals)))
+            }
+            _ => Ok(None),
+        },
+        _ => Ok(None),
+    }
+}
+
+/// Comparison operators on same-kind raw batches.
+fn compare_typed_batches(op: &BinaryOperator, left: &TypedBatch, right: &TypedBatch) -> Option<TypedBatch> {
+    let matches = |ordering: Ordering| -> bool {
+        match op {
+            BinaryOperator::Equal => ordering == Ordering::Equal,
+            BinaryOperator::NotEqual => ordering != Ordering::Equal,
+            BinaryOperator::LessThan => ordering == Ordering::Less,
+            BinaryOperator::LessThanOrEqual => ordering != Ordering::Greater,
+            BinaryOperator::GreaterThan => ordering == Ordering::Greater,
+            BinaryOperator::GreaterThanOrEqual => ordering != Ordering::Less,
+            _ => unreachable!("called with a non-comparison operator"),
+        }
+    };
+    // Ordering comparison mirrors Value::cmp for same-kind pairs.
+    let batch = match (left, right) {
+        (TypedBatch::I64(l), TypedBatch::I64(r)) => {
+            TypedBatch::Bool(l.iter().zip(r).map(|(&a, &b)| matches(a.cmp(&b))).collect())
+        }
+        (TypedBatch::F64(l), TypedBatch::F64(r)) => {
+            TypedBatch::Bool(l.iter().zip(r).map(|(&a, &b)| matches(cmp_f64_value(a, b))).collect())
+        }
+        (TypedBatch::I32(l), TypedBatch::I32(r)) => {
+            TypedBatch::Bool(l.iter().zip(r).map(|(&a, &b)| matches(a.cmp(&b))).collect())
+        }
+        (TypedBatch::Bool(l), TypedBatch::Bool(r))
+            if matches!(op, BinaryOperator::Equal | BinaryOperator::NotEqual) =>
+        {
+            TypedBatch::Bool(l.iter().zip(r).map(|(&a, &b)| matches(a.cmp(&b))).collect())
+        }
+        _ => return None,
+    };
+    Some(batch)
+}
+
+/// f64 ordering mirroring `Value::cmp_f64` (NaN ordering: NaN == NaN, NaN < x).
+fn cmp_f64_value(a: f64, b: f64) -> Ordering {
+    if a.is_nan() && b.is_nan() {
+        Ordering::Equal
+    } else if a.is_nan() {
+        Ordering::Less
+    } else if b.is_nan() {
+        Ordering::Greater
+    } else {
+        a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+    }
+}
+
+/// Arithmetic operators on same-kind raw batches (wrapping for ints).
+fn arith_typed_batches(op: &BinaryOperator, left: &TypedBatch, right: &TypedBatch) -> Option<TypedBatch> {
+    use BinaryOperator::{Add, Multiply, Subtract};
+    match (left, right) {
+        (TypedBatch::I64(l), TypedBatch::I64(r)) => Some(TypedBatch::I64(
+            l.iter().zip(r).map(|(&a, &b)| match op {
+                Add => a.wrapping_add(b),
+                Subtract => a.wrapping_sub(b),
+                Multiply => a.wrapping_mul(b),
+                _ => unreachable!("arith only"),
+            }).collect(),
+        )),
+        (TypedBatch::F64(l), TypedBatch::F64(r)) => Some(TypedBatch::F64(
+            l.iter().zip(r).map(|(&a, &b)| match op {
+                Add => a + b,
+                Subtract => a - b,
+                Multiply => a * b,
+                _ => unreachable!("arith only"),
+            }).collect(),
+        )),
+        (TypedBatch::I32(l), TypedBatch::I32(r)) => Some(TypedBatch::I32(
+            l.iter().zip(r).map(|(&a, &b)| match op {
+                Add => a.wrapping_add(b),
+                Subtract => a.wrapping_sub(b),
+                Multiply => a.wrapping_mul(b),
+                _ => unreachable!("arith only"),
+            }).collect(),
+        )),
+        _ => None,
+    }
+}
+
+/// Type casts on raw typed batches.
+///
+/// Mirrors `ExpressionEvaluator::eval_type_cast` for numeric targets. Casts
+/// that may produce NULL (e.g. non-finite f64 → int) are NOT served by the
+/// typed path and fall back to the value path.
+fn typed_cast_batch(batch: TypedBatch, target_type: &crate::core::types::DataType) -> Option<TypedBatch> {
+    use crate::core::types::DataType;
+    match target_type {
+        // DataType::Int => value.to_int() (returns BigInt — replicated verbatim).
+        DataType::Int | DataType::BigInt => match batch {
+            TypedBatch::I64(v) => Some(TypedBatch::I64(v)),
+            TypedBatch::I32(v) => Some(TypedBatch::I64(v.into_iter().map(i64::from).collect())),
+            _ => None,
+        },
+        DataType::Double => match batch {
+            TypedBatch::F64(v) => Some(TypedBatch::F64(v)),
+            TypedBatch::I64(v) => Some(TypedBatch::F64(v.into_iter().map(|x| x as f64).collect())),
+            TypedBatch::I32(v) => Some(TypedBatch::F64(v.into_iter().map(|x| x as f64).collect())),
+            _ => None,
+        },
+        DataType::Bool => match batch {
+            TypedBatch::I64(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0).collect())),
+            TypedBatch::F64(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0.0).collect())),
+            TypedBatch::I32(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0).collect())),
+            TypedBatch::Bool(v) => Some(TypedBatch::Bool(v)),
+        },
+        _ => None,
+    }
+}
+
+/// Gather a typed column's entries at `indices`.
+fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> TypedColumn {
+    match column {
+        TypedColumn::I64(v) => TypedColumn::I64(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::F64(v) => TypedColumn::F64(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::I32(v) => TypedColumn::I32(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::Fallback(v) => {
+            TypedColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
+        }
     }
 }
 
@@ -1043,7 +1856,7 @@ mod tests {
         assert!(!chunk.columnar_promise_holds(&expr));
     }
 
-    /// T5: attached counters record one hit per successful columnar
+    /// Attached counters record one hit per successful columnar
     /// evaluation and one miss per per-row fallback.
     #[test]
     fn columnar_stats_record_hits_and_misses() {
@@ -1083,7 +1896,7 @@ mod tests {
         assert!((stats.hit_rate() - 0.5).abs() < 1e-9);
     }
 
-    /// T4.2: `get_column` lazily materialises and caches the columnar
+    /// `get_column` lazily materialises and caches the columnar
     /// representation; `take_indices` defers the cache rebuild.
     #[test]
     fn column_cache_is_lazy_and_deferred_after_take_indices() {
@@ -1116,6 +1929,206 @@ mod tests {
         assert_eq!(
             selected.get_column(1).expect("age column"),
             vec![Value::BigInt(20)]
+        );
+    }
+
+    // ── Typed columns ──
+
+    #[test]
+    fn typed_columns_build_pure_bigint_column() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..100)
+            .map(|i| vec![Value::BigInt((i % 1000) as i64)])
+            .collect();
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        let bytes = chunk.build_typed_columns();
+        let typed = chunk.typed_column(0).expect("typed column built");
+        assert!(matches!(typed, TypedColumn::I64(_)), "expected I64 layout");
+        assert!(bytes > 0, "typed allocation must be accounted");
+        assert_eq!(
+            typed.value_at(5),
+            Some(Value::BigInt(5)),
+            "O(1) indexed materialization"
+        );
+    }
+
+    #[test]
+    fn typed_columns_fallback_on_null_and_mixed_and_string() {
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "n".to_string(),
+            "mixed".to_string(),
+            "s".to_string(),
+        ]));
+        let rows = vec![
+            vec![
+                Value::Null(crate::core::value::NullType::Null),
+                Value::BigInt(1),
+                Value::string("a"),
+            ],
+            vec![Value::BigInt(2), Value::Double(2.0), Value::string("b")],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+        assert!(matches!(
+            chunk.typed_column(0),
+            Some(TypedColumn::Fallback(_))
+        ));
+        assert!(matches!(
+            chunk.typed_column(1),
+            Some(TypedColumn::Fallback(_))
+        ));
+        assert!(matches!(
+            chunk.typed_column(2),
+            Some(TypedColumn::Fallback(_))
+        ));
+    }
+
+    #[test]
+    fn typed_columns_survive_take_indices() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..10)
+            .map(|i| vec![Value::BigInt(i as i64)])
+            .collect();
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+        let mut selected = chunk.take_indices(&[0, 2, 4]);
+        assert!(matches!(
+            selected.typed_column(0),
+            Some(TypedColumn::I64(_))
+        ));
+        assert_eq!(
+            selected.get_column(0).expect("column"),
+            vec![
+                Value::BigInt(0),
+                Value::BigInt(2),
+                Value::BigInt(4)
+            ]
+        );
+    }
+
+    #[test]
+    fn typed_eval_matches_value_path_semantics() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..100)
+            .map(|i| vec![Value::BigInt((i % 1000) as i64)])
+            .collect();
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+
+        let expr = Expression::binary(
+            Expression::variable("k0"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(Value::BigInt(500)),
+        );
+        let typed_result = chunk.evaluate_expression(&expr, None).expect("eval");
+        assert_eq!(typed_result.len(), 100);
+
+        // Sanity: expected boolean mask.
+        let expected: Vec<Value> = (0..100)
+            .map(|i| Value::Bool((i % 1000) > 500))
+            .collect();
+        assert_eq!(typed_result, expected);
+    }
+
+    #[test]
+    fn typed_eval_supports_arithmetic_and_cast() {
+        let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
+        let rows = vec![
+            vec![Value::BigInt(40), Value::BigInt(2)],
+            vec![Value::BigInt(10), Value::BigInt(5)],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+
+        let add = Expression::binary(
+            Expression::variable("a"),
+            BinaryOperator::Add,
+            Expression::variable("b"),
+        );
+        assert_eq!(
+            chunk.evaluate_expression(&add, None).expect("add"),
+            vec![Value::BigInt(42), Value::BigInt(15)]
+        );
+
+        let cast = Expression::TypeCast {
+            expression: Box::new(Expression::variable("a")),
+            target_type: crate::core::DataType::Double,
+        };
+        assert_eq!(
+            chunk.evaluate_expression(&cast, None).expect("cast"),
+            vec![Value::Double(40.0), Value::Double(10.0)]
+        );
+    }
+
+    #[test]
+    fn typed_columns_disabled_falls_back() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..10)
+            .map(|i| vec![Value::BigInt(i as i64)])
+            .collect();
+        set_typed_columns_enabled(false);
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        let bytes = chunk.build_typed_columns();
+        assert_eq!(bytes, 0);
+        assert!(chunk.typed_column(0).is_none());
+        set_typed_columns_enabled(true);
+    }
+
+    #[test]
+    fn row_pool_recycles_typed_columns() {
+        let pool = RowPool::new(64, 1);
+        let col = pool.acquire_typed(TypedKind::I64);
+        pool.release_typed(col);
+        let col = pool.acquire_typed(TypedKind::I64);
+        match col {
+            TypedColumn::I64(v) => assert!(v.capacity() >= 64, "recycled capacity"),
+            _ => panic!("expected I64 column"),
+        }
+    }
+
+    // ── Selection vectors ──
+
+    #[test]
+    fn selection_attachment_and_materialization() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..10)
+            .map(|i| vec![Value::BigInt(i as i64)])
+            .collect();
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+
+        let chunk = chunk.with_selection(vec![0, 2, 4]);
+        assert_eq!(chunk.visible_count(), 3);
+        assert_eq!(chunk.visible_indices(), vec![0, 2, 4]);
+        assert!(chunk.is_visible(2));
+        assert!(!chunk.is_visible(1));
+
+        let mut chunk = chunk;
+        assert!(chunk.materialize_selection());
+        assert_eq!(chunk.visible_count(), 3);
+        assert!(chunk.selection().is_none());
+        // Rows were gathered in selection order and typed columns follow.
+        let col = chunk.get_column(0).expect("column");
+        assert_eq!(col, vec![Value::BigInt(0), Value::BigInt(2), Value::BigInt(4)]);
+        // Second materialize is a no-op.
+        assert!(!chunk.materialize_selection());
+    }
+
+    #[test]
+    fn selection_preserves_typed_columns_until_materialized() {
+        let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+        let rows: Vec<Vec<Value>> = (0..6)
+            .map(|i| vec![Value::BigInt(i as i64)])
+            .collect();
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        chunk.build_typed_columns();
+        let mut chunk = chunk.with_selection(vec![1, 3]);
+        assert!(chunk.typed_column(0).is_some(), "typed layout kept");
+        chunk.materialize_selection();
+        let typed = chunk.typed_column(0).expect("typed layout gathered");
+        assert_eq!(
+            typed.to_values(),
+            vec![Value::BigInt(1), Value::BigInt(3)]
         );
     }
 }

@@ -83,11 +83,17 @@ pub(super) fn build_source_spec(
             let limit = scan_node
                 .limit()
                 .and_then(|v| (v >= 0).then_some(v as usize));
+            let projected_properties = scan_node.projected_properties().to_vec();
+            let predicate = crate::query::planning::scan_predicate::extract_scan_predicates(
+                scan_node.vertex_filter(),
+                &projected_properties,
+            );
             Ok(SourceSpec::StorageScanVertices {
                 space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 limit,
                 col_names: scan_node.col_names().to_vec(),
-                projected_properties: scan_node.projected_properties().to_vec(),
+                projected_properties,
+                predicate,
             })
         }
         PlanNodeEnum::ScanEdges(scan_node) => {

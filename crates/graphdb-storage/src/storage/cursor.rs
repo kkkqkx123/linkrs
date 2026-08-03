@@ -124,6 +124,12 @@ pub struct ScanOptions {
     pub projection: Option<Vec<RequiredProperty>>,
     /// Read timestamp captured by the caller.
     pub read_timestamp: Option<Timestamp>,
+    /// Optional conjunctive scan predicates pushed from the query layer.
+    ///
+    /// All predicates must match for a row to be emitted.  The query layer
+    /// keeps the original filter on top, so the pushdown is a pure
+    /// pre-filter (see [`ScanPredicate`]).
+    pub predicate: Option<Vec<ScanPredicate>>,
 }
 
 impl ScanOptions {
@@ -178,6 +184,12 @@ impl ScanOptions {
         self
     }
 
+    /// Builder: set pushed scan predicates (conjunction semantics).
+    pub fn with_predicate(mut self, predicates: Vec<ScanPredicate>) -> Self {
+        self.predicate = Some(predicates);
+        self
+    }
+
     pub fn batch_size(&self) -> usize {
         if self.batch_size == 0 {
             Self::DEFAULT_BATCH_SIZE
@@ -199,6 +211,124 @@ pub enum IndexPredicate {
     },
     Prefix(crate::core::Value),
     All,
+}
+
+/// A single-column comparison predicate pushed from the query layer into a
+/// physical scan.
+///
+/// This is the whitelist of filter conjuncts the planner can push into the
+/// storage layer.  A list of predicates forms a conjunction (every predicate
+/// must match).  Rows with a missing property never match, mirroring the
+/// query engine's NULL semantics where comparisons against NULL are false.
+/// The original filter expression still runs on top of the scan, so the
+/// pushdown is a pure pre-filter and can never change results.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanPredicate {
+    /// `column = value`
+    ColumnEqual {
+        column: String,
+        value: crate::core::Value,
+    },
+    /// `column` bounded by constants (either bound may be absent).
+    ColumnRange {
+        column: String,
+        lower: Option<crate::core::Value>,
+        upper: Option<crate::core::Value>,
+        include_lower: bool,
+        include_upper: bool,
+    },
+}
+
+impl ScanPredicate {
+    /// Whether the predicate matches the given property set.
+    ///
+    /// Properties are a `(name, value)` slice in projection order.  A
+    /// missing column (or any non-scalar comparison) never matches.
+    pub fn matches(&self, props: &[(String, crate::core::Value)]) -> bool {
+        let Some(value) = props
+            .iter()
+            .find(|(name, _)| name == self.column())
+            .map(|(_, v)| v)
+        else {
+            return false;
+        };
+        match self {
+            ScanPredicate::ColumnEqual { value: expected, .. } => {
+                compare_scalar(value, expected) == std::cmp::Ordering::Equal
+            }
+            ScanPredicate::ColumnRange {
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+                ..
+            } => {
+                if let Some(lower) = lower {
+                    let ord = compare_scalar(value, lower);
+                    let passes = if *include_lower {
+                        ord != std::cmp::Ordering::Less
+                    } else {
+                        ord == std::cmp::Ordering::Greater
+                    };
+                    if !passes {
+                        return false;
+                    }
+                }
+                if let Some(upper) = upper {
+                    let ord = compare_scalar(value, upper);
+                    let passes = if *include_upper {
+                        ord != std::cmp::Ordering::Greater
+                    } else {
+                        ord == std::cmp::Ordering::Less
+                    };
+                    if !passes {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// The property column this predicate compares.
+    pub fn column(&self) -> &str {
+        match self {
+            ScanPredicate::ColumnEqual { column, .. } => column,
+            ScanPredicate::ColumnRange { column, .. } => column,
+        }
+    }
+}
+
+/// Compare two scalar values for a pushed predicate.
+///
+/// Integer kinds are compared exactly as `i64`; any numeric pair involving a
+/// float is compared as `f64` (mirroring the query engine's typed batch
+/// evaluation); everything else falls back to `Value` ordering.
+fn compare_scalar(a: &crate::core::Value, b: &crate::core::Value) -> std::cmp::Ordering {
+    match (as_i64(a), as_i64(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        _ => match (as_f64(a), as_f64(b)) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => crate::core::Value::cmp(a, b),
+        },
+    }
+}
+
+fn as_i64(value: &crate::core::Value) -> Option<i64> {
+    match value {
+        crate::core::Value::SmallInt(v) => Some(*v as i64),
+        crate::core::Value::Int(v) => Some(*v as i64),
+        crate::core::Value::BigInt(v) => Some(*v),
+        _ => None,
+    }
+}
+
+fn as_f64(value: &crate::core::Value) -> Option<f64> {
+    match value {
+        crate::core::Value::Float(v) => Some(*v as f64),
+        crate::core::Value::Double(v) => Some(*v),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

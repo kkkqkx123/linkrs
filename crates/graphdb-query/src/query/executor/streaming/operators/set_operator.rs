@@ -121,7 +121,8 @@ impl SetOperator {
             } => loop {
                 base.ensure_not_cancelled()?;
                 if !*left_consumed {
-                    if let Some(chunk) = left.advance()? {
+                    if let Some(mut chunk) = left.advance()? {
+                        chunk.materialize_selection();
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -143,7 +144,8 @@ impl SetOperator {
                     }
                 }
 
-                if let Some(chunk) = right.advance()? {
+                if let Some(mut chunk) = right.advance()? {
+                    chunk.materialize_selection();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
@@ -166,7 +168,8 @@ impl SetOperator {
 
             Self::UnionAll { left_consumed, .. } => loop {
                 if !*left_consumed {
-                    if let Some(chunk) = left.advance()? {
+                    if let Some(mut chunk) = left.advance()? {
+                        chunk.materialize_selection();
                         if !chunk.is_empty() {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk.rows,
@@ -178,7 +181,8 @@ impl SetOperator {
                     }
                 }
 
-                if let Some(chunk) = right.advance()? {
+                if let Some(mut chunk) = right.advance()? {
+                    chunk.materialize_selection();
                     if !chunk.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
@@ -203,7 +207,8 @@ impl SetOperator {
                     return Ok(None);
                 }
                 if !*left_buffered {
-                    while let Some(chunk) = left.advance()? {
+                    while let Some(mut chunk) = left.advance()? {
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
@@ -214,7 +219,8 @@ impl SetOperator {
                 }
 
                 if !*right_buffered {
-                    while let Some(chunk) = right.advance()? {
+                    while let Some(mut chunk) = right.advance()? {
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -250,7 +256,8 @@ impl SetOperator {
             } => loop {
                 base.ensure_not_cancelled()?;
                 if !*right_buffered {
-                    while let Some(chunk) = right.advance()? {
+                    while let Some(mut chunk) = right.advance()? {
+                        chunk.materialize_selection();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
@@ -260,7 +267,8 @@ impl SetOperator {
                     *right_buffered = true;
                 }
 
-                if let Some(chunk) = left.advance()? {
+                if let Some(mut chunk) = left.advance()? {
+                    chunk.materialize_selection();
                     let result_rows: Vec<Vec<Value>> = chunk
                         .rows
                         .into_iter()
@@ -286,7 +294,8 @@ impl SetOperator {
             } => {
                 if !*right_buffered {
                     right.open()?;
-                    while let Some(chunk) = right.advance()? {
+                    while let Some(mut chunk) = right.advance()? {
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -300,7 +309,8 @@ impl SetOperator {
 
                 loop {
                     base.ensure_not_cancelled()?;
-                    if let Some(chunk) = left.advance()? {
+                    if let Some(mut chunk) = left.advance()? {
+                        chunk.materialize_selection();
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);

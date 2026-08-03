@@ -131,10 +131,20 @@ pub(crate) fn reserve_memory(
     base: &OperatorBase,
     rows: &[Vec<Value>],
 ) -> Result<Option<MemoryReservation>, QueryError> {
+    reserve_memory_with_extra(base, rows, 0)
+}
+
+/// Reserve memory for `rows` plus `extra_bytes` (e.g. the typed column
+/// layout built by the source) against the query memory budget.
+pub(crate) fn reserve_memory_with_extra(
+    base: &OperatorBase,
+    rows: &[Vec<Value>],
+    extra_bytes: usize,
+) -> Result<Option<MemoryReservation>, QueryError> {
     let Some(runtime) = base.runtime.as_ref() else {
         return Ok(None);
     };
-    let bytes = MemoryBudget::estimate_rows_memory(rows);
+    let bytes = MemoryBudget::estimate_rows_memory(rows).saturating_add(extra_bytes);
     runtime.memory_budget.reserve(bytes).map(Some)
 }
 

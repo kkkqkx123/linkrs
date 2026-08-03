@@ -34,7 +34,8 @@ pub(super) fn handle_traverse(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
+        chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let tc = TraversalConfig::traverse(
@@ -114,7 +115,8 @@ pub(super) fn handle_bi_expand(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiExpand not opened".to_string()));
     }
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
+        chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;
@@ -200,7 +202,8 @@ pub(super) fn handle_bi_traverse(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiTraverse not opened".to_string()));
     }
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
+        chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;

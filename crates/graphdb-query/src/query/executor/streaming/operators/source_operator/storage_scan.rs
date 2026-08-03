@@ -12,7 +12,7 @@ use crate::storage::{RequiredProperty, ScanOptions, StorageError};
 use super::SourceOperator;
 use super::util::{
     attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
-    reserve_memory, storage_error,
+    reserve_memory_with_extra, storage_error,
 };
 
 /// Open the storage-backed scan source variants, creating the cursor that
@@ -26,6 +26,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             partition_range,
             col_names,
             projected_properties,
+            predicate,
             cursor,
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
@@ -44,6 +45,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                                 .map(|n| RequiredProperty::new(n.clone()))
                                 .collect()
                         }),
+                        predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                         ..ScanOptions::default()
                     },
                 )
@@ -167,6 +169,11 @@ pub(crate) fn next(
 
 /// Shared pull loop over a storage cursor: read a batch, translate each row
 /// into the entity layout, then emit a chunk with a memory reservation.
+///
+/// The produced chunk eagerly builds its typed column layout from the batch
+/// rows (fixed-size scalar columns only; NULL/mixed/string columns fall
+/// back), and the extra typed allocation is accounted in the chunk's memory
+/// reservation.
 fn next_cursor_chunk<C, R, FRow, FBatch>(
     cursor: &mut Option<C>,
     space_name: &str,
@@ -192,10 +199,14 @@ where
         }
         let rows = batch.into_iter().map(&mut map_row).collect::<Vec<_>>();
         if !rows.is_empty() {
-            let reservation = reserve_memory(base, &rows)?;
-            // T4.2: no proactive columnar materialisation — the columnar cache
-            // is lazily built by the first `get_column` consumer.
-            let chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+            // No proactive Value columnar materialisation — the `columns`
+            // cache is lazily built by the first `get_column` consumer. The
+            // typed layout IS built eagerly here so the typed batch evaluator
+            // and index-based access stay available across selection
+            // boundaries.
+            let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+            let typed_bytes = chunk.build_typed_columns();
+            let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
             let chunk = attach_columnar_stats(base, chunk);
             let chunk = if let Some(r) = reservation {
                 chunk.with_memory_reservation(r)

@@ -472,7 +472,13 @@ impl StreamingExecutionEngine {
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
-        executor.advance()
+        let mut chunk = executor.advance()?;
+        // Materialize any propagated selection before the chunk leaves the
+        // executor tree (the API layer consumes full rows).
+        if let Some(chunk) = chunk.as_mut() {
+            chunk.materialize_selection();
+        }
+        Ok(chunk)
     }
 
     /// Stop the root executor (signal upstream to stop producing).
@@ -609,7 +615,8 @@ impl StreamingExecutionEngine {
         for executor in &mut self.partition_executors {
             executor.open()?;
             let loop_result = (|| -> Result<(), QueryError> {
-                while let Some(chunk) = executor.advance()? {
+                while let Some(mut chunk) = executor.advance()? {
+                    chunk.materialize_selection();
                     all_chunks.push(chunk);
                 }
                 Ok(())
@@ -638,7 +645,8 @@ impl StreamingExecutionEngine {
 
         executor.open()?;
         let loop_result = (|| -> Result<(), QueryError> {
-            while let Some(chunk) = executor.advance()? {
+            while let Some(mut chunk) = executor.advance()? {
+                chunk.materialize_selection();
                 output_chunks.push(chunk);
             }
             Ok(())

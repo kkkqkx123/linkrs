@@ -23,6 +23,7 @@ pub mod fulltext_planner;
 pub mod vector_planner;
 
 // Modules organized by function
+pub mod scan_predicate;
 pub mod statements;
 
 // Re-export the main types.

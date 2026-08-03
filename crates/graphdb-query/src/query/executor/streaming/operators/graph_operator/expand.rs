@@ -27,7 +27,8 @@ pub(super) fn handle(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
+        chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             if let Some(output) = common::expand_on_chunk(
@@ -106,7 +107,8 @@ pub(super) fn handle_all(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(chunk) = input.advance()? {
+    while let Some(mut chunk) = input.advance()? {
+        chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             if let Some(output) = common::expand_on_chunk(

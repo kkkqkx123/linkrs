@@ -471,6 +471,8 @@ impl PoolHandle {
         let copied = DataChunk {
             rows: chunk.rows.clone(),
             columns: None,
+            typed_columns: None,
+            selection: None,
             schema: std::sync::Arc::clone(&chunk.schema),
             layout: std::sync::Arc::clone(&chunk.layout),
             memory_reservation: None,

@@ -55,6 +55,13 @@ Dependency flow: `core → config → search → sync → transaction → storag
 
 ### Build & Run
 
+> **SIMD build flags (Phase 0)**: `.cargo/config.toml` compiles with
+> `-C target-cpu=x86-64-v3` (AVX2, Haswell+, 2013) for automatic
+> vectorization (verified ~3.46x on the autovectorization benchmark).
+> On CPUs without AVX2, fall back to the baseline target:
+> `RUSTFLAGS="-C target-cpu=x86_64" cargo build --release`
+> (or delete the `[target.x86_64-unknown-linux-gnu]` section).
+
 ```shell
 # Build the server
 cargo build --release

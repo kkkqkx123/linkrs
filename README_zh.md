@@ -55,6 +55,13 @@ crates/
 
 ### 构建与运行
 
+> **SIMD 编译选项（Phase 0）**：`.cargo/config.toml` 以
+> `-C target-cpu=x86-64-v3`（AVX2，Haswell+ 2013 年后 CPU）编译，
+> 获得编译器自动向量化收益（已验证 autovectorization 基准约 3.46x）。
+> 不支持 AVX2 的 CPU 可回退基线目标：
+> `RUSTFLAGS="-C target-cpu=x86_64" cargo build --release`
+> （或删除 `[target.x86_64-unknown-linux-gnu]` 配置段）。
+
 ```shell
 # 构建服务端
 cargo build --release

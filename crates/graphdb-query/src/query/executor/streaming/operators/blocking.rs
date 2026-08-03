@@ -436,7 +436,8 @@ impl BlockingOperator {
                 let st = state.as_mut().unwrap();
 
                 if st.merge_state.is_none() && st.row_iter.is_none() {
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if st.col_names.is_empty() {
                             st.col_names = chunk.col_names();
@@ -737,7 +738,10 @@ impl BlockingOperator {
                                 state.col_names = chunk.col_names();
                             }
                             let sm = base.spill_manager();
-                            for row in chunk.rows {
+                            // Consume the child's selection vector — only
+                            // visible rows are aggregated (no row moves).
+                            for idx in chunk.visible_indices() {
+                                let row = &chunk.rows[idx];
                                 if let Some(ref mut spiller) = state.partition_spiller {
                                     // Spill mode: route row directly, keeping
                                     // the remainder of this chunk intact.
@@ -969,7 +973,8 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -1121,7 +1126,8 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -1277,7 +1283,8 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let limit = *n as usize;
 
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if state.col_names.is_empty() {
                             state.col_names = chunk.col_names();
@@ -1427,7 +1434,8 @@ impl BlockingOperator {
                 let mut accumulating = true;
                 while accumulating {
                     match input.advance()? {
-                        Some(chunk) => {
+                        Some(mut chunk) => {
+                        chunk.materialize_selection();
                             base.ensure_not_cancelled()?;
                             if state.col_names.is_empty() {
                                 state.col_names = chunk.col_names();
@@ -1472,7 +1480,8 @@ impl BlockingOperator {
 
                 // Spill consumption phase: route remaining input to partition spiller
                 if let Some(ref mut spiller) = state.partition_spiller {
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         let sm = base.spill_manager().ok_or_else(|| {
                             QueryError::execution("Spill manager not available".to_string())
@@ -1522,7 +1531,8 @@ impl BlockingOperator {
 
                 let state = state.as_mut().unwrap();
                 if !state.materialized {
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if state.input_layout.is_none() {
                             state.input_layout = Some(chunk.get_layout());
@@ -1583,7 +1593,8 @@ impl BlockingOperator {
                     return Ok(None);
                 }
 
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if state.input_layout.is_none() {
                         state.input_layout = Some(chunk.get_layout());
@@ -1635,7 +1646,8 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = Vec::new();
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -1703,10 +1715,13 @@ impl BlockingOperator {
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        // Consume the child's selection vector.
+                        let visible = chunk.visible_indices();
+                        for idx in &visible {
+                            memory_tracker.try_reserve_row(&chunk.rows[*idx])?;
                         }
-                        for row in chunk.rows {
+                        for idx in visible {
+                            let row = &chunk.rows[idx];
                             let mut group_key = Vec::new();
                             if group_by_expressions.is_empty() {
                                 group_key.push(Value::Null(NullType::Null));
@@ -1731,7 +1746,7 @@ impl BlockingOperator {
 
                             for (i, func) in aggregate_functions.iter().enumerate() {
                                 if let Some(acc) = group_accs.get_mut(i) {
-                                    let value = extract_field_value(&row, &col_names, func);
+                                    let value = extract_field_value(row, &col_names, func);
                                     acc.accumulate(&value);
                                 }
                             }

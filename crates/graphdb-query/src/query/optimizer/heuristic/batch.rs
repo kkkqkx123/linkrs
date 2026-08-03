@@ -173,6 +173,7 @@ impl BatchOptimizer {
             | PushFilterDownNode(_)
             | PushEFilterDown(_)
             | PushVFilterDownScanVertices(_)
+            | PushFilterDownScanVertices(_)
             | PushFilterDownInnerJoin(_)
             | PushFilterDownHashInnerJoin(_)
             | PushFilterDownHashLeftJoin(_)

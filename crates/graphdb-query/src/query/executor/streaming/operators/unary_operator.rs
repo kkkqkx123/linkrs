@@ -5,7 +5,7 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
-use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::chunk::{selection_propagation_enabled, DataChunk};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
@@ -166,21 +166,50 @@ impl UnaryOperator {
                                     e
                                 ))
                             })?;
+                        // Build a selection vector restricted to the
+                        // currently-visible rows (a nested filter keeps the
+                        // absolute row indices).
                         let mut selected = Vec::new();
-                        for (i, val) in results.into_iter().enumerate() {
-                            if matches_value(&val) {
-                                selected.push(i);
+                        match chunk.selection() {
+                            None => {
+                                for (i, val) in results.iter().enumerate() {
+                                    if matches_value(val) {
+                                        selected.push(i);
+                                    }
+                                }
+                            }
+                            Some(sel) => {
+                                for &i in sel {
+                                    if matches_value(&results[i]) {
+                                        selected.push(i);
+                                    }
+                                }
                             }
                         }
                         if selected.is_empty() {
                             continue;
                         }
-                        // T4.3: all rows selected — hand the chunk through as-is,
-                        // skipping the full `take_indices` row move.
-                        if selected.len() == chunk.len() {
+                        // All visible rows selected — hand the chunk through
+                        // as-is, keeping any existing selection.
+                        if selected.len() == chunk.visible_count() {
+                            if selection_propagation_enabled() {
+                                return Ok(Some(chunk));
+                            }
+                            // Rollback mode: never hand a selection downstream.
+                            chunk.materialize_selection();
                             return Ok(Some(chunk));
                         }
-                        let selected_chunk = chunk.take_indices(&selected);
+                        if !selection_propagation_enabled() {
+                            let selected_chunk = chunk.take_indices(&selected);
+                            return Ok(Some(selected_chunk));
+                        }
+                        // Attach the selection vector instead of moving rows;
+                        // the columnar/typed caches stay valid for the downstream
+                        // selection-aware consumers.
+                        if let Some(stats) = &chunk.columnar_stats {
+                            stats.record_selection_attached();
+                        }
+                        let selected_chunk = chunk.with_selection(selected);
                         return Ok(Some(selected_chunk));
                     }
                     None => return Ok(None),
@@ -193,6 +222,30 @@ impl UnaryOperator {
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     let params = state.parameters.as_ref();
+                    // When the child carries a selection vector, evaluate
+                    // each output expression only for the visible rows — the
+                    // output chunk is fully materialized (small).
+                    if chunk.selection().is_some() {
+                        let mut columns = Vec::with_capacity(output_expressions.len());
+                        for expr in output_expressions.iter() {
+                            let col = chunk
+                                .evaluate_expression_visible(expr, params)
+                                .map_err(|e| {
+                                    QueryError::execution(format!(
+                                        "Project expression evaluation failed: {}",
+                                        e
+                                    ))
+                                })?;
+                            columns.push(col);
+                        }
+                        if !columns.is_empty() && !columns[0].is_empty() {
+                            return Ok(Some(DataChunk::from_columns(
+                                columns,
+                                Arc::clone(&base.output_layout),
+                            )));
+                        }
+                        continue;
+                    }
                     let columns = chunk
                         .evaluate_expressions(output_expressions, params)
                         .map_err(|e| {
@@ -225,6 +278,8 @@ impl UnaryOperator {
                     let Some(mut chunk) = input.advance()? else {
                         return Ok(None);
                     };
+                    // P2: materialize any propagated selection (boundary).
+                    chunk.materialize_selection();
 
                     if *skipped < *offset {
                         let remaining_offset = (*offset - *skipped) as usize;
@@ -249,7 +304,8 @@ impl UnaryOperator {
                 }
             }
             Self::Dedup { seen_rows } => {
-                while let Some(chunk) = input.advance()? {
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     let mut result_rows = vec![];
                     for row in chunk.rows {
                         if seen_rows.insert(row.clone()) {
@@ -267,6 +323,7 @@ impl UnaryOperator {
             }
             Self::Assign { assignments, state } => loop {
                 if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     let params = state.parameters.as_ref();
                     // Batch-evaluate all assignment expressions first
                     let mut new_cols: Vec<Vec<Value>> = Vec::with_capacity(assignments.len());
@@ -286,8 +343,9 @@ impl UnaryOperator {
                         }
                     }
                     if !chunk.rows.is_empty() {
-                        // Invalidate columnar cache since rows changed
+                        // Invalidate columnar caches since rows changed
                         chunk.columns = None;
+                        chunk.typed_columns = None;
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
                             Arc::clone(&base.output_layout),
@@ -298,7 +356,8 @@ impl UnaryOperator {
                 }
             },
             Self::Remove { columns_to_remove } => loop {
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     let col_names = chunk.col_names();
                     let mut indices_to_keep = vec![];
                     for (idx, col_name) in col_names.iter().enumerate() {
@@ -339,7 +398,9 @@ impl UnaryOperator {
                 base.ensure_not_cancelled()?;
                 if *current_row_index >= all_rows.len() && !*input_done {
                     match input.advance()? {
-                        Some(chunk) => {
+                        Some(mut chunk) => {
+                            // P2: boundary materialization.
+                            chunk.materialize_selection();
                             let col_names = chunk.col_names();
                             *col_index =
                                 col_names.iter().position(|c| c == unwind_column.as_str());
@@ -398,7 +459,8 @@ impl UnaryOperator {
                 vertex_properties,
                 state,
             } => loop {
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
@@ -436,7 +498,9 @@ impl UnaryOperator {
                 }
                 loop {
                     match input.advance()? {
-                        Some(chunk) => {
+                        Some(mut chunk) => {
+                            // P2: boundary materialization.
+                            chunk.materialize_selection();
                             let remaining = (*count - *consumed) as usize;
                             let take_count = chunk.rows.len().min(remaining);
                             let rows: Vec<Vec<Value>> =

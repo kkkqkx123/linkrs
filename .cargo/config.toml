@@ -1,2 +1,15 @@
+# Build configuration (SIMD compile options)
+#
+# x86-64-v3 enables AVX2/SSE4.2 codegen (Haswell+, 2013). This is a pure
+# compile-level win (verified 3.46x on the autovectorization benchmark) with
+# zero code changes. See AGENTS.md "Building and Running" for the fallback.
+#
+# Fallback to the baseline x86-64 target on older CPUs:
+#   RUSTFLAGS="-C target-cpu=x86_64" cargo build ...
+# or delete this [target] section entirely.
+
 [env]
 RUST_TEST_THREADS = "1"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v3"]

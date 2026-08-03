@@ -336,7 +336,8 @@ impl VectorOperator {
                     }
                 }
 
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
@@ -348,7 +349,8 @@ impl VectorOperator {
                 if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("VectorLookup not opened".to_string()));
                 }
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     return Ok(Some(chunk));
                 }
                 Ok(None)
@@ -406,7 +408,8 @@ impl VectorOperator {
                     }
                 }
 
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection();
                     base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }

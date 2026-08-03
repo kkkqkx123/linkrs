@@ -121,6 +121,170 @@ fn bench_wide_single_column_filter(c: &mut Criterion) {
     group.finish();
 }
 
+/// Real DataChunk filter over the typed column layout.
+///
+/// Builds a chunk exactly as source operators do (rows + `build_typed_columns`)
+/// and evaluates a single-column predicate through `evaluate_expression`,
+/// comparing the typed batch path against the row-major path.
+fn bench_typed_data_chunk_filter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("typed_data_chunk_filter");
+    group.measurement_time(Duration::from_secs(2));
+    group.sample_size(30);
+
+    let predicate = graphdb_query::core::types::expr::Expression::Binary {
+        left: Box::new(graphdb_query::core::types::expr::Expression::Variable(
+            "k0".into(),
+        )),
+        op: graphdb_query::core::types::operators::BinaryOperator::GreaterThan,
+        right: Box::new(graphdb_query::core::types::expr::Expression::Literal(
+            Value::BigInt(500),
+        )),
+    };
+
+    for n in [4096usize, 16384, 65536] {
+        group.bench_function(BenchmarkId::new("typed_chunk", n), |b| {
+            b.iter_batched(
+                || {
+                    let mut chunk = create_wide_chunk(n);
+                    chunk.build_typed_columns();
+                    chunk
+                },
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&predicate, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new("row_chunk", n), |b| {
+            b.iter_batched(
+                || create_wide_chunk(n),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&predicate, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
+/// End-to-end Filter→Project chain with selection-vector propagation
+/// vs. the materialized path (1% selectivity).
+fn bench_selection_chain(c: &mut Criterion) {
+    use graphdb_query::core::types::expr::Expression;
+    use graphdb_query::query::executor::streaming::chunk::set_selection_propagation_enabled;
+
+    let mut group = c.benchmark_group("selection_propagation_chain");
+    group.measurement_time(Duration::from_secs(2));
+    group.sample_size(30);
+
+    let n = 16384usize;
+    let predicate = Expression::Binary {
+        left: Box::new(Expression::Variable("k0".into())),
+        op: graphdb_query::core::types::operators::BinaryOperator::LessThan,
+        right: Box::new(Expression::Literal(Value::BigInt(163))), // ~1% of 0..16384
+    };
+    let project = Expression::Variable("k1".into());
+
+    group.bench_function("materialized_chain", |b| {
+        b.iter_batched(
+            || {
+                let mut chunk = create_wide_chunk(n);
+                chunk.build_typed_columns();
+                chunk
+            },
+            |mut chunk| {
+                let results = chunk.evaluate_expression(&predicate, None).unwrap();
+                let selected: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| {
+                        if matches!(v, Value::Bool(true)) {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let mut filtered = chunk.take_indices(&selected);
+                let _ = filtered.evaluate_expression(&project, None).unwrap();
+                black_box(filtered.len());
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("selection_chain", |b| {
+        b.iter_batched(
+            || {
+                let mut chunk = create_wide_chunk(n);
+                chunk.build_typed_columns();
+                chunk
+            },
+            |mut chunk| {
+                let results = chunk.evaluate_expression(&predicate, None).unwrap();
+                let selected: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| {
+                        if matches!(v, Value::Bool(true)) {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                // Selection vector travels downstream without row moves;
+                // the next operator reads only the visible rows.
+                let chunk = chunk.with_selection(selected);
+                let slot = chunk
+                    .get_layout()
+                    .slot_id("k1")
+                    .expect("k1 slot");
+                let mut acc = 0usize;
+                for idx in chunk.visible_indices() {
+                    if let Some(Value::BigInt(v)) = chunk.get_typed_by_slot(idx, slot) {
+                        acc = acc.wrapping_add(v as usize);
+                    }
+                }
+                black_box(acc);
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("materialized_chain_disabled", |b| {
+        set_selection_propagation_enabled(false);
+        b.iter_batched(
+            || {
+                let mut chunk = create_wide_chunk(n);
+                chunk.build_typed_columns();
+                chunk
+            },
+            |mut chunk| {
+                let results = chunk.evaluate_expression(&predicate, None).unwrap();
+                let selected: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, v)| {
+                        if matches!(v, Value::Bool(true)) {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let mut filtered = chunk.take_indices(&selected);
+                let _ = filtered.evaluate_expression(&project, None).unwrap();
+                black_box(filtered.len());
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+    set_selection_propagation_enabled(true);
+    group.finish();
+}
+
 fn bench_null_bitmap(c: &mut Criterion) {
     let mut group = c.benchmark_group("null_bitmap");
     group.measurement_time(Duration::from_secs(2));
@@ -269,5 +433,7 @@ criterion_group!(
     bench_null_bitmap,
     bench_autovectorization,
     bench_selectivity_propagation,
+    bench_typed_data_chunk_filter,
+    bench_selection_chain,
 );
 criterion_main!(benches);

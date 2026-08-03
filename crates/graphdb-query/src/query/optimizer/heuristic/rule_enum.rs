@@ -146,6 +146,7 @@ define_rewrite_rules! {
         PushFilterDownNode(predicate_pushdown::PushFilterDownNodeRule),
         PushEFilterDown(predicate_pushdown::PushEFilterDownRule),
         PushVFilterDownScanVertices(predicate_pushdown::PushVFilterDownScanVerticesRule),
+        PushFilterDownScanVertices(predicate_pushdown::PushFilterDownScanVerticesRule),
         PushFilterDownInnerJoin(predicate_pushdown::PushFilterDownInnerJoinRule),
         PushFilterDownHashInnerJoin(predicate_pushdown::PushFilterDownHashInnerJoinRule),
         PushFilterDownHashLeftJoin(predicate_pushdown::PushFilterDownHashLeftJoinRule),
@@ -282,6 +283,9 @@ impl Default for RuleRegistry {
         ));
         registry.add(RewriteRule::PushVFilterDownScanVertices(
             predicate_pushdown::PushVFilterDownScanVerticesRule::new(),
+        ));
+        registry.add(RewriteRule::PushFilterDownScanVertices(
+            predicate_pushdown::PushFilterDownScanVerticesRule::new(),
         ));
         registry.add(RewriteRule::PushFilterDownInnerJoin(
             predicate_pushdown::PushFilterDownInnerJoinRule::new(),
