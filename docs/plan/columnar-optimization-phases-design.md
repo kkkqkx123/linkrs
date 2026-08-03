@@ -11,7 +11,7 @@
 | Phase 0 | SIMD 编译选项落地 | 无 | 全查询 3.46x（编译级） | 已验证 |
 | Phase 1 | 列式 DataChunk（typed 定长列 + 行式兜底） | 无 | 过滤/投影 2~5x | 已验证 4.7x |
 | Phase 2 | 选择向量跨算子传播 + scan 谓词下沉 | Phase 1 | 低选择率 10~1000x | 已验证 3300x |
-| Phase 3 | 并行扩展评估、存储层读取基线 | Phase 1/2 数据 | 待定 | 待验证 |
+| Phase 3 | 并行扩展评估、存储层读取基线 | Phase 1/2 数据 | 待定 | 已验证（P3.1 立项 / P3.2 不立项） |
 
 优先级依据：收益/成本比与依赖关系。Phase 0 独立且零代码，最先落地；Phase 1 是 Phase 2/3 的地基；Phase 3 需要前两阶段数据支撑再立项。
 
@@ -75,13 +75,22 @@
 - 各步骤集成测试 + 全量回归通过；spill/排序路径不受影响（物化边界明确）
 - 回退：selection 传播由执行器配置开关控制
 
-## Phase 3：并行扩展评估与存储层读取基线（先验证后立项）
+## Phase 3：并行扩展评估与存储层读取基线（验证已执行，结论已定）
 
 **目标**：补齐已验证清单中"待评估"两项的证据，数据达标才立项。
 
 - P3.1 存储层读取基线：`storage_bench` 补充读取路径（宽表全扫 vs 窄表随机取属性），对齐写入路径既有基准
 - P3.2 并行加速曲线：端到端并行基准（1/2/4/8 核），利用 `ProfileBoard` 的 `parallel_work_time_us`/`parallel_wall_time_us` 计算并行效率；区分表扫描型与图遍历型查询
 - 决策规则：P3.1 数据显示存储读占端到端 >30% 且列式属性块 PoC ≥1.5x 才立项存储改造；P3.2 加速 ≥2x（4 核）才立项并行扩展
+
+**执行结果（2026-08-03，实测数据与结论）**：
+
+- **P3.1 立项**：投影列读 vs 全行物化 3.26x~5.04x（宽表 4.5x+）≥1.5x；端到端存储读占比 R：Q1 扫描过滤聚合 33%、Q2 扫描分组 50%、Q3 遍历 92%（均 >30%）。改造方向：查询路径消费列块（跳过行式 `Value` 物化，与 Phase 1 typed 列联动）
+- **P3.2 未达标**：1/2/4/8 workers 下 `actual_workers` 恒为 1，E(4) ∈ [0.96, 1.00] 无加速（<2x 门槛）。**根因：端到端并行链路未接通（两层死链路）**：① DQL 扫描计划器未设置 `ScanVerticesNode.tag` → 分区决策恒 fallback；② `build_physical_plan` 从不消费 `ExecutionPlan.partition_spec`。**并行功能需先完整实现（接线）再验证**，完整实施步骤与验证方案见 `docs/plan/columnar-phase3-parallel-storage-verification-design.md`
+- 附带发现：批量顶点插入 O(n²)（200k → 510s，边插入线性）；无锚 2-hop 遍历单次 >5min（病态）
+
+- 实测数据归档：`docs/archive/benches/phase3-parallel-storage-validation.md`
+- 问题跟踪：`docs/issue/parallel-execution-dead-chain.md`（死链路）、`docs/issue/vertex-batch-insert-quadratic.md`、`docs/issue/traversal-query-pathology.md`
 
 ## 非目标（本轮明确不做）
 

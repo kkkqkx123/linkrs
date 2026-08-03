@@ -247,3 +247,11 @@ harness = false
 [[bench]]
 name = "columnar_necessity_bench"
 harness = false
+
+[[bench]]
+name = "storage_read_baseline"
+harness = false
+
+[[bench]]
+name = "parallel_scale_bench"
+harness = false
