@@ -286,9 +286,9 @@ impl CollectionOperationEvaluator {
         }
 
         match object {
-            Value::Vertex(vertex) => Ok(vertex.property_value(property).unwrap_or_else(|| {
-                Value::Null(crate::core::value::NullType::Null)
-            })),
+            Value::Vertex(vertex) => Ok(vertex
+                .property_value(property)
+                .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))),
             Value::Edge(edge) => Ok(edge
                 .properties()
                 .get(property)

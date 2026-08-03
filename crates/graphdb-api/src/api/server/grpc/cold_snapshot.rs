@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use tonic::{Request, Response, Status};
 
 use crate::api::server::grpc::proto::coldsnapshot::{
-    cold_snapshot_service_server::ColdSnapshotService, ListSnapshotsRequest,
-    ListSnapshotsResponse, PullSnapshotRequest, PushSnapshotRequest, PushSnapshotResponse,
-    SnapshotChunk, SnapshotDescriptor,
+    cold_snapshot_service_server::ColdSnapshotService, ListSnapshotsRequest, ListSnapshotsResponse,
+    PullSnapshotRequest, PushSnapshotRequest, PushSnapshotResponse, SnapshotChunk,
+    SnapshotDescriptor,
 };
 
 const CHUNK_SIZE: usize = 1024 * 1024;
@@ -39,7 +39,9 @@ impl ColdSnapshotServer {
             return None;
         }
         let path = self.snapshot_dir.join(file_name);
-        path.extension().is_some_and(|e| e == "lkcs").then_some(path)
+        path.extension()
+            .is_some_and(|e| e == "lkcs")
+            .then_some(path)
     }
 }
 
@@ -130,7 +132,9 @@ impl ColdSnapshotService for ColdSnapshotServer {
                 .map(|b| crc32fast::hash(&b))
                 .unwrap_or(0);
             let Ok(file) = std::fs::File::open(&path) else {
-                let _ = tx.send(Err(Status::not_found("snapshot file disappeared"))).await;
+                let _ = tx
+                    .send(Err(Status::not_found("snapshot file disappeared")))
+                    .await;
                 return;
             };
             let mut reader = std::io::BufReader::new(file);
@@ -145,7 +149,9 @@ impl ColdSnapshotService for ColdSnapshotServer {
                 }
                 let mut buf = vec![0u8; read_size];
                 if Read::read_exact(&mut reader, &mut buf).is_err() {
-                    let _ = tx.send(Err(Status::internal("failed to read snapshot file"))).await;
+                    let _ = tx
+                        .send(Err(Status::internal("failed to read snapshot file")))
+                        .await;
                     return;
                 }
                 let last = offset + read_size as u64 >= file_len;
@@ -167,7 +173,9 @@ impl ColdSnapshotService for ColdSnapshotServer {
             let _ = Seek::seek(&mut reader, SeekFrom::Start(0)).ok();
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
     async fn push_snapshot(
@@ -187,7 +195,9 @@ impl ColdSnapshotService for ColdSnapshotServer {
         }
         // Sanity-check the payload parses as a snapshot before persisting.
         if crate::storage::cold::ColdSnapshot::from_bytes(&req.data).is_err() {
-            return Err(Status::invalid_argument("payload is not a valid .lkcs snapshot"));
+            return Err(Status::invalid_argument(
+                "payload is not a valid .lkcs snapshot",
+            ));
         }
         std::fs::create_dir_all(&self.snapshot_dir)
             .map_err(|e| Status::internal(format!("cannot create snapshot dir: {}", e)))?;
@@ -214,18 +224,14 @@ pub struct ColdSnapshotClient {
 
 impl ColdSnapshotClient {
     /// Wrap an established gRPC channel.
-    pub fn with_channel(
-        channel: tonic::transport::Channel,
-    ) -> Self {
+    pub fn with_channel(channel: tonic::transport::Channel) -> Self {
         Self {
             inner: crate::api::server::grpc::proto::coldsnapshot::cold_snapshot_service_client::ColdSnapshotServiceClient::new(channel),
         }
     }
 
     /// Connect to a remote endpoint like `http://127.0.0.1:50051`.
-    pub async fn connect_addr(
-        address: &str,
-    ) -> Result<Self, tonic::transport::Error> {
+    pub async fn connect_addr(address: &str) -> Result<Self, tonic::transport::Error> {
         let channel = tonic::transport::Endpoint::new(address.to_string())?
             .connect()
             .await?;
@@ -389,8 +395,9 @@ mod tests {
                 .unwrap();
         });
 
-        let mut client =
-            ColdSnapshotClient::connect_addr(&format!("http://{}", addr)).await.unwrap();
+        let mut client = ColdSnapshotClient::connect_addr(&format!("http://{}", addr))
+            .await
+            .unwrap();
 
         let listing = client.list().await.unwrap();
         assert_eq!(listing.len(), 1);

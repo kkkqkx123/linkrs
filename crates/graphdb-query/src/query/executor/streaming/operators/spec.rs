@@ -491,14 +491,29 @@ pub enum MigrateAction {
 /// Space DDL command payload.
 #[derive(Debug, Clone)]
 pub enum SpaceManageCommand {
-    Create { space_name: String, vid_type: String },
-    Drop { space_name: String },
-    Desc { space_name: String },
+    Create {
+        space_name: String,
+        vid_type: String,
+    },
+    Drop {
+        space_name: String,
+    },
+    Desc {
+        space_name: String,
+    },
     Show,
-    ShowCreate { space_name: String },
-    Switch { space_name: String },
-    Alter { space_name: String },
-    Clear { space_name: String },
+    ShowCreate {
+        space_name: String,
+    },
+    Switch {
+        space_name: String,
+    },
+    Alter {
+        space_name: String,
+    },
+    Clear {
+        space_name: String,
+    },
 }
 
 /// Tag DDL command payload.
@@ -515,10 +530,17 @@ pub enum TagManageCommand {
         deletions: Vec<String>,
         changes: Vec<PropertyRename>,
     },
-    Desc { tag_name: String },
-    Drop { tag_name: String, if_exists: bool },
+    Desc {
+        tag_name: String,
+    },
+    Drop {
+        tag_name: String,
+        if_exists: bool,
+    },
     Show,
-    ShowCreate { tag_name: String },
+    ShowCreate {
+        tag_name: String,
+    },
 }
 
 /// Edge DDL command payload.
@@ -536,10 +558,17 @@ pub enum EdgeManageCommand {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
     },
-    Desc { edge_name: String },
-    Drop { edge_name: String, if_exists: bool },
+    Desc {
+        edge_name: String,
+    },
+    Drop {
+        edge_name: String,
+        if_exists: bool,
+    },
     Show,
-    ShowCreate { edge_name: String },
+    ShowCreate {
+        edge_name: String,
+    },
 }
 
 /// Index DDL command payload.
@@ -550,21 +579,35 @@ pub enum IndexManageCommand {
         target_name: String,
         properties: Vec<String>,
     },
-    DropTagIndex { index_name: String },
-    DescTagIndex { index_name: String },
+    DropTagIndex {
+        index_name: String,
+    },
+    DescTagIndex {
+        index_name: String,
+    },
     ShowTagIndexes,
-    RebuildTagIndex { index_name: String },
+    RebuildTagIndex {
+        index_name: String,
+    },
     CreateEdgeIndex {
         index_name: String,
         target_name: String,
         properties: Vec<String>,
     },
-    DropEdgeIndex { index_name: String },
-    DescEdgeIndex { index_name: String },
+    DropEdgeIndex {
+        index_name: String,
+    },
+    DescEdgeIndex {
+        index_name: String,
+    },
     ShowEdgeIndexes,
-    RebuildEdgeIndex { index_name: String },
+    RebuildEdgeIndex {
+        index_name: String,
+    },
     ShowIndexes,
-    ShowCreateIndex { index_name: String },
+    ShowCreateIndex {
+        index_name: String,
+    },
 }
 
 /// User DDL command payload.
@@ -581,13 +624,27 @@ pub enum UserManageCommand {
         new_role: Option<String>,
         is_locked: Option<bool>,
     },
-    Drop { username: String, if_exists: bool },
-    ChangePassword { password_info: PasswordInfo },
-    GrantRole { username: String, space_name: String, role: String },
-    RevokeRole { username: String, space_name: String },
+    Drop {
+        username: String,
+        if_exists: bool,
+    },
+    ChangePassword {
+        password_info: PasswordInfo,
+    },
+    GrantRole {
+        username: String,
+        space_name: String,
+        role: String,
+    },
+    RevokeRole {
+        username: String,
+        space_name: String,
+    },
     ShowUsers,
     ShowRoles,
-    DescribeUser { username: String },
+    DescribeUser {
+        username: String,
+    },
 }
 
 /// Fulltext index DDL command payload.
@@ -599,10 +656,20 @@ pub enum FulltextManageCommand {
         fields: Vec<String>,
         space_id: u64,
     },
-    Drop { index_name: String, if_exists: bool },
-    Alter { index_name: String },
-    Show { pattern: Option<String>, from_schema: Option<String> },
-    Describe { index_name: String },
+    Drop {
+        index_name: String,
+        if_exists: bool,
+    },
+    Alter {
+        index_name: String,
+    },
+    Show {
+        pattern: Option<String>,
+        from_schema: Option<String>,
+    },
+    Describe {
+        index_name: String,
+    },
 }
 
 /// Vector index DDL command payload.
@@ -616,7 +683,9 @@ pub enum VectorManageCommand {
         distance: VectorDistance,
         space_id: u64,
     },
-    Drop { index_name: String },
+    Drop {
+        index_name: String,
+    },
 }
 
 /// Property rename within ALTER TAG (executor consumes only old/new names).

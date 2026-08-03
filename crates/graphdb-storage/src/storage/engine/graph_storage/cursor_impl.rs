@@ -161,11 +161,13 @@ impl VertexCursor for GraphVertexCursor {
         &mut self,
         batch_size: usize,
     ) -> Result<Vec<FlatVertexRecord>, StorageError> {
-        self.scan_batch(batch_size, |vid, internal_id, tag_name, props| FlatVertexRecord {
-            vid,
-            internal_id,
-            tag_name,
-            props,
+        self.scan_batch(batch_size, |vid, internal_id, tag_name, props| {
+            FlatVertexRecord {
+                vid,
+                internal_id,
+                tag_name,
+                props,
+            }
         })
     }
 }

@@ -88,15 +88,13 @@ fn bench_wide_single_column_filter(c: &mut Criterion) {
                 |mut chunk| {
                     let _ = chunk.evaluate_expression(
                         &graphdb_query::core::types::expr::Expression::Binary {
-                            left: Box::new(
-                                graphdb_query::core::types::expr::Expression::Variable("k0".into()),
-                            ),
+                            left: Box::new(graphdb_query::core::types::expr::Expression::Variable(
+                                "k0".into(),
+                            )),
                             op: graphdb_query::core::types::operators::BinaryOperator::GreaterThan,
-                            right: Box::new(
-                                graphdb_query::core::types::expr::Expression::Literal(
-                                    Value::BigInt(500),
-                                ),
-                            ),
+                            right: Box::new(graphdb_query::core::types::expr::Expression::Literal(
+                                Value::BigInt(500),
+                            )),
                         },
                         None,
                     );
@@ -237,10 +235,7 @@ fn bench_selection_chain(c: &mut Criterion) {
                 // Selection vector travels downstream without row moves;
                 // the next operator reads only the visible rows.
                 let chunk = chunk.with_selection(selected);
-                let slot = chunk
-                    .get_layout()
-                    .slot_id("k1")
-                    .expect("k1 slot");
+                let slot = chunk.get_layout().slot_id("k1").expect("k1 slot");
                 let mut acc = 0usize;
                 for idx in chunk.visible_indices() {
                     if let Some(Value::BigInt(v)) = chunk.get_typed_by_slot(idx, slot) {
@@ -322,7 +317,15 @@ fn bench_null_bitmap(c: &mut Criterion) {
                 }
             })
             .collect();
-        let bits: Vec<u64> = (0..n).map(|i| if (i as f64) / (n as f64) < null_rate { 0 } else { 1 }).collect();
+        let bits: Vec<u64> = (0..n)
+            .map(|i| {
+                if (i as f64) / (n as f64) < null_rate {
+                    0
+                } else {
+                    1
+                }
+            })
+            .collect();
         group.bench_function(BenchmarkId::new("bitmap_2vec", null_rate), |b| {
             b.iter(|| {
                 let mut count = 0usize;
@@ -383,7 +386,9 @@ fn bench_autovectorization(c: &mut Criterion) {
     let n = 262144usize;
     let cols: Vec<i64> = (0..n).map(|i| (i % 1000) as i64).collect();
     group.bench_function("scalar", |b| b.iter(|| black_box(filter_scalar(&cols))));
-    group.bench_function("unrolled4", |b| b.iter(|| black_box(filter_unrolled4(&cols))));
+    group.bench_function("unrolled4", |b| {
+        b.iter(|| black_box(filter_unrolled4(&cols)))
+    });
     group.finish();
 }
 
@@ -397,16 +402,19 @@ fn bench_selectivity_propagation(c: &mut Criterion) {
         let pass_count = (n as f64 * selectivity) as usize;
         let indices: Vec<usize> = (0..pass_count).collect();
 
-        group.bench_function(BenchmarkId::new("take_indices_materialize", selectivity), |b| {
-            b.iter_batched(
-                || create_wide_chunk(n),
-                |mut chunk| {
-                    let out = chunk.take_indices(&indices);
-                    black_box(out.len());
-                },
-                criterion::BatchSize::SmallInput,
-            )
-        });
+        group.bench_function(
+            BenchmarkId::new("take_indices_materialize", selectivity),
+            |b| {
+                b.iter_batched(
+                    || create_wide_chunk(n),
+                    |mut chunk| {
+                        let out = chunk.take_indices(&indices);
+                        black_box(out.len());
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
+            },
+        );
 
         let rows: Vec<Vec<Value>> = (0..n)
             .map(|i| vec![Value::BigInt((i % 1000) as i64)])

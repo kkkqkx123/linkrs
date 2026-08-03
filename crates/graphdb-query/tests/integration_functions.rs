@@ -855,7 +855,10 @@ fn test_rand64_function() {
 
     let result = registry.execute("rand64", &[]);
     assert!(result.is_ok());
-    assert!(matches!(result.expect("rand64函数应该成功"), Value::BigInt(_)));
+    assert!(matches!(
+        result.expect("rand64函数应该成功"),
+        Value::BigInt(_)
+    ));
 }
 
 #[test]

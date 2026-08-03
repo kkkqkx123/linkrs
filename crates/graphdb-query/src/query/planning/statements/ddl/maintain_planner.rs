@@ -455,9 +455,8 @@ impl Planner for MaintainPlanner {
             }
 
             Stmt::ShowQueries(_) => {
-                let node = crate::query::planning::plan::core::nodes::ShowQueriesNode::new(
-                    next_node_id(),
-                );
+                let node =
+                    crate::query::planning::plan::core::nodes::ShowQueriesNode::new(next_node_id());
                 PlanNodeEnum::ShowQueries(node)
             }
 

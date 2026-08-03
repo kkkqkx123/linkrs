@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, EdgeManageCommand, FulltextManageCommand, FulltextSpec,
-    GraphSpec, IndexManageCommand, JoinSpec, PropertyRename, RecursiveFragmentSpec,
-    SinkSpec, SourceSpec, SpaceManageCommand, TagManageCommand, UnarySpec, UserManageCommand,
+    GraphSpec, IndexManageCommand, JoinSpec, PropertyRename, RecursiveFragmentSpec, SinkSpec,
+    SourceSpec, SpaceManageCommand, TagManageCommand, UnarySpec, UserManageCommand,
     VectorManageCommand, VectorSpec,
 };
 use super::super::super::slot::SlotLayout;
@@ -272,11 +272,9 @@ pub(super) fn build_standalone_write_source(
                 let rank_expr = match rank {
                     Some(value) => value.clone(),
                     None => {
-                        let id = src
-                            .context()
-                            .register_expression(ExpressionMeta::new(Expression::literal(
-                                crate::core::Value::BigInt(0),
-                            )));
+                        let id = src.context().register_expression(ExpressionMeta::new(
+                            Expression::literal(crate::core::Value::BigInt(0)),
+                        ));
                         ContextualExpression::new(id, src.context().clone())
                     }
                 };
@@ -309,10 +307,9 @@ pub(super) fn build_standalone_write_source(
         PlanNodeEnum::Update(update) => {
             use crate::query::planning::plan::core::nodes::data_modification::info::UpdateTargetType;
             match update.info() {
-                UpdateTargetType::Vertex(info) => (
-                    vec![vec![info.vertex_id.clone()]],
-                    vec!["vid".to_string()],
-                ),
+                UpdateTargetType::Vertex(info) => {
+                    (vec![vec![info.vertex_id.clone()]], vec!["vid".to_string()])
+                }
                 UpdateTargetType::Edge(info) => (
                     vec![vec![info.src.clone(), info.dst.clone()]],
                     vec!["src".to_string(), "dst".to_string()],
@@ -351,7 +348,10 @@ pub(super) fn build_standalone_write_source(
             ));
         }
     };
-    Ok(SourceSpec::StandaloneValues { values: rows, col_names })
+    Ok(SourceSpec::StandaloneValues {
+        values: rows,
+        col_names,
+    })
 }
 
 // ── Unary spec builders ───────────────────────────────────────────────────────

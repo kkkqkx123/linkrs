@@ -57,12 +57,24 @@ fn create_column_chunk(size: usize, num_cols: usize) -> DataChunk {
     let names: Vec<String> = (0..num_cols).map(|i| format!("c{}", i)).collect();
     let layout = Arc::new(SlotLayout::from_names(&names));
     let mut columns: Vec<Vec<Value>> = Vec::with_capacity(num_cols);
-    columns.push((0..size).map(|i| Value::BigInt((i % 100_000) as i64)).collect());
-    columns.push((0..size).map(|i| Value::string(format!("user_{}", i % 1000))).collect());
+    columns.push(
+        (0..size)
+            .map(|i| Value::BigInt((i % 100_000) as i64))
+            .collect(),
+    );
+    columns.push(
+        (0..size)
+            .map(|i| Value::string(format!("user_{}", i % 1000)))
+            .collect(),
+    );
     columns.push((0..size).map(|i| Value::Int((i % 80) as i32)).collect());
     columns.push((0..size).map(|i| Value::Double((i % 40) as f64)).collect());
     for c in 4..num_cols {
-        columns.push((0..size).map(|i| Value::Double(i as f64 * (c as f64) * 0.001)).collect());
+        columns.push(
+            (0..size)
+                .map(|i| Value::Double(i as f64 * (c as f64) * 0.001))
+                .collect(),
+        );
     }
     DataChunk::from_columns(columns, layout)
 }
@@ -100,7 +112,10 @@ fn hash_join_build_columns(
     let mut build_index: HashMap<JoinKeyValue, Vec<u32>> = HashMap::new();
     for (row_idx, _) in cols[0].iter().enumerate() {
         let key = JoinKeyValue::from(cols[0][row_idx].clone());
-        build_index.entry(key).or_default().push((base + row_idx) as u32);
+        build_index
+            .entry(key)
+            .or_default()
+            .push((base + row_idx) as u32);
     }
     let chunk_cols = chunk.columns.take().unwrap();
     if target.is_empty() {
@@ -139,7 +154,9 @@ fn bench_hash_join_build(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("columns_full_cost", size), |b| {
             b.iter_batched(
                 || seed_build_target(*size),
-                |(mut chunk, mut target)| black_box(hash_join_build_columns(&mut chunk, &mut target, *size)),
+                |(mut chunk, mut target)| {
+                    black_box(hash_join_build_columns(&mut chunk, &mut target, *size))
+                },
                 BatchSize::SmallInput,
             )
         });
@@ -151,11 +168,7 @@ fn bench_hash_join_build(c: &mut Criterion) {
 
 /// Current in-memory path (blocking.rs): collect all_rows, group rows by key
 /// with per-group row storage, then rescan each group for the aggregate.
-fn group_by_rows(
-    chunk: &mut DataChunk,
-    key_cols: &[usize],
-    value_col: usize,
-) -> (usize, f64) {
+fn group_by_rows(chunk: &mut DataChunk, key_cols: &[usize], value_col: usize) -> (usize, f64) {
     let mut all_rows: Vec<Vec<Value>> = Vec::new();
     for row in std::mem::take(&mut chunk.rows) {
         all_rows.push(row);
@@ -188,7 +201,10 @@ fn group_by_accumulator(
     for row in std::mem::take(&mut chunk.rows) {
         let key: Vec<Value> = key_cols.iter().map(|&k| row[k].clone()).collect();
         let accs = acc_map.entry(key).or_insert_with(|| {
-            vec![AggregateAccumulator::Sum(0.0), AggregateAccumulator::Count(0)]
+            vec![
+                AggregateAccumulator::Sum(0.0),
+                AggregateAccumulator::Count(0),
+            ]
         });
         accs[0].accumulate(&row[value_col]);
         accs[1].accumulate(&row[value_col]);
@@ -202,7 +218,10 @@ fn bench_group_by(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(3));
     group.sample_size(30);
 
-    for (key_name, key_cols) in [("1_key", vec![2usize]), ("3_key", vec![2usize, 3usize, 1usize])] {
+    for (key_name, key_cols) in [
+        ("1_key", vec![2usize]),
+        ("3_key", vec![2usize, 3usize, 1usize]),
+    ] {
         for size in &ROW_SIZES {
             let keys = key_cols.clone();
             group.bench_function(
@@ -270,7 +289,9 @@ fn scan_group_columns(chunk: &mut DataChunk, key_col: usize, value_col: usize) -
     let mut sum = 0.0;
     for (row_idx, _) in cols[0].iter().enumerate() {
         let key = cols[key_col][row_idx].clone();
-        let acc = acc_map.entry(key).or_insert_with(|| AggregateAccumulator::Sum(0.0));
+        let acc = acc_map
+            .entry(key)
+            .or_insert_with(|| AggregateAccumulator::Sum(0.0));
         acc.accumulate(&cols[value_col][row_idx]);
         sum += 1.0;
     }

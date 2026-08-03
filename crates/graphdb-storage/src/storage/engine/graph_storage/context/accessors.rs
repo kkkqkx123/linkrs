@@ -640,9 +640,7 @@ impl GraphStorageContext {
     ///
     /// The view is a lightweight copy of the registration (Arc clones only),
     /// so callers may query it without holding the registry lock.
-    pub fn cold_time_machine(
-        &self,
-    ) -> crate::storage::cold::ColdSnapshotTimeMachine {
+    pub fn cold_time_machine(&self) -> crate::storage::cold::ColdSnapshotTimeMachine {
         let mut machine = crate::storage::cold::ColdSnapshotTimeMachine::new();
         let cold = self.cold_snapshots.read();
         for snapshots in cold.values() {

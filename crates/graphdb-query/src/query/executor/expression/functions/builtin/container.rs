@@ -260,11 +260,7 @@ fn execute_range(args: &[Value]) -> Result<Value, ExpressionError> {
         match to_i64(&args[2]) {
             Some(v) => v,
             None if args[2].is_null() => return Ok(Value::Null(NullType::Null)),
-            None => {
-                return Err(ExpressionError::type_error(
-                    "range step must be an integer",
-                ))
-            }
+            None => return Err(ExpressionError::type_error("range step must be an integer")),
         }
     } else {
         1

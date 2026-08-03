@@ -289,9 +289,9 @@ impl SourceOperator {
                     prop_names: prop_names.clone(),
                 }));
             }
-            Self::Start => base.insert_state(GlobalState::Source(SourceState::Start {
-                emitted: false,
-            })),
+            Self::Start => {
+                base.insert_state(GlobalState::Source(SourceState::Start { emitted: false }))
+            }
         }
         base.lifecycle.mark_opened();
         Ok(())
@@ -301,9 +301,9 @@ impl SourceOperator {
         use crate::query::executor::streaming::operators::state::SourceState;
         use crate::query::executor::streaming::state::GlobalState;
         match self {
-            Self::ScanVertices { .. }
-            | Self::StandaloneValues { .. }
-            | Self::ScanEdges { .. } => buffered::next(self, base),
+            Self::ScanVertices { .. } | Self::StandaloneValues { .. } | Self::ScanEdges { .. } => {
+                buffered::next(self, base)
+            }
             Self::StorageScanVertices { .. } | Self::StorageScanEdges { .. } => {
                 storage_scan::next(self, base)
             }
@@ -326,7 +326,8 @@ impl SourceOperator {
                     return Ok(None);
                 }
                 *emitted = true;
-                let chunk = DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
+                let chunk =
+                    DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
                 Ok(Some(chunk))
             }
             Self::Argument => {

@@ -15,8 +15,12 @@ use super::*;
 fn test_insert_and_get() {
     let mut table = PropertyTable::new();
 
-    table.add_property("weight".to_string(), DataType::Double, false).unwrap();
-    table.add_property("since".to_string(), DataType::Int, true).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
+    table
+        .add_property("since".to_string(), DataType::Int, true)
+        .unwrap();
 
     let offset = table
         .insert(
@@ -50,7 +54,9 @@ fn test_insert_and_get() {
 #[test]
 fn test_update() {
     let mut table = PropertyTable::new();
-    table.add_property("weight".to_string(), DataType::Double, false).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
 
     let _offset = table
         .insert(&[("weight".to_string(), Value::Double(1.0))], 100)
@@ -73,7 +79,9 @@ fn test_update() {
 #[test]
 fn test_delete() {
     let mut table = PropertyTable::new();
-    table.add_property("weight".to_string(), DataType::Double, false).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
 
     let offset1 = table
         .insert(&[("weight".to_string(), Value::Double(1.0))], 100)
@@ -93,8 +101,12 @@ fn test_delete() {
 #[test]
 fn test_dump_load_roundtrip() {
     let mut table = PropertyTable::new();
-    table.add_property("weight".to_string(), DataType::Double, false).unwrap();
-    table.add_property("since".to_string(), DataType::Int, true).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
+    table
+        .add_property("since".to_string(), DataType::Int, true)
+        .unwrap();
 
     let offset1 = table
         .insert(
@@ -140,8 +152,12 @@ fn test_dump_load_roundtrip() {
 #[test]
 fn test_rename_and_remove_property() {
     let mut table = PropertyTable::new();
-    table.add_property("weight".to_string(), DataType::Double, false).unwrap();
-    table.add_property("since".to_string(), DataType::Int, true).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
+    table
+        .add_property("since".to_string(), DataType::Int, true)
+        .unwrap();
 
     let offset = table
         .insert(
@@ -182,8 +198,12 @@ fn test_rename_and_remove_property() {
 #[test]
 fn test_property_table_update_single_property() {
     let mut table = PropertyTable::new();
-    table.add_property("name".to_string(), DataType::String, false).unwrap();
-    table.add_property("age".to_string(), DataType::Int, false).unwrap();
+    table
+        .add_property("name".to_string(), DataType::String, false)
+        .unwrap();
+    table
+        .add_property("age".to_string(), DataType::Int, false)
+        .unwrap();
 
     let offset = table
         .insert(
@@ -222,7 +242,9 @@ fn test_property_table_update_single_property() {
 #[test]
 fn test_property_table_overflow_boundary_values() {
     let mut table = PropertyTable::new();
-    table.add_property("data".to_string(), DataType::String, false).unwrap();
+    table
+        .add_property("data".to_string(), DataType::String, false)
+        .unwrap();
 
     // Test values at overflow boundary
     let sizes = vec![255, 256, 257];
@@ -252,7 +274,9 @@ fn test_property_table_overflow_boundary_values() {
 #[test]
 fn test_property_table_update_to_null() {
     let mut table = PropertyTable::new();
-    table.add_property("optional".to_string(), DataType::String, true).unwrap();
+    table
+        .add_property("optional".to_string(), DataType::String, true)
+        .unwrap();
 
     let offset = table
         .insert(&[("optional".to_string(), Value::string("value"))], 100)
@@ -275,7 +299,9 @@ fn test_property_table_update_to_null() {
 #[test]
 fn test_property_table_multiple_sequential_updates() {
     let mut table = PropertyTable::new();
-    table.add_property("counter".to_string(), DataType::Int, false).unwrap();
+    table
+        .add_property("counter".to_string(), DataType::Int, false)
+        .unwrap();
 
     let offset = table
         .insert(&[("counter".to_string(), Value::Int(0))], 100)
@@ -302,7 +328,9 @@ fn test_property_table_multiple_sequential_updates() {
 #[test]
 fn test_property_table_offset_reuse() {
     let mut table = PropertyTable::new();
-    table.add_property("value".to_string(), DataType::Int, false).unwrap();
+    table
+        .add_property("value".to_string(), DataType::Int, false)
+        .unwrap();
 
     let _offset1 = table
         .insert(&[("value".to_string(), Value::Int(100))], 100)

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::core::{error::QueryError, EdgeDirection};
 use crate::core::types::storage_ids::VertexId;
+use crate::core::{error::QueryError, EdgeDirection};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
@@ -9,8 +9,8 @@ use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::QueryStorage;
 use std::sync::Arc;
 
-use super::SourceOperator;
 use super::util::{attach_columnar_stats, make_flat_vertex_row, reserve_memory, storage_error};
+use super::SourceOperator;
 
 /// Two-phase neighbor scan state machine.
 ///
@@ -81,9 +81,9 @@ fn next_get_neighbors(
     projected_properties: &[String],
     state: &mut NeighborScanState,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let storage_ref = storage.as_ref().ok_or_else(|| {
-        QueryError::execution("GetNeighbors requires storage".to_string())
-    })?;
+    let storage_ref = storage
+        .as_ref()
+        .ok_or_else(|| QueryError::execution("GetNeighbors requires storage".to_string()))?;
 
     loop {
         base.ensure_not_cancelled()?;
@@ -127,16 +127,12 @@ fn next_get_neighbors(
                 let end = (*position + base.chunk_size).min(vertex_ids.len());
                 let guard = storage_ref.read();
                 for vid in &vertex_ids[*position..end] {
-                    let edges = guard
-                        .get_node_edges(space_name, vid, *direction)
-                        .map_err(|error| {
-                            storage_error(
-                                "GetNeighbors",
-                                "get node edges",
-                                space_name,
-                                error,
-                            )
-                        })?;
+                    let edges =
+                        guard
+                            .get_node_edges(space_name, vid, *direction)
+                            .map_err(|error| {
+                                storage_error("GetNeighbors", "get node edges", space_name, error)
+                            })?;
                     for edge in edges {
                         let nid = match direction {
                             EdgeDirection::Out => *edge.dst(),
@@ -171,16 +167,16 @@ fn next_get_neighbors(
                 let mut rows = Vec::with_capacity(batch_size);
                 if projected_properties.is_empty() {
                     for neighbor_id in &neighbor_ids[*position..end] {
-                        if let Some(vertex) = guard
-                            .get_vertex(space_name, neighbor_id)
-                            .map_err(|error| {
+                        if let Some(vertex) =
+                            guard.get_vertex(space_name, neighbor_id).map_err(|error| {
                                 storage_error(
                                     "GetNeighbors",
                                     "get neighbor vertex",
                                     space_name,
                                     error,
                                 )
-                            })? {
+                            })?
+                        {
                             rows.push(make_flat_vertex_row(vertex, projected_properties));
                         }
                     }
@@ -195,7 +191,8 @@ fn next_get_neighbors(
                                     space_name,
                                     error,
                                 )
-                            })? {
+                            })?
+                        {
                             rows.push(make_flat_vertex_row(vertex, projected_properties));
                         }
                     }

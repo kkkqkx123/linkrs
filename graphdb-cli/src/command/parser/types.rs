@@ -170,22 +170,11 @@ pub enum MetaCommand {
 #[derive(Debug)]
 pub enum SnapshotAction {
     List,
-    Info {
-        label: u32,
-    },
-    Load {
-        path: String,
-    },
-    Remove {
-        label: u32,
-    },
-    Export {
-        label: u32,
-        path: String,
-    },
-    Merge {
-        labels: Vec<u32>,
-    },
+    Info { label: u32 },
+    Load { path: String },
+    Remove { label: u32 },
+    Export { label: u32, path: String },
+    Merge { labels: Vec<u32> },
 }
 
 #[derive(Debug, Clone)]

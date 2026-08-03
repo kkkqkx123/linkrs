@@ -90,11 +90,7 @@ pub struct ColdDelta {
 }
 
 impl ColdDelta {
-    pub fn new(
-        base_ts: Timestamp,
-        delta_ts: Timestamp,
-        label: LabelId,
-    ) -> Self {
+    pub fn new(base_ts: Timestamp, delta_ts: Timestamp, label: LabelId) -> Self {
         Self {
             base_ts,
             delta_ts,
@@ -208,16 +204,14 @@ impl ColdDelta {
     /// Serialize this delta into a `.lkcd` file with a CRC32 footer.
     pub fn write<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let buf = self.encode()?;
-        std::fs::write(path.as_ref(), &buf).map_err(|e| {
-            StorageError::io_error(format!("failed to write delta file: {}", e))
-        })
+        std::fs::write(path.as_ref(), &buf)
+            .map_err(|e| StorageError::io_error(format!("failed to write delta file: {}", e)))
     }
 
     /// Load a delta from a `.lkcd` file, verifying magic and CRC32.
     pub fn open<P: AsRef<Path>>(path: P) -> StorageResult<Self> {
-        let data = std::fs::read(path.as_ref()).map_err(|e| {
-            StorageError::io_error(format!("failed to read delta file: {}", e))
-        })?;
+        let data = std::fs::read(path.as_ref())
+            .map_err(|e| StorageError::io_error(format!("failed to read delta file: {}", e)))?;
         Self::from_bytes(&data)
     }
 
@@ -225,9 +219,7 @@ impl ColdDelta {
         let mut pos = 0usize;
         let mut read_arr = |n: usize| -> StorageResult<Vec<u8>> {
             if pos + n > data.len() {
-                return Err(StorageError::deserialize_error(
-                    "ColdDelta data truncated",
-                ));
+                return Err(StorageError::deserialize_error("ColdDelta data truncated"));
             }
             let v = data[pos..pos + n].to_vec();
             pos += n;
@@ -235,9 +227,7 @@ impl ColdDelta {
         };
         let read_u32 = |pos: &mut usize| -> StorageResult<u32> {
             if *pos + 4 > data.len() {
-                return Err(StorageError::deserialize_error(
-                    "ColdDelta truncated (u32)",
-                ));
+                return Err(StorageError::deserialize_error("ColdDelta truncated (u32)"));
             }
             let v = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
             *pos += 4;
@@ -245,9 +235,7 @@ impl ColdDelta {
         };
         let read_u64 = |pos: &mut usize| -> StorageResult<u64> {
             if *pos + 8 > data.len() {
-                return Err(StorageError::deserialize_error(
-                    "ColdDelta truncated (u64)",
-                ));
+                return Err(StorageError::deserialize_error("ColdDelta truncated (u64)"));
             }
             let v = u64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
             *pos += 8;
@@ -283,9 +271,7 @@ impl ColdDelta {
         };
 
         if read_arr(4)? != COLD_DELTA_MAGIC {
-            return Err(StorageError::deserialize_error(
-                "invalid ColdDelta magic",
-            ));
+            return Err(StorageError::deserialize_error("invalid ColdDelta magic"));
         }
         let version = read_u32(&mut pos)?;
         if version != COLD_DELTA_VERSION {
@@ -344,9 +330,7 @@ impl ColdDelta {
 
         // CRC32 verification
         if pos + 4 > data.len() {
-            return Err(StorageError::deserialize_error(
-                "ColdDelta missing CRC",
-            ));
+            return Err(StorageError::deserialize_error("ColdDelta missing CRC"));
         }
         let stored_crc = read_u32(&mut pos)?;
         let computed_crc = crc32fast::hash(&data[..pos - 4]);
@@ -521,8 +505,7 @@ impl ColdSnapshot {
             };
             let names = index.indexed_property_names();
             Some(crate::storage::cold::ColdPropertyIndex::build(
-                &exported,
-                &names,
+                &exported, &names,
             ))
         } else {
             None
@@ -609,7 +592,9 @@ fn encode_value(buf: &mut Vec<u8>, value: &Value) -> StorageResult<()> {
 
 fn decode_value(data: &[u8], pos: &mut usize) -> StorageResult<Value> {
     if *pos >= data.len() {
-        return Err(StorageError::deserialize_error("ColdDelta truncated (value tag)"));
+        return Err(StorageError::deserialize_error(
+            "ColdDelta truncated (value tag)",
+        ));
     }
     let tag = data[*pos];
     *pos += 1;
@@ -677,14 +662,8 @@ mod tests {
             src_label: 0,
             dst_label: 0,
             properties: vec![
-                StoragePropertyDef::new(
-                    "weight".to_string(),
-                    crate::core::types::DataType::Double,
-                ),
-                StoragePropertyDef::new(
-                    "name".to_string(),
-                    crate::core::types::DataType::String,
-                ),
+                StoragePropertyDef::new("weight".to_string(), crate::core::types::DataType::Double),
+                StoragePropertyDef::new("name".to_string(), crate::core::types::DataType::String),
             ],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
@@ -736,7 +715,10 @@ mod tests {
         let nbr = merged
             .get_edge_to_dst(0, 1)
             .expect("0->1 must survive update");
-        let props = merged.properties().read_properties(nbr.prop_offset).unwrap();
+        let props = merged
+            .properties()
+            .read_properties(nbr.prop_offset)
+            .unwrap();
         assert!(props.contains(&("weight".to_string(), Value::Double(1.5))));
         // 0->2 removed
         assert!(merged.get_edge_to_dst(0, 2).is_none());
@@ -790,9 +772,7 @@ mod tests {
 
         // Label mismatch rejected.
         let mut other = make_table();
-        other
-            .insert_edge(0, 1, 0, &[], 100)
-            .unwrap();
+        other.insert_edge(0, 1, 0, &[], 100).unwrap();
         let other_exported = other.export_snapshot(100).unwrap();
         let other_snapshot = ColdSnapshot::create(
             &other_exported,
@@ -810,16 +790,11 @@ mod tests {
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let exported = table.export_snapshot(100).unwrap();
-        let index = crate::storage::cold::ColdPropertyIndex::build(
-            &exported,
-            &["weight".to_string()],
-        );
-        let base = ColdSnapshot::create_with_index(
-            &exported,
-            Some(index),
-            dir.path().join("base.lkcs"),
-        )
-        .unwrap();
+        let index =
+            crate::storage::cold::ColdPropertyIndex::build(&exported, &["weight".to_string()]);
+        let base =
+            ColdSnapshot::create_with_index(&exported, Some(index), dir.path().join("base.lkcs"))
+                .unwrap();
 
         table
             .insert_edge(5, 6, 0, &[("weight".to_string(), Value::Double(9.0))], 200)

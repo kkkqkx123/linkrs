@@ -761,10 +761,16 @@ fn test_columnar_stats_realistic_workload() {
     chunk.evaluate_expression(&simple_pred, None).unwrap();
     chunk.evaluate_expression(&compound_pred, None).unwrap();
     chunk.evaluate_expression(&property_pred, None).unwrap();
-    chunk.evaluate_expressions(&[Expression::Variable("id".into())], None).unwrap();
+    chunk
+        .evaluate_expressions(&[Expression::Variable("id".into())], None)
+        .unwrap();
 
-    let hits_after_simple = stats.columnar_hits.load(std::sync::atomic::Ordering::Relaxed);
-    let misses_after_simple = stats.columnar_misses.load(std::sync::atomic::Ordering::Relaxed);
+    let hits_after_simple = stats
+        .columnar_hits
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let misses_after_simple = stats
+        .columnar_misses
+        .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(hits_after_simple, 4);
     assert_eq!(misses_after_simple, 0);
     assert_eq!(stats.hit_rate(), 1.0);
@@ -775,12 +781,16 @@ fn test_columnar_stats_realistic_workload() {
     };
     chunk.evaluate_expression(&fn_expr, None).unwrap();
     assert_eq!(
-        stats.columnar_hits.load(std::sync::atomic::Ordering::Relaxed),
+        stats
+            .columnar_hits
+            .load(std::sync::atomic::Ordering::Relaxed),
         4,
         "function expression must miss the columnar path"
     );
     assert_eq!(
-        stats.columnar_misses.load(std::sync::atomic::Ordering::Relaxed),
+        stats
+            .columnar_misses
+            .load(std::sync::atomic::Ordering::Relaxed),
         1,
         "function expression records exactly one miss"
     );

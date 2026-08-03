@@ -396,9 +396,8 @@ impl SinkOperator {
                                 .map(|(tag_name, prop_names)| {
                                     let mut props = HashMap::new();
                                     for name in prop_names {
-                                        if let Some((_n, expr)) = vertex_properties
-                                            .iter()
-                                            .find(|(n, _)| n == name)
+                                        if let Some((_n, expr)) =
+                                            vertex_properties.iter().find(|(n, _)| n == name)
                                         {
                                             if let Ok(val) = eval_expr(expr, &mut context) {
                                                 props.insert(name.clone(), val);
@@ -549,15 +548,10 @@ impl SinkOperator {
                                                 let val = eval_expr(expr, &mut context)?;
                                                 props.insert(prop_name.clone(), val);
                                             }
-                                            let tags = vec![Tag::new(
-                                                tag_name.clone(),
-                                                props.clone(),
-                                            )];
-                                            let vertex = Vertex::new_with_properties(
-                                                vid,
-                                                tags,
-                                                props,
-                                            );
+                                            let tags =
+                                                vec![Tag::new(tag_name.clone(), props.clone())];
+                                            let vertex =
+                                                Vertex::new_with_properties(vid, tags, props);
                                             StorageWriter::insert_vertex(
                                                 &mut *writer,
                                                 space_name,
@@ -681,13 +675,8 @@ impl SinkOperator {
                                                 let val = eval_expr(expr, &mut context)?;
                                                 props.insert(prop_name.clone(), val);
                                             }
-                                            let edge = Edge::new(
-                                                src,
-                                                dst,
-                                                edge_type.clone(),
-                                                0,
-                                                props,
-                                            );
+                                            let edge =
+                                                Edge::new(src, dst, edge_type.clone(), 0, props);
                                             StorageWriter::insert_edge(
                                                 &mut *writer,
                                                 space_name,

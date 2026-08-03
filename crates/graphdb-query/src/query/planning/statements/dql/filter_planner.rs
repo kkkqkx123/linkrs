@@ -40,8 +40,8 @@ impl Planner for FilterPlanner {
         let start_node = StartNode::new();
         let start_enum = PlanNodeEnum::Start(start_node);
 
-        let filter_node =
-            FilterNode::new(start_enum.clone(), filter_stmt.expression.clone()).map_err(|e| {
+        let filter_node = FilterNode::new(start_enum.clone(), filter_stmt.expression.clone())
+            .map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
             })?;
 

@@ -70,8 +70,9 @@ impl ExplainPlanner {
             })?;
 
         let inner_plan = match metadata_context {
-            Some(metadata) => inner_planner
-                .transform_with_metadata(&inner_validated, qctx, metadata)?,
+            Some(metadata) => {
+                inner_planner.transform_with_metadata(&inner_validated, qctx, metadata)?
+            }
             None => inner_planner.transform(&inner_validated, qctx)?,
         };
 

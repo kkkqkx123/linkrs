@@ -115,8 +115,8 @@ impl ApplyOperator {
                 loop {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
-                        };
-                        left_chunk.materialize_selection();
+                    };
+                    left_chunk.materialize_selection();
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
@@ -189,8 +189,8 @@ impl ApplyOperator {
                 loop {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
-                        };
-                        left_chunk.materialize_selection();
+                    };
+                    left_chunk.materialize_selection();
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
@@ -250,8 +250,8 @@ impl ApplyOperator {
                 loop {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
-                        };
-                        left_chunk.materialize_selection();
+                    };
+                    left_chunk.materialize_selection();
                     let mut output = Vec::with_capacity(left_chunk.rows.len());
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;

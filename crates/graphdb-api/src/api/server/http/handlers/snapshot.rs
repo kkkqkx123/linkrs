@@ -107,7 +107,9 @@ pub async fn remove_cold_snapshot<
             .map_err(|e| HttpError::internal(format!("Failed to remove snapshot: {:?}", e)))?
             .map_err(|e| HttpError::internal(format!("Failed to remove snapshot: {}", e)))?
     }
-    Ok(JsonResponse(serde_json::json!({ "removed": true, "label": label })))
+    Ok(JsonResponse(
+        serde_json::json!({ "removed": true, "label": label }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -136,10 +138,12 @@ pub async fn export_cold_snapshot<
     let info = {
         let storage = storage.clone();
         let path = path.clone();
-        tokio::task::spawn_blocking(move || storage.read().export_cold_snapshot(request.label, &path))
-            .await
-            .map_err(|e| HttpError::internal(format!("Failed to export snapshot: {:?}", e)))?
-            .map_err(|e| HttpError::internal(format!("Failed to export snapshot: {}", e)))?
+        tokio::task::spawn_blocking(move || {
+            storage.read().export_cold_snapshot(request.label, &path)
+        })
+        .await
+        .map_err(|e| HttpError::internal(format!("Failed to export snapshot: {:?}", e)))?
+        .map_err(|e| HttpError::internal(format!("Failed to export snapshot: {}", e)))?
     };
     Ok(JsonResponse(to_json_info(&info)))
 }

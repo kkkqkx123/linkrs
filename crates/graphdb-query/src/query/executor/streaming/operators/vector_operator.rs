@@ -217,10 +217,7 @@ impl VectorOperator {
                                     ),
                                 )
                                 .map_err(|e| {
-                                    QueryError::execution(format!(
-                                        "Vector create failed: {}",
-                                        e
-                                    ))
+                                    QueryError::execution(format!("Vector create failed: {}", e))
                                 });
                                 match res {
                                     Ok(_) => Ok(Some(make_manage_result(

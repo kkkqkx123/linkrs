@@ -95,7 +95,8 @@ mod tests {
     use crate::core::Expression;
     use crate::core::Value;
 
-    fn scan_node() -> crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode {
+    fn scan_node(
+    ) -> crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode {
         crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(
             0, "test",
         )
@@ -137,7 +138,10 @@ mod tests {
 
         let rule = PushFilterDownScanVerticesRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite");
         let result = result.expect("some result");
         let new_node = result.new_nodes.first().expect("node");
@@ -161,12 +165,16 @@ mod tests {
             op: BinaryOperator::NotEqual,
             right: Box::new(Expression::Literal(Value::string("bob"))),
         };
-        let node = filter_node(contextual(not_equal), PlanNodeEnum::ScanVertices(scan_node()));
+        let node = filter_node(
+            contextual(not_equal),
+            PlanNodeEnum::ScanVertices(scan_node()),
+        );
         assert!(rule.apply(ctx, &node).expect("rewrite").is_none());
 
-        let non_scan_input = filter_node(contextual(prop("x")), PlanNodeEnum::Start(
-            crate::query::planning::plan::core::nodes::StartNode::default(),
-        ));
+        let non_scan_input = filter_node(
+            contextual(prop("x")),
+            PlanNodeEnum::Start(crate::query::planning::plan::core::nodes::StartNode::default()),
+        );
         assert!(rule.apply(ctx, &non_scan_input).expect("rewrite").is_none());
     }
 }

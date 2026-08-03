@@ -9,11 +9,11 @@ use crate::storage::open_edge_scan;
 use crate::storage::open_vertex_scan;
 use crate::storage::{RequiredProperty, ScanOptions, StorageError};
 
-use super::SourceOperator;
 use super::util::{
     attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
     reserve_memory_with_extra, storage_error,
 };
+use super::SourceOperator;
 
 /// Open the storage-backed scan source variants, creating the cursor that
 /// streams batches from storage.

@@ -628,7 +628,11 @@ impl Value {
         if matches!(self, Value::Bool(_))
             && matches!(
                 target,
-                DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::Float | DataType::Double
+                DataType::SmallInt
+                    | DataType::Int
+                    | DataType::BigInt
+                    | DataType::Float
+                    | DataType::Double
             )
         {
             return Err(StorageError::type_mismatch(

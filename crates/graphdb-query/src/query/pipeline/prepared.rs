@@ -92,9 +92,7 @@ pub fn requires_auto_commit(stmt: &Stmt) -> bool {
         | Stmt::Set(..)
         | Stmt::Remove(..)
         | Stmt::Merge(..) => true,
-        Stmt::Pipe(pipe) => {
-            requires_auto_commit(&pipe.left) || requires_auto_commit(&pipe.right)
-        }
+        Stmt::Pipe(pipe) => requires_auto_commit(&pipe.left) || requires_auto_commit(&pipe.right),
         Stmt::SetOperation(set_op) => {
             requires_auto_commit(&set_op.left) || requires_auto_commit(&set_op.right)
         }

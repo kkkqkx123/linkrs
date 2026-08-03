@@ -228,14 +228,15 @@ impl UnaryOperator {
                     if chunk.selection().is_some() {
                         let mut columns = Vec::with_capacity(output_expressions.len());
                         for expr in output_expressions.iter() {
-                            let col = chunk
-                                .evaluate_expression_visible(expr, params)
-                                .map_err(|e| {
-                                    QueryError::execution(format!(
-                                        "Project expression evaluation failed: {}",
-                                        e
-                                    ))
-                                })?;
+                            let col =
+                                chunk
+                                    .evaluate_expression_visible(expr, params)
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "Project expression evaluation failed: {}",
+                                            e
+                                        ))
+                                    })?;
                             columns.push(col);
                         }
                         if !columns.is_empty() && !columns[0].is_empty() {
@@ -402,8 +403,7 @@ impl UnaryOperator {
                             // P2: boundary materialization.
                             chunk.materialize_selection();
                             let col_names = chunk.col_names();
-                            *col_index =
-                                col_names.iter().position(|c| c == unwind_column.as_str());
+                            *col_index = col_names.iter().position(|c| c == unwind_column.as_str());
                             *layout = Some(chunk.get_layout());
                             *all_rows = chunk.rows;
                             *current_row_index = 0;

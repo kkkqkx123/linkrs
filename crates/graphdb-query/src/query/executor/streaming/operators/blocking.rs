@@ -32,9 +32,7 @@ pub use sort::{MergeState, RunBuffer, SortState, TopNState};
 pub use window::{WindowFunctionState, WindowState};
 
 use crate::query::executor::streaming::slot::SlotLayout;
-use aggregate::{
-    extract_field_value, value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES,
-};
+use aggregate::{extract_field_value, value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES};
 use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
 use window::compute_window_function;
 
@@ -319,8 +317,7 @@ impl BlockingOperator {
             } => {
                 *state = Some(AggregateState {
                     group_map: HashMap::new(),
-                    accumulator_overhead: aggregate_functions.len()
-                        * ACCUMULATOR_OVERHEAD_BYTES,
+                    accumulator_overhead: aggregate_functions.len() * ACCUMULATOR_OVERHEAD_BYTES,
                     result_iter: None,
                     spill_files: vec![],
                     partition_spiller: None,
@@ -437,7 +434,7 @@ impl BlockingOperator {
 
                 if st.merge_state.is_none() && st.row_iter.is_none() {
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if st.col_names.is_empty() {
                             st.col_names = chunk.col_names();
@@ -579,245 +576,96 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
 
                 loop {
-                if state.output_complete {
-                    return Ok(None);
-                }
-
-                let num_group_keys = group_by_expressions.len();
-                let has_group_keys = num_group_keys > 0;
-                // Per-group overhead beyond the group key: one accumulator
-                // instance per aggregate function. Without this, workloads
-                // with many small keys would under-report memory usage.
-                let group_overhead = state.accumulator_overhead;
-
-                // Evaluate group key expressions on a single input row.
-                let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
-                    if !has_group_keys {
-                        return Vec::new();
+                    if state.output_complete {
+                        return Ok(None);
                     }
-                    let mut key = Vec::with_capacity(num_group_keys);
-                    for expr in group_by_expressions.iter() {
-                        let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
-                        match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                            Ok(value) => key.push(value),
-                            Err(_) => key.push(Value::Null(NullType::Null)),
+
+                    let num_group_keys = group_by_expressions.len();
+                    let has_group_keys = num_group_keys > 0;
+                    // Per-group overhead beyond the group key: one accumulator
+                    // instance per aggregate function. Without this, workloads
+                    // with many small keys would under-report memory usage.
+                    let group_overhead = state.accumulator_overhead;
+
+                    // Evaluate group key expressions on a single input row.
+                    let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
+                        if !has_group_keys {
+                            return Vec::new();
                         }
-                    }
-                    key
-                };
-
-                // Encode a single input row as a partial-accumulator row
-                // [group_key..., accumulator_to_value(acc)...] for the spill path.
-                let partial_row_of = |row: &[Value], col_names: &[String]| -> Vec<Value> {
-                    let mut partial_row = eval_group_key(row, col_names);
-                    for (func, expr) in aggregate_functions.iter() {
-                        let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
-                        let value = match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                            Ok(v) => v,
-                            Err(_) => Value::Null(NullType::Null),
-                        };
-                        let mut acc = AggregateAccumulator::for_function(func)
-                            .expect("every aggregate function has an accumulator");
-                        acc.accumulate(&value);
-                        partial_row.push(accumulator_to_value(&acc));
-                    }
-                    partial_row
-                };
-
-                // Output phase: drain result iterator
-                if let Some(ref mut iter) = state.result_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
-                    if chunk_rows.is_empty() {
-                        state.result_iter = None;
-                        if !state.has_spilled || state.current_partition >= state.spilled_runs.len()
-                        {
-                            state.output_complete = true;
-                            return Ok(None);
-                        }
-                    } else {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            Arc::clone(&base.output_layout),
-                        )));
-                    }
-                }
-
-                // Replay phase: process spilled partitions one at a time
-                if state.has_spilled && state.partition_spiller.is_none() {
-                    while state.current_partition < state.spilled_runs.len() {
-                        base.ensure_not_cancelled()?;
-
-                        let run = match &state.spilled_runs[state.current_partition] {
-                            Some(r) => r,
-                            None => {
-                                state.current_partition += 1;
-                                continue;
-                            }
-                        };
-
-                        let mut reader =
-                            crate::query::executor::streaming::spill::RunReader::open(run)?;
-
-                        let mut partition_results = Vec::new();
-                        // Rebuild accumulators from partial-accumulator rows.
-                        let mut group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>> =
-                            HashMap::new();
-                        while let Some(row) = reader.read_row()? {
-                            let group_key: Vec<Value> =
-                                row.iter().take(num_group_keys).cloned().collect();
-                            let accs = group_map.entry(group_key).or_insert_with(|| {
-                                aggregate_functions
-                                    .iter()
-                                    .map(|(f, _)| {
-                                        AggregateAccumulator::for_function(f).expect(
-                                            "every aggregate function has an accumulator",
-                                        )
-                                    })
-                                    .collect()
-                            });
-                            for (i, func) in aggregate_functions.iter().enumerate() {
-                                if let Some(acc) = accs.get_mut(i) {
-                                    let partial_value = row
-                                        .get(num_group_keys + i)
-                                        .cloned()
-                                        .unwrap_or(Value::Null(NullType::Null));
-                                    if let Some(other) =
-                                        value_to_partial_accumulator(&func.0, &partial_value)
-                                    {
-                                        acc.merge(&other);
-                                    }
-                                }
+                        let mut key = Vec::with_capacity(num_group_keys);
+                        for expr in group_by_expressions.iter() {
+                            let mut ctx =
+                                ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                Ok(value) => key.push(value),
+                                Err(_) => key.push(Value::Null(NullType::Null)),
                             }
                         }
-                        for (group_key, accs) in group_map {
-                            let mut result_row = if has_group_keys {
-                                group_key
-                            } else {
-                                Vec::new()
+                        key
+                    };
+
+                    // Encode a single input row as a partial-accumulator row
+                    // [group_key..., accumulator_to_value(acc)...] for the spill path.
+                    let partial_row_of = |row: &[Value], col_names: &[String]| -> Vec<Value> {
+                        let mut partial_row = eval_group_key(row, col_names);
+                        for (func, expr) in aggregate_functions.iter() {
+                            let mut ctx =
+                                ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+                            let value = match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                Ok(v) => v,
+                                Err(_) => Value::Null(NullType::Null),
                             };
-                            for acc in accs {
-                                result_row.push(acc.finalize());
-                            }
-                            partition_results.push(result_row);
+                            let mut acc = AggregateAccumulator::for_function(func)
+                                .expect("every aggregate function has an accumulator");
+                            acc.accumulate(&value);
+                            partial_row.push(accumulator_to_value(&acc));
                         }
+                        partial_row
+                    };
 
-                        let _ = std::fs::remove_file(&run.path);
-                        state.current_partition += 1;
-
-                        if !partition_results.is_empty() {
-                            state.result_iter = Some(partition_results.into_iter());
-                            let chunk_rows: Vec<Vec<Value>> = state
-                                .result_iter
-                                .as_mut()
-                                .unwrap()
-                                .by_ref()
-                                .take(1024)
-                                .collect();
-                            if !chunk_rows.is_empty() {
-                                return Ok(Some(DataChunk::new_with_layout(
-                                    chunk_rows,
-                                    Arc::clone(&base.output_layout),
-                                )));
-                            }
+                    // Output phase: drain result iterator
+                    if let Some(ref mut iter) = state.result_iter {
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        if chunk_rows.is_empty() {
                             state.result_iter = None;
+                            if !state.has_spilled
+                                || state.current_partition >= state.spilled_runs.len()
+                            {
+                                state.output_complete = true;
+                                return Ok(None);
+                            }
+                        } else {
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                     }
-                    state.output_complete = true;
-                    return Ok(None);
-                }
 
-                // Accumulation phase: read input and aggregate.
-                // Once the memory budget is exhausted the remaining input is
-                // routed directly to the partition spiller (spill mode).
-                let mut accumulating = true;
-                while accumulating {
-                    match input.advance()? {
-                        Some(chunk) => {
+                    // Replay phase: process spilled partitions one at a time
+                    if state.has_spilled && state.partition_spiller.is_none() {
+                        while state.current_partition < state.spilled_runs.len() {
                             base.ensure_not_cancelled()?;
-                            if state.col_names.is_empty() {
-                                state.col_names = chunk.col_names();
-                            }
-                            let sm = base.spill_manager();
-                            // Consume the child's selection vector — only
-                            // visible rows are aggregated (no row moves).
-                            for idx in chunk.visible_indices() {
-                                let row = &chunk.rows[idx];
-                                if let Some(ref mut spiller) = state.partition_spiller {
-                                    // Spill mode: route row directly, keeping
-                                    // the remainder of this chunk intact.
-                                    let manager = sm.clone().ok_or_else(|| {
-                                        QueryError::execution(
-                                            "Spill manager not available".to_string(),
-                                        )
-                                    })?;
-                                    let group_key = eval_group_key(&row, &state.col_names);
-                                    let p =
-                                        crate::query::executor::streaming::spill::hash_row_partition(
-                                            &group_key,
-                                            spiller.num_partitions(),
-                                        ) as usize;
-                                    let partial_row = partial_row_of(&row, &state.col_names);
-                                    spiller.insert_row_to_partition(&partial_row, p, &manager)?;
+
+                            let run = match &state.spilled_runs[state.current_partition] {
+                                Some(r) => r,
+                                None => {
+                                    state.current_partition += 1;
                                     continue;
                                 }
-                                let group_key = eval_group_key(&row, &state.col_names);
-                                if !state.group_map.contains_key(&group_key) {
-                                    if let Err(e) = memory_tracker.try_reserve(
-                                        MemoryBudget::estimate_row_memory(&group_key)
-                                            + group_overhead,
-                                    ) {
-                                        if let Some(sm) = base.spill_manager() {
-                                            let config = HashPartitionConfig::default();
-                                            let num_partitions = config.num_partitions;
-                                            let mut spiller =
-                                                HashPartitionSpiller::new(config, &sm, 0)?;
+                            };
 
-                                            // Spill accumulated groups as partial-accumulator rows.
-                                            for (key, accs) in std::mem::take(&mut state.group_map)
-                                            {
-                                                let p = crate::query::executor::streaming::spill::hash_row_partition(
-                                                &key,
-                                                num_partitions,
-                                            ) as usize;
-                                                let mut partial_row = key.clone();
-                                                for acc in &accs {
-                                                    partial_row.push(accumulator_to_value(acc));
-                                                }
-                                                spiller.insert_row_to_partition(
-                                                    &partial_row,
-                                                    p,
-                                                    &sm,
-                                                )?;
-                                                memory_tracker.release(
-                                                    MemoryBudget::estimate_row_memory(&key)
-                                                        + group_overhead,
-                                                );
-                                            }
+                            let mut reader =
+                                crate::query::executor::streaming::spill::RunReader::open(run)?;
 
-                                            // Route current row by group key hash.
-                                            let p = crate::query::executor::streaming::spill::hash_row_partition(
-                                            &group_key,
-                                            num_partitions,
-                                        ) as usize;
-                                            let partial_row =
-                                                partial_row_of(&row, &state.col_names);
-                                            spiller.insert_row_to_partition(
-                                                &partial_row,
-                                                p,
-                                                &sm,
-                                            )?;
-
-                                            state.partition_spiller = Some(spiller);
-                                            state.has_spilled = true;
-                                            // Current row already routed above.
-                                            continue;
-                                        } else {
-                                            return Err(e);
-                                        }
-                                    }
-                                }
-
-                                let accs = state.group_map.entry(group_key).or_insert_with(|| {
+                            let mut partition_results = Vec::new();
+                            // Rebuild accumulators from partial-accumulator rows.
+                            let mut group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>> =
+                                HashMap::new();
+                            while let Some(row) = reader.read_row()? {
+                                let group_key: Vec<Value> =
+                                    row.iter().take(num_group_keys).cloned().collect();
+                                let accs = group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
                                         .map(|(f, _)| {
@@ -827,64 +675,224 @@ impl BlockingOperator {
                                         })
                                         .collect()
                                 });
-                                for (i, (_func, expr)) in aggregate_functions.iter().enumerate() {
+                                for (i, func) in aggregate_functions.iter().enumerate() {
                                     if let Some(acc) = accs.get_mut(i) {
-                                        let mut ctx = ValueRowContext::from_names(
-                                            row.clone(),
-                                            state.col_names.clone(),
-                                        );
-                                        let value =
-                                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                                Ok(v) => v,
-                                                Err(_) => Value::Null(NullType::Null),
-                                            };
-                                        acc.accumulate(&value);
+                                        let partial_value = row
+                                            .get(num_group_keys + i)
+                                            .cloned()
+                                            .unwrap_or(Value::Null(NullType::Null));
+                                        if let Some(other) =
+                                            value_to_partial_accumulator(&func.0, &partial_value)
+                                        {
+                                            acc.merge(&other);
+                                        }
                                     }
                                 }
                             }
+                            for (group_key, accs) in group_map {
+                                let mut result_row = if has_group_keys {
+                                    group_key
+                                } else {
+                                    Vec::new()
+                                };
+                                for acc in accs {
+                                    result_row.push(acc.finalize());
+                                }
+                                partition_results.push(result_row);
+                            }
+
+                            let _ = std::fs::remove_file(&run.path);
+                            state.current_partition += 1;
+
+                            if !partition_results.is_empty() {
+                                state.result_iter = Some(partition_results.into_iter());
+                                let chunk_rows: Vec<Vec<Value>> = state
+                                    .result_iter
+                                    .as_mut()
+                                    .unwrap()
+                                    .by_ref()
+                                    .take(1024)
+                                    .collect();
+                                if !chunk_rows.is_empty() {
+                                    return Ok(Some(DataChunk::new_with_layout(
+                                        chunk_rows,
+                                        Arc::clone(&base.output_layout),
+                                    )));
+                                }
+                                state.result_iter = None;
+                            }
                         }
-                        None => {
-                            accumulating = false;
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+
+                    // Accumulation phase: read input and aggregate.
+                    // Once the memory budget is exhausted the remaining input is
+                    // routed directly to the partition spiller (spill mode).
+                    let mut accumulating = true;
+                    while accumulating {
+                        match input.advance()? {
+                            Some(chunk) => {
+                                base.ensure_not_cancelled()?;
+                                if state.col_names.is_empty() {
+                                    state.col_names = chunk.col_names();
+                                }
+                                let sm = base.spill_manager();
+                                // Consume the child's selection vector — only
+                                // visible rows are aggregated (no row moves).
+                                for idx in chunk.visible_indices() {
+                                    let row = &chunk.rows[idx];
+                                    if let Some(ref mut spiller) = state.partition_spiller {
+                                        // Spill mode: route row directly, keeping
+                                        // the remainder of this chunk intact.
+                                        let manager = sm.clone().ok_or_else(|| {
+                                            QueryError::execution(
+                                                "Spill manager not available".to_string(),
+                                            )
+                                        })?;
+                                        let group_key = eval_group_key(&row, &state.col_names);
+                                        let p =
+                                        crate::query::executor::streaming::spill::hash_row_partition(
+                                            &group_key,
+                                            spiller.num_partitions(),
+                                        ) as usize;
+                                        let partial_row = partial_row_of(&row, &state.col_names);
+                                        spiller.insert_row_to_partition(
+                                            &partial_row,
+                                            p,
+                                            &manager,
+                                        )?;
+                                        continue;
+                                    }
+                                    let group_key = eval_group_key(&row, &state.col_names);
+                                    if !state.group_map.contains_key(&group_key) {
+                                        if let Err(e) = memory_tracker.try_reserve(
+                                            MemoryBudget::estimate_row_memory(&group_key)
+                                                + group_overhead,
+                                        ) {
+                                            if let Some(sm) = base.spill_manager() {
+                                                let config = HashPartitionConfig::default();
+                                                let num_partitions = config.num_partitions;
+                                                let mut spiller =
+                                                    HashPartitionSpiller::new(config, &sm, 0)?;
+
+                                                // Spill accumulated groups as partial-accumulator rows.
+                                                for (key, accs) in
+                                                    std::mem::take(&mut state.group_map)
+                                                {
+                                                    let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                                &key,
+                                                num_partitions,
+                                            ) as usize;
+                                                    let mut partial_row = key.clone();
+                                                    for acc in &accs {
+                                                        partial_row.push(accumulator_to_value(acc));
+                                                    }
+                                                    spiller.insert_row_to_partition(
+                                                        &partial_row,
+                                                        p,
+                                                        &sm,
+                                                    )?;
+                                                    memory_tracker.release(
+                                                        MemoryBudget::estimate_row_memory(&key)
+                                                            + group_overhead,
+                                                    );
+                                                }
+
+                                                // Route current row by group key hash.
+                                                let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                            &group_key,
+                                            num_partitions,
+                                        ) as usize;
+                                                let partial_row =
+                                                    partial_row_of(&row, &state.col_names);
+                                                spiller.insert_row_to_partition(
+                                                    &partial_row,
+                                                    p,
+                                                    &sm,
+                                                )?;
+
+                                                state.partition_spiller = Some(spiller);
+                                                state.has_spilled = true;
+                                                // Current row already routed above.
+                                                continue;
+                                            } else {
+                                                return Err(e);
+                                            }
+                                        }
+                                    }
+
+                                    let accs =
+                                        state.group_map.entry(group_key).or_insert_with(|| {
+                                            aggregate_functions
+                                                .iter()
+                                                .map(|(f, _)| {
+                                                    AggregateAccumulator::for_function(f).expect(
+                                                "every aggregate function has an accumulator",
+                                            )
+                                                })
+                                                .collect()
+                                        });
+                                    for (i, (_func, expr)) in aggregate_functions.iter().enumerate()
+                                    {
+                                        if let Some(acc) = accs.get_mut(i) {
+                                            let mut ctx = ValueRowContext::from_names(
+                                                row.clone(),
+                                                state.col_names.clone(),
+                                            );
+                                            let value =
+                                                match ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                                {
+                                                    Ok(v) => v,
+                                                    Err(_) => Value::Null(NullType::Null),
+                                                };
+                                            acc.accumulate(&value);
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                accumulating = false;
+                            }
                         }
                     }
-                }
 
-                // Input is fully consumed above (accumulated or spilled).
-                // Finalize spilled runs and replay them within this same call;
-                // the executor protocol treats Ok(None) as end-of-stream.
-                if state.partition_spiller.is_some() {
-                    let runs = state.partition_spiller.take().unwrap().finalize()?;
-                    state.spilled_runs = runs;
-                    state.current_partition = 0;
-                    continue;
-                }
-
-                // In-memory output: finalize accumulated groups
-                let group_map = std::mem::take(&mut state.group_map);
-                let mut result_rows = Vec::new();
-                for (group_key, accs) in group_map {
-                    let mut result_row = if has_group_keys {
-                        group_key
-                    } else {
-                        Vec::new()
-                    };
-                    for acc in accs {
-                        result_row.push(acc.finalize());
+                    // Input is fully consumed above (accumulated or spilled).
+                    // Finalize spilled runs and replay them within this same call;
+                    // the executor protocol treats Ok(None) as end-of-stream.
+                    if state.partition_spiller.is_some() {
+                        let runs = state.partition_spiller.take().unwrap().finalize()?;
+                        state.spilled_runs = runs;
+                        state.current_partition = 0;
+                        continue;
                     }
-                    result_rows.push(result_row);
-                }
 
-                let mut result_iter = result_rows.into_iter();
-                let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
-                state.result_iter = Some(result_iter);
-                if chunk_rows.is_empty() {
-                    state.output_complete = true;
-                    return Ok(None);
-                }
-                return Ok(Some(DataChunk::new_with_layout(
-                    chunk_rows,
-                    Arc::clone(&base.output_layout),
-                )));
+                    // In-memory output: finalize accumulated groups
+                    let group_map = std::mem::take(&mut state.group_map);
+                    let mut result_rows = Vec::new();
+                    for (group_key, accs) in group_map {
+                        let mut result_row = if has_group_keys {
+                            group_key
+                        } else {
+                            Vec::new()
+                        };
+                        for acc in accs {
+                            result_row.push(acc.finalize());
+                        }
+                        result_rows.push(result_row);
+                    }
+
+                    let mut result_iter = result_rows.into_iter();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    state.result_iter = Some(result_iter);
+                    if chunk_rows.is_empty() {
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
             }
 
@@ -974,7 +982,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -1127,7 +1135,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -1284,7 +1292,7 @@ impl BlockingOperator {
                     let limit = *n as usize;
 
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if state.col_names.is_empty() {
                             state.col_names = chunk.col_names();
@@ -1435,7 +1443,7 @@ impl BlockingOperator {
                 while accumulating {
                     match input.advance()? {
                         Some(mut chunk) => {
-                        chunk.materialize_selection();
+                            chunk.materialize_selection();
                             base.ensure_not_cancelled()?;
                             if state.col_names.is_empty() {
                                 state.col_names = chunk.col_names();
@@ -1481,7 +1489,7 @@ impl BlockingOperator {
                 // Spill consumption phase: route remaining input to partition spiller
                 if let Some(ref mut spiller) = state.partition_spiller {
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         let sm = base.spill_manager().ok_or_else(|| {
                             QueryError::execution("Spill manager not available".to_string())
@@ -1532,7 +1540,7 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if !state.materialized {
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if state.input_layout.is_none() {
                             state.input_layout = Some(chunk.get_layout());
@@ -1594,7 +1602,7 @@ impl BlockingOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                chunk.materialize_selection();
+                    chunk.materialize_selection();
                     base.ensure_not_cancelled()?;
                     if state.input_layout.is_none() {
                         state.input_layout = Some(chunk.get_layout());
@@ -1647,7 +1655,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = Vec::new();
                     while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                        chunk.materialize_selection();
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -2095,19 +2103,17 @@ impl BlockingOperator {
                         let num_partitions = config.num_partitions;
                         let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
                         for (key, accs) in std::mem::take(&mut s.group_map) {
-                            let p =
-                                crate::query::executor::streaming::spill::hash_row_partition(
-                                    &key,
-                                    num_partitions,
-                                ) as usize;
+                            let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                &key,
+                                num_partitions,
+                            ) as usize;
                             let mut partial_row = key.clone();
                             for acc in &accs {
                                 partial_row.push(accumulator_to_value(acc));
                             }
                             spiller.insert_row_to_partition(&partial_row, p, sm)?;
                             memory_tracker.release(
-                                MemoryBudget::estimate_row_memory(&key)
-                                    + s.accumulator_overhead,
+                                MemoryBudget::estimate_row_memory(&key) + s.accumulator_overhead,
                             );
                         }
                         s.partition_spiller = Some(spiller);

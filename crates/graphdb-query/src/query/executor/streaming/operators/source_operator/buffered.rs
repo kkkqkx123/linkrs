@@ -2,14 +2,14 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::expression::evaluation_context::default_context::DefaultExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
-use crate::query::executor::streaming::operators::state::SourceState;
-use crate::query::executor::streaming::state::GlobalState;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::executor::streaming::state::GlobalState;
 
-use super::SourceOperator;
 use super::util::{attach_columnar_stats, reserve_memory};
+use super::SourceOperator;
 
 /// Open the buffered source variants.
 ///

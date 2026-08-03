@@ -11,9 +11,9 @@
 //! - SHOW ROLES - List all roles
 //! - DESCRIBE USER - Describe user details
 
-mod common;
 #[path = "dcl/cascade_operations.rs"]
 mod cascade_operations;
+mod common;
 #[path = "dcl/concurrent_operations.rs"]
 mod concurrent_operations;
 #[path = "dcl/cross_operation_consistency.rs"]

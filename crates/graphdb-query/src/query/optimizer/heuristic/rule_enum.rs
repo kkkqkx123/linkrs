@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 45);
+        assert_eq!(registry.len(), 46);
     }
 
     #[test]

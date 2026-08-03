@@ -9,15 +9,17 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::state::GlobalState;
-use crate::storage::{open_index_cursor, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, QueryStorage};
+use crate::storage::{
+    open_index_cursor, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, QueryStorage,
+};
 use parking_lot::RwLock;
 
-use super::SourceOperator;
 use super::super::spec::{BoundIndexPredicate, IndexProjection};
 use super::util::{
     attach_columnar_stats, make_flat_covering_edge_row, make_flat_covering_vertex_row,
     make_flat_edge_row, make_flat_vertex_row, reserve_memory, storage_error,
 };
+use super::SourceOperator;
 
 /// Open the `IndexScan` source: build the physical scan plan and open the
 /// cursor.
@@ -33,9 +35,9 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             cursor,
             ..
         } => {
-            let storage_ref = storage.as_ref().ok_or_else(|| {
-                QueryError::execution("IndexScan requires storage".to_string())
-            })?;
+            let storage_ref = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("IndexScan requires storage".to_string()))?;
             let plan = build_index_scan_plan(
                 storage_ref,
                 space_name,
@@ -44,9 +46,10 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                 projection,
                 partition_range.clone(),
             )?;
-            *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
-                storage_error("IndexScan", "open cursor", space_name, error)
-            })?);
+            *cursor =
+                Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
+                    storage_error("IndexScan", "open cursor", space_name, error)
+                })?);
             base.insert_state(GlobalState::Source(SourceState::IndexScan { cursor: None }));
         }
         _ => unreachable!("index_scan::open called for a non-index source"),
@@ -74,9 +77,9 @@ pub(crate) fn next(
                 IndexProjection::Columns(cols) => cols.clone(),
                 _ => Vec::new(),
             };
-            let storage = storage.as_ref().ok_or_else(|| {
-                QueryError::execution("IndexScan requires storage".to_string())
-            })?;
+            let storage = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("IndexScan requires storage".to_string()))?;
             let context = IndexScanContext {
                 storage,
                 space_name,
@@ -188,9 +191,11 @@ fn next_index_chunk(
                         columns,
                     } => match &entity_ref {
                         EntityRef::Vertex(_) => {
-                            if let Some(row) =
-                                make_flat_covering_vertex_row(&entity_ref, columns, vertex_projection)
-                            {
+                            if let Some(row) = make_flat_covering_vertex_row(
+                                &entity_ref,
+                                columns,
+                                vertex_projection,
+                            ) {
                                 output_rows.push(row);
                             }
                         }
@@ -259,8 +264,9 @@ fn next_index_chunk(
                                 continue;
                             };
                             match guard.get_edge(space_name, src, dst, &name, *ranking) {
-                                Ok(Some(edge)) => output_rows
-                                    .push(make_flat_edge_row(edge, vertex_projection)),
+                                Ok(Some(edge)) => {
+                                    output_rows.push(make_flat_edge_row(edge, vertex_projection))
+                                }
                                 Ok(None) => {
                                     debug_assert!(
                                         false,
@@ -596,15 +602,13 @@ mod tests {
                 "v.age".to_string(),
             ])),
             partition_range: None,
-            cursor: Some(Box::new(FakeIndexCursor::new(vec![
-                IndexRow::Covering {
-                    entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
-                    columns: vec![
-                        ("name".to_string(), Value::string("Alice")),
-                        ("age".to_string(), Value::BigInt(30)),
-                    ],
-                },
-            ]))),
+            cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
+                entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
+                columns: vec![
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::BigInt(30)),
+                ],
+            }]))),
             edge_type_names: std::collections::HashMap::new(),
         };
         let mut base = OperatorBase::new(0).with_runtime(Some(test_runtime()));

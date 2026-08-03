@@ -300,9 +300,7 @@ impl GraphStorage {
 
     /// Time-travel view over the registered cold snapshots: a per-label
     /// shelf of immutable versions keyed by snapshot timestamp.
-    pub fn cold_time_machine(
-        &self,
-    ) -> crate::storage::cold::ColdSnapshotTimeMachine {
+    pub fn cold_time_machine(&self) -> crate::storage::cold::ColdSnapshotTimeMachine {
         self.ctx.cold_time_machine()
     }
 
@@ -350,21 +348,23 @@ impl GraphStorage {
             space,
             &edge_info.dst_tag_name,
         )?
-        .ok_or_else(|| StorageError::not_found(format!("No destination tag for edge {}", edge_type)))?;
+        .ok_or_else(|| {
+            StorageError::not_found(format!("No destination tag for edge {}", edge_type))
+        })?;
         let key = crate::storage::engine::data_store::EdgeTableKey::new(
             src_label,
             dst_label,
             edge_info.edge_type_id,
         );
 
-        let base = self.ctx.data_store().with_single_edge_table(
-            &key,
-            |table| table.export_snapshot(from_ts),
-        )?;
-        let latest = self.ctx.data_store().with_single_edge_table(
-            &key,
-            |table| table.export_snapshot(to_ts),
-        )?;
+        let base = self
+            .ctx
+            .data_store()
+            .with_single_edge_table(&key, |table| table.export_snapshot(from_ts))?;
+        let latest = self
+            .ctx
+            .data_store()
+            .with_single_edge_table(&key, |table| table.export_snapshot(to_ts))?;
 
         let base_snapshot = cold_snapshot_from_export(&base)?;
         let latest_snapshot = cold_snapshot_from_export(&latest)?;
@@ -404,7 +404,6 @@ impl GraphStorage {
         self.ctx.load_cold_snapshot(reconstructed.clone());
         Ok(reconstructed)
     }
-
 
     /// Remove old published checkpoints while retaining the newest recovery points.
     pub fn cleanup_old_checkpoints(&self, max_checkpoints: usize) -> StorageResult<usize> {
@@ -1178,12 +1177,9 @@ impl StorageSchemaOps for GraphStorage {
             .schema_manager()
             .rename_tag_property(space, tag, old_name, new_name)?;
         if renamed {
-            let label_id = crate::storage::engine::graph_storage::ops::tag_label_id(
-                &self.ctx,
-                space,
-                tag,
-            )?
-            .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+            let label_id =
+                crate::storage::engine::graph_storage::ops::tag_label_id(&self.ctx, space, tag)?
+                    .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
             schema_engine::rename_vertex_property(&self.ctx, label_id, old_name, new_name)?;
         }
         Ok(renamed)
@@ -1719,15 +1715,13 @@ impl crate::storage::client::StorageSnapshotOps for GraphStorage {
         Ok(())
     }
 
-    fn export_cold_snapshot(
-        &self,
-        label: LabelId,
-        path: &Path,
-    ) -> StorageResult<ColdSnapshotInfo> {
+    fn export_cold_snapshot(&self, label: LabelId, path: &Path) -> StorageResult<ColdSnapshotInfo> {
         let snapshot = self
             .ctx
             .cold_snapshot_at(label, Timestamp::MAX)
-            .ok_or_else(|| StorageError::not_found(format!("no cold snapshot for label {}", label)))?;
+            .ok_or_else(|| {
+                StorageError::not_found(format!("no cold snapshot for label {}", label))
+            })?;
         let exported = snapshot.export_to_path(path)?;
         cold_snapshot_info(&exported)
     }
@@ -1778,12 +1772,12 @@ impl crate::storage::client::StorageSnapshotOps for GraphStorage {
 
 /// Build `ColdSnapshotInfo` from a snapshot, reading file metadata when a
 /// backing file exists.
-fn cold_snapshot_info(snapshot: &crate::storage::cold::ColdSnapshot) -> StorageResult<ColdSnapshotInfo> {
+fn cold_snapshot_info(
+    snapshot: &crate::storage::cold::ColdSnapshot,
+) -> StorageResult<ColdSnapshotInfo> {
     let (file_path, file_size) = match snapshot.backing_path() {
         Some(path) => {
-            let size = std::fs::metadata(path)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             (path.display().to_string(), size)
         }
         None => (String::new(), 0),

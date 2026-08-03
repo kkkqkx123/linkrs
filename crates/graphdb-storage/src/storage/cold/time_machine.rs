@@ -106,12 +106,7 @@ impl ColdSnapshotTimeMachine {
     ) -> Vec<Arc<ColdSnapshot>> {
         self.shelves
             .get(&label)
-            .map(|shelf| {
-                shelf
-                    .range(from..=to)
-                    .map(|(_, v)| v.clone())
-                    .collect()
-            })
+            .map(|shelf| shelf.range(from..=to).map(|(_, v)| v.clone()).collect())
             .unwrap_or_default()
     }
 
@@ -152,7 +147,11 @@ impl ColdSnapshotTimeMachine {
                     count += 1;
                 }
                 Err(err) => {
-                    log::warn!("skipping unreadable cold snapshot {}: {}", path.display(), err);
+                    log::warn!(
+                        "skipping unreadable cold snapshot {}: {}",
+                        path.display(),
+                        err
+                    );
                 }
             }
         }
@@ -196,8 +195,8 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default())
-            .unwrap();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
         for (src, dst) in edges {
             table
                 .insert_edge(

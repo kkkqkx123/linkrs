@@ -351,9 +351,9 @@ impl ColdSnapshot {
         let schema_data = read_section(data, &mut pos)?;
 
         // Property section: 1-byte marker (raw / zstd) + payload.
-        let (marker, prop_payload) = prop_section
-            .split_first()
-            .ok_or_else(|| StorageError::deserialize_error("ColdSnapshot property section empty"))?;
+        let (marker, prop_payload) = prop_section.split_first().ok_or_else(|| {
+            StorageError::deserialize_error("ColdSnapshot property section empty")
+        })?;
         let prop_data: Vec<u8> = match *marker {
             ZSTD_MARKER => zstd::decode_all(prop_payload).map_err(|e| {
                 StorageError::deserialize_error(format!("zstd decompress failed: {}", e))
@@ -534,9 +534,8 @@ impl ColdSnapshot {
             self.label,
             self.property_index.as_ref(),
         )?;
-        std::fs::write(path.as_ref(), &buf).map_err(|e| {
-            StorageError::io_error(format!("failed to write snapshot file: {}", e))
-        })?;
+        std::fs::write(path.as_ref(), &buf)
+            .map_err(|e| StorageError::io_error(format!("failed to write snapshot file: {}", e)))?;
         let mut copy = Self::from_bytes(&buf)?;
         copy.path = Some(path.as_ref().to_path_buf());
         Ok(copy)
@@ -616,7 +615,10 @@ impl ColdSnapshot {
             exported.snapshot_ts,
             exported.label,
             exported.out_csr.edge_count(),
-            exported.out_csr.vertex_capacity().max(exported.in_csr.vertex_capacity()),
+            exported
+                .out_csr
+                .vertex_capacity()
+                .max(exported.in_csr.vertex_capacity()),
             exported.out_csr.clone(),
             exported.in_csr.clone(),
             exported.properties.clone(),
@@ -737,9 +739,7 @@ impl ColdSnapshot {
         if let Some(bitmap) = &self.vertex_presence {
             let word = row / 64;
             let bit = row % 64;
-            bitmap
-                .get(word)
-                .is_some_and(|w| (w & (1u64 << bit)) != 0)
+            bitmap.get(word).is_some_and(|w| (w & (1u64 << bit)) != 0)
         } else {
             !self.out_csr.edges_of(row as u32).is_empty()
         }
@@ -793,7 +793,11 @@ impl ColdSnapshot {
         self.vertex_capacity = out_capacity.max(in_capacity);
         self.edge_count = self.out_csr.edge_count();
         let bitmap = build_presence_bitmap(&self.out_csr);
-        self.vertex_presence = if bitmap.is_empty() { None } else { Some(bitmap) };
+        self.vertex_presence = if bitmap.is_empty() {
+            None
+        } else {
+            Some(bitmap)
+        };
 
         if let Some(index) = self.property_index.as_mut() {
             index.remap_vertex_ids(src_mapping, dst_mapping);
@@ -1096,9 +1100,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
         for _ in start..end {
             let dict_id = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
             pos += 4;
-            let edge_id = EdgeId::new(u64::from_le_bytes(
-                data[pos..pos + 8].try_into().unwrap(),
-            ));
+            let edge_id = EdgeId::new(u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()));
             pos += 8;
             let prop_offset = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
             pos += 4;
@@ -1107,10 +1109,7 @@ fn decode_csr_dict(data: &[u8]) -> StorageResult<Csr> {
             let neighbor = *dict
                 .get(dict_id as usize)
                 .ok_or_else(|| StorageError::deserialize_error("cold CSR dict id out of range"))?;
-            entries.push((
-                v as u32,
-                Nbr::new(neighbor, edge_id, prop_offset, ts),
-            ));
+            entries.push((v as u32, Nbr::new(neighbor, edge_id, prop_offset, ts)));
         }
     }
     Ok(Csr::from_nbr_entries(&entries, capacity))
@@ -1598,7 +1597,13 @@ mod tests {
         let mut table = make_table();
         for src in [0u32, 5, 100] {
             table
-                .insert_edge(src, src + 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                .insert_edge(
+                    src,
+                    src + 1,
+                    0,
+                    &[("weight".to_string(), Value::Double(1.0))],
+                    100,
+                )
                 .unwrap();
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1628,7 +1633,13 @@ mod tests {
         for src in 0..100u32 {
             for dst in 0..5u32 {
                 table
-                    .insert_edge(src, dst, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                    .insert_edge(
+                        src,
+                        dst,
+                        0,
+                        &[("weight".to_string(), Value::Double(1.0))],
+                        100,
+                    )
                     .unwrap();
             }
         }
@@ -1648,7 +1659,10 @@ mod tests {
         assert_eq!(roundtrip.edges_of(99).len(), 5);
         assert_eq!(roundtrip.edges_of(50).len(), 5);
         // Endpoint bytes survive the dict round-trip.
-        assert_eq!(roundtrip.edges_of(0)[0].neighbor, csr.edges_of(0)[0].neighbor);
+        assert_eq!(
+            roundtrip.edges_of(0)[0].neighbor,
+            csr.edges_of(0)[0].neighbor
+        );
     }
 
     #[test]
@@ -1675,7 +1689,10 @@ mod tests {
                     i,
                     i + 1,
                     0,
-                    &[("name".to_string(), Value::string(format!("repeated-pattern-{}", i % 7)))],
+                    &[(
+                        "name".to_string(),
+                        Value::string(format!("repeated-pattern-{}", i % 7)),
+                    )],
                     100,
                 )
                 .unwrap();
@@ -1687,7 +1704,10 @@ mod tests {
         let loaded = ColdSnapshot::open(&path).unwrap();
         assert_eq!(loaded.edge_count(), 50);
         let nbr = loaded.get_out_edges(10)[0];
-        let props = loaded.properties().read_properties(nbr.prop_offset).unwrap();
+        let props = loaded
+            .properties()
+            .read_properties(nbr.prop_offset)
+            .unwrap();
         assert_eq!(props.len(), 1);
         assert_eq!(props[0].1, Value::string("repeated-pattern-3"));
     }

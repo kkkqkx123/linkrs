@@ -329,7 +329,12 @@ pub(crate) fn drop_tag(
             .ok()
             .flatten()
             .and_then(|tag| vertex_tables.get(&tag.tag_id))
-            .map(|table| table.id_hole_stats(crate::transaction::wal::Timestamp::MAX).0 > 0)
+            .map(|table| {
+                table
+                    .id_hole_stats(crate::transaction::wal::Timestamp::MAX)
+                    .0
+                    > 0
+            })
             .unwrap_or(false)
     });
     if has_data {

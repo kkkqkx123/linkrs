@@ -19,30 +19,61 @@ pub enum AggregateAccumulator {
     Sum(f64),
     Min(Option<Value>),
     Max(Option<Value>),
-    Avg { sum: f64, count: u64 },
+    Avg {
+        sum: f64,
+        count: u64,
+    },
     Collect(Vec<Value>),
     CollectSet(HashSet<Value>),
     Distinct(HashSet<Value>),
-    Percentile { values: Vec<f64>, percentile: f64 },
-    PercentileCont { values: Vec<f64>, percentile: f64 },
+    Percentile {
+        values: Vec<f64>,
+        percentile: f64,
+    },
+    PercentileCont {
+        values: Vec<f64>,
+        percentile: f64,
+    },
     Median(Vec<f64>),
     Mode(Vec<Value>),
-    Std { n: u64, mean: f64, m2: f64 },
-    StddevPop { n: u64, mean: f64, m2: f64 },
-    StddevSamp { n: u64, mean: f64, m2: f64 },
-    Variance { n: u64, mean: f64, m2: f64 },
+    Std {
+        n: u64,
+        mean: f64,
+        m2: f64,
+    },
+    StddevPop {
+        n: u64,
+        mean: f64,
+        m2: f64,
+    },
+    StddevSamp {
+        n: u64,
+        mean: f64,
+        m2: f64,
+    },
+    Variance {
+        n: u64,
+        mean: f64,
+        m2: f64,
+    },
     Product(Option<f64>),
     BitAnd(Option<i64>),
     BitOr(Option<i64>),
     BoolAnd(Option<bool>),
     BoolOr(Option<bool>),
-    GroupConcat { parts: Vec<String>, separator: String },
+    GroupConcat {
+        parts: Vec<String>,
+        separator: String,
+    },
     GroupConcatWithOrder {
         parts: Vec<String>,
         separator: String,
     },
     VecSum(Option<Vec<f32>>),
-    VecAvg { sum: Vec<f32>, count: u64 },
+    VecAvg {
+        sum: Vec<f32>,
+        count: u64,
+    },
 }
 
 impl AggregateAccumulator {
@@ -281,30 +312,62 @@ impl AggregateAccumulator {
                 *c1 += c2;
             }
             (Self::Collect(a), Self::Collect(b)) => a.extend_from_slice(b),
-            (Self::CollectSet(a), Self::CollectSet(b))
-            | (Self::Distinct(a), Self::Distinct(b)) => a.extend(b.iter().cloned()),
+            (Self::CollectSet(a), Self::CollectSet(b)) | (Self::Distinct(a), Self::Distinct(b)) => {
+                a.extend(b.iter().cloned())
+            }
             (Self::Percentile { values: a, .. }, Self::Percentile { values: b, .. })
-            | (
-                Self::PercentileCont { values: a, .. },
-                Self::PercentileCont { values: b, .. },
-            ) => a.extend_from_slice(b),
+            | (Self::PercentileCont { values: a, .. }, Self::PercentileCont { values: b, .. }) => {
+                a.extend_from_slice(b)
+            }
             (Self::Median(a), Self::Median(b)) => a.extend_from_slice(b),
             (Self::Mode(a), Self::Mode(b)) => a.extend_from_slice(b),
             (
-                Self::Std { n: n1, mean: m1, m2: v1 },
-                Self::Std { n: n2, mean: m2, m2: v2 },
+                Self::Std {
+                    n: n1,
+                    mean: m1,
+                    m2: v1,
+                },
+                Self::Std {
+                    n: n2,
+                    mean: m2,
+                    m2: v2,
+                },
             )
             | (
-                Self::StddevPop { n: n1, mean: m1, m2: v1 },
-                Self::StddevPop { n: n2, mean: m2, m2: v2 },
+                Self::StddevPop {
+                    n: n1,
+                    mean: m1,
+                    m2: v1,
+                },
+                Self::StddevPop {
+                    n: n2,
+                    mean: m2,
+                    m2: v2,
+                },
             )
             | (
-                Self::StddevSamp { n: n1, mean: m1, m2: v1 },
-                Self::StddevSamp { n: n2, mean: m2, m2: v2 },
+                Self::StddevSamp {
+                    n: n1,
+                    mean: m1,
+                    m2: v1,
+                },
+                Self::StddevSamp {
+                    n: n2,
+                    mean: m2,
+                    m2: v2,
+                },
             )
             | (
-                Self::Variance { n: n1, mean: m1, m2: v1 },
-                Self::Variance { n: n2, mean: m2, m2: v2 },
+                Self::Variance {
+                    n: n1,
+                    mean: m1,
+                    m2: v1,
+                },
+                Self::Variance {
+                    n: n2,
+                    mean: m2,
+                    m2: v2,
+                },
             ) => welford_merge(n1, m1, v1, n2, m2, v2),
             (Self::Product(a), Self::Product(b)) => {
                 if let (Some(x), Some(y)) = (*a, *b) {
@@ -357,10 +420,7 @@ impl AggregateAccumulator {
                     *a = b.clone();
                 }
             }
-            (
-                Self::VecAvg { sum: s1, count: c1 },
-                Self::VecAvg { sum: s2, count: c2 },
-            ) => {
+            (Self::VecAvg { sum: s1, count: c1 }, Self::VecAvg { sum: s2, count: c2 }) => {
                 if s1.is_empty() {
                     *s1 = s2.clone();
                 } else if s1.len() == s2.len() {
@@ -407,9 +467,7 @@ impl AggregateAccumulator {
                 }
             }
             Self::Percentile { values, percentile }
-            | Self::PercentileCont { values, percentile } => {
-                percentile_of(values, *percentile)
-            }
+            | Self::PercentileCont { values, percentile } => percentile_of(values, *percentile),
             Self::Median(values) => median_of(values),
             Self::Mode(values) => mode_of(values),
             Self::Std { n, mean: _, m2 } | Self::Variance { n, mean: _, m2 } => {
@@ -572,7 +630,9 @@ fn mode_of(values: &[Value]) -> Value {
     for value in values {
         *frequency.entry(format!("{}", value)).or_insert(0) += 1;
     }
-    let Some(mode_str) = frequency.into_iter().max_by_key(|(_, count)| *count)
+    let Some(mode_str) = frequency
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
         .map(|(key, _)| key)
     else {
         return Value::Null(NullType::Null);
@@ -658,9 +718,9 @@ pub fn accumulator_to_value(acc: &AggregateAccumulator) -> Value {
                 )))
             }
         }
-        AggregateAccumulator::VecSum(Some(vec)) => value_list_of_f64(
-            &vec.iter().map(|x| *x as f64).collect::<Vec<_>>(),
-        ),
+        AggregateAccumulator::VecSum(Some(vec)) => {
+            value_list_of_f64(&vec.iter().map(|x| *x as f64).collect::<Vec<_>>())
+        }
         AggregateAccumulator::VecSum(None) => Value::Null(NullType::Null),
         AggregateAccumulator::VecAvg { sum, count } => {
             if *count == 0 {
@@ -683,9 +743,7 @@ fn value_list_of_values(values: &[Value]) -> Value {
     if values.is_empty() {
         Value::Null(NullType::Null)
     } else {
-        Value::List(Box::new(crate::core::value::List::from(
-            values.to_vec(),
-        )))
+        Value::List(Box::new(crate::core::value::List::from(values.to_vec())))
     }
 }
 
@@ -802,11 +860,7 @@ pub fn decode_partial(func: &AggregateFunction, value: &Value) -> Option<Aggrega
         AggregateAccumulator::GroupConcat { parts, .. }
         | AggregateAccumulator::GroupConcatWithOrder { parts, .. } => {
             if let Value::List(list) = value {
-                *parts = list
-                    .values
-                    .iter()
-                    .map(|v| format!("{}", v))
-                    .collect();
+                *parts = list.values.iter().map(|v| format!("{}", v)).collect();
             }
         }
         AggregateAccumulator::VecSum(sum) => match value {
@@ -1099,7 +1153,13 @@ mod tests {
         };
         merged.merge(&a);
         merged.merge(&b);
-        for v in [Value::Int(1), Value::Int(3), Value::Int(2), Value::Int(4), Value::Int(5)] {
+        for v in [
+            Value::Int(1),
+            Value::Int(3),
+            Value::Int(2),
+            Value::Int(4),
+            Value::Int(5),
+        ] {
             single.accumulate(&v);
         }
         let (Value::Double(md), Value::Double(sd)) = (merged.finalize(), single.finalize()) else {
@@ -1201,11 +1261,7 @@ mod tests {
             AggregateFunction::BoolAnd("x".to_string()),
             AggregateFunction::BoolOr("x".to_string()),
             AggregateFunction::GroupConcat("x".to_string(), ",".to_string()),
-            AggregateFunction::GroupConcatWithOrder(
-                "x".to_string(),
-                ",".to_string(),
-                Vec::new(),
-            ),
+            AggregateFunction::GroupConcatWithOrder("x".to_string(), ",".to_string(), Vec::new()),
             AggregateFunction::VecSum("x".to_string()),
             AggregateFunction::VecAvg("x".to_string()),
         ];

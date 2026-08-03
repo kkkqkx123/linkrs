@@ -185,10 +185,9 @@ impl HashJoinBuildSide {
                 .or_default()
                 .push((base + row_idx) as u32);
         }
-        let chunk_cols = chunk
-            .columns
-            .take()
-            .ok_or_else(|| QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string()))?;
+        let chunk_cols = chunk.columns.take().ok_or_else(|| {
+            QueryError::execution("HashJoinBuildSide: empty chunk columns".to_string())
+        })?;
         if self.columns.is_empty() {
             self.columns = chunk_cols;
         } else {

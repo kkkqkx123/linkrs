@@ -7,13 +7,13 @@ use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::state::GlobalState;
-use crate::storage::{EdgeCursor, ScanOptions, VecEdgeCursor, open_edge_scan};
+use crate::storage::{open_edge_scan, EdgeCursor, ScanOptions, VecEdgeCursor};
 
-use super::SourceOperator;
 use super::util::{
     attach_columnar_stats, make_edge_row, make_flat_vertex_row, parse_vertex_id, reserve_memory,
     storage_error,
 };
+use super::SourceOperator;
 
 /// Open the point-lookup source variants.
 pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
@@ -32,7 +32,9 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                     }
                 }
             }
-            base.insert_state(GlobalState::Source(SourceState::GetVertices { position: 0 }));
+            base.insert_state(GlobalState::Source(SourceState::GetVertices {
+                position: 0,
+            }));
         }
         SourceOperator::GetEdges {
             storage,
@@ -43,9 +45,9 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             rank,
             cursor,
         } => {
-            let storage_ref = storage.as_ref().ok_or_else(|| {
-                QueryError::execution("GetEdges requires storage".to_string())
-            })?;
+            let storage_ref = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("GetEdges requires storage".to_string()))?;
             let guard = storage_ref.read();
             let edges = if let (Some(src), Some(dst), Some(edge_type)) =
                 (src.as_deref(), dst.as_deref(), edge_type.as_deref())
@@ -63,10 +65,8 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                     ..ScanOptions::default()
                 };
                 drop(guard);
-                let scan_cursor =
-                    open_edge_scan(storage_ref, space_name, &scan_opts).map_err(|error| {
-                        storage_error("GetEdges", "open cursor", space_name, error)
-                    })?;
+                let scan_cursor = open_edge_scan(storage_ref, space_name, &scan_opts)
+                    .map_err(|error| storage_error("GetEdges", "open cursor", space_name, error))?;
                 *cursor = Some(scan_cursor);
                 Vec::new()
             };
@@ -130,9 +130,9 @@ fn next_get_vertices(
                     }
                 }
             }
-            let storage_ref = storage.as_ref().ok_or_else(|| {
-                QueryError::execution("GetVertices requires storage".to_string())
-            })?;
+            let storage_ref = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("GetVertices requires storage".to_string()))?;
             let guard = storage_ref.read();
             let vid = match cached_ids.first() {
                 Some(vid) => *vid,
@@ -178,13 +178,13 @@ fn next_get_vertices(
         }
     }
     loop {
-        let storage_ref = storage.as_ref().ok_or_else(|| {
-            QueryError::execution("GetVertices requires storage".to_string())
-        })?;
+        let storage_ref = storage
+            .as_ref()
+            .ok_or_else(|| QueryError::execution("GetVertices requires storage".to_string()))?;
         let guard = storage_ref.read();
-        let ids = vertex_ids.as_ref().ok_or_else(|| {
-            QueryError::execution("GetVertices requires vertex IDs".to_string())
-        })?;
+        let ids = vertex_ids
+            .as_ref()
+            .ok_or_else(|| QueryError::execution("GetVertices requires vertex IDs".to_string()))?;
         let (position, done) = {
             let mut arena = base.state_arena();
             let s = arena.global.get_mut(&base.state_key()).unwrap();
@@ -218,7 +218,8 @@ fn next_get_vertices(
                     .get_vertex_projected(space_name, vid, projected_properties)
                     .map_err(|error| {
                         storage_error("GetVertices", "get vertex", space_name, error)
-                    })? {
+                    })?
+                {
                     rows.push(make_flat_vertex_row(vertex, projected_properties));
                 }
             }

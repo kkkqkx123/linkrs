@@ -269,7 +269,9 @@ impl HttpClient {
     // ── Cold snapshot management ──
 
     /// List all registered cold snapshots.
-    pub async fn list_cold_snapshots(&self) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+    pub async fn list_cold_snapshots(
+        &self,
+    ) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
         let url = format!("{}/snapshots/cold", self.base_url);
         let response = self.inner.get(&url).send().await?;
         if !response.status().is_success() {
@@ -289,7 +291,10 @@ impl HttpClient {
     }
 
     /// Register a cold snapshot from a server-side `.lkcs` file.
-    pub async fn load_cold_snapshot(&self, path: &str) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
+    pub async fn load_cold_snapshot(
+        &self,
+        path: &str,
+    ) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
         let url = format!("{}/snapshots/cold/load", self.base_url);
         let response = self
             .inner
@@ -348,7 +353,10 @@ impl HttpClient {
     }
 
     /// Consolidate every registered version of the given labels.
-    pub async fn merge_cold_snapshots(&self, labels: &[u32]) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+    pub async fn merge_cold_snapshots(
+        &self,
+        labels: &[u32],
+    ) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
         let url = format!("{}/snapshots/cold/merge", self.base_url);
         let response = self
             .inner

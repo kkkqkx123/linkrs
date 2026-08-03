@@ -39,7 +39,10 @@ pub(super) fn execute_space_manage(
         SpaceManageCommand::Show => None,
     };
     let result = match command {
-        SpaceManageCommand::Create { space_name, vid_type } => super::exec_ddl(storage, |s| {
+        SpaceManageCommand::Create {
+            space_name,
+            vid_type,
+        } => super::exec_ddl(storage, |s| {
             let vid_type = parse_vid_type_str(vid_type);
             let mut space_info = SpaceInfo::new(space_name.clone()).with_vid_type(vid_type);
             StorageSchemaOps::create_space(s, &mut space_info)
@@ -257,8 +260,10 @@ pub(super) fn execute_tag_manage(
                 Ok(_) => Ok(()),
                 Err(e)
                     if *if_exists
-                        && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
-                            || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                        && (e.kind()
+                            == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            || e.kind()
+                                == crate::core::error::storage::StorageErrorKind::NotFound) =>
                 {
                     Ok(())
                 }
@@ -474,8 +479,10 @@ pub(super) fn execute_edge_manage(
                 Ok(_) => Ok(()),
                 Err(e)
                     if *if_exists
-                        && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
-                            || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
+                        && (e.kind()
+                            == crate::core::error::storage::StorageErrorKind::LabelNotFound
+                            || e.kind()
+                                == crate::core::error::storage::StorageErrorKind::NotFound) =>
                 {
                     Ok(())
                 }

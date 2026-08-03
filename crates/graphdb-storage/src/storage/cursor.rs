@@ -253,9 +253,9 @@ impl ScanPredicate {
             return false;
         };
         match self {
-            ScanPredicate::ColumnEqual { value: expected, .. } => {
-                compare_scalar(value, expected) == std::cmp::Ordering::Equal
-            }
+            ScanPredicate::ColumnEqual {
+                value: expected, ..
+            } => compare_scalar(value, expected) == std::cmp::Ordering::Equal,
             ScanPredicate::ColumnRange {
                 lower,
                 upper,
@@ -593,10 +593,14 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("age".to_string(), Value::BigInt(30));
         vertex.add_tag(Tag::new("person".to_string(), props));
-        vertex.properties.insert("age".to_string(), Value::BigInt(30));
+        vertex
+            .properties
+            .insert("age".to_string(), Value::BigInt(30));
 
         let mut cursor = VecVertexCursor::new(vec![vertex]);
-        let batch = cursor.next_flat_batch(10).expect("flat batch should succeed");
+        let batch = cursor
+            .next_flat_batch(10)
+            .expect("flat batch should succeed");
         assert_eq!(batch.len(), 1);
         let rec = &batch[0];
         assert_eq!(rec.vid, VertexId::from_int64(1));

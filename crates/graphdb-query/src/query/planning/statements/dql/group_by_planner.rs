@@ -3,12 +3,12 @@
 //! Query planning for statements that involve the GROUP BY clause
 
 use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::expr::Expression;
+use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::parser::ast::{GroupingType, Stmt};
-use crate::query::planning::plan::core::{
-    nodes::{AggregateNode, FilterNode, ProjectNode, ScanVerticesNode},
+use crate::query::planning::plan::core::nodes::{
+    AggregateNode, FilterNode, ProjectNode, ScanVerticesNode,
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -220,12 +220,8 @@ impl Planner for GroupByPlanner {
         // Build the input plan. A standalone GROUP BY aggregates over every
         // vertex of the current space; when the GROUP BY is the right side of
         // a pipe, PipePlanner replaces this adapter with the piped rows.
-        let (input_enum, input_tail) = self.build_standalone_input(
-            validated,
-            &group_keys,
-            &aggregation_functions,
-            qctx,
-        )?;
+        let (input_enum, input_tail) =
+            self.build_standalone_input(validated, &group_keys, &aggregation_functions, qctx)?;
 
         // Generate grouping sets from GroupingType
         let grouping_sets = match &group_by_stmt.grouping_type {

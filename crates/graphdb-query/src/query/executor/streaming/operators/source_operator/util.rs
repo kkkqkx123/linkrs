@@ -1,7 +1,7 @@
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::wal::EntityRef;
-use crate::core::{Value, Vertex, Edge};
+use crate::core::{Edge, Value, Vertex};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
@@ -72,7 +72,8 @@ pub(crate) fn make_edge_row(edge: Edge) -> Vec<Value> {
     vec![Value::Edge(Box::new(edge))]
 }
 
-pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[String]) -> Vec<Value> {    let props: Vec<Value> = flatten
+pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[String]) -> Vec<Value> {
+    let props: Vec<Value> = flatten
         .iter()
         .map(|prop| {
             edge.properties()
@@ -168,10 +169,7 @@ mod tests {
         let mut vertex = Vertex::with_vid(VertexId::from_int64(1));
         vertex.set_vertex_property("age".to_string(), Value::BigInt(30));
         vertex.set_vertex_property("name".to_string(), Value::string("Alice"));
-        let row = make_flat_vertex_row(
-            vertex,
-            &["age".to_string(), "name".to_string()],
-        );
+        let row = make_flat_vertex_row(vertex, &["age".to_string(), "name".to_string()]);
         assert_eq!(row.len(), 3);
         assert!(matches!(&row[0], Value::Vertex(_)));
         assert_eq!(row[1], Value::BigInt(30));

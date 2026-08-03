@@ -63,21 +63,30 @@ impl Planner for CollectPlanner {
                 .expression
                 .expression()
                 .map(|e| e.inner().clone())
-                .unwrap_or_else(|| Expression::Variable(item.expression.to_expression_string()));            let field = self.collect_field(&expression);
+                .unwrap_or_else(|| Expression::Variable(item.expression.to_expression_string()));
+            let field = self.collect_field(&expression);
             aggregate_functions.push(AggregateFunction::Collect(field));
-            agg_aliases.push(item.alias.clone().unwrap_or_else(|| "collected".to_string()));
+            agg_aliases.push(
+                item.alias
+                    .clone()
+                    .unwrap_or_else(|| "collected".to_string()),
+            );
         }
 
-        let aggregate_node =
-            AggregateNode::with_agg_aliases(start_enum.clone(), Vec::new(), aggregate_functions, agg_aliases)
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create AggregateNode: {}",
-                        e
-                    ))
-                })?;
+        let aggregate_node = AggregateNode::with_agg_aliases(
+            start_enum.clone(),
+            Vec::new(),
+            aggregate_functions,
+            agg_aliases,
+        )
+        .map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
+        })?;
 
-        let sub_plan = SubPlan::new(Some(PlanNodeEnum::Aggregate(aggregate_node)), Some(start_enum));
+        let sub_plan = SubPlan::new(
+            Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            Some(start_enum),
+        );
         Ok(sub_plan)
     }
 

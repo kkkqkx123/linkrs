@@ -131,10 +131,7 @@ fn is_comparison_op(op: BinaryOperator) -> bool {
 /// Extract the property name of a `var.property` expression.
 fn property_column(expr: &Expression) -> Option<&str> {
     match expr {
-        Expression::Property {
-            object,
-            property,
-        } => match object.as_ref() {
+        Expression::Property { object, property } => match object.as_ref() {
             Expression::Variable(_) => Some(property.as_str()),
             _ => None,
         },
@@ -242,9 +239,7 @@ mod tests {
     }
 
     fn contextual(expr: Expression) -> ContextualExpression {
-        let ctx = std::sync::Arc::new(
-            crate::core::types::expr::ExpressionAnalysisContext::new(),
-        );
+        let ctx = std::sync::Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
         let id = ctx.register_expression(ExpressionMeta::new(expr));
         ContextualExpression::new(id, ctx)
     }
@@ -275,7 +270,11 @@ mod tests {
     #[test]
     fn extract_combined_range() {
         let expr = bin(
-            bin(prop("age"), BinaryOperator::GreaterThan, lit(Value::Int(18))),
+            bin(
+                prop("age"),
+                BinaryOperator::GreaterThan,
+                lit(Value::Int(18)),
+            ),
             BinaryOperator::And,
             bin(prop("age"), BinaryOperator::LessThan, lit(Value::Int(30))),
         );
@@ -289,7 +288,11 @@ mod tests {
 
     #[test]
     fn extract_literal_on_left() {
-        let expr = bin(lit(Value::Int(30)), BinaryOperator::GreaterThan, prop("age"));
+        let expr = bin(
+            lit(Value::Int(30)),
+            BinaryOperator::GreaterThan,
+            prop("age"),
+        );
         let predicates = extract_scan_predicates(Some(&contextual(expr)), &["age".to_string()]);
         assert_eq!(predicates.len(), 1);
         assert!(predicates[0].matches(&[("age".to_string(), Value::Int(25))]));

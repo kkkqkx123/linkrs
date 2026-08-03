@@ -4,8 +4,8 @@
 
 use crate::core::YieldColumn;
 use crate::query::parser::ast::stmt::{OrderDirection, ReturnItem, ReturnStmt, Stmt};
-use crate::query::planning::plan::core::{
-    nodes::{DedupNode, LimitNode, ProjectNode, SortNode, StartNode},
+use crate::query::planning::plan::core::nodes::{
+    DedupNode, LimitNode, ProjectNode, SortNode, StartNode,
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
