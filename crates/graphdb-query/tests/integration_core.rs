@@ -771,24 +771,6 @@ fn test_evaluator_nested_expression() {
 }
 
 #[test]
-fn test_evaluator_batch_evaluation() {
-    let mut ctx = DefaultExpressionContext::new();
-
-    let expressions = vec![
-        Expression::literal(1i64),
-        Expression::literal(2i64),
-        Expression::literal(3i64),
-    ];
-
-    let results = ExpressionEvaluator::evaluate_batch(&expressions, &mut ctx)
-        .expect("批量表达式求值应该成功");
-    assert_eq!(results.len(), 3);
-    assert_eq!(results[0], Value::Int(1));
-    assert_eq!(results[1], Value::Int(2));
-    assert_eq!(results[2], Value::Int(3));
-}
-
-#[test]
 fn test_evaluator_can_evaluate() {
     // Pure constant expressions can be evaluated.
     let const_expr = Expression::Binary {

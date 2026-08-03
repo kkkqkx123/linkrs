@@ -15,8 +15,8 @@ use parking_lot::RwLock;
 use super::SourceOperator;
 use super::super::spec::{BoundIndexPredicate, IndexProjection};
 use super::util::{
-    make_covering_edge_row, make_covering_vertex_row, make_edge_row, make_vertex_row,
-    reserve_memory, storage_error,
+    attach_columnar_stats, make_flat_covering_edge_row, make_flat_covering_vertex_row,
+    make_flat_edge_row, make_flat_vertex_row, reserve_memory, storage_error,
 };
 
 /// Open the `IndexScan` source: build the physical scan plan and open the
@@ -188,7 +188,9 @@ fn next_index_chunk(
                         columns,
                     } => match &entity_ref {
                         EntityRef::Vertex(_) => {
-                            if let Some(row) = make_covering_vertex_row(&entity_ref, columns) {
+                            if let Some(row) =
+                                make_flat_covering_vertex_row(&entity_ref, columns, vertex_projection)
+                            {
                                 output_rows.push(row);
                             }
                         }
@@ -203,7 +205,12 @@ fn next_index_chunk(
                             else {
                                 continue;
                             };
-                            if let Some(row) = make_covering_edge_row(&entity_ref, columns, name) {
+                            if let Some(row) = make_flat_covering_edge_row(
+                                &entity_ref,
+                                columns,
+                                name,
+                                vertex_projection,
+                            ) {
                                 output_rows.push(row);
                             }
                         }
@@ -216,7 +223,8 @@ fn next_index_chunk(
                                 guard.get_vertex_projected(space_name, vid, vertex_projection)
                             };
                             match result {
-                                Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
+                                Ok(Some(vertex)) => output_rows
+                                    .push(make_flat_vertex_row(vertex, vertex_projection)),
                                 Ok(None) => {
                                     debug_assert!(
                                         false,
@@ -251,7 +259,8 @@ fn next_index_chunk(
                                 continue;
                             };
                             match guard.get_edge(space_name, src, dst, &name, *ranking) {
-                                Ok(Some(edge)) => output_rows.push(make_edge_row(edge)),
+                                Ok(Some(edge)) => output_rows
+                                    .push(make_flat_edge_row(edge, vertex_projection)),
                                 Ok(None) => {
                                     debug_assert!(
                                         false,
@@ -277,11 +286,15 @@ fn next_index_chunk(
         *cursor = Some(index_cursor);
         if !output_rows.is_empty() {
             let reservation = reserve_memory(base, &output_rows)?;
-            let mut chunk = DataChunk::new_with_layout(output_rows, output_layout.clone());
-            chunk.materialize_columns();
-            if let Some(reservation) = reservation {
-                chunk = chunk.with_memory_reservation(reservation);
-            }
+            let chunk = attach_columnar_stats(
+                base,
+                DataChunk::new_with_layout(output_rows, output_layout.clone()),
+            );
+            let chunk = if let Some(reservation) = reservation {
+                chunk.with_memory_reservation(reservation)
+            } else {
+                chunk
+            };
             return Ok(Some(chunk));
         }
         if exhausted {
@@ -393,10 +406,11 @@ mod tests {
 
     #[test]
     fn covering_index_edge_rows_do_not_require_a_table_fetch() {
-        let row = make_covering_edge_row(
+        let row = make_flat_covering_edge_row(
             &knows_edge_entity_ref(7),
             vec![("since".to_string(), Value::Int(2024))],
             "KNOWS".to_string(),
+            &[],
         )
         .expect("edge entity should produce a covering row");
         let Value::Edge(edge) = &row[0] else {
@@ -478,7 +492,10 @@ mod tests {
                 value: Value::Int(2024),
             },
             projection: IndexProjection::Columns(vec!["since".to_string()]),
-            output_layout: Arc::new(SlotLayout::from_names(&["KNOWS".to_string()])),
+            output_layout: Arc::new(SlotLayout::from_names(&[
+                "KNOWS".to_string(),
+                "KNOWS.since".to_string(),
+            ])),
             partition_range: None,
             cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
                 entity_ref: knows_edge_entity_ref(3),
@@ -542,9 +559,10 @@ mod tests {
 
     #[test]
     fn covering_index_rows_do_not_require_a_table_fetch() {
-        let row = make_covering_vertex_row(
+        let row = make_flat_covering_vertex_row(
             &EntityRef::Vertex(VertexId::from_int64(7)),
             vec![("name".to_string(), Value::string("Alice"))],
+            &[],
         )
         .expect("vertex entity should produce a covering row");
         let Value::Vertex(vertex) = &row[0] else {
@@ -555,5 +573,51 @@ mod tests {
             vertex.get_property_any("name"),
             Some(&Value::string("Alice"))
         );
+    }
+
+    #[test]
+    fn covering_index_vertex_rows_emit_flat_property_columns() {
+        let storage = Arc::new(RwLock::new(
+            MockStorage::new().expect("MockStorage should be created"),
+        ));
+        let mut source = SourceOperator::IndexScan {
+            storage: Some(storage),
+            space_name: "test".to_string(),
+            index_name: "person_idx".to_string(),
+            index_id: 1,
+            predicate: BoundIndexPredicate::Equal {
+                column: "name".to_string(),
+                value: Value::string("Alice"),
+            },
+            projection: IndexProjection::Columns(vec!["name".to_string(), "age".to_string()]),
+            output_layout: Arc::new(SlotLayout::from_names(&[
+                "v".to_string(),
+                "v.name".to_string(),
+                "v.age".to_string(),
+            ])),
+            partition_range: None,
+            cursor: Some(Box::new(FakeIndexCursor::new(vec![
+                IndexRow::Covering {
+                    entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
+                    columns: vec![
+                        ("name".to_string(), Value::string("Alice")),
+                        ("age".to_string(), Value::BigInt(30)),
+                    ],
+                },
+            ]))),
+            edge_type_names: std::collections::HashMap::new(),
+        };
+        let mut base = OperatorBase::new(0).with_runtime(Some(test_runtime()));
+
+        let chunk = source
+            .next(&mut base)
+            .expect("pull should succeed")
+            .expect("chunk should be Some");
+        assert_eq!(chunk.len(), 1);
+        assert_eq!(chunk.rows[0].len(), 3);
+        assert!(matches!(&chunk.rows[0][0], Value::Vertex(_)));
+        assert_eq!(chunk.rows[0][1], Value::string("Alice"));
+        assert_eq!(chunk.rows[0][2], Value::BigInt(30));
+        assert_eq!(chunk.col_names(), vec!["v", "v.name", "v.age"]);
     }
 }

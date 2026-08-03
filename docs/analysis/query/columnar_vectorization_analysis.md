@@ -1,6 +1,8 @@
 # 列式化/向量化/批量优化分析
 
 > 基于当前代码库实际使用场景的分析，不考虑性能测试数据。
+>
+> **状态更新（M1/M2 落地后）**：本文 §1-§6 的"现状"与"结论"撰写于投影下推与扁平列落地之前，部分表述已过时——投影下推、扫描扁平属性列（`{var}.{prop}` 复合槽）、列式批求值、扫描边界扁平记录（`FlatVertexRecord`）、单份存储（取消主动 `materialize_columns`）、Filter 全选短路均已落地。落地后的方案细节与任务分解见 `docs/plan/scan-column-flattening-design.md` 与 `docs/plan/scan-column-flattening-execution-plan.md`；`evaluate_batch` 已删除。本文的"不必要"结论仅针对**完整列式化/typed column/SIMD/选择向量传播**，维持不变。
 
 ## 当前架构概览
 
@@ -58,17 +60,15 @@ INSERT VERTEX person(name, age) VALUES 'p1':('Alice',30), 'p2':('Bob',25)
 - `SourceOperator` 从 `ColumnStore` 读取数据时，先将每个 `Vertex`/`Edge` 解构成 `Vec<Value>` 行，然后组装成 `DataChunk`。
 - Filter 逐行求值谓词，收集 `selected: Vec<usize>`，最后调用 `take_indices()` 移动选中行。
 - Project 逐行逐表达式求值，构建新行。
+- （已落地：扫描源输出扁平属性列（`{var}.{prop}` 复合槽），Filter/Project 走上列式批求值快路径；Filter 全选时直接透传 chunk。）
 
 **分析：**
-- 存储层已经是列式（`ColumnStore`），但扫描时**未做投影下推**——即使 query 只需 `name`，也会加载所有属性。
-- `DataChunk` 已有 `get_column()` / `column_ref()` API，但**零调用点**——属于死代码。
+- 存储层已经是列式（`ColumnStore`），且**投影下推已落地**——query 只需 `name` 时只加载所需列（`ScanOptions.projection` + `get_projected_batch`）。
+- `DataChunk` 的 `get_column()` 已接入列式求值路径（首次调用惰性物化并缓存）；源算子不再主动 `materialize_columns`，单份存储。
 - 测试数据极小（< 100 行），行式遍历的开销在整体延迟中占比可忽略。
 - **行式 → 列式转换本身有成本**：`Vec<Vec<Value>>` 转 `Vec<Vec<Value>>` 并无意义。
 
-**结论：当前阶段不必要。**
-- 投影下推到存储层的收益更大（减少 I/O），比列式 DataChunk 更紧迫。
-- 在 1024 行的 chunk size 下，SIMD 利用率有限。
-- 零用户报告行式处理为瓶颈。
+**结论：当前阶段不必要。**（完整列式 DataChunk 不做；投影下推与扫描扁平列已落地，见 plan 文档。）
 
 ### 2. 有效性位图 (Validity Bitmap) 和选择向量 (Selection Vector)
 
@@ -91,7 +91,7 @@ INSERT VERTEX person(name, age) VALUES 'p1':('Alice',30), 'p2':('Bob',25)
 
 **现状：**
 - `ExpressionEvaluator` 使用递归树遍历解释执行。
-- `evaluate_batch()` 名义上是批处理，实际是 `expressions.iter().map(|e| evaluate(e, ctx))`——逐个表达式依次求值，没有批处理。
+- 批处理语义由 `DataChunk::evaluate_expressions` / `evaluate_expression` 承担：支持 Literal/Variable/Parameter/Unary/Binary/TypeCast/Property-on-Variable 的列式批求值（`eval_with_cache`），其余表达式回退逐行递归求值；快路径命中/未命中由 `ColumnarStats` 计数（可观测）。
 - 上下文通过 `SlotLayout.name_to_slot` HashMap 做名称解析，没有 slot 级快速路径。
 - 算子循环：对每行创建 `ValueRowContext`/`BorrowedRowContext`，然后对每行每表达式调用 `evaluate()`。
 
@@ -100,27 +100,20 @@ INSERT VERTEX person(name, age) VALUES 'p1':('Alice',30), 'p2':('Bob',25)
 - 图数据库查询的表达式通常简单（`p.age > 28` 或 `a + b`），不是 OLAP 风格的长表达式链。
 - 向量化表达式求值（如按列求值、批量 dispatch）对于简单表达式收益有限，但会大幅提升代码复杂度。
 
-**结论：当前阶段不必要。**
-- 行式求值在表达式简单的场景下足够。
-- 向量化表达式求值通常和列式 DataChunk 绑定，单一引入无意义。
-- 这是典型的「过早优化」——没有 profile 证明表达式求值是瓶颈。
+**结论：当前阶段不必要。**（列式批求值快路径已落地，typed/SIMD 内核不做。）
 
 ### 4. 批量存储属性读写 (Batch Storage Property Fetch/Write)
 
 **现状：**
-- `VertexCursor::next_batch(batch_size) -> Vec<Vertex>` 返回批量顶点对象。
+- `VertexCursor::next_batch(batch_size) -> Vec<Vertex>` 返回批量顶点对象；扁平变体 `next_flat_batch -> Vec<FlatVertexRecord>` 跳过 `Vertex`/`HashMap` 装箱（已落地）。
 - `PropertyBatchReader` trait 提供 `read_vertex_props(&[VertexId], &[String]) -> Vec<Vec<Value>>`——从列式 ColumnStore 读取指定 ID 的指定属性。
-- 但 `SourceOperator` 的 `StorageScanVertices` 没有使用 `PropertyBatchReader`——它调用 `cursor.next_batch()` 获取完整 `Vertex`，然后逐一解构为 `Vec<Value>`。
+- `SourceOperator` 的 `StorageScanVertices` 已通过 `ScanOptions.projection` + `get_projected_batch` 做存储侧投影下推（已落地）。
 
 **分析：**
-- 这是**当前最值得优化的点**：`next_batch()` 已经批量获取顶点，但没有利用列式 ColumnStore 做投影下推。
-- 如果 `SourceOperator` 支持列投影（只读 `name` 和 `age` 两列），可以减少属性读取和 Value boxing。
-- 测试中的多属性场景：`CREATE TAG person(name: STRING, age: INT, city: STRING, salary: FLOAT)`，投影通常只取 1-3 列——浪费大量无意义加载。
+- 存储侧投影下推已实现：只读取投影列，减少属性读取和 Value boxing。
+- 测试中的多属性场景：`CREATE TAG person(name: STRING, age: INT, city: STRING, salary: FLOAT)`，投影通常只取 1-3 列——无意义的列加载已消除。
 
-**结论：部分必要，但不是列式化，而是投影下推。**
-- 将 `PropertyBatchReader` 接入扫描路径，让 `SourceOperator` 支持仅读取所需列。
-- 这和「列式 DataChunk」是两个不同概念——投影下推行式 DataChunk 同样适用。
-- 实现成本低、收益确定、不破坏现有算子接口。
+**结论：已落地。**（投影下推 + 扫描边界扁平记录；下一步按决策门验证是否需要 typed column。）
 
 ### 5. 细粒度存储 Morsel
 
@@ -161,20 +154,23 @@ INSERT VERTEX person(name, age) VALUES 'p1':('Alice',30), 'p2':('Bob',25)
 |--------|--------|------|
 | 列式 DataChunk | 不必要 | 行式在 1024 行/simple expr 下已足够；产生列式 → 行式转换成本 |
 | Validity Bitmap | 不必要 | 与行式引擎绑定，需重写算子接口 |
-| 选择向量 | 不必要 | `Vec<usize>` + `take_indices()` 在当前场景下足够 |
-| 向量化表达式 | 不必要 | 简单表达式场景，ROI 低 |
-| **投影下推** | **建议做** | 利用已有 `PropertyBatchReader`，减少列读取 |
+| 选择向量 | 不必要 | `Vec<usize>` + `take_indices()`（含全选短路）在当前场景下足够 |
+| 向量化表达式 | 不必要 | 简单表达式场景，ROI 低；列式批求值快路径已落地 |
+| **投影下推** | **已落地** | `ScanOptions.projection` + `get_projected_batch`，减少列读取 |
+| **扫描扁平属性列** | **已落地** | 复合槽 `{var}.{prop}`，Filter/Project 走列式快路径 |
+| **扫描边界扁平记录** | **已落地** | `FlatVertexRecord` 跳过 Vertex/HashMap 装箱 |
+| **单份存储** | **已落地** | 源算子取消主动物化，`get_column` 惰性缓存 |
 | 批量存储写入 | 不必要 | 当前 DML 负载轻 |
 | 细粒度存储 Morsel | 不必要 | 单线程场景，并行无意义 |
 | 紧凑 visited set | 不必要 | 已有自适应 BitVec 实现 |
 | 紧凑 frontier | 不必要 | 空间换时间，紧凑化反而增加 I/O |
 
-**最值得做的唯一优化：投影下推到存储层。**
+**已落地的最有价值优化：投影下推 + 扫描扁平属性列（贯通列式快路径）。**
 
 具体来说：
-1. 扩展 `SourceOperator` 支持 `projected_columns: Option<Vec<String>>`
-2. 在扫描时调用 `PropertyBatchReader::read_vertex_props(ids, &projected_columns)` 而非构建完整 `Vertex`
-3. 跳过非投影列的属性加载和 Value boxing
-4. 其他算子无需修改（行式 DataChunk 不变）
+1. `SourceOperator` 支持 `projected_columns`（`ScanOptions.projection`），存储侧只读投影列（`get_projected_batch`）
+2. 扫描源输出 layout 追加扁平属性列（`{var}.{prop}`），Filter/Project 的 `p.age` 命中列式 `Property` 分支
+3. 存储边界 `next_flat_batch` 跳过 `Vertex`/`HashMap` 装箱；chunk 列缓存按需物化（单份存储）
+4. 快路径命中率由 `ColumnarStats` 可观测，扁平列承诺有 debug 断言
 
-其余的列式化/向量化/批量优化，应严格执行 M6 策略——**等 profile 证明瓶颈后再引入**。
+完整的列式化/向量化/批量优化（typed column、SIMD、选择向量传播、Morsel），仍严格执行 M6 策略——**等 profile 证明瓶颈后再引入**（基准验证集 B1-B7 与决策门见 `docs/plan/fallback-and-typed-column-analysis.md` §6）。

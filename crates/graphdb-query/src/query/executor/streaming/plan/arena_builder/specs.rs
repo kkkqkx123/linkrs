@@ -164,7 +164,18 @@ pub(super) fn build_source_spec(
                 )
             };
             let col_names = scan_node.col_names().to_vec();
-            let output_layout = Arc::new(SlotLayout::from_names(&col_names));
+            // Widen the output layout with flat property columns (`{var}.{prop}`)
+            // so covering index rows can hit the columnar `Property` fast path.
+            let mut layout_names = col_names.clone();
+            if let crate::query::executor::streaming::operators::spec::IndexProjection::Columns(
+                columns,
+            ) = &projection
+            {
+                if let Some(var) = col_names.first() {
+                    layout_names.extend(columns.iter().map(|col| format!("{var}.{col}")));
+                }
+            }
+            let output_layout = Arc::new(SlotLayout::from_names(&layout_names));
             Ok(SourceSpec::IndexScan {
                 space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 index_name,

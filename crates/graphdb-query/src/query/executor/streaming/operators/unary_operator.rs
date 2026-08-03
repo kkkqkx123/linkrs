@@ -172,10 +172,16 @@ impl UnaryOperator {
                                 selected.push(i);
                             }
                         }
-                        if !selected.is_empty() {
-                            let selected_chunk = chunk.take_indices(&selected);
-                            return Ok(Some(selected_chunk));
+                        if selected.is_empty() {
+                            continue;
                         }
+                        // T4.3: all rows selected — hand the chunk through as-is,
+                        // skipping the full `take_indices` row move.
+                        if selected.len() == chunk.len() {
+                            return Ok(Some(chunk));
+                        }
+                        let selected_chunk = chunk.take_indices(&selected);
+                        return Ok(Some(selected_chunk));
                     }
                     None => return Ok(None),
                 }

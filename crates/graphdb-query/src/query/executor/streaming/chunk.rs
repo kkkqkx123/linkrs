@@ -30,6 +30,7 @@
 //!   constructors for tests and legacy code. Always produce a layout (auto-created).
 
 use super::slot::{SlotId, SlotLayout};
+use super::runtime::ColumnarStats;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::MemoryReservation;
@@ -123,6 +124,10 @@ pub struct DataChunk {
     /// Memory reservation for this chunk's data.
     /// Dropping the chunk releases the reserved bytes.
     pub memory_reservation: Option<MemoryReservation>,
+    /// Query-level columnar fast-path counters (T5 observability).
+    /// Shared per query; `None` for chunks that were not produced by a source
+    /// operator or whose producer had no runtime attached.
+    pub columnar_stats: Option<Arc<ColumnarStats>>,
 }
 
 // M4 transitional: Clone loses memory accounting.
@@ -135,6 +140,7 @@ impl Clone for DataChunk {
             schema: self.schema.clone(),
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
+            columnar_stats: self.columnar_stats.clone(),
         }
     }
 }
@@ -183,6 +189,7 @@ impl DataChunk {
             schema,
             layout,
             memory_reservation: None,
+            columnar_stats: None,
         }
     }
 
@@ -190,6 +197,15 @@ impl DataChunk {
     /// The reserved bytes are released when the chunk is dropped.
     pub fn with_memory_reservation(mut self, reservation: MemoryReservation) -> Self {
         self.memory_reservation = Some(reservation);
+        self
+    }
+
+    /// Attach query-level columnar fast-path counters (T5 observability).
+    ///
+    /// Source operators attach the runtime's counters so that Filter/Project
+    /// evaluation on this chunk can expose the columnar hit/miss rate.
+    pub fn with_columnar_stats(mut self, stats: Arc<ColumnarStats>) -> Self {
+        self.columnar_stats = Some(stats);
         self
     }
 
@@ -246,6 +262,7 @@ impl DataChunk {
             schema,
             layout,
             memory_reservation: None,
+            columnar_stats: None,
         })
     }
 
@@ -324,6 +341,7 @@ impl DataChunk {
             schema,
             layout,
             memory_reservation: None,
+            columnar_stats: None,
         }
     }
 
@@ -377,6 +395,7 @@ impl DataChunk {
             schema,
             layout,
             memory_reservation: None,
+            columnar_stats: None,
         }
     }
 
@@ -453,10 +472,17 @@ impl DataChunk {
     /// aggregation) should pull it once via `get_column()` and iterate the
     /// returned `Vec<Value>` rather than calling `get_by_slot` per row.
     ///
+    /// When no columnar representation exists yet, it is materialised and
+    /// cached here so repeated pulls do not re-transpose the rows (T4.2:
+    /// lazy single-copy storage — sources no longer proactively materialise).
+    ///
     /// Returns `None` if `slot` is out of range for the layout.
-    pub fn get_column(&self, slot: SlotId) -> Option<Vec<Value>> {
+    pub fn get_column(&mut self, slot: SlotId) -> Option<Vec<Value>> {
         if slot >= self.layout.len() {
             return None;
+        }
+        if self.columns.is_none() && !self.rows.is_empty() {
+            self.materialize_columns();
         }
         if let Some(ref columns) = self.columns {
             return columns.get(slot).cloned();
@@ -490,17 +516,15 @@ impl DataChunk {
         for &i in indices {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
-        let columns = self.columns.as_ref().map(|cols| {
-            cols.iter()
-                .map(|col| indices.iter().map(|&i| col[i].clone()).collect())
-                .collect()
-        });
+        // T4.2: columnar cache rebuild is deferred — invalidate it here and
+        // let the next `get_column` materialise lazily from the selected rows.
         Self {
             rows: selected,
-            columns,
+            columns: None,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
+            columnar_stats: self.columnar_stats.clone(),
         }
     }
 
@@ -540,16 +564,14 @@ impl DataChunk {
         for i in start..end {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
-        let columns = self
-            .columns
-            .as_ref()
-            .map(|cols| cols.iter().map(|col| col[start..end].to_vec()).collect());
+        // T4.2: defer columnar cache rebuild, mirroring `take_indices`.
         Self {
             rows: selected,
-            columns,
+            columns: None,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
+            columnar_stats: self.columnar_stats.clone(),
         }
     }
 
@@ -594,8 +616,7 @@ impl DataChunk {
         &mut self,
         expressions: &[Expression],
         params: Option<&Arc<HashMap<String, Value>>>,
-    ) -> Result<Vec<Vec<Value>>, ExpressionError> {
-        if self.rows.is_empty() {
+    ) -> Result<Vec<Vec<Value>>, ExpressionError> {        if self.rows.is_empty() {
             return Ok(vec![Vec::new(); expressions.len()]);
         }
         // Fast path: all expressions are Variables — extract columns directly.
@@ -617,6 +638,9 @@ impl DataChunk {
                     columns.push(col);
                 }
             }
+            for _ in 0..expressions.len() {
+                self.count_columnar(true);
+            }
             return Ok(columns);
         }
         // Fast path: all are Literal expressions
@@ -629,6 +653,9 @@ impl DataChunk {
                 if let Expression::Literal(v) = expr {
                     columns.push(vec![v.clone(); self.rows.len()]);
                 }
+            }
+            for _ in 0..expressions.len() {
+                self.count_columnar(true);
             }
             return Ok(columns);
         }
@@ -648,7 +675,7 @@ impl DataChunk {
     ///
     /// `params` provides parameter values (for `$name` resolution), shared across all rows.
     pub fn evaluate_expression(
-        &self,
+        &mut self,
         expression: &Expression,
         params: Option<&Arc<HashMap<String, Value>>>,
     ) -> Result<Vec<Value>, ExpressionError> {
@@ -657,15 +684,23 @@ impl DataChunk {
         }
         // Fast columnar batch path
         if let Ok(result) = self.try_evaluate_columnar(expression, params) {
+            self.count_columnar(true);
             return Ok(result);
         }
+        self.count_columnar(false);
+        debug_assert!(
+            !self.columnar_promise_holds(expression),
+            "flat column promise broken: expression {:?} should have hit the \
+             columnar path but fell back to per-row evaluation",
+            expression
+        );
         // Fall back to per-row evaluation
         self.evaluate_expression_per_row(expression, params)
     }
 
     /// Columnar batch evaluation path — returns Err if the expression is too complex.
     fn try_evaluate_columnar(
-        &self,
+        &mut self,
         expression: &Expression,
         params: Option<&Arc<HashMap<String, Value>>>,
     ) -> Result<Vec<Value>, ExpressionError> {
@@ -677,7 +712,16 @@ impl DataChunk {
     }
 
     /// Collect all Variable references from an expression tree into col_cache.
-    fn collect_variables(&self, expr: &Expression, col_cache: &mut HashMap<String, Vec<Value>>) {
+    ///
+    /// Only direct `Expression::Variable` references are cached: property
+    /// expressions resolve via compound slots (`{var}.{prop}`) in
+    /// `eval_with_cache`, so caching the whole entity column per property
+    /// access would only add per-row deep copies that are never read.
+    fn collect_variables(
+        &mut self,
+        expr: &Expression,
+        col_cache: &mut HashMap<String, Vec<Value>>,
+    ) {
         match expr {
             Expression::Variable(name) => {
                 if !col_cache.contains_key(name) {
@@ -698,24 +742,13 @@ impl DataChunk {
             Expression::TypeCast { expression, .. } => {
                 self.collect_variables(expression, col_cache);
             }
-            Expression::Property { object, .. } => {
-                if let Expression::Variable(var_name) = object.as_ref() {
-                    if !col_cache.contains_key(var_name) {
-                        if let Some(slot) = self.layout.slot_id(var_name.as_str()) {
-                            if let Some(col) = self.get_column(slot) {
-                                col_cache.insert(var_name.clone(), col);
-                            }
-                        }
-                    }
-                }
-            }
             _ => {}
         }
     }
 
     /// Evaluate expression using a pre-populated column cache.
     fn eval_with_cache(
-        &self,
+        &mut self,
         expression: &Expression,
         col_cache: &HashMap<String, Vec<Value>>,
         params: Option<&Arc<HashMap<String, Value>>>,
@@ -816,6 +849,49 @@ impl DataChunk {
         }
         Ok(results)
     }
+
+    /// Record a columnar fast-path hit/miss on the attached counters (T5).
+    fn count_columnar(&self, hit: bool) {
+        if let Some(stats) = &self.columnar_stats {
+            if hit {
+                stats.record_hit();
+            } else {
+                stats.record_miss();
+            }
+        }
+    }
+
+    /// Whether the whole expression tree is promised to hit the columnar path.
+    ///
+    /// True only when every node is supported by the columnar evaluator and
+    /// every `{var}.{prop}` property access has a matching compound slot in
+    /// this chunk's layout. Debug-only: a miss for such an expression means
+    /// the flat-column promise (T5) was broken and would silently regress
+    /// performance.
+    #[cfg(debug_assertions)]
+    fn columnar_promise_holds(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::Literal(_) | Expression::Parameter(_) | Expression::Variable(_) => true,
+            Expression::Unary { operand, .. } => self.columnar_promise_holds(operand),
+            Expression::Binary { left, right, .. } => {
+                self.columnar_promise_holds(left) && self.columnar_promise_holds(right)
+            }
+            Expression::TypeCast { expression, .. } => self.columnar_promise_holds(expression),
+            Expression::Property { object, property } => {
+                if let Expression::Variable(var) = object.as_ref() {
+                    let compound = format!("{}.{}", var, property);
+                    return self.layout.slot_id(&compound).is_some();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn columnar_promise_holds(&self, _expr: &Expression) -> bool {
+        false
+    }
 }
 
 /// A zero-copy view into a slice of rows within a [`DataChunk`].
@@ -844,6 +920,11 @@ impl ChunkView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::Expression;
+    use crate::core::types::operators::BinaryOperator;
+    use crate::core::types::storage_ids::VertexId;
+    use crate::core::Vertex;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn test_data_chunk_creation() {
@@ -866,5 +947,175 @@ mod tests {
         let chunk = DataChunk::from_rows(rows);
         assert_eq!(chunk.schema.columns[0].data_type, "bigint");
         assert_eq!(chunk.schema.columns[1].data_type, "string");
+    }
+
+    /// The flat-property column (`p.age`) must be served by the columnar
+    /// `Property` branch.  The vertex in slot 0 deliberately carries no
+    /// properties, so correct results are only possible if the compound slot
+    /// is used instead of per-row property extraction.
+    #[test]
+    fn flat_property_column_hits_columnar_path() {
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+        ]));
+        let rows = vec![
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+                Value::BigInt(30),
+            ],
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(2)))),
+                Value::BigInt(20),
+            ],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        let expr = Expression::binary(
+            Expression::property(Expression::variable("p"), "age"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(Value::BigInt(28)),
+        );
+        let results = chunk
+            .evaluate_expression(&expr, None)
+            .expect("evaluate should succeed");
+        assert_eq!(results, vec![Value::Bool(true), Value::Bool(false)]);
+    }
+
+    /// The flat-column promise holds when every property access has a matching
+    /// compound slot: the columnar path must hit for `p.age > 28`.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn flat_column_promise_holds_for_flat_layout() {
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+            "p.name".to_string(),
+        ]));
+        let rows = vec![
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+                Value::BigInt(30),
+                Value::string("Alice"),
+            ],
+        ];
+        let chunk = DataChunk::new_with_layout(rows, layout);
+        let expr = Expression::binary(
+            Expression::property(Expression::variable("p"), "age"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(Value::BigInt(28)),
+        );
+        assert!(chunk.columnar_promise_holds(&expr));
+    }
+
+    /// The promise does not hold when a property access has no compound slot
+    /// (e.g. a variable bound to a non-scan source): such expressions are
+    /// legitimately evaluated per row.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn flat_column_promise_does_not_hold_without_compound_slot() {
+        let layout = Arc::new(SlotLayout::from_names(&["p".to_string()]));
+        let rows = vec![vec![Value::Vertex(Box::new(Vertex::with_vid(
+            VertexId::from_int64(1),
+        )))]];
+        let chunk = DataChunk::new_with_layout(rows, layout);
+        let expr = Expression::property(Expression::variable("p"), "age");
+        assert!(!chunk.columnar_promise_holds(&expr));
+    }
+
+    /// Expressions with non-columnar nodes (functions) are not promised even
+    /// when they contain a flat property access.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn flat_column_promise_excludes_unsupported_nodes() {
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+        ]));
+        let rows = vec![vec![
+            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+            Value::BigInt(30),
+        ]];
+        let chunk = DataChunk::new_with_layout(rows, layout);
+        let expr = Expression::function(
+            "abs".to_string(),
+            vec![Expression::property(Expression::variable("p"), "age")],
+        );
+        assert!(!chunk.columnar_promise_holds(&expr));
+    }
+
+    /// T5: attached counters record one hit per successful columnar
+    /// evaluation and one miss per per-row fallback.
+    #[test]
+    fn columnar_stats_record_hits_and_misses() {
+        let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+        ]));
+        let rows = vec![vec![
+            Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+            Value::BigInt(30),
+        ]];
+        let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+
+        let simple = Expression::binary(
+            Expression::property(Expression::variable("p"), "age"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(Value::BigInt(28)),
+        );
+        chunk
+            .evaluate_expression(&simple, None)
+            .expect("columnar evaluation should succeed");
+        assert_eq!(stats.columnar_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.columnar_misses.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.hit_rate(), 1.0);
+
+        // A function expression is not columnar-supported: per-row fallback.
+        let complex = Expression::function(
+            "abs".to_string(),
+            vec![Expression::property(Expression::variable("p"), "age")],
+        );
+        chunk
+            .evaluate_expression(&complex, None)
+            .expect("per-row evaluation should succeed");
+        assert_eq!(stats.columnar_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.columnar_misses.load(Ordering::Relaxed), 1);
+        assert!((stats.hit_rate() - 0.5).abs() < 1e-9);
+    }
+
+    /// T4.2: `get_column` lazily materialises and caches the columnar
+    /// representation; `take_indices` defers the cache rebuild.
+    #[test]
+    fn column_cache_is_lazy_and_deferred_after_take_indices() {
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+        ]));
+        let rows = vec![
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+                Value::BigInt(30),
+            ],
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(2)))),
+                Value::BigInt(20),
+            ],
+        ];
+        let mut chunk = DataChunk::new_with_layout(rows, layout);
+        assert!(chunk.columns.is_none(), "no proactive materialisation");
+
+        let col = chunk.get_column(1).expect("age column");
+        assert_eq!(col, vec![Value::BigInt(30), Value::BigInt(20)]);
+        assert!(chunk.columns.is_some(), "materialised and cached on demand");
+
+        let mut selected = chunk.take_indices(&[1]);
+        assert!(
+            selected.columns.is_none(),
+            "columnar cache rebuild is deferred after take_indices"
+        );
+        assert_eq!(
+            selected.get_column(1).expect("age column"),
+            vec![Value::BigInt(20)]
+        );
     }
 }

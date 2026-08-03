@@ -9,7 +9,7 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 use super::SourceOperator;
-use super::util::reserve_memory;
+use super::util::{attach_columnar_stats, reserve_memory};
 
 /// Open the buffered source variants.
 ///
@@ -128,10 +128,12 @@ fn next_buffer_chunk(
     } else {
         std::sync::Arc::new(SlotLayout::from_names(col_names))
     };
-    let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.materialize_columns();
-    if let Some(reservation) = reservation {
-        chunk = chunk.with_memory_reservation(reservation);
-    }
+    let chunk = DataChunk::new_with_layout(rows, layout);
+    let chunk = attach_columnar_stats(base, chunk);
+    let chunk = if let Some(reservation) = reservation {
+        chunk.with_memory_reservation(reservation)
+    } else {
+        chunk
+    };
     Ok(Some(chunk))
 }

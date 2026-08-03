@@ -29,17 +29,6 @@ impl ExpressionEvaluator {
         Self::evaluate_recursive(expression, context)
     }
 
-    /// Evaluating a list of expressions in batches
-    pub fn evaluate_batch<C: ExpressionContext>(
-        expressions: &[Expression],
-        context: &mut C,
-    ) -> Result<Vec<Value>, ExpressionError> {
-        expressions
-            .iter()
-            .map(|expr| Self::evaluate(expr, context))
-            .collect()
-    }
-
     /// Check whether the expression can be evaluated.
     ///
     /// Check whether the expression can be evaluated without any runtime context.

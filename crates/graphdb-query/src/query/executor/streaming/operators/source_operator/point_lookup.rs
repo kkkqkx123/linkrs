@@ -10,7 +10,10 @@ use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::{EdgeCursor, ScanOptions, VecEdgeCursor, open_edge_scan};
 
 use super::SourceOperator;
-use super::util::{make_edge_row, make_vertex_row, parse_vertex_id, reserve_memory, storage_error};
+use super::util::{
+    attach_columnar_stats, make_edge_row, make_flat_vertex_row, parse_vertex_id, reserve_memory,
+    storage_error,
+};
 
 /// Open the point-lookup source variants.
 pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
@@ -156,13 +159,17 @@ fn next_get_vertices(
                 }
             };
             if let Some(vertex) = vertex_opt {
-                let rows = vec![make_vertex_row(vertex)];
+                let rows = vec![make_flat_vertex_row(vertex, projected_properties)];
                 let reservation = reserve_memory(base, &rows)?;
-                let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
-                chunk.materialize_columns();
-                if let Some(r) = reservation {
-                    chunk = chunk.with_memory_reservation(r);
-                }
+                let chunk = attach_columnar_stats(
+                    base,
+                    DataChunk::new_with_layout(rows, base.output_layout.clone()),
+                );
+                let chunk = if let Some(r) = reservation {
+                    chunk.with_memory_reservation(r)
+                } else {
+                    chunk
+                };
                 mark_done(base);
                 return Ok(Some(chunk));
             }
@@ -202,7 +209,7 @@ fn next_get_vertices(
                 if let Some(vertex) = guard.get_vertex(space_name, vid).map_err(|error| {
                     storage_error("GetVertices", "get vertex", space_name, error)
                 })? {
-                    rows.push(make_vertex_row(vertex));
+                    rows.push(make_flat_vertex_row(vertex, projected_properties));
                 }
             }
         } else {
@@ -212,17 +219,21 @@ fn next_get_vertices(
                     .map_err(|error| {
                         storage_error("GetVertices", "get vertex", space_name, error)
                     })? {
-                    rows.push(make_vertex_row(vertex));
+                    rows.push(make_flat_vertex_row(vertex, projected_properties));
                 }
             }
         }
         if !rows.is_empty() {
             let reservation = reserve_memory(base, &rows)?;
-            let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
-            chunk.materialize_columns();
-            if let Some(r) = reservation {
-                chunk = chunk.with_memory_reservation(r);
-            }
+            let chunk = attach_columnar_stats(
+                base,
+                DataChunk::new_with_layout(rows, base.output_layout.clone()),
+            );
+            let chunk = if let Some(r) = reservation {
+                chunk.with_memory_reservation(r)
+            } else {
+                chunk
+            };
             return Ok(Some(chunk));
         }
     }
@@ -246,11 +257,15 @@ fn next_get_edges(
     let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
     if !rows.is_empty() {
         let reservation = reserve_memory(base, &rows)?;
-        let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
-        chunk.materialize_columns();
-        if let Some(r) = reservation {
-            chunk = chunk.with_memory_reservation(r);
-        }
+        let chunk = attach_columnar_stats(
+            base,
+            DataChunk::new_with_layout(rows, base.output_layout.clone()),
+        );
+        let chunk = if let Some(r) = reservation {
+            chunk.with_memory_reservation(r)
+        } else {
+            chunk
+        };
         *cursor = Some(cur);
         return Ok(Some(chunk));
     }

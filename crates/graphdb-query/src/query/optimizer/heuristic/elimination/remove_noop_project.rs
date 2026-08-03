@@ -82,6 +82,23 @@ impl RemoveNoopProjectRule {
         self.allowed_child_types.contains(node.name())
     }
 
+    /// Whether removing the Project would widen the physical output schema
+    /// beyond the child's logical `col_names`.
+    ///
+    /// Scan sources emit flat property columns (`{var}.{prop}`) appended to
+    /// the entity column when they carry projected properties, so a bare scan
+    /// as root would leak those flat columns into the result schema.
+    fn child_widens_layout(child: &PlanNodeEnum) -> bool {
+        match child {
+            PlanNodeEnum::ScanVertices(node) => !node.projected_properties().is_empty(),
+            PlanNodeEnum::ScanEdges(node) => !node.projected_properties().is_empty(),
+            PlanNodeEnum::GetVertices(node) => !node.projected_properties().is_empty(),
+            PlanNodeEnum::GetNeighbors(node) => !node.projected_properties().is_empty(),
+            PlanNodeEnum::IndexScan(node) => !node.return_columns().is_empty(),
+            _ => false,
+        }
+    }
+
     /// Check whether it is a projection with no operations (i.e., a projection that does not perform any computational tasks).
     fn is_noop_projection(&self, project: &ProjectNode, child_col_names: &[String]) -> bool {
         let proj_col_names = project.col_names();
@@ -166,6 +183,13 @@ impl RewriteRule for RemoveNoopProjectRule {
             return Ok(None);
         }
 
+        // A child whose physical layout is wider than its logical col_names
+        // would leak flat property columns into the result schema if the
+        // Project were removed.
+        if Self::child_widens_layout(input) {
+            return Ok(None);
+        }
+
         // Obtain the column names of the child nodes
         let child_col_names = input.col_names();
 
@@ -191,6 +215,9 @@ impl EliminationRule for RemoveNoopProjectRule {
                 if !self.is_allowed_child_type(input) {
                     return false;
                 }
+                if Self::child_widens_layout(input) {
+                    return false;
+                }
                 self.is_noop_projection(n, input.col_names())
             }
             _ => false,
@@ -209,7 +236,34 @@ impl EliminationRule for RemoveNoopProjectRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::ContextualExpression;
+    use crate::core::{Expression, YieldColumn};
     use crate::query::optimizer::heuristic::rule::RewriteRule;
+    use crate::query::planning::plan::core::nodes::access::{IndexScanNode, ScanType};
+    use crate::query::planning::plan::core::nodes::{ProjectNode, ScanVerticesNode};
+    use std::sync::Arc;
+
+    fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let id = ctx.register_expression(expr_meta);
+        let ctx_expr = ContextualExpression::new(id, ctx);
+        YieldColumn {
+            expression: ctx_expr,
+            alias: alias.to_string(),
+            is_matched: false,
+        }
+    }
+
+    fn noop_project(scan: PlanNodeEnum) -> PlanNodeEnum {
+        let columns = vec![create_yield_column(
+            Expression::Variable("p".to_string()),
+            "p",
+        )];
+        let project = ProjectNode::new(scan, columns).expect("Failed to create ProjectNode");
+        PlanNodeEnum::Project(project)
+    }
 
     #[test]
     fn test_remove_noop_project_rule_name() {
@@ -233,5 +287,67 @@ mod tests {
             crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
         // “The ‘Start’ option is not included in the allowed list.”
         assert!(!rule.is_allowed_child_type(&PlanNodeEnum::Start(start_node.clone())));
+    }
+
+    #[test]
+    fn test_noop_project_removed_over_plain_scan() {
+        let rule = RemoveNoopProjectRule::new();
+        let mut ctx = RewriteContext::new();
+
+        let mut scan_node = ScanVerticesNode::new(1, "default");
+        scan_node.set_col_names(vec!["p".to_string()]);
+        let project = noop_project(PlanNodeEnum::ScanVertices(scan_node));
+
+        let result = rule
+            .apply(&mut ctx, &project)
+            .expect("Failed to apply rule");
+        assert!(result.is_some());
+        assert!(result.expect("transform should exist").erase_curr);
+    }
+
+    #[test]
+    fn test_project_kept_over_scan_with_flat_property_columns() {
+        let rule = RemoveNoopProjectRule::new();
+        let mut ctx = RewriteContext::new();
+
+        let mut scan_node = ScanVerticesNode::new(1, "default");
+        scan_node.set_col_names(vec!["p".to_string()]);
+        scan_node.set_projected_properties(vec!["age".to_string()]);
+        let project = noop_project(PlanNodeEnum::ScanVertices(scan_node));
+
+        let result = rule
+            .apply(&mut ctx, &project)
+            .expect("Failed to apply rule");
+        assert!(
+            result.is_none(),
+            "project must survive a widened scan layout"
+        );
+        assert!(!rule.can_eliminate(&project));
+    }
+
+    #[test]
+    fn test_project_kept_over_covering_index_scan() {
+        let rule = RemoveNoopProjectRule::new();
+        let mut ctx = RewriteContext::new();
+
+        let mut index_scan = IndexScanNode::new(
+            1,
+            1,
+            1,
+            "person_idx".to_string(),
+            "person".to_string(),
+            ScanType::Unique,
+        );
+        index_scan.set_col_names(vec!["p".to_string()]);
+        index_scan.set_return_columns(vec!["name".to_string()]);
+        let project = noop_project(PlanNodeEnum::IndexScan(index_scan));
+
+        let result = rule
+            .apply(&mut ctx, &project)
+            .expect("Failed to apply rule");
+        assert!(
+            result.is_none(),
+            "project must survive a covering index scan"
+        );
     }
 }

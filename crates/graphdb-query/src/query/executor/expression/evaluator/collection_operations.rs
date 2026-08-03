@@ -286,20 +286,9 @@ impl CollectionOperationEvaluator {
         }
 
         match object {
-            Value::Vertex(vertex) => {
-                if let Some(val) = vertex.properties.get(property) {
-                    return Ok(val.clone());
-                }
-                for tag in &vertex.tags {
-                    if let Some(val) = tag.properties.get(property) {
-                        return Ok(val.clone());
-                    }
-                    if tag.name == property {
-                        return Ok(Value::map(tag.properties.clone()));
-                    }
-                }
-                Ok(Value::Null(crate::core::value::NullType::Null))
-            }
+            Value::Vertex(vertex) => Ok(vertex.property_value(property).unwrap_or_else(|| {
+                Value::Null(crate::core::value::NullType::Null)
+            })),
             Value::Edge(edge) => Ok(edge
                 .properties()
                 .get(property)

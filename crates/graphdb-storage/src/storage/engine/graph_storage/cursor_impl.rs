@@ -6,7 +6,7 @@ use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cold::ColdSnapshot;
-use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
+use crate::storage::cursor::{EdgeCursor, FlatVertexRecord, ScanOptions, VertexCursor};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
 use crate::storage::edge::Nbr;
 use crate::storage::engine::data_store::EdgeTableKey;
@@ -143,6 +143,42 @@ impl GraphVertexCursor {
 
 impl VertexCursor for GraphVertexCursor {
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Vertex>, StorageError> {
+        self.scan_batch(batch_size, |vid, internal_id, tag_name, props| {
+            let props_map: HashMap<String, Value> = props.into_iter().collect();
+            Vertex {
+                vid,
+                id: internal_id,
+                tags: vec![Tag::new(tag_name, props_map.clone())],
+                properties: props_map,
+            }
+        })
+    }
+
+    fn next_flat_batch(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Vec<FlatVertexRecord>, StorageError> {
+        self.scan_batch(batch_size, |vid, internal_id, tag_name, props| FlatVertexRecord {
+            vid,
+            internal_id,
+            tag_name,
+            props,
+        })
+    }
+}
+
+impl GraphVertexCursor {
+    /// Shared scan loop over the vertex tables, building one output row per
+    /// emitted vertex. The `build` closure receives the decoded fields
+    /// (external vid, internal id, tag name, projected properties as a plain
+    /// `Vec`) so both the `Vertex` and the flat-record paths share the
+    /// filtering / batch logic while skipping per-row `HashMap` boxing in the
+    /// flat path.
+    fn scan_batch<T>(
+        &mut self,
+        batch_size: usize,
+        mut build: impl FnMut(VertexId, i64, String, Vec<(String, Value)>) -> T,
+    ) -> Result<Vec<T>, StorageError> {
         if self.exhausted || self.tags.labels.is_empty() {
             return Ok(Vec::new());
         }
@@ -202,14 +238,12 @@ impl VertexCursor for GraphVertexCursor {
                     .unwrap_or("unknown");
 
                 for record in records.into_iter().flatten() {
-                    let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-                    let vertex_tag = Tag::new(tag_name.to_string(), props.clone());
-                    batch.push(Vertex {
-                        vid: record.vid,
-                        id: record.internal_id as i64,
-                        tags: vec![vertex_tag],
-                        properties: props,
-                    });
+                    batch.push(build(
+                        record.vid,
+                        record.internal_id as i64,
+                        tag_name.to_string(),
+                        record.properties,
+                    ));
                     self.emitted += 1;
                     if let Some(limit) = self.limit {
                         if self.emitted >= limit {

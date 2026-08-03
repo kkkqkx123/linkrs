@@ -65,7 +65,7 @@ fn bench_expression_eval(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("simple_predicate", chunk_size), |b| {
             b.iter_batched(
                 || create_chunk(*chunk_size),
-                |chunk| {
+                |mut chunk| {
                     let _ = chunk.evaluate_expression(&simple_pred, None);
                 },
                 BatchSize::SmallInput,
@@ -75,7 +75,7 @@ fn bench_expression_eval(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("compound_predicate", chunk_size), |b| {
             b.iter_batched(
                 || create_chunk(*chunk_size),
-                |chunk| {
+                |mut chunk| {
                     let _ = chunk.evaluate_expression(&compound_pred, None);
                 },
                 BatchSize::SmallInput,
@@ -85,7 +85,7 @@ fn bench_expression_eval(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("project_single", chunk_size), |b| {
             b.iter_batched(
                 || create_chunk(*chunk_size),
-                |chunk| {
+                |mut chunk| {
                     let _ = chunk.evaluate_expression(&project_single[0], None);
                 },
                 BatchSize::SmallInput,
@@ -95,7 +95,7 @@ fn bench_expression_eval(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("project_multi_each", chunk_size), |b| {
             b.iter_batched(
                 || create_chunk(*chunk_size),
-                |chunk| {
+                |mut chunk| {
                     for expr in &project_multi {
                         let _ = chunk.evaluate_expression(expr, None);
                     }
@@ -192,7 +192,7 @@ fn bench_materialize_columns(c: &mut Criterion) {
                     chunk.materialize_columns();
                     chunk
                 },
-                |chunk| {
+                |mut chunk| {
                     let _ = chunk.get_column(0);
                     let _ = chunk.get_column(1);
                     let _ = chunk.get_column(2);

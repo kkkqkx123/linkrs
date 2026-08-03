@@ -449,15 +449,48 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::Argument => SlotLayout::new(vec![]),
         SourceSpec::ScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StandaloneValues { col_names, .. } => SlotLayout::from_names(col_names),
-        SourceSpec::StorageScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
+        SourceSpec::StorageScanVertices {
+            col_names,
+            projected_properties,
+            ..
+        } => SlotLayout::from_names(&flat_scan_col_names(col_names, projected_properties)),
         SourceSpec::ScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
-        SourceSpec::StorageScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
-        SourceSpec::GetVertices { .. } => SlotLayout::from_names(&["vertex".to_string()]),
+        SourceSpec::StorageScanEdges {
+            col_names,
+            projected_properties,
+            ..
+        } => SlotLayout::from_names(&flat_scan_col_names(col_names, projected_properties)),
+        SourceSpec::GetVertices {
+            projected_properties, ..
+        } => SlotLayout::from_names(&flat_scan_col_names(
+            &["vertex".to_string()],
+            projected_properties,
+        )),
         SourceSpec::GetEdges { .. } => SlotLayout::from_names(&["edge".to_string()]),
-        SourceSpec::GetNeighbors { .. } => SlotLayout::from_names(&["vertex".to_string()]),
+        SourceSpec::GetNeighbors {
+            projected_properties, ..
+        } => SlotLayout::from_names(&flat_scan_col_names(
+            &["vertex".to_string()],
+            projected_properties,
+        )),
         SourceSpec::IndexScan { output_layout, .. } => (**output_layout).clone(),
         SourceSpec::GetProp { output_layout, .. } => (**output_layout).clone(),
     }
+}
+
+/// Append flat property columns (`{var}.{prop}`) after the entity column so
+/// that scan sources expose a compound slot per projected property, letting
+/// the columnar evaluator's `Property` branch hit without per-row extraction.
+fn flat_scan_col_names(col_names: &[String], projected_properties: &[String]) -> Vec<String> {
+    let mut names = col_names.to_vec();
+    if let Some(var) = col_names.first() {
+        names.extend(
+            projected_properties
+                .iter()
+                .map(|prop| format!("{var}.{prop}")),
+        );
+    }
+    names
 }
 
 pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {

@@ -10,7 +10,10 @@ use crate::storage::open_vertex_scan;
 use crate::storage::{RequiredProperty, ScanOptions, StorageError};
 
 use super::SourceOperator;
-use super::util::{make_edge_row, make_vertex_row, reserve_memory, storage_error};
+use super::util::{
+    attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
+    reserve_memory, storage_error,
+};
 
 /// Open the storage-backed scan source variants, creating the cursor that
 /// streams batches from storage.
@@ -113,25 +116,51 @@ pub(crate) fn next(
 ) -> Result<Option<DataChunk>, QueryError> {
     match op {
         SourceOperator::StorageScanVertices {
-            space_name, cursor, ..
-        } => next_cursor_chunk(
-            cursor,
             space_name,
-            "StorageScanVertices",
-            base,
-            make_vertex_row,
-            |cur, batch_size| cur.next_batch(batch_size),
-        ),
+            cursor,
+            projected_properties,
+            ..
+        } => {
+            let flatten = projected_properties.clone();
+            if flatten.is_empty() {
+                next_cursor_chunk(
+                    cursor,
+                    space_name,
+                    "StorageScanVertices",
+                    base,
+                    move |vertex| make_flat_vertex_row(vertex, &flatten),
+                    |cur, batch_size| cur.next_batch(batch_size),
+                )
+            } else {
+                // Flat path: pull records directly from storage (skipping
+                // per-row Vertex/HashMap boxing) and widen them into the flat
+                // property layout.
+                next_cursor_chunk(
+                    cursor,
+                    space_name,
+                    "StorageScanVertices",
+                    base,
+                    move |record| make_flat_vertex_record_row(record, &flatten),
+                    |cur, batch_size| cur.next_flat_batch(batch_size),
+                )
+            }
+        }
         SourceOperator::StorageScanEdges {
-            space_name, cursor, ..
-        } => next_cursor_chunk(
-            cursor,
             space_name,
-            "StorageScanEdges",
-            base,
-            make_edge_row,
-            |cur, batch_size| cur.next_batch(batch_size),
-        ),
+            cursor,
+            projected_properties,
+            ..
+        } => {
+            let flatten = projected_properties.clone();
+            next_cursor_chunk(
+                cursor,
+                space_name,
+                "StorageScanEdges",
+                base,
+                move |edge| make_flat_edge_row(edge, &flatten),
+                |cur, batch_size| cur.next_batch(batch_size),
+            )
+        }
         _ => unreachable!("storage_scan::next called for a non-scan source"),
     }
 }
@@ -164,11 +193,15 @@ where
         let rows = batch.into_iter().map(&mut map_row).collect::<Vec<_>>();
         if !rows.is_empty() {
             let reservation = reserve_memory(base, &rows)?;
-            let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
-            chunk.materialize_columns();
-            if let Some(r) = reservation {
-                chunk = chunk.with_memory_reservation(r);
-            }
+            // T4.2: no proactive columnar materialisation — the columnar cache
+            // is lazily built by the first `get_column` consumer.
+            let chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+            let chunk = attach_columnar_stats(base, chunk);
+            let chunk = if let Some(r) = reservation {
+                chunk.with_memory_reservation(r)
+            } else {
+                chunk
+            };
             *cursor = Some(cur);
             return Ok(Some(chunk));
         }

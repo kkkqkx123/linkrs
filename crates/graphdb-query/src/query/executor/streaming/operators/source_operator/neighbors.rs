@@ -10,7 +10,7 @@ use crate::storage::QueryStorage;
 use std::sync::Arc;
 
 use super::SourceOperator;
-use super::util::{make_vertex_row, reserve_memory, storage_error};
+use super::util::{attach_columnar_stats, make_flat_vertex_row, reserve_memory, storage_error};
 
 /// Two-phase neighbor scan state machine.
 ///
@@ -181,7 +181,7 @@ fn next_get_neighbors(
                                     error,
                                 )
                             })? {
-                            rows.push(make_vertex_row(vertex));
+                            rows.push(make_flat_vertex_row(vertex, projected_properties));
                         }
                     }
                 } else {
@@ -196,7 +196,7 @@ fn next_get_neighbors(
                                     error,
                                 )
                             })? {
-                            rows.push(make_vertex_row(vertex));
+                            rows.push(make_flat_vertex_row(vertex, projected_properties));
                         }
                     }
                 }
@@ -204,12 +204,15 @@ fn next_get_neighbors(
                 *position = end;
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk =
-                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
-                    chunk.materialize_columns();
-                    if let Some(r) = reservation {
-                        chunk = chunk.with_memory_reservation(r);
-                    }
+                    let chunk = attach_columnar_stats(
+                        base,
+                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout)),
+                    );
+                    let chunk = if let Some(r) = reservation {
+                        chunk.with_memory_reservation(r)
+                    } else {
+                        chunk
+                    };
                     return Ok(Some(chunk));
                 }
             }

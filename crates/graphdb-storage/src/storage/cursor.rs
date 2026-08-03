@@ -239,6 +239,30 @@ pub struct IndexScanPlan {
 }
 
 // ---------------------------------------------------------------------------
+// Flat vertex record (scan boundary bypassing Vertex/HashMap boxing)
+// ---------------------------------------------------------------------------
+
+/// A vertex row read from the storage columns without `Vertex`/`HashMap`
+/// boxing.
+///
+/// The properties are a plain `Vec<(String, Value)>` in storage projection
+/// order. The query layer rebuilds the `Value::Vertex` slot 0 only when a
+/// consumer actually needs the entity (graph operators, `RETURN p`, label
+/// checks), skipping the per-row `HashMap` construction at the storage
+/// boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatVertexRecord {
+    /// External vertex ID.
+    pub vid: crate::core::types::VertexId,
+    /// Internal (storage) vertex ID.
+    pub internal_id: i64,
+    /// Tag (label) name of the scanned table.
+    pub tag_name: String,
+    /// Projected properties in storage order.
+    pub props: Vec<(String, crate::core::Value)>,
+}
+
+// ---------------------------------------------------------------------------
 // Cursor traits
 // ---------------------------------------------------------------------------
 
@@ -248,6 +272,30 @@ pub trait VertexCursor: Send + std::fmt::Debug {
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Vertex>, StorageError>;
+
+    /// Read the next batch as flat vertex records (at most `batch_size`
+    /// rows), skipping `Vertex` construction and `HashMap` boxing.
+    ///
+    /// The default implementation materialises vertices via [`Self::next_batch`]
+    /// and converts them. Storage engines should override this when they can
+    /// produce records directly from the column store.
+    ///
+    /// Returns an empty `Vec` when the scan is exhausted.
+    fn next_flat_batch(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Vec<FlatVertexRecord>, StorageError> {
+        Ok(self
+            .next_batch(batch_size)?
+            .into_iter()
+            .map(|v| FlatVertexRecord {
+                vid: v.vid,
+                internal_id: v.id,
+                tag_name: v.tags.first().map(|t| t.name.clone()).unwrap_or_default(),
+                props: v.properties.into_iter().collect(),
+            })
+            .collect())
+    }
 }
 
 /// A cursor that yields edges in batches.
@@ -399,4 +447,40 @@ pub fn open_index_cursor<S: crate::storage::StorageReader + ?Sized>(
 ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
     let reader = storage.read();
     reader.create_index_cursor(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::storage_ids::VertexId;
+    use crate::core::{Tag, Value, Vertex};
+    use std::collections::HashMap;
+
+    #[test]
+    fn next_flat_batch_default_converts_vertices() {
+        let mut vertex = Vertex::with_vid(VertexId::from_int64(1));
+        vertex.id = 7;
+        let mut props = HashMap::new();
+        props.insert("age".to_string(), Value::BigInt(30));
+        vertex.add_tag(Tag::new("person".to_string(), props));
+        vertex.properties.insert("age".to_string(), Value::BigInt(30));
+
+        let mut cursor = VecVertexCursor::new(vec![vertex]);
+        let batch = cursor.next_flat_batch(10).expect("flat batch should succeed");
+        assert_eq!(batch.len(), 1);
+        let rec = &batch[0];
+        assert_eq!(rec.vid, VertexId::from_int64(1));
+        assert_eq!(rec.internal_id, 7);
+        assert_eq!(rec.tag_name, "person");
+        assert_eq!(rec.props, vec![("age".to_string(), Value::BigInt(30))]);
+    }
+
+    #[test]
+    fn next_flat_batch_empty_when_exhausted() {
+        let mut cursor = VecVertexCursor::new(Vec::new());
+        let batch = cursor
+            .next_flat_batch(10)
+            .expect("flat batch should succeed");
+        assert!(batch.is_empty());
+    }
 }

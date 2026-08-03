@@ -474,6 +474,7 @@ impl PoolHandle {
             schema: std::sync::Arc::clone(&chunk.schema),
             layout: std::sync::Arc::clone(&chunk.layout),
             memory_reservation: None,
+            columnar_stats: chunk.columnar_stats.clone(),
         };
         Ok(PooledChunk {
             chunk: copied,

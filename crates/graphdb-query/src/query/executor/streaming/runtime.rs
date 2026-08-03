@@ -29,6 +29,45 @@ pub struct QueryIdentity {
     pub space_name: Option<String>,
 }
 
+/// Query-level columnar fast-path counters (T5 observability).
+///
+/// Shared via `Arc` with the chunks produced by source operators; every
+/// `DataChunk::evaluate_expression` call records a hit (columnar batch path
+/// succeeded) or a miss (fell back to per-row evaluation). The miss rate
+/// exposes how much of the flat-column promise is actually kept.
+#[derive(Debug, Default)]
+pub struct ColumnarStats {
+    pub columnar_hits: AtomicU64,
+    pub columnar_misses: AtomicU64,
+}
+
+impl ColumnarStats {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_hit(&self) {
+        self.columnar_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_miss(&self) {
+        self.columnar_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Fraction of evaluation calls that hit the columnar fast path.
+    /// Returns 1.0 when nothing was evaluated (vacuous).
+    pub fn hit_rate(&self) -> f64 {
+        let hits = self.columnar_hits.load(Ordering::Relaxed);
+        let misses = self.columnar_misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        if total == 0 {
+            1.0
+        } else {
+            hits as f64 / total as f64
+        }
+    }
+}
+
 /// Per-operator profile snapshot
 #[derive(Debug, Clone, Default)]
 pub struct OperatorProfile {
@@ -434,6 +473,8 @@ pub struct ExecutionRuntime {
 
     /// Per-query bumpalo arena for executor temporary allocations.
     pub arena: Option<Arc<Mutex<Arena>>>,
+    /// Columnar fast-path hit/miss counters shared with produced chunks (T5).
+    columnar_stats: Arc<ColumnarStats>,
 }
 
 impl ExecutionRuntime {
@@ -476,6 +517,7 @@ impl ExecutionRuntime {
             correlation_frame: Mutex::new(None),
             parameter_values: None,
             arena: Some(Arc::new(Mutex::new(Arena::new()))),
+            columnar_stats: Arc::new(ColumnarStats::new()),
         }
     }
 
@@ -774,6 +816,11 @@ impl ExecutionRuntime {
     /// Return a reference to the bumpalo arena, if configured.
     pub fn arena(&self) -> Option<&Arc<Mutex<Arena>>> {
         self.arena.as_ref()
+    }
+
+    /// Return the columnar fast-path counters shared with produced chunks.
+    pub fn columnar_stats(&self) -> Arc<ColumnarStats> {
+        Arc::clone(&self.columnar_stats)
     }
 
     /// Reset the bumpalo arena, freeing all temporary allocations.
