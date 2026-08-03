@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, FulltextSpec, GraphSpec, JoinSpec, RecursiveFragmentSpec,
-    SinkSpec, SourceSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, EdgeManageCommand, FulltextManageCommand, FulltextSpec,
+    GraphSpec, IndexManageCommand, JoinSpec, PropertyRename, RecursiveFragmentSpec,
+    SinkSpec, SourceSpec, SpaceManageCommand, TagManageCommand, UnarySpec, UserManageCommand,
+    VectorManageCommand, VectorSpec,
 };
 use super::super::super::slot::SlotLayout;
 use crate::core::types::expr::Expression;
@@ -1199,12 +1201,216 @@ pub(super) fn build_update_edges_spec(
 
 // ── DDL spec builders ─────────────────────────────────────────────────────────
 
+fn space_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode,
+) -> SpaceManageCommand {
+    use crate::query::executor::streaming::operators::spec::SpaceManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::*;
+    match node {
+        Create(n) => SpaceManageCommand::Create {
+            space_name: n.info().space_name.clone(),
+            vid_type: n.info().vid_type.clone(),
+        },
+        Drop(n) => SpaceManageCommand::Drop {
+            space_name: n.space_name().to_string(),
+        },
+        Desc(n) => SpaceManageCommand::Desc {
+            space_name: n.space_name().to_string(),
+        },
+        Show(_) => SpaceManageCommand::Show,
+        ShowCreate(n) => SpaceManageCommand::ShowCreate {
+            space_name: n.space_name().to_string(),
+        },
+        Switch(n) => SpaceManageCommand::Switch {
+            space_name: n.space_name().to_string(),
+        },
+        Alter(n) => SpaceManageCommand::Alter {
+            space_name: n.space_name().to_string(),
+        },
+        Clear(n) => SpaceManageCommand::Clear {
+            space_name: n.space_name().to_string(),
+        },
+    }
+}
+
+fn tag_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode,
+) -> TagManageCommand {
+    use crate::query::executor::streaming::operators::spec::TagManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode::*;
+    match node {
+        Create(n) => {
+            let info = n.info();
+            TagManageCommand::Create {
+                tag_name: info.tag_name.clone(),
+                properties: info.properties.clone(),
+                if_not_exists: info.if_not_exists,
+            }
+        }
+        Alter(n) => {
+            let info = n.info();
+            TagManageCommand::Alter {
+                tag_name: info.tag_name.clone(),
+                additions: info.additions.clone(),
+                deletions: info.deletions.clone(),
+                changes: info
+                    .changes
+                    .iter()
+                    .map(|c| PropertyRename {
+                        old_name: c.old_name.clone(),
+                        new_name: c.new_name.clone(),
+                    })
+                    .collect(),
+            }
+        }
+        Desc(n) => TagManageCommand::Desc {
+            tag_name: n.tag_name().to_string(),
+        },
+        Drop(n) => TagManageCommand::Drop {
+            tag_name: n.tag_name().to_string(),
+            if_exists: n.if_exists(),
+        },
+        Show(_) => TagManageCommand::Show,
+        ShowCreate(n) => TagManageCommand::ShowCreate {
+            tag_name: n.tag_name().to_string(),
+        },
+    }
+}
+
+fn edge_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode,
+) -> EdgeManageCommand {
+    use crate::query::executor::streaming::operators::spec::EdgeManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
+    match node {
+        Create(n) => {
+            let info = n.info();
+            EdgeManageCommand::Create {
+                edge_name: info.edge_name.clone(),
+                properties: info.properties.clone(),
+                src_tag_name: info.src_tag_name.clone(),
+                dst_tag_name: info.dst_tag_name.clone(),
+                if_not_exists: info.if_not_exists,
+            }
+        }
+        Alter(n) => {
+            let info = n.info();
+            EdgeManageCommand::Alter {
+                edge_name: info.edge_name.clone(),
+                additions: info.additions.clone(),
+                deletions: info.deletions.clone(),
+            }
+        }
+        Desc(n) => EdgeManageCommand::Desc {
+            edge_name: n.edge_name().to_string(),
+        },
+        Drop(n) => EdgeManageCommand::Drop {
+            edge_name: n.edge_name().to_string(),
+            if_exists: n.if_exists(),
+        },
+        Show(_) => EdgeManageCommand::Show,
+        ShowCreate(n) => EdgeManageCommand::ShowCreate {
+            edge_name: n.edge_name().to_string(),
+        },
+    }
+}
+
+fn index_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode,
+) -> IndexManageCommand {
+    use crate::query::executor::streaming::operators::spec::IndexManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode::*;
+    match node {
+        CreateTagIndex(n) => {
+            let info = n.info();
+            IndexManageCommand::CreateTagIndex {
+                index_name: info.index_name.clone(),
+                target_name: info.target_name.clone(),
+                properties: info.properties.clone(),
+            }
+        }
+        DropTagIndex(n) => IndexManageCommand::DropTagIndex {
+            index_name: n.index_name().to_string(),
+        },
+        DescTagIndex(n) => IndexManageCommand::DescTagIndex {
+            index_name: n.index_name().to_string(),
+        },
+        ShowTagIndexes(_) => IndexManageCommand::ShowTagIndexes,
+        RebuildTagIndex(n) => IndexManageCommand::RebuildTagIndex {
+            index_name: n.index_name().to_string(),
+        },
+        CreateEdgeIndex(n) => {
+            let info = n.info();
+            IndexManageCommand::CreateEdgeIndex {
+                index_name: info.index_name.clone(),
+                target_name: info.target_name.clone(),
+                properties: info.properties.clone(),
+            }
+        }
+        DropEdgeIndex(n) => IndexManageCommand::DropEdgeIndex {
+            index_name: n.index_name().to_string(),
+        },
+        DescEdgeIndex(n) => IndexManageCommand::DescEdgeIndex {
+            index_name: n.index_name().to_string(),
+        },
+        ShowEdgeIndexes(_) => IndexManageCommand::ShowEdgeIndexes,
+        RebuildEdgeIndex(n) => IndexManageCommand::RebuildEdgeIndex {
+            index_name: n.index_name().to_string(),
+        },
+        ShowIndexes(_) => IndexManageCommand::ShowIndexes,
+        ShowCreateIndex(n) => IndexManageCommand::ShowCreateIndex {
+            index_name: n.index_name().to_string(),
+        },
+    }
+}
+
+fn user_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode,
+) -> UserManageCommand {
+    use crate::query::executor::streaming::operators::spec::UserManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::*;
+    match node {
+        Create(n) => UserManageCommand::Create {
+            username: n.username().to_string(),
+            password: n.password().to_string(),
+            role: n.role().to_string(),
+        },
+        Alter(n) => UserManageCommand::Alter {
+            username: n.username().to_string(),
+            new_password: n.new_password().cloned(),
+            new_role: n.new_role().cloned(),
+            is_locked: n.is_locked(),
+        },
+        Drop(n) => UserManageCommand::Drop {
+            username: n.username().to_string(),
+            if_exists: n.if_exists(),
+        },
+        ChangePassword(n) => UserManageCommand::ChangePassword {
+            password_info: n.password_info().clone(),
+        },
+        GrantRole(n) => UserManageCommand::GrantRole {
+            username: n.username().to_string(),
+            space_name: n.space_name().to_string(),
+            role: n.role().to_string(),
+        },
+        RevokeRole(n) => UserManageCommand::RevokeRole {
+            username: n.username().to_string(),
+            space_name: n.space_name().to_string(),
+        },
+        ShowUsers(_) => UserManageCommand::ShowUsers,
+        ShowRoles(_) => UserManageCommand::ShowRoles,
+        DescribeUser(n) => UserManageCommand::DescribeUser {
+            username: n.username().to_string(),
+        },
+    }
+}
+
 pub(super) fn build_space_manage_spec(
     node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<DdlSpec, PlanBuildError> {
     Ok(DdlSpec::SpaceManage {
-        command: node.clone(),
+        command: space_manage_to_command(node),
     })
 }
 
@@ -1214,7 +1420,7 @@ pub(super) fn build_tag_manage_spec(
 ) -> Result<DdlSpec, PlanBuildError> {
     Ok(DdlSpec::TagManage {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        command: node.clone(),
+        command: tag_manage_to_command(node),
     })
 }
 
@@ -1224,7 +1430,7 @@ pub(super) fn build_edge_manage_spec(
 ) -> Result<DdlSpec, PlanBuildError> {
     Ok(DdlSpec::EdgeManage {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        command: node.clone(),
+        command: edge_manage_to_command(node),
     })
 }
 
@@ -1234,7 +1440,7 @@ pub(super) fn build_index_manage_spec(
 ) -> Result<DdlSpec, PlanBuildError> {
     Ok(DdlSpec::IndexManage {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        command: node.clone(),
+        command: index_manage_to_command(node),
     })
 }
 
@@ -1253,11 +1459,40 @@ pub(super) fn build_user_manage_spec(
     _exec_ctx: &ExecutionContext,
 ) -> Result<DdlSpec, PlanBuildError> {
     Ok(DdlSpec::UserManage {
-        command: node.clone(),
+        command: user_manage_to_command(node),
     })
 }
 
 // ── Fulltext spec builders ────────────────────────────────────────────────────
+
+fn fulltext_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode,
+) -> FulltextManageCommand {
+    use crate::query::executor::streaming::operators::spec::FulltextManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode::*;
+    match node {
+        Create(n) => FulltextManageCommand::Create {
+            index_name: n.index_name.clone(),
+            schema_name: n.schema_name.clone(),
+            fields: n.fields.iter().map(|f| f.field_name.clone()).collect(),
+            space_id: n.space_id,
+        },
+        Drop(n) => FulltextManageCommand::Drop {
+            index_name: n.index_name.clone(),
+            if_exists: n.if_exists,
+        },
+        Alter(n) => FulltextManageCommand::Alter {
+            index_name: n.index_name.clone(),
+        },
+        Show(n) => FulltextManageCommand::Show {
+            pattern: n.pattern.clone(),
+            from_schema: n.from_schema.clone(),
+        },
+        Describe(n) => FulltextManageCommand::Describe {
+            index_name: n.index_name.clone(),
+        },
+    }
+}
 
 pub(super) fn build_fulltext_manage_spec(
     node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode,
@@ -1265,7 +1500,7 @@ pub(super) fn build_fulltext_manage_spec(
 ) -> Result<FulltextSpec, PlanBuildError> {
     Ok(FulltextSpec::FulltextManage {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        command: node.clone(),
+        command: fulltext_manage_to_command(node),
     })
 }
 
@@ -1315,13 +1550,33 @@ pub(super) fn build_match_fulltext_spec(
 
 // ── Vector spec builders ──────────────────────────────────────────────────────
 
+fn vector_manage_to_command(
+    node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,
+) -> VectorManageCommand {
+    use crate::query::executor::streaming::operators::spec::VectorManageCommand;
+    use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode::*;
+    match node {
+        Create(n) => VectorManageCommand::Create {
+            index_name: n.index_name.clone(),
+            tag_name: n.tag_name.clone(),
+            field_name: n.field_name.clone(),
+            vector_size: n.vector_size,
+            distance: n.distance,
+            space_id: n.space_id,
+        },
+        Drop(n) => VectorManageCommand::Drop {
+            index_name: n.index_name.clone(),
+        },
+    }
+}
+
 pub(super) fn build_vector_manage_spec(
     node: &crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
     Ok(VectorSpec::VectorManage {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        command: node.clone(),
+        command: vector_manage_to_command(node),
     })
 }
 

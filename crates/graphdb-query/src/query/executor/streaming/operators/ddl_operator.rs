@@ -7,11 +7,11 @@ use crate::core::{NullType, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::executor::streaming::operators::spec::MigrateAction;
-use crate::query::executor::streaming::slot::{SlotInfo, SlotLayout};
-use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
+use crate::query::executor::streaming::operators::spec::{
+    EdgeManageCommand, IndexManageCommand, MigrateAction, SpaceManageCommand, TagManageCommand,
+    UserManageCommand,
 };
+use crate::query::executor::streaming::slot::{SlotInfo, SlotLayout};
 use crate::storage::{QueryStorage, StorageSchemaOps};
 
 /// Pre-computed layout for DDL manage result chunks (action, name, status).
@@ -118,25 +118,25 @@ fn make_single_col_schema(col_name: &str, col_type: &str) -> Arc<Schema> {
 pub enum DdlOperator {
     SpaceManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        command: SpaceManageNode,
+        command: SpaceManageCommand,
         emitted: bool,
     },
     TagManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
-        command: TagManageNode,
+        command: TagManageCommand,
         emitted: bool,
     },
     EdgeManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
-        command: EdgeManageNode,
+        command: EdgeManageCommand,
         emitted: bool,
     },
     IndexManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
-        command: IndexManageNode,
+        command: IndexManageCommand,
         emitted: bool,
     },
     DeleteIndex {
@@ -147,7 +147,7 @@ pub enum DdlOperator {
     },
     UserManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        command: UserManageNode,
+        command: UserManageCommand,
         emitted: bool,
     },
     ShowStats {

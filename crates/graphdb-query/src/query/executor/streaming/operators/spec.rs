@@ -13,9 +13,12 @@ use std::sync::Arc;
 
 use crate::core::types::expr::{ContextualExpression, Expression};
 use crate::core::types::operators::AggregateFunction;
+use crate::core::types::user::PasswordInfo;
+use crate::core::types::PropertyDef;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::parser::ast::vector::VectorDistance;
 
 // ── Bound index predicate types ─────────────────────────────────────────────
 
@@ -475,32 +478,176 @@ pub enum MigrateAction {
     MigrateSpace,
 }
 
+// ── Manage command payloads ──────────────────────────────────────────────────
+// Self-contained value types for management DDL commands.
+//
+// These carry only the value fields consumed by the executor layer, so that
+// the spec layer stays independent of planning-layer node types.
+
+/// Space DDL command payload.
+#[derive(Debug, Clone)]
+pub enum SpaceManageCommand {
+    Create { space_name: String, vid_type: String },
+    Drop { space_name: String },
+    Desc { space_name: String },
+    Show,
+    ShowCreate { space_name: String },
+    Switch { space_name: String },
+    Alter { space_name: String },
+    Clear { space_name: String },
+}
+
+/// Tag DDL command payload.
+#[derive(Debug, Clone)]
+pub enum TagManageCommand {
+    Create {
+        tag_name: String,
+        properties: Vec<PropertyDef>,
+        if_not_exists: bool,
+    },
+    Alter {
+        tag_name: String,
+        additions: Vec<PropertyDef>,
+        deletions: Vec<String>,
+        changes: Vec<PropertyRename>,
+    },
+    Desc { tag_name: String },
+    Drop { tag_name: String, if_exists: bool },
+    Show,
+    ShowCreate { tag_name: String },
+}
+
+/// Edge DDL command payload.
+#[derive(Debug, Clone)]
+pub enum EdgeManageCommand {
+    Create {
+        edge_name: String,
+        properties: Vec<PropertyDef>,
+        src_tag_name: Option<String>,
+        dst_tag_name: Option<String>,
+        if_not_exists: bool,
+    },
+    Alter {
+        edge_name: String,
+        additions: Vec<PropertyDef>,
+        deletions: Vec<String>,
+    },
+    Desc { edge_name: String },
+    Drop { edge_name: String, if_exists: bool },
+    Show,
+    ShowCreate { edge_name: String },
+}
+
+/// Index DDL command payload.
+#[derive(Debug, Clone)]
+pub enum IndexManageCommand {
+    CreateTagIndex {
+        index_name: String,
+        target_name: String,
+        properties: Vec<String>,
+    },
+    DropTagIndex { index_name: String },
+    DescTagIndex { index_name: String },
+    ShowTagIndexes,
+    RebuildTagIndex { index_name: String },
+    CreateEdgeIndex {
+        index_name: String,
+        target_name: String,
+        properties: Vec<String>,
+    },
+    DropEdgeIndex { index_name: String },
+    DescEdgeIndex { index_name: String },
+    ShowEdgeIndexes,
+    RebuildEdgeIndex { index_name: String },
+    ShowIndexes,
+    ShowCreateIndex { index_name: String },
+}
+
+/// User DDL command payload.
+#[derive(Debug, Clone)]
+pub enum UserManageCommand {
+    Create {
+        username: String,
+        password: String,
+        role: String,
+    },
+    Alter {
+        username: String,
+        new_password: Option<String>,
+        new_role: Option<String>,
+        is_locked: Option<bool>,
+    },
+    Drop { username: String, if_exists: bool },
+    ChangePassword { password_info: PasswordInfo },
+    GrantRole { username: String, space_name: String, role: String },
+    RevokeRole { username: String, space_name: String },
+    ShowUsers,
+    ShowRoles,
+    DescribeUser { username: String },
+}
+
+/// Fulltext index DDL command payload.
+#[derive(Debug, Clone)]
+pub enum FulltextManageCommand {
+    Create {
+        index_name: String,
+        schema_name: String,
+        fields: Vec<String>,
+        space_id: u64,
+    },
+    Drop { index_name: String, if_exists: bool },
+    Alter { index_name: String },
+    Show { pattern: Option<String>, from_schema: Option<String> },
+    Describe { index_name: String },
+}
+
+/// Vector index DDL command payload.
+#[derive(Debug, Clone)]
+pub enum VectorManageCommand {
+    Create {
+        index_name: String,
+        tag_name: String,
+        field_name: String,
+        vector_size: usize,
+        distance: VectorDistance,
+        space_id: u64,
+    },
+    Drop { index_name: String },
+}
+
+/// Property rename within ALTER TAG (executor consumes only old/new names).
+#[derive(Debug, Clone)]
+pub struct PropertyRename {
+    pub old_name: String,
+    pub new_name: String,
+}
+
 // ── DDL spec ─────────────────────────────────────────────────────────────────
 
 /// Immutable config for DDL operators.
 #[derive(Debug, Clone)]
 pub enum DdlSpec {
     SpaceManage {
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode,
+        command: SpaceManageCommand,
     },
     TagManage {
         space_name: String,
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode,
+        command: TagManageCommand,
     },
     EdgeManage {
         space_name: String,
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode,
+        command: EdgeManageCommand,
     },
     IndexManage {
         space_name: String,
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode,
+        command: IndexManageCommand,
     },
     DeleteIndex {
         space_name: String,
         index_name: String,
     },
     UserManage {
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode,
+        command: UserManageCommand,
     },
     ShowStats {
         space_name: String,
@@ -531,7 +678,7 @@ pub enum DdlSpec {
 pub enum FulltextSpec {
     FulltextManage {
         space_name: String,
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode,
+        command: FulltextManageCommand,
     },
     FulltextSearch {
         space_name: String,
@@ -565,7 +712,7 @@ pub enum FulltextSpec {
 pub enum VectorSpec {
     VectorManage {
         space_name: String,
-        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,
+        command: VectorManageCommand,
     },
     VectorSearch {
         space_name: String,

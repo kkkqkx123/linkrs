@@ -7,18 +7,17 @@ use crate::core::types::edge::EdgeTypeInfo;
 use crate::core::types::index::{Index, IndexConfig, IndexType};
 use crate::core::types::space::SpaceInfo;
 use crate::core::types::tag::TagInfo;
-use crate::core::types::PropertyDef;
 use crate::core::{NullType, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
+use crate::query::executor::streaming::operators::spec::{
+    EdgeManageCommand, IndexManageCommand, SpaceManageCommand, TagManageCommand,
 };
 use crate::storage::{QueryStorage, StorageSchemaOps};
 
 pub(super) fn execute_space_manage(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    command: &SpaceManageNode,
+    command: &SpaceManageCommand,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -29,23 +28,31 @@ pub(super) fn execute_space_manage(
     if !base.lifecycle.is_opened() {
         return Ok(None);
     }
-    let space_name = extract_space_manage_name(command);
+    let space_name = match command {
+        SpaceManageCommand::Create { space_name, .. }
+        | SpaceManageCommand::Drop { space_name }
+        | SpaceManageCommand::Desc { space_name }
+        | SpaceManageCommand::ShowCreate { space_name }
+        | SpaceManageCommand::Switch { space_name }
+        | SpaceManageCommand::Alter { space_name }
+        | SpaceManageCommand::Clear { space_name } => Some(space_name.clone()),
+        SpaceManageCommand::Show => None,
+    };
     let result = match command {
-        SpaceManageNode::Create(node) => super::exec_ddl(storage, |s| {
-            let info = node.info();
-            let vid_type = parse_vid_type_str(&info.vid_type);
-            let mut space_info = SpaceInfo::new(info.space_name.clone()).with_vid_type(vid_type);
+        SpaceManageCommand::Create { space_name, vid_type } => super::exec_ddl(storage, |s| {
+            let vid_type = parse_vid_type_str(vid_type);
+            let mut space_info = SpaceInfo::new(space_name.clone()).with_vid_type(vid_type);
             StorageSchemaOps::create_space(s, &mut space_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageNode::Drop(_) => super::exec_ddl(storage, |s| {
+        SpaceManageCommand::Drop { .. } => super::exec_ddl(storage, |s| {
             let name = space_name.as_deref().unwrap_or("");
             StorageSchemaOps::drop_space(s, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageNode::Alter(_) => {
+        SpaceManageCommand::Alter { .. } => {
             let comment = space_name.as_deref().unwrap_or("");
             super::exec_ddl(storage, |s| {
                 StorageSchemaOps::alter_space_comment(s, 0, comment.to_string())
@@ -53,13 +60,13 @@ pub(super) fn execute_space_manage(
                 Ok(())
             })
         }
-        SpaceManageNode::Clear(_) => super::exec_ddl(storage, |s| {
+        SpaceManageCommand::Clear { .. } => super::exec_ddl(storage, |s| {
             let name = space_name.as_deref().unwrap_or("");
             StorageSchemaOps::clear_space(s, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageNode::Desc(_) | SpaceManageNode::ShowCreate(_) => {
+        SpaceManageCommand::Desc { .. } | SpaceManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;
             let name = space_name.as_deref().unwrap_or("");
             match reader
@@ -120,7 +127,7 @@ pub(super) fn execute_space_manage(
                 ))),
             }
         }
-        SpaceManageNode::Switch(_) => {
+        SpaceManageCommand::Switch { .. } => {
             let reader = super::get_reader(storage)?;
             let name = space_name.as_deref().unwrap_or("");
             match reader
@@ -154,7 +161,7 @@ pub(super) fn execute_space_manage(
                 None => Err(QueryError::execution(format!("Space not found: {}", name))),
             }
         }
-        SpaceManageNode::Show(_) => {
+        SpaceManageCommand::Show => {
             let reader = super::get_reader(storage)?;
             let spaces = reader
                 .list_spaces()
@@ -203,7 +210,7 @@ pub(super) fn execute_space_manage(
 pub(super) fn execute_tag_manage(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
-    command: &TagManageNode,
+    command: &TagManageCommand,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -214,17 +221,26 @@ pub(super) fn execute_tag_manage(
     if !base.lifecycle.is_opened() {
         return Ok(None);
     }
-    let tag_name = extract_tag_manage_name(command);
-    let properties = extract_tag_manage_properties(command);
+    let tag_name = match command {
+        TagManageCommand::Create { tag_name, .. }
+        | TagManageCommand::Alter { tag_name, .. }
+        | TagManageCommand::Desc { tag_name }
+        | TagManageCommand::Drop { tag_name, .. }
+        | TagManageCommand::ShowCreate { tag_name } => Some(tag_name.clone()),
+        TagManageCommand::Show => None,
+    };
     let result = match command {
-        TagManageNode::Create(node) => super::exec_ddl(storage, |s| {
-            let name = tag_name.as_deref().unwrap_or("unnamed");
-            let mut info = TagInfo::new(name.to_string());
+        TagManageCommand::Create {
+            tag_name,
+            properties,
+            if_not_exists,
+        } => super::exec_ddl(storage, |s| {
+            let mut info = TagInfo::new(tag_name.clone());
             info.properties = properties.clone();
             match StorageSchemaOps::create_tag(s, space_name, &info) {
                 Ok(_) => Ok(()),
                 Err(e)
-                    if node.info().if_not_exists
+                    if *if_not_exists
                         && e.kind()
                             == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
                 {
@@ -233,12 +249,14 @@ pub(super) fn execute_tag_manage(
                 Err(e) => Err(QueryError::execution(e.to_string())),
             }
         }),
-        TagManageNode::Drop(node) => super::exec_ddl(storage, |s| {
-            let name = tag_name.as_deref().unwrap_or("");
-            match StorageSchemaOps::drop_tag(s, space_name, name) {
+        TagManageCommand::Drop {
+            tag_name,
+            if_exists,
+        } => super::exec_ddl(storage, |s| {
+            match StorageSchemaOps::drop_tag(s, space_name, tag_name) {
                 Ok(_) => Ok(()),
                 Err(e)
-                    if node.if_exists()
+                    if *if_exists
                         && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
                             || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
                 {
@@ -247,17 +265,25 @@ pub(super) fn execute_tag_manage(
                 Err(e) => Err(QueryError::execution(e.to_string())),
             }
         }),
-        TagManageNode::Alter(node) => super::exec_ddl(storage, |s| {
-            let name = tag_name.as_deref().unwrap_or("");
-            let additions = node.info().additions.clone();
-            let deletions = node.info().deletions.clone();
-            StorageSchemaOps::alter_tag(s, space_name, name, additions, deletions)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            for change in &node.info().changes {
+        TagManageCommand::Alter {
+            tag_name,
+            additions,
+            deletions,
+            changes,
+        } => super::exec_ddl(storage, |s| {
+            StorageSchemaOps::alter_tag(
+                s,
+                space_name,
+                tag_name,
+                additions.clone(),
+                deletions.clone(),
+            )
+            .map_err(|e| QueryError::execution(e.to_string()))?;
+            for change in changes {
                 StorageSchemaOps::rename_tag_property(
                     s,
                     space_name,
-                    name,
+                    tag_name,
                     &change.old_name,
                     &change.new_name,
                 )
@@ -265,7 +291,7 @@ pub(super) fn execute_tag_manage(
             }
             Ok(())
         }),
-        TagManageNode::Desc(_) => {
+        TagManageCommand::Desc { .. } => {
             let reader = super::get_reader(storage)?;
             let name = tag_name.as_deref().unwrap_or("");
             match reader
@@ -322,7 +348,7 @@ pub(super) fn execute_tag_manage(
                 }
             }
         }
-        TagManageNode::Show(_) => {
+        TagManageCommand::Show => {
             let reader = super::get_reader(storage)?;
             let tags = reader
                 .list_tags(space_name)
@@ -359,7 +385,7 @@ pub(super) fn execute_tag_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        TagManageNode::ShowCreate(_) => {
+        TagManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;
             let name = tag_name.as_deref().unwrap_or("");
             match reader
@@ -397,7 +423,7 @@ pub(super) fn execute_tag_manage(
 pub(super) fn execute_edge_manage(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
-    command: &EdgeManageNode,
+    command: &EdgeManageCommand,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -408,19 +434,30 @@ pub(super) fn execute_edge_manage(
     if !base.lifecycle.is_opened() {
         return Ok(None);
     }
-    let edge_type = extract_edge_manage_name(command);
-    let properties = extract_edge_manage_properties(command);
+    let edge_type = match command {
+        EdgeManageCommand::Create { edge_name, .. }
+        | EdgeManageCommand::Alter { edge_name, .. }
+        | EdgeManageCommand::Desc { edge_name }
+        | EdgeManageCommand::Drop { edge_name, .. }
+        | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
+        EdgeManageCommand::Show => None,
+    };
     let result = match command {
-        EdgeManageNode::Create(node) => super::exec_ddl(storage, |s| {
-            let et = edge_type.as_deref().unwrap_or("unnamed");
-            let mut info = EdgeTypeInfo::new(et.to_string());
+        EdgeManageCommand::Create {
+            edge_name,
+            properties,
+            src_tag_name,
+            dst_tag_name,
+            if_not_exists,
+        } => super::exec_ddl(storage, |s| {
+            let mut info = EdgeTypeInfo::new(edge_name.clone());
             info.properties = properties.clone();
-            info.src_tag_name = node.info().src_tag_name.clone().unwrap_or_default();
-            info.dst_tag_name = node.info().dst_tag_name.clone().unwrap_or_default();
+            info.src_tag_name = src_tag_name.clone().unwrap_or_default();
+            info.dst_tag_name = dst_tag_name.clone().unwrap_or_default();
             match StorageSchemaOps::create_edge_type(s, space_name, &info) {
                 Ok(_) => Ok(()),
                 Err(e)
-                    if node.info().if_not_exists
+                    if *if_not_exists
                         && e.kind()
                             == crate::core::error::storage::StorageErrorKind::LabelAlreadyExists =>
                 {
@@ -429,12 +466,14 @@ pub(super) fn execute_edge_manage(
                 Err(e) => Err(QueryError::execution(e.to_string())),
             }
         }),
-        EdgeManageNode::Drop(node) => super::exec_ddl(storage, |s| {
-            let name = edge_type.as_deref().unwrap_or("");
-            match StorageSchemaOps::drop_edge_type(s, space_name, name) {
+        EdgeManageCommand::Drop {
+            edge_name,
+            if_exists,
+        } => super::exec_ddl(storage, |s| {
+            match StorageSchemaOps::drop_edge_type(s, space_name, edge_name) {
                 Ok(_) => Ok(()),
                 Err(e)
-                    if node.if_exists()
+                    if *if_exists
                         && (e.kind() == crate::core::error::storage::StorageErrorKind::LabelNotFound
                             || e.kind() == crate::core::error::storage::StorageErrorKind::NotFound) =>
                 {
@@ -443,15 +482,22 @@ pub(super) fn execute_edge_manage(
                 Err(e) => Err(QueryError::execution(e.to_string())),
             }
         }),
-        EdgeManageNode::Alter(node) => super::exec_ddl(storage, |s| {
-            let name = edge_type.as_deref().unwrap_or("");
-            let additions = node.info().additions.clone();
-            let deletions = node.info().deletions.clone();
-            StorageSchemaOps::alter_edge_type(s, space_name, name, additions, deletions)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
+        EdgeManageCommand::Alter {
+            edge_name,
+            additions,
+            deletions,
+        } => super::exec_ddl(storage, |s| {
+            StorageSchemaOps::alter_edge_type(
+                s,
+                space_name,
+                edge_name,
+                additions.clone(),
+                deletions.clone(),
+            )
+            .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        EdgeManageNode::Desc(_) | EdgeManageNode::ShowCreate(_) => {
+        EdgeManageCommand::Desc { .. } | EdgeManageCommand::ShowCreate { .. } => {
             let reader = super::get_reader(storage)?;
             let name = edge_type.as_deref().unwrap_or("");
             match reader
@@ -508,7 +554,7 @@ pub(super) fn execute_edge_manage(
                 }
             }
         }
-        EdgeManageNode::Show(_) => {
+        EdgeManageCommand::Show => {
             let reader = super::get_reader(storage)?;
             let edges = reader
                 .list_edge_types(space_name)
@@ -552,7 +598,7 @@ pub(super) fn execute_edge_manage(
 pub(super) fn execute_index_manage(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
-    command: &IndexManageNode,
+    command: &IndexManageCommand,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -563,9 +609,32 @@ pub(super) fn execute_index_manage(
     if !base.lifecycle.is_opened() {
         return Ok(None);
     }
-    let index_name = extract_index_manage_name(command);
-    let target_name = extract_index_target_name(command);
-    let index_properties = extract_index_properties(command);
+    let index_name = match command {
+        IndexManageCommand::CreateTagIndex { index_name, .. }
+        | IndexManageCommand::DropTagIndex { index_name }
+        | IndexManageCommand::DescTagIndex { index_name }
+        | IndexManageCommand::RebuildTagIndex { index_name }
+        | IndexManageCommand::CreateEdgeIndex { index_name, .. }
+        | IndexManageCommand::DropEdgeIndex { index_name }
+        | IndexManageCommand::DescEdgeIndex { index_name }
+        | IndexManageCommand::RebuildEdgeIndex { index_name }
+        | IndexManageCommand::ShowCreateIndex { index_name } => Some(index_name.clone()),
+        IndexManageCommand::ShowTagIndexes
+        | IndexManageCommand::ShowEdgeIndexes
+        | IndexManageCommand::ShowIndexes => None,
+    };
+    let target_name = match command {
+        IndexManageCommand::CreateTagIndex { target_name, .. }
+        | IndexManageCommand::CreateEdgeIndex { target_name, .. } => {
+            Some(target_name.clone()).filter(|s| !s.is_empty())
+        }
+        _ => None,
+    };
+    let index_properties = match command {
+        IndexManageCommand::CreateTagIndex { properties, .. }
+        | IndexManageCommand::CreateEdgeIndex { properties, .. } => properties.clone(),
+        _ => Vec::new(),
+    };
 
     // Resolve space_id from space_name to avoid space ID mismatch
     let resolved_space_id = storage
@@ -574,7 +643,7 @@ pub(super) fn execute_index_manage(
         .unwrap_or(0);
 
     let result = match command {
-        IndexManageNode::CreateTagIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::CreateTagIndex { .. } => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
             let schema = target_name.as_deref().unwrap_or(space_name);
             let fields: Vec<crate::core::types::IndexField> = index_properties
@@ -603,7 +672,7 @@ pub(super) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::CreateEdgeIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::CreateEdgeIndex { .. } => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
             let schema = target_name.as_deref().unwrap_or(space_name);
             let fields: Vec<crate::core::types::IndexField> = index_properties
@@ -632,19 +701,19 @@ pub(super) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DropTagIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::DropTagIndex { .. } => super::exec_ddl(storage, |s| {
             let name = index_name.as_deref().unwrap_or("");
             StorageSchemaOps::drop_tag_index(s, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DropEdgeIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::DropEdgeIndex { .. } => super::exec_ddl(storage, |s| {
             let name = index_name.as_deref().unwrap_or("");
             StorageSchemaOps::drop_edge_index(s, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DescTagIndex(_) | IndexManageNode::ShowCreateIndex(_) => {
+        IndexManageCommand::DescTagIndex { .. } | IndexManageCommand::ShowCreateIndex { .. } => {
             let reader = super::get_reader(storage)?;
             let name = index_name.as_deref().unwrap_or("");
             match reader
@@ -698,7 +767,7 @@ pub(super) fn execute_index_manage(
                 ))),
             }
         }
-        IndexManageNode::ShowIndexes(_) | IndexManageNode::ShowTagIndexes(_) => {
+        IndexManageCommand::ShowIndexes | IndexManageCommand::ShowTagIndexes => {
             let reader = super::get_reader(storage)?;
             let indexes = reader
                 .list_tag_indexes(space_name)
@@ -740,13 +809,13 @@ pub(super) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageNode::RebuildTagIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::RebuildTagIndex { .. } => super::exec_ddl(storage, |s| {
             let name = index_name.as_deref().unwrap_or("");
             StorageSchemaOps::rebuild_tag_index(s, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DescEdgeIndex(_) => {
+        IndexManageCommand::DescEdgeIndex { .. } => {
             let reader = super::get_reader(storage)?;
             let name = index_name.as_deref().unwrap_or("");
             match reader
@@ -800,7 +869,7 @@ pub(super) fn execute_index_manage(
                 ))),
             }
         }
-        IndexManageNode::ShowEdgeIndexes(_) => {
+        IndexManageCommand::ShowEdgeIndexes => {
             let reader = super::get_reader(storage)?;
             let indexes = reader
                 .list_edge_indexes(space_name)
@@ -842,7 +911,7 @@ pub(super) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageNode::RebuildEdgeIndex(_) => super::exec_ddl(storage, |s| {
+        IndexManageCommand::RebuildEdgeIndex { .. } => super::exec_ddl(storage, |s| {
             let name = index_name.as_deref().unwrap_or("");
             StorageSchemaOps::rebuild_edge_index(s, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -877,93 +946,6 @@ pub(super) fn execute_delete_index(
     result
 }
 
-fn extract_space_manage_name(node: &SpaceManageNode) -> Option<String> {
-    use SpaceManageNode::*;
-    match node {
-        Create(node) => Some(node.info().space_name.clone()),
-        Drop(node) => Some(node.space_name().to_string()),
-        Desc(node) => Some(node.space_name().to_string()),
-        ShowCreate(node) => Some(node.space_name().to_string()),
-        Switch(node) => Some(node.space_name().to_string()),
-        Clear(node) => Some(node.space_name().to_string()),
-        Alter(node) => Some(node.space_name().to_string()),
-        Show(_) => None,
-    }
-}
-
-fn extract_tag_manage_name(node: &TagManageNode) -> Option<String> {
-    use TagManageNode::*;
-    match node {
-        Create(node) => Some(node.info().tag_name.clone()),
-        Alter(node) => Some(node.info().tag_name.clone()),
-        Desc(node) => Some(node.tag_name().to_string()),
-        Drop(node) => Some(node.tag_name().to_string()),
-        ShowCreate(node) => Some(node.tag_name().to_string()),
-        Show(_) => None,
-    }
-}
-
-fn extract_tag_manage_properties(node: &TagManageNode) -> Vec<PropertyDef> {
-    match node {
-        TagManageNode::Create(node) => node.info().properties.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn extract_edge_manage_name(node: &EdgeManageNode) -> Option<String> {
-    use EdgeManageNode::*;
-    match node {
-        Create(node) => Some(node.info().edge_name.clone()),
-        Alter(node) => Some(node.info().edge_name.clone()),
-        Desc(node) => Some(node.edge_name().to_string()),
-        Drop(node) => Some(node.edge_name().to_string()),
-        ShowCreate(node) => Some(node.edge_name().to_string()),
-        Show(_) => None,
-    }
-}
-
-fn extract_edge_manage_properties(node: &EdgeManageNode) -> Vec<PropertyDef> {
-    match node {
-        EdgeManageNode::Create(node) => node.info().properties.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn extract_index_properties(node: &IndexManageNode) -> Vec<String> {
-    use IndexManageNode::*;
-    match node {
-        CreateTagIndex(node) => node.info().properties.clone(),
-        CreateEdgeIndex(node) => node.info().properties.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn extract_index_target_name(node: &IndexManageNode) -> Option<String> {
-    use IndexManageNode::*;
-    match node {
-        CreateTagIndex(node) => Some(node.info().target_name.clone()).filter(|s| !s.is_empty()),
-        CreateEdgeIndex(node) => Some(node.info().target_name.clone()).filter(|s| !s.is_empty()),
-        _ => None,
-    }
-}
-
-fn extract_index_manage_name(node: &IndexManageNode) -> Option<String> {
-    use IndexManageNode::*;
-    match node {
-        CreateTagIndex(node) => Some(node.info().index_name.clone()),
-        DropTagIndex(node) => Some(node.index_name().to_string()),
-        DescTagIndex(node) => Some(node.index_name().to_string()),
-        RebuildTagIndex(node) => Some(node.index_name().to_string()),
-        CreateEdgeIndex(node) => Some(node.info().index_name.clone()),
-        DropEdgeIndex(node) => Some(node.index_name().to_string()),
-        DescEdgeIndex(node) => Some(node.index_name().to_string()),
-        RebuildEdgeIndex(node) => Some(node.index_name().to_string()),
-        ShowCreateIndex(node) => Some(node.index_name().to_string()),
-        ShowTagIndexes(_) | ShowEdgeIndexes(_) | ShowIndexes(_) => None,
-    }
-}
-
-/// Parse vid_type string (from CREATE SPACE statement) into `DataType`.
 fn parse_vid_type_str(s: &str) -> crate::core::types::DataType {
     let upper = s.trim().to_uppercase();
     if upper == "INT64" {

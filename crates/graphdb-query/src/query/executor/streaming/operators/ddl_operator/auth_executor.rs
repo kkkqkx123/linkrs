@@ -8,12 +8,12 @@ use crate::core::types::user::{UserAlterInfo, UserInfo};
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode;
+use crate::query::executor::streaming::operators::spec::UserManageCommand;
 use crate::storage::{QueryStorage, StorageAuthOps};
 
 pub(super) fn execute_user_manage(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    command: &UserManageNode,
+    command: &UserManageCommand,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -25,45 +25,54 @@ pub(super) fn execute_user_manage(
         return Ok(None);
     }
     let result = match command {
-        UserManageNode::Create(node) => super::exec_auth(storage, |s| {
-            if node.username().is_empty() {
+        UserManageCommand::Create {
+            username,
+            password,
+            role,
+        } => super::exec_auth(storage, |s| {
+            if username.is_empty() {
                 return Err(QueryError::execution(
                     "Username cannot be empty".to_string(),
                 ));
             }
-            if node.password().is_empty() {
+            if password.is_empty() {
                 return Err(QueryError::execution(
                     "Password cannot be empty".to_string(),
                 ));
             }
-            if !node.role().is_empty()
-                && node.role().parse::<RoleType>().is_err()
-            {
+            if !role.is_empty() && role.parse::<RoleType>().is_err() {
                 return Err(QueryError::execution(format!(
                     "Unknown role type: {}",
-                    node.role()
+                    role
                 )));
             }
-            let info = UserInfo::new(node.username().to_string(), node.password().to_string())
+            let info = UserInfo::new(username.clone(), password.clone())
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             StorageAuthOps::create_user(s, &info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::Drop(node) => super::exec_auth(storage, |s| {
-            let name = node.username();
-            let dropped = StorageAuthOps::drop_user(s, name)
+        UserManageCommand::Drop {
+            username,
+            if_exists,
+        } => super::exec_auth(storage, |s| {
+            let dropped = StorageAuthOps::drop_user(s, username)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            if !dropped && !node.if_exists() {
+            if !dropped && !*if_exists {
                 return Err(QueryError::execution(format!(
                     "User {} does not exist",
-                    name
+                    username
                 )));
             }
             Ok(())
         }),
-        UserManageNode::Alter(node) => super::exec_auth(storage, |s| {
-            if let Some(role) = node.new_role() {
+        UserManageCommand::Alter {
+            username,
+            new_password,
+            new_role,
+            is_locked,
+        } => super::exec_auth(storage, |s| {
+            if let Some(role) = new_role {
                 if role.parse::<RoleType>().is_err() {
                     return Err(QueryError::execution(format!(
                         "Unknown role type: {}",
@@ -71,60 +80,62 @@ pub(super) fn execute_user_manage(
                     )));
                 }
             }
-            let mut alter_info = UserAlterInfo::new(node.username().to_string());
-            if let Some(password) = node.new_password() {
+            let mut alter_info = UserAlterInfo::new(username.clone());
+            if let Some(password) = new_password {
                 alter_info.new_password = Some(password.clone());
             }
-            if let Some(is_locked) = node.is_locked() {
-                alter_info.is_locked = Some(is_locked);
+            if let Some(locked) = is_locked {
+                alter_info.is_locked = Some(*locked);
             }
             StorageAuthOps::alter_user(s, &alter_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::DescribeUser(node) => {
+        UserManageCommand::DescribeUser { username } => {
             let reader = super::get_reader(storage)?;
-            let name = node.username();
-            if reader.user_exists(name) {
+            if reader.user_exists(username) {
                 let schema = super::make_single_col_schema("user", "string");
                 Ok(Some(super::make_single_row(
                     schema,
-                    vec![Value::string(format!("User '{}' exists", name))],
+                    vec![Value::string(format!("User '{}' exists", username))],
                 )))
             } else {
                 Err(QueryError::execution(format!(
                     "User {} does not exist",
-                    name
+                    username
                 )))
             }
         }
-        UserManageNode::ChangePassword(node) => super::exec_auth(storage, |s| {
-            let info = node.password_info();
-            StorageAuthOps::change_password(s, info)
+        UserManageCommand::ChangePassword { password_info } => super::exec_auth(storage, |s| {
+            StorageAuthOps::change_password(s, password_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::GrantRole(node) => super::exec_auth(storage, |s| {
+        UserManageCommand::GrantRole {
+            username,
+            space_name,
+            role,
+        } => super::exec_auth(storage, |s| {
             let space_id = s
-                .get_space_id(node.space_name())
+                .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            let role = node
-                .role()
-                .parse::<RoleType>()
-                .map_err(QueryError::execution)?;
-            StorageAuthOps::grant_role(s, node.username(), space_id, role)
+            let role = role.parse::<RoleType>().map_err(QueryError::execution)?;
+            StorageAuthOps::grant_role(s, username, space_id, role)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::RevokeRole(node) => super::exec_auth(storage, |s| {
+        UserManageCommand::RevokeRole {
+            username,
+            space_name,
+        } => super::exec_auth(storage, |s| {
             let space_id = s
-                .get_space_id(node.space_name())
+                .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            StorageAuthOps::revoke_role(s, node.username(), space_id)
+            StorageAuthOps::revoke_role(s, username, space_id)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::ShowUsers(_) => {
+        UserManageCommand::ShowUsers => {
             let reader = super::get_reader(storage)?;
             let users = reader.list_users();
             let rows: Vec<Vec<Value>> = users
@@ -134,7 +145,7 @@ pub(super) fn execute_user_manage(
             let schema = super::make_single_col_schema("user", "string");
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        UserManageNode::ShowRoles(_) => {
+        UserManageCommand::ShowRoles => {
             let schema = super::make_single_col_schema("role", "string");
             Ok(Some(DataChunk::new(Vec::new(), schema)))
         }

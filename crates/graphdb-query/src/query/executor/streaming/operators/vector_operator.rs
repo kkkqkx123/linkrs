@@ -8,7 +8,7 @@ use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
+use crate::query::executor::streaming::operators::spec::VectorManageCommand;
 use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
@@ -33,7 +33,7 @@ pub enum VectorOperator {
     VectorManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
-        command: VectorManageNode,
+        command: VectorManageCommand,
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -185,11 +185,18 @@ impl VectorOperator {
                 }
 
                 let result = match command {
-                    VectorManageNode::Create(node) => {
+                    VectorManageCommand::Create {
+                        index_name,
+                        tag_name,
+                        field_name,
+                        vector_size,
+                        distance,
+                        space_id,
+                    } => {
                         #[cfg(feature = "qdrant")]
                         {
                             if let Some(coordinator) = vector_coordinator {
-                                let distance = match node.distance {
+                                let distance = match distance {
                                     crate::query::parser::ast::vector::VectorDistance::Cosine => {
                                         vector_client::DistanceMetric::Cosine
                                     }
@@ -202,21 +209,24 @@ impl VectorOperator {
                                 };
                                 let res = futures::executor::block_on(
                                     coordinator.create_vector_index(
-                                        node.space_id,
-                                        &node.tag_name,
-                                        &node.field_name,
-                                        node.vector_size,
+                                        *space_id,
+                                        tag_name,
+                                        field_name,
+                                        *vector_size,
                                         distance,
                                     ),
                                 )
                                 .map_err(|e| {
-                                    QueryError::execution(format!("Vector create failed: {}", e))
+                                    QueryError::execution(format!(
+                                        "Vector create failed: {}",
+                                        e
+                                    ))
                                 });
                                 match res {
                                     Ok(_) => Ok(Some(make_manage_result(
                                         Arc::clone(&base.output_layout),
                                         "create_vector_index",
-                                        Some(&node.index_name),
+                                        Some(index_name.as_str()),
                                         "created",
                                     ))),
                                     Err(e) => Err(e),
@@ -225,29 +235,37 @@ impl VectorOperator {
                                 Ok(Some(make_manage_result(
                                     Arc::clone(&base.output_layout),
                                     "create_vector_index",
-                                    Some(&node.index_name),
+                                    Some(index_name.as_str()),
                                     "no-coordinator",
                                 )))
                             }
                         }
                         #[cfg(not(feature = "qdrant"))]
                         {
-                            let _ = (storage, space_name);
+                            let _ = (
+                                storage,
+                                space_name,
+                                tag_name,
+                                field_name,
+                                vector_size,
+                                distance,
+                                space_id,
+                            );
                             Ok(Some(make_manage_result(
                                 Arc::clone(&base.output_layout),
                                 "create_vector_index",
-                                Some(&node.index_name),
+                                Some(index_name.as_str()),
                                 "qdrant feature disabled",
                             )))
                         }
                     }
-                    VectorManageNode::Drop(node) => {
+                    VectorManageCommand::Drop { index_name } => {
                         #[cfg(feature = "qdrant")]
                         {
                             let _ = vector_coordinator;
                             Err(QueryError::execution(format!(
                                 "Vector index drop requires tag and field metadata: {}",
-                                node.index_name
+                                index_name
                             )))
                         }
                         #[cfg(not(feature = "qdrant"))]
@@ -256,7 +274,7 @@ impl VectorOperator {
                             Ok(Some(make_manage_result(
                                 Arc::clone(&base.output_layout),
                                 "drop_vector_index",
-                                Some(&node.index_name),
+                                Some(index_name.as_str()),
                                 "qdrant feature disabled",
                             )))
                         }
