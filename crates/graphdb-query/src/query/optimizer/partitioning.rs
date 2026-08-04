@@ -6,6 +6,9 @@
 //! identifiers.
 
 use crate::query::optimizer::stats::StatsView;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    MultipleInputNode, SingleInputNode,
+};
 use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum};
 
 /// Static configuration for partition selection. The default is disabled so
@@ -62,6 +65,30 @@ impl PartitioningPlanner {
         &self.config
     }
 
+    /// Deterministic layout signature for the current partitioning config and
+    /// data domain.  It is embedded in the [`PartitionSpec::layout_version`]
+    /// so the plan cache fingerprint changes whenever the trusted vertex-id
+    /// range, partition granularity, or data domain changes — forcing a
+    /// replan instead of reusing a stale cached partition layout.
+    fn layout_signature(&self, source: &PartitionSource) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match &self.config.vertex_id_range {
+            Some(range) => {
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            None => {
+                hasher.write_u8(0);
+            }
+        }
+        self.config.min_rows_per_partition.hash(&mut hasher);
+        self.config.max_partitions.hash(&mut hasher);
+        self.config.max_workers.hash(&mut hasher);
+        source.to_string().hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn decide(&self, root: &PlanNodeEnum, statistics: &StatsView) -> PartitioningDecision {
         if !self.config.enabled {
             return Self::fallback("partitioning is disabled");
@@ -86,6 +113,13 @@ impl PartitioningPlanner {
             );
         }
         if Self::has_graph_traversal(root) {
+            // E4: allow an anchored *bounded* traversal (a single ExpandAll
+            // above the anchor vertex scan). The anchor is partitioned by
+            // vertex-id range and each partition expands locally; only
+            // recursive / path-algorithm traversals are rejected outright.
+            if let Some(decision) = self.decide_anchored_traversal(root, statistics, &range) {
+                return decision;
+            }
             return Self::fallback(
                 "plan contains recursive graph traversal; partitioning not supported",
             );
@@ -93,47 +127,356 @@ impl PartitioningPlanner {
 
         let mut scans = Vec::new();
         Self::collect_vertex_scans(root, &mut scans);
-        if scans.len() != 1 {
+        if scans.len() == 1 {
+            let Some(tag) = scans[0].tag() else {
+                return Self::fallback("vertex scan has no tag statistics key");
+            };
+            let rows = statistics.vertex_count(tag);
+            if rows == 0 {
+                return Self::fallback(format!(
+                    "missing statistics for vertex tag '{tag}'; cannot estimate row count"
+                ));
+            }
+            if rows < self.config.min_rows_per_partition.saturating_mul(2) {
+                return Self::fallback(format!(
+                    "estimated vertex rows ({rows}) are below the partition threshold"
+                ));
+            }
+
+            let desired = self.desired_partition_count(rows);
+            let ranges = split_range(&range, desired);
+            let source = PartitionSource::VertexId {
+                tag: tag.to_string(),
+            };
+            let layout_version = self.layout_signature(&source);
+            match PartitionSpec::try_new(
+                ranges,
+                source,
+                // Layout version is a signature of the partitioning config
+                // and data domain; the storage layer may supply a real
+                // monotonic version in a later phase.
+                Some(layout_version),
+            ) {
+                Ok(spec) => PartitioningDecision {
+                    partition_spec: Some(spec),
+                    reason: format!(
+                        "partitioned tagged vertex scan '{}' into {} ranges from trusted layout",
+                        tag, desired
+                    ),
+                },
+                Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
+            }
+        } else if scans.is_empty() {
+            return self.decide_edge_scan(root, statistics, &range);
+        } else {
+            return self.decide_multi_scan(root, statistics, &range);
+        }
+    }
+
+    /// Choose a partition layout for a plan with several independent tagged
+    /// vertex scans (UNION / MINUS / INTERSECT / cross-join of partition-local
+    /// scan chains). Every branch shares the same vertex-id ranges; each branch
+    /// is scanned independently per partition and gathered before the global
+    /// set/join operator runs.
+    ///
+    /// Equality joins between two partitionable sides are rejected: without a
+    /// hash exchange, partitioning both sides and gathering would be correct
+    /// but the join itself would run serially, so it is left to E1b.
+    fn decide_multi_scan(
+        &self,
+        root: &PlanNodeEnum,
+        statistics: &StatsView,
+        range: &std::ops::Range<i64>,
+    ) -> PartitioningDecision {
+        let Some((left, right, _kind)) = Self::split_independent_branches(root) else {
             return Self::fallback(
-                "automatic partitioning requires exactly one tagged vertex scan",
+                "multi-scan plan is not a union/cross-join of independent scan branches",
+            );
+        };
+        let mut left_chain = Vec::new();
+        let mut right_chain = Vec::new();
+        if !Self::collect_vertex_chain(left, &mut left_chain)
+            || !Self::collect_vertex_chain(right, &mut right_chain)
+        {
+            return Self::fallback(
+                "multi-scan branches are not linear chains ending in tagged vertex scans",
             );
         }
-        let Some(tag) = scans[0].tag() else {
-            return Self::fallback("vertex scan has no tag statistics key");
+        let PlanNodeEnum::ScanVertices(left_scan) = left_chain[left_chain.len() - 1] else {
+            return Self::fallback("left branch must end in a tagged vertex scan");
+        };
+        let PlanNodeEnum::ScanVertices(right_scan) = right_chain[right_chain.len() - 1] else {
+            return Self::fallback("right branch must end in a tagged vertex scan");
+        };
+        let Some(left_tag) = left_scan.tag() else {
+            return Self::fallback("left vertex scan has no tag statistics key");
+        };
+        let Some(right_tag) = right_scan.tag() else {
+            return Self::fallback("right vertex scan has no tag statistics key");
+        };
+
+        let left_rows = statistics.vertex_count(left_tag);
+        let right_rows = statistics.vertex_count(right_tag);
+        if left_rows == 0 || right_rows == 0 {
+            return Self::fallback(format!(
+                "missing statistics for vertex tag(s) '{left_tag}'/'{right_tag}'"
+            ));
+        }
+        let threshold = self.config.min_rows_per_partition.saturating_mul(2);
+        if left_rows < threshold || right_rows < threshold {
+            return Self::fallback(format!(
+                "estimated vertex rows ({left_rows}/{right_rows}) are below the partition threshold"
+            ));
+        }
+
+        let rows = left_rows.max(right_rows);
+        let desired = self.desired_partition_count(rows);
+        let ranges = split_range(range, desired);
+        let representative = left_tag.to_string();
+        let source = PartitionSource::VertexId { tag: representative };
+        let layout_version = self.layout_signature(&source);
+        match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
+            Ok(spec) => PartitioningDecision {
+                partition_spec: Some(spec),
+                reason: format!(
+                    "partitioned independent scans '{left_tag}'/'{right_tag}' into {desired} shared ranges"
+                ),
+            },
+            Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
+        }
+    }
+
+    /// Choose a partition layout for an anchored bounded traversal (E4):
+    /// a linear chain with exactly one `ExpandAll` above the anchor vertex
+    /// scan. The anchor is partitioned by vertex-id range; every partition
+    /// runs the bounded traversal locally over its anchor subrange and the
+    /// results are gathered globally. Recursive traversals and path
+    /// algorithms are not chain-walkable and fall through to rejection.
+    ///
+    /// Returns `None` when the plan is not an anchored bounded traversal, so
+    /// the caller can fall back to the generic graph-traversal rejection.
+    fn decide_anchored_traversal(
+        &self,
+        root: &PlanNodeEnum,
+        statistics: &StatsView,
+        range: &std::ops::Range<i64>,
+    ) -> Option<PartitioningDecision> {
+        let mut chain = Vec::new();
+        if !Self::collect_anchored_chain(root, &mut chain) {
+            return None;
+        }
+        // chain is root-first, ending with the anchor scan.
+        let expand_count = chain
+            .iter()
+            .filter(|n| matches!(n, PlanNodeEnum::ExpandAll(_)))
+            .count();
+        if expand_count != 1 {
+            return Some(Self::fallback(
+                "anchored traversal must contain exactly one ExpandAll hop",
+            ));
+        }
+        let PlanNodeEnum::ScanVertices(scan) = chain[chain.len() - 1] else {
+            return Some(Self::fallback(
+                "anchored traversal must end in a tagged vertex scan",
+            ));
+        };
+        let Some(tag) = scan.tag() else {
+            return Some(Self::fallback("anchor vertex scan has no tag statistics key"));
         };
         let rows = statistics.vertex_count(tag);
         if rows == 0 {
+            return Some(Self::fallback(format!(
+                "missing statistics for anchor tag '{tag}'; cannot estimate row count"
+            )));
+        }
+        if rows < self.config.min_rows_per_partition.saturating_mul(2) {
+            return Some(Self::fallback(format!(
+                "estimated anchor rows ({rows}) are below the partition threshold"
+            )));
+        }
+
+        let desired = self.desired_partition_count(rows);
+        let ranges = split_range(range, desired);
+        let source = PartitionSource::VertexId {
+            tag: tag.to_string(),
+        };
+        let layout_version = self.layout_signature(&source);
+        match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
+            Ok(spec) => Some(PartitioningDecision {
+                partition_spec: Some(spec),
+                reason: format!(
+                    "partitioned anchored traversal by '{tag}' vertex-id ranges into {desired} partitions"
+                ),
+            }),
+            Err(error) => Some(Self::fallback(format!(
+                "invalid configured partition layout: {error}"
+            ))),
+        }
+    }
+
+    /// Walk a linear chain that ends in a tagged vertex scan and contains at
+    /// most one bounded `ExpandAll` hop. Any other graph operator (Traverse,
+    /// Loop, path algorithms, vertex-property fetches) fails the walk.
+    fn collect_anchored_chain<'a>(
+        node: &'a PlanNodeEnum,
+        chain: &mut Vec<&'a PlanNodeEnum>,
+    ) -> bool {
+        chain.push(node);
+        match node {
+            PlanNodeEnum::ScanVertices(_) => true,
+            PlanNodeEnum::Filter(filter) => Self::collect_anchored_chain(filter.input(), chain),
+            PlanNodeEnum::Project(project) => Self::collect_anchored_chain(project.input(), chain),
+            PlanNodeEnum::Limit(limit) => Self::collect_anchored_chain(limit.input(), chain),
+            PlanNodeEnum::Sort(sort) => Self::collect_anchored_chain(sort.input(), chain),
+            PlanNodeEnum::Aggregate(agg) => Self::collect_anchored_chain(agg.input(), chain),
+            PlanNodeEnum::TopN(topn) => Self::collect_anchored_chain(topn.input(), chain),
+            PlanNodeEnum::Dedup(dedup) => Self::collect_anchored_chain(dedup.input(), chain),
+            PlanNodeEnum::Window(window) => Self::collect_anchored_chain(window.input(), chain),
+            PlanNodeEnum::ExpandAll(expand_all) => {
+                if let Some(input) = expand_all.inputs().first() {
+                    Self::collect_anchored_chain(input, chain)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Split a binary-op root into its two branch inputs when the op is a set
+    /// op or cross join (no equality-join key dependency).
+    fn split_independent_branches(
+        node: &PlanNodeEnum,
+    ) -> Option<(&PlanNodeEnum, &PlanNodeEnum, &'static str)> {
+        match node {
+            PlanNodeEnum::Union(union) => {
+                Some((union.input(), union.union_input(), "union"))
+            }
+            PlanNodeEnum::Minus(minus) => Some((minus.input(), minus.minus_input(), "minus")),
+            PlanNodeEnum::Intersect(intersect) => {
+                Some((intersect.input(), intersect.intersect_input(), "intersect"))
+            }
+            PlanNodeEnum::CrossJoin(join) => Some((join.left_input(), join.right_input(), "cross join")),
+            _ => None,
+        }
+    }
+
+    /// Walk a linear chain that must end in a tagged vertex scan.
+    fn collect_vertex_chain<'a>(
+        node: &'a PlanNodeEnum,
+        chain: &mut Vec<&'a PlanNodeEnum>,
+    ) -> bool {
+        chain.push(node);
+        match node {
+            PlanNodeEnum::ScanVertices(_) => true,
+            PlanNodeEnum::Filter(filter) => Self::collect_vertex_chain(filter.input(), chain),
+            PlanNodeEnum::Project(project) => Self::collect_vertex_chain(project.input(), chain),
+            PlanNodeEnum::Limit(limit) => Self::collect_vertex_chain(limit.input(), chain),
+            PlanNodeEnum::Sort(sort) => Self::collect_vertex_chain(sort.input(), chain),
+            PlanNodeEnum::Aggregate(agg) => Self::collect_vertex_chain(agg.input(), chain),
+            PlanNodeEnum::TopN(topn) => Self::collect_vertex_chain(topn.input(), chain),
+            PlanNodeEnum::Dedup(dedup) => Self::collect_vertex_chain(dedup.input(), chain),
+            PlanNodeEnum::Window(window) => Self::collect_vertex_chain(window.input(), chain),
+            _ => false,
+        }
+    }
+
+    /// Number of partitions to cut for a relation with `rows` estimated rows.
+    ///
+    /// E5 granularity tuning: the baseline is `rows / min_rows_per_partition`
+    /// (one partition per threshold bucket), but the result is additionally
+    /// bounded by the available worker threads (`max_workers`) so we never cut
+    /// more partitions than can run concurrently — the actual parallelism is
+    /// `min(partitions, workers)`, and surplus partitions only add exchange
+    /// overhead. Small relations are rejected earlier via the `2 * min_rows`
+    /// threshold; a zero-size relation here clamps to the minimum of 2.
+    fn desired_partition_count(&self, rows: u64) -> usize {
+        let by_rows = usize::try_from(rows / self.config.min_rows_per_partition)
+            .unwrap_or(self.config.max_partitions);
+        let by_workers = self.config.max_workers;
+        by_rows
+            .clamp(2, self.config.max_partitions)
+            .min(by_workers.max(2))
+    }
+
+    /// Choose an edge-scan partition layout for a pure edge-table chain.
+    ///
+    /// The plan must be a linear chain ending in a `ScanEdges` node whose rows
+    /// are self-sufficient (edge properties / aggregates only). Chains that
+    /// fetch src/dst vertex properties (Expand, GetProp, AppendVertices) are
+    /// rejected because partitioning by src-id range cannot provide the
+    /// vertex-side join key.
+    fn decide_edge_scan(
+        &self,
+        root: &PlanNodeEnum,
+        statistics: &StatsView,
+        range: &std::ops::Range<i64>,
+    ) -> PartitioningDecision {
+        let mut chain = Vec::new();
+        if !Self::collect_chain(root, &mut chain) {
+            return Self::fallback(
+                "edge scan plan is not a linear chain ending in a ScanEdges node",
+            );
+        }
+        let PlanNodeEnum::ScanEdges(scan) = chain[chain.len() - 1] else {
+            return Self::fallback(
+                "edge scan plan must end in a ScanEdges node for partition selection",
+            );
+        };
+        let Some(edge_type) = scan.edge_type() else {
+            return Self::fallback("edge scan has no edge type statistics key");
+        };
+        let rows = statistics.edge_count(&edge_type);
+        if rows == 0 {
             return Self::fallback(format!(
-                "missing statistics for vertex tag '{tag}'; cannot estimate row count"
+                "missing statistics for edge type '{edge_type}'; cannot estimate row count"
             ));
         }
         if rows < self.config.min_rows_per_partition.saturating_mul(2) {
             return Self::fallback(format!(
-                "estimated vertex rows ({rows}) are below the partition threshold"
+                "estimated edge rows ({rows}) are below the partition threshold"
             ));
         }
 
-        let desired = usize::try_from(rows / self.config.min_rows_per_partition)
-            .unwrap_or(self.config.max_partitions)
-            .clamp(2, self.config.max_partitions);
+        let desired = self.desired_partition_count(rows);
         let ranges = split_range(range, desired);
-        match PartitionSpec::try_new(
-            ranges,
-            PartitionSource::VertexId {
-                tag: tag.to_string(),
-            },
-            // No layout versioning from the partitioning planner yet;
-            // the storage layer will provide one in a later phase.
-            None,
-        ) {
-            Ok(spec) => PartitioningDecision {
-                partition_spec: Some(spec),
-                reason: format!(
-                    "partitioned tagged vertex scan '{}' into {} ranges from trusted layout",
-                    tag, desired
-                ),
-            },
+        let source = PartitionSource::EdgeId {
+            edge_type: edge_type.to_string(),
+        };
+        let layout_version = self.layout_signature(&source);
+        match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
+            Ok(spec) => {
+                let description = spec.source().to_string();
+                PartitioningDecision {
+                    partition_spec: Some(spec),
+                    reason: format!(
+                        "partitioned edge scan {description} into {desired} src-id ranges from trusted layout"
+                    ),
+                }
+            }
             Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
+        }
+    }
+
+    /// Walk a linear chain from `node` down to its terminal scan. Supports the
+    /// same unary operators as the physical partition builder; anything else
+    /// (joins, Expand, vertex lookups, set ops) returns `false`.
+    fn collect_chain<'a>(
+        node: &'a PlanNodeEnum,
+        chain: &mut Vec<&'a PlanNodeEnum>,
+    ) -> bool {
+        chain.push(node);
+        match node {
+            PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_) => true,
+            PlanNodeEnum::Filter(filter) => Self::collect_chain(filter.input(), chain),
+            PlanNodeEnum::Project(project) => Self::collect_chain(project.input(), chain),
+            PlanNodeEnum::Limit(limit) => Self::collect_chain(limit.input(), chain),
+            PlanNodeEnum::Sort(sort) => Self::collect_chain(sort.input(), chain),
+            PlanNodeEnum::Aggregate(agg) => Self::collect_chain(agg.input(), chain),
+            PlanNodeEnum::TopN(topn) => Self::collect_chain(topn.input(), chain),
+            PlanNodeEnum::Dedup(dedup) => Self::collect_chain(dedup.input(), chain),
+            PlanNodeEnum::Window(window) => Self::collect_chain(window.input(), chain),
+            _ => false,
         }
     }
 
@@ -205,7 +548,7 @@ impl PartitioningPlanner {
     }
 }
 
-fn split_range(range: std::ops::Range<i64>, partition_count: usize) -> Vec<std::ops::Range<i64>> {
+fn split_range(range: &std::ops::Range<i64>, partition_count: usize) -> Vec<std::ops::Range<i64>> {
     let total = range.end - range.start;
     let width = (total + partition_count as i64 - 1) / partition_count as i64;
     let mut ranges = Vec::with_capacity(partition_count);
@@ -250,7 +593,7 @@ mod tests {
             min_rows_per_partition: 1_000,
             max_partitions: 4,
             vertex_id_range: Some(0i64..10_000),
-            max_workers: 1,
+            max_workers: 4,
             max_buffered_chunks: 10,
         });
 
@@ -262,6 +605,48 @@ mod tests {
                 .map(PartitionSpec::partition_count),
             Some(4)
         );
+        let spec = decision.partition_spec.expect("partitioned spec");
+        assert!(
+            spec.layout_version().is_some(),
+            "layout version must be populated from the config/domain signature"
+        );
+        let signature = planner.layout_signature(spec.source());
+        assert_eq!(spec.layout_version(), Some(signature));
+    }
+
+    #[test]
+    fn layout_signature_changes_when_config_changes() {
+        let stats = make_stats();
+        let base = make_planner();
+        let reranged = PartitioningPlanner::new(PartitioningConfig {
+            vertex_id_range: Some(0i64..20_000),
+            ..make_planner().config().clone()
+        });
+        let resized = PartitioningPlanner::new(PartitioningConfig {
+            max_workers: 8,
+            ..make_planner().config().clone()
+        });
+        let plan = tagged_scan();
+        let base_sig = base
+            .decide(&plan, &view_of(&stats))
+            .partition_spec
+            .map(|spec| spec.layout_version().unwrap());
+        let base_again = base
+            .decide(&plan, &view_of(&stats))
+            .partition_spec
+            .map(|spec| spec.layout_version().unwrap());
+        let reranged_sig = reranged
+            .decide(&plan, &view_of(&stats))
+            .partition_spec
+            .map(|spec| spec.layout_version().unwrap());
+        let resized_sig = resized
+            .decide(&plan, &view_of(&stats))
+            .partition_spec
+            .map(|spec| spec.layout_version().unwrap());
+        let base = base_sig.expect("layout signature");
+        assert_eq!(base_again.expect("layout signature"), base, "signature is deterministic");
+        assert_ne!(base, reranged_sig.expect("layout signature"), "vertex-id range change must alter the signature");
+        assert_ne!(base, resized_sig.expect("layout signature"), "worker count change must alter the signature");
     }
 
     #[test]
@@ -284,7 +669,7 @@ mod tests {
             min_rows_per_partition: 1_000,
             max_partitions: 4,
             vertex_id_range: Some(0i64..10_000),
-            max_workers: 1,
+            max_workers: 4,
             max_buffered_chunks: 10,
         })
     }
@@ -324,5 +709,257 @@ mod tests {
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("graph traversal"));
+    }
+
+    #[test]
+    fn multi_scan_union_selects_partition_layout() {
+        use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+
+        let stats = StatisticsManager::new();
+        let mut tag = TagStatistics::new("person".to_string());
+        tag.vertex_count = 10_000;
+        stats.update_tag_stats(TEST_SPACE, tag);
+        let mut other = TagStatistics::new("company".to_string());
+        other.vertex_count = 10_000;
+        stats.update_tag_stats(TEST_SPACE, other);
+
+        let mut scan_a = ScanVerticesNode::new(1, "space");
+        scan_a.set_tag("person");
+        let mut scan_b = ScanVerticesNode::new(2, "space");
+        scan_b.set_tag("company");
+        let union = UnionNode::new(
+            PlanNodeEnum::ScanVertices(scan_a),
+            PlanNodeEnum::ScanVertices(scan_b),
+            false,
+        )
+        .expect("union plan should build");
+        let plan = PlanNodeEnum::Union(union);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("union of two large scans should partition");
+        assert_eq!(spec.partition_count(), 4);
+        assert!(
+            matches!(spec.source(), PartitionSource::VertexId { tag } if tag == "person"),
+            "representative source is the left scan tag"
+        );
+    }
+
+    #[test]
+    fn multi_scan_union_falls_back_when_branch_is_not_a_scan_chain() {
+        use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::CrossJoinNode;
+
+        let stats = make_stats();
+        let mut scan_a = ScanVerticesNode::new(1, "space");
+        scan_a.set_tag("person");
+        let mut scan_b = ScanVerticesNode::new(2, "space");
+        scan_b.set_tag("person");
+        let mut scan_c = ScanVerticesNode::new(3, "space");
+        scan_c.set_tag("company");
+        let cross = CrossJoinNode::new(
+            PlanNodeEnum::ScanVertices(scan_b),
+            PlanNodeEnum::ScanVertices(scan_c),
+        )
+        .expect("cross join should build");
+        let union = UnionNode::new(
+            PlanNodeEnum::ScanVertices(scan_a),
+            PlanNodeEnum::CrossJoin(cross),
+            false,
+        )
+        .expect("union plan should build");
+        let plan = PlanNodeEnum::Union(union);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("linear chains"));
+    }
+
+    #[test]
+    fn equality_join_is_rejected_for_partitioning() {
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+
+        let stats = make_stats();
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        let join = InnerJoinNode::new(
+            PlanNodeEnum::ScanVertices(scan.clone()),
+            PlanNodeEnum::ScanVertices(scan),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("join plan should build");
+        let plan = PlanNodeEnum::InnerJoin(join);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("not a union/cross-join"));
+    }
+
+    #[test]
+    fn edge_scan_selects_partition_layout() {
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
+        use crate::query::optimizer::stats::EdgeTypeStatistics;
+
+        let stats = StatisticsManager::new();
+        let mut edge = EdgeTypeStatistics::new("follows".to_string());
+        edge.edge_count = 10_000;
+        stats.update_edge_stats(TEST_SPACE, edge);
+
+        let scan = ScanEdgesNode::new(1, "follows");
+        let plan = PlanNodeEnum::ScanEdges(scan);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("large edge scan should partition");
+        assert_eq!(spec.partition_count(), 4);
+        assert!(
+            matches!(spec.source(), PartitionSource::EdgeId { edge_type } if edge_type == "follows")
+        );
+    }
+
+    #[test]
+    fn edge_scan_with_traversal_above_rejected() {
+        use crate::core::EdgeDirection;
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandNode;
+        use crate::query::optimizer::stats::EdgeTypeStatistics;
+
+        let stats = StatisticsManager::new();
+        let mut edge = EdgeTypeStatistics::new("follows".to_string());
+        edge.edge_count = 10_000;
+        stats.update_edge_stats(TEST_SPACE, edge);
+
+        // Expand above an edge scan needs vertex-side data.
+        let scan = PlanNodeEnum::ScanEdges(ScanEdgesNode::new(1, "follows"));
+        let mut expand = ExpandNode::new(1, vec!["follows".to_string()], EdgeDirection::Out);
+        expand.add_input(scan);
+        let plan = PlanNodeEnum::Expand(expand);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(
+            decision.reason.contains("graph traversal"),
+            "expand plans must be rejected, got: {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn partition_count_is_capped_by_available_workers() {
+        // E5 granularity: never cut more partitions than can run concurrently.
+        // rows/min_rows = 10, but only 2 workers -> exactly 2 partitions.
+        let stats = make_stats();
+        let planner = PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 8,
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 2,
+            max_buffered_chunks: 10,
+        });
+
+        let decision = planner.decide(&tagged_scan(), &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("large scan should partition");
+        assert_eq!(spec.partition_count(), 2);
+    }
+
+    #[test]
+    fn partition_count_is_capped_by_max_partitions() {
+        // rows/min_rows = 20, but max_partitions = 4 -> 4 partitions.
+        let stats = make_stats();
+        let planner = PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 500,
+            max_partitions: 4,
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 8,
+            max_buffered_chunks: 10,
+        });
+
+        let decision = planner.decide(&tagged_scan(), &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("large scan should partition");
+        assert_eq!(spec.partition_count(), 4);
+    }
+
+    #[test]
+    fn anchored_traversal_selects_partition_layout() {
+        use crate::core::EdgeDirection;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+
+        let stats = make_stats();
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        let mut expand = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+        expand.add_input(PlanNodeEnum::ScanVertices(scan));
+        let plan = PlanNodeEnum::ExpandAll(expand);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("anchored traversal should partition");
+        assert_eq!(spec.partition_count(), 4);
+        assert!(
+            matches!(spec.source(), PartitionSource::VertexId { tag } if tag == "person"),
+            "anchor scan tag is the partition source"
+        );
+    }
+
+    #[test]
+    fn two_hop_traversal_is_rejected() {
+        use crate::core::EdgeDirection;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+
+        let stats = make_stats();
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        let mut hop1 = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+        hop1.add_input(PlanNodeEnum::ScanVertices(scan));
+        let mut hop2 = ExpandAllNode::new(2, vec!["follows".to_string()], "OUT");
+        hop2.add_input(PlanNodeEnum::ExpandAll(hop1));
+        let plan = PlanNodeEnum::ExpandAll(hop2);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(
+            decision.reason.contains("exactly one ExpandAll"),
+            "two-hop traversals must be rejected, got: {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn recursive_traversal_is_rejected() {
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
+
+        let stats = make_stats();
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        let mut append = AppendVerticesNode::new(1, "person");
+        append.add_input(PlanNodeEnum::ScanVertices(scan));
+        let plan = PlanNodeEnum::AppendVertices(append);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(
+            decision.reason.contains("recursive graph traversal"),
+            "vertex-property-fetch traversals must be rejected, got: {}",
+            decision.reason
+        );
     }
 }

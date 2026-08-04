@@ -16,6 +16,7 @@ use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
+use crate::query::optimizer::PartitioningConfig;
 use crate::query::DataSet;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
@@ -188,10 +189,12 @@ impl<
 
         // Engine-level shared scheduler + query registry, created once at
         // startup and reused across all queries (worker threads persist).
-        let optimizer_engine = Arc::new(crate::query::OptimizerEngine::default());
+        let mut optimizer_engine = crate::query::OptimizerEngine::default();
+        optimizer_engine.set_partitioning_config(Self::partitioning_config_from(&config));
         let shared_scheduler = Arc::new(SharedScheduler::new(
             optimizer_engine.partitioning_config().max_workers.max(1),
         ));
+        let optimizer_engine = Arc::new(optimizer_engine);
         let query_registry = Arc::new(QueryRegistry::new());
         info!(
             "Shared query scheduler created with {} worker(s)",
@@ -228,21 +231,35 @@ impl<
                         "Failed to initialize vector search, falling back to basic QueryApi: {}",
                         e
                     );
-                    let mut api =
-                        Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+                    let mut api = Self::build_query_api(
+                        &storage,
+                        &stats_manager,
+                        schema_manager.as_ref(),
+                        optimizer_engine.clone(),
+                    );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     (Arc::new(RwLock::new(api)), None)
                 }
             }
         } else {
-            let mut api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            let mut api = Self::build_query_api(
+                &storage,
+                &stats_manager,
+                schema_manager.as_ref(),
+                optimizer_engine.clone(),
+            );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             (Arc::new(RwLock::new(api)), None)
         };
 
         #[cfg(not(feature = "qdrant"))]
         let query_api = {
-            let mut api = Self::build_query_api(&storage, &stats_manager, schema_manager.as_ref());
+            let mut api = Self::build_query_api(
+                &storage,
+                &stats_manager,
+                schema_manager.as_ref(),
+                optimizer_engine.clone(),
+            );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             Arc::new(RwLock::new(api))
         };
@@ -280,17 +297,35 @@ impl<
         Arc::new(service)
     }
 
-    /// Shared helper: build a QueryApi with optional SchemaManager
+    /// Shared helper: build a QueryApi with optional SchemaManager, reusing the
+    /// server-level optimizer engine so `[parallel]` settings take effect.
     fn build_query_api(
         storage: &Arc<S>,
         stats_manager: &Arc<StatsManager>,
         schema_manager: Option<&Arc<SchemaManager>>,
+        optimizer_engine: Arc<crate::query::OptimizerEngine>,
     ) -> QueryApi<S> {
         let inner = Arc::new(RwLock::new((**storage).clone()));
-        if let Some(sm) = schema_manager {
-            QueryApi::with_schema_manager(inner, stats_manager.clone(), sm.clone())
-        } else {
-            QueryApi::new(inner, stats_manager.clone())
+        QueryApi::with_optimizer_engine(
+            inner,
+            stats_manager.clone(),
+            optimizer_engine,
+            schema_manager.cloned(),
+        )
+    }
+
+    /// Map the `[parallel]` config section onto the query optimizer's
+    /// partitioning configuration. An unconfigured section keeps the default
+    /// (partitioning disabled, single worker) so server behavior is unchanged.
+    fn partitioning_config_from(config: &Config) -> PartitioningConfig {
+        let parallel = &config.common.parallel;
+        PartitioningConfig {
+            enabled: parallel.enabled,
+            min_rows_per_partition: parallel.min_rows_per_partition,
+            max_partitions: parallel.max_partitions,
+            vertex_id_range: parallel.vertex_id_range(),
+            max_workers: parallel.workers,
+            max_buffered_chunks: parallel.max_buffered_chunks,
         }
     }
 

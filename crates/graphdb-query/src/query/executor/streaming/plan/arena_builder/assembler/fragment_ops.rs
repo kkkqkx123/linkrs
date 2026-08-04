@@ -234,7 +234,7 @@ impl ArenaPlanAssembler {
         Ok((fid, op_id))
     }
 
-    pub(super) fn push_graph_op(
+    pub(crate) fn push_graph_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,
         op_alloc: &mut PhysicalOperatorIdAllocator,
@@ -306,7 +306,7 @@ impl ArenaPlanAssembler {
         Ok((fid, op_id))
     }
 
-    pub(super) fn push_binary_op(
+    pub(crate) fn push_binary_op(
         ctx: &mut FragmentCtx,
         frag_alloc: &mut ArenaFragmentAllocator,
         left_fid: FragmentId,

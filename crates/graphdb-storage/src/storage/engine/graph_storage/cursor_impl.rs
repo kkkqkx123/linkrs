@@ -689,6 +689,7 @@ impl EdgeCursor for GraphEdgeCursor {
                 match table_state.phase {
                     TablePhase::Mutable => {
                         scan_mutable(ScanArgs {
+                            ctx,
                             store,
                             target,
                             td,
@@ -706,6 +707,7 @@ impl EdgeCursor for GraphEdgeCursor {
                     TablePhase::Segment(seg_idx) => {
                         scan_segments(
                             ScanArgs {
+                                ctx,
                                 store,
                                 target,
                                 td,
@@ -743,6 +745,7 @@ impl EdgeCursor for GraphEdgeCursor {
 }
 
 struct ScanArgs<'a> {
+    ctx: &'a GraphStorageContext,
     store: &'a TimeTravelEdgeStore,
     target: &'a TargetDef,
     td: &'a TableDef,
@@ -784,7 +787,9 @@ fn scan_mutable(args: ScanArgs) {
             continue;
         }
         if let Some(ref r) = *args.src_id_range {
-            let src_int = src_vid.as_int64().unwrap_or(0);
+            let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
+            let src_ext = resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
+            let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
             if src_int < r.start || src_int >= r.end {
                 continue;
             }
@@ -851,7 +856,9 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             continue;
         }
         if let Some(ref r) = *args.src_id_range {
-            let src_int = src_vid.as_int64().unwrap_or(0);
+            let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
+            let src_ext = resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, src_vid, args.ts);
+            let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
             if src_int < r.start || src_int >= r.end {
                 continue;
             }
@@ -1186,13 +1193,6 @@ impl EdgeCursor for ColdEdgeCursor {
             let nbr = self.row_edges[self.row_idx];
             self.row_idx += 1;
 
-            if let Some(ref range) = src_id_range {
-                let src_int = src_internal as i64;
-                if src_int < range.start || src_int >= range.end {
-                    continue;
-                }
-            }
-
             let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
             let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
             let src_vid = VertexId::from_int64(src_internal as i64);
@@ -1208,6 +1208,16 @@ impl EdgeCursor for ColdEdgeCursor {
 
             let src_ext = resolve_vertex_id(&self.ctx, src_internal, src_label, &src_vid, ts);
             let dst_ext = resolve_vertex_id(&self.ctx, dst_internal, dst_label, &dst_vid, ts);
+
+            // The CSR iterates internal vertex indices; the src-id range is
+            // expressed over external ids, so filter on the resolved id.
+            if let Some(ref range) = src_id_range {
+                let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
+                if src_int < range.start || src_int >= range.end {
+                    continue;
+                }
+            }
+
             batch.push(Edge {
                 src: make_vid(&src_ext),
                 dst: make_vid(&dst_ext),

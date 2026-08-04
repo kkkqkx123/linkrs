@@ -7,6 +7,7 @@ pub mod fulltext;
 pub mod log;
 pub mod monitoring;
 pub mod optimizer;
+pub mod parallel;
 pub mod storage;
 pub mod transaction;
 
@@ -15,6 +16,7 @@ pub use fulltext::*;
 pub use log::*;
 pub use monitoring::*;
 pub use optimizer::*;
+pub use parallel::*;
 pub use storage::*;
 pub use transaction::*;
 
@@ -45,6 +47,10 @@ pub struct CommonConfig {
     #[serde(default)]
     pub optimizer: OptimizerConfig,
 
+    /// Parallel query execution configuration
+    #[serde(default)]
+    pub parallel: ParallelConfig,
+
     /// Monitoring configuration
     #[serde(default)]
     pub monitoring: MonitoringConfig,
@@ -67,6 +73,7 @@ impl CommonConfig {
         self.log.validate()?;
         self.storage.validate()?;
         self.optimizer.validate()?;
+        self.parallel.validate()?;
         self.monitoring.validate()?;
         self.query_resource.validate()?;
         Ok(())

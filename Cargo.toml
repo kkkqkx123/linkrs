@@ -255,3 +255,7 @@ harness = false
 [[bench]]
 name = "parallel_scale_bench"
 harness = false
+
+[[bench]]
+name = "traversal_perf_bench"
+harness = false

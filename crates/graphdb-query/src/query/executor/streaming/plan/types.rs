@@ -25,6 +25,7 @@ use super::super::operators::spec::{
 use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
 use super::properties::PhysicalProperties;
+use crate::query::planning::plan::PartitionSpec;
 
 // ── Identity types ──────────────────────────────────────────────────────────
 
@@ -436,12 +437,21 @@ pub struct PhysicalPlan {
     /// Why parallel partitioning was not applied (empty = partitioning
     /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
     pub parallel_fallback_reason: String,
+    /// Physical partition layout selected for this plan (absent for
+    /// single-tree execution). Retained so the plan cache can key on the
+    /// layout and EXPLAIN/PROFILE can describe it without re-planning.
+    pub partition_spec: Option<PartitionSpec>,
 }
 
 impl PhysicalPlan {
     /// Look up an operator by its physical ID.
     pub fn operator(&self, id: PhysicalOperatorId) -> Option<&PhysicalOperatorSpec> {
         self.operators.get(id.0)
+    }
+
+    /// Physical partition layout, if the plan is partitioned.
+    pub fn partition_spec(&self) -> Option<&PartitionSpec> {
+        self.partition_spec.as_ref()
     }
 
     /// Look up all physical operators derived from a logical node.

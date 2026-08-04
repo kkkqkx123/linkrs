@@ -65,7 +65,7 @@ pub struct PlanCacheContext {
     pub capability_set: u64,
 }
 
-use crate::query::planning::plan::execution_plan::PartitionSpec;
+use crate::query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
 
 /// Query Plan Cache Key
 ///
@@ -235,11 +235,16 @@ impl PlanCacheKey {
         std::collections::hash_map::DefaultHasher::new()
     }
 
-    /// Produce a numeric fingerprint from the partition source and layout
-    /// version so that a change in either component yields a different key.
+    /// Produce a numeric fingerprint from the partition ranges, source, and
+    /// layout version so that any change in the range layout, the data domain
+    /// it maps over, or the storage layout version yields a different key.
     fn compute_fingerprint(spec: &PartitionSpec) -> u64 {
         use std::hash::Hash;
         let mut hasher = Self::hasher();
+        for range in spec.ranges() {
+            range.start.hash(&mut hasher);
+            range.end.hash(&mut hasher);
+        }
         spec.source().to_string().hash(&mut hasher);
         spec.layout_version().hash(&mut hasher);
         hasher.finish()
@@ -691,6 +696,80 @@ impl QueryPlanCache {
             .sum()
     }
 
+    /// Look up a cached plan keyed by its physical partition layout.
+    ///
+    /// The key incorporates the layout fingerprint (ranges, source, layout
+    /// version), so a plan cached under one layout is never reused for a
+    /// different one.  This is the lookup used by callers that already know
+    /// the current layout (e.g. re-planning against a previous execution's
+    /// metadata); plain-text lookups deliberately miss partitioned entries.
+    pub fn get_with_partition(&self, query: &str, spec: &PartitionSpec) -> Option<Arc<CachedPlan>> {
+        let key = PlanCacheKey::from_query_with_partition(query, spec);
+
+        if let Some(plan) = self.cache.get(&key) {
+            if plan.query_template != query {
+                log::warn!(
+                    "Query plan cache hash collision detected: hash={}, expected_query={}, cached_query={}",
+                    key.hash,
+                    query,
+                    plan.query_template
+                );
+                self.stats.counters.record_miss();
+                return None;
+            }
+            self.stats.counters.record_hit();
+            return Some(plan);
+        }
+
+        self.stats.counters.record_miss();
+        None
+    }
+
+    /// Store a plan under its physical partition layout key.
+    ///
+    /// Only partitioned plans should use this; the plain-text key is left
+    /// free so a subsequent lookup that cannot provide the layout does not
+    /// silently reuse a layout-dependent plan.
+    pub fn put_with_partition(
+        &self,
+        query: &str,
+        spec: &PartitionSpec,
+        plan: Arc<PhysicalPlan>,
+        param_positions: Vec<ParamPosition>,
+    ) {
+        let key = PlanCacheKey::from_query_with_partition(query, spec);
+        let priority = if self.config.priority_config.enable_priority {
+            self.calculate_priority(&plan)
+        } else {
+            CachePriority::Normal
+        };
+        let complexity_score = self.calculate_complexity_score(&plan);
+        let cached_plan = Arc::new(CachedPlan {
+            query_template: query.to_string(),
+            plan,
+            param_positions,
+            created_at: Instant::now(),
+            last_accessed: Instant::now(),
+            access_count: 0,
+            avg_execution_time_ms: 0.0,
+            execution_count: 0,
+            priority,
+            complexity_score,
+            estimated_compute_cost: self.estimate_compute_cost_from_score(complexity_score),
+            current_ttl: Duration::from_secs(self.config.ttl_config.base_ttl_seconds),
+            dependent_tables: Vec::new(),
+            is_dml: false,
+            is_transaction: false,
+        });
+        self.cache.insert(key, cached_plan);
+        self.stats.memory.update(self.estimate_current_memory(), self.cache.entry_count() as usize);
+    }
+
+    /// Estimate compute cost in milliseconds from an already-computed score.
+    fn estimate_compute_cost_from_score(&self, complexity: u32) -> u64 {
+        (complexity as u64 * 10).max(100)
+    }
+
     /// Compute a parameter type signature from param positions.
     ///
     /// M1.6: produces a hash of the parameter *types* (not values) so that
@@ -1088,5 +1167,118 @@ mod tests {
         assert!(CachePriority::Critical > CachePriority::High);
         assert!(CachePriority::High > CachePriority::Normal);
         assert!(CachePriority::Normal > CachePriority::Low);
+    }
+
+    fn make_spec(ranges: &[(i64, i64)], layout_version: Option<u64>) -> PartitionSpec {
+        PartitionSpec::try_new(
+            ranges
+                .iter()
+                .map(|(start, end)| *start..*end)
+                .collect(),
+            PartitionSource::VertexId {
+                tag: "Node".to_string(),
+            },
+            layout_version,
+        )
+        .expect("valid spec")
+    }
+
+    #[test]
+    fn partition_fingerprint_changes_with_ranges() {
+        let key_a = PlanCacheKey::from_query_with_partition(
+            "MATCH (n:Node) RETURN n",
+            &make_spec(&[(0, 100), (100, 200)], Some(1)),
+        );
+        let key_b = PlanCacheKey::from_query_with_partition(
+            "MATCH (n:Node) RETURN n",
+            &make_spec(&[(0, 50), (50, 100), (100, 200)], Some(1)),
+        );
+        assert_ne!(key_a, key_b, "different range splits must not share a key");
+    }
+
+    #[test]
+    fn partition_fingerprint_changes_with_source_and_layout_version() {
+        let base = make_spec(&[(0, 100)], Some(1));
+        let other_source = PartitionSpec::try_new(
+            vec![0..100],
+            PartitionSource::EdgeId {
+                edge_type: "Link".to_string(),
+            },
+            Some(1),
+        )
+        .expect("valid spec");
+        let bumped_version = make_spec(&[(0, 100)], Some(2));
+
+        let key_base =
+            PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &base);
+        assert_ne!(
+            key_base,
+            PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &other_source),
+            "different data domains must not share a key"
+        );
+        assert_ne!(
+            key_base,
+            PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &bumped_version),
+            "layout version bumps must not share a key"
+        );
+    }
+
+    #[test]
+    fn partitioned_plan_is_isolated_from_plain_text_lookup() {
+        use crate::query::executor::streaming::plan::types::{
+            CapabilitySet, FragmentGraph, FragmentId, OutputContract, PlanCompatibility,
+            PlanFingerprint, PipelineMode,
+        };
+        use crate::query::executor::streaming::parameters::ParameterSchema;
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use std::collections::HashMap;
+
+        let cache = QueryPlanCache::default();
+        let query = "MATCH (n:Node) RETURN n";
+        let spec = make_spec(&[(0, 100)], Some(1));
+        let plan = Arc::new(PhysicalPlan {
+            operators: Vec::new(),
+            logical_to_physical: HashMap::new(),
+            fragments: FragmentGraph::new(Vec::new(), FragmentId(0)),
+            root_fragment: FragmentId(0),
+            output: OutputContract {
+                output_layout: SlotLayout::new(Vec::new()),
+                always_produces_row: false,
+                nullability: Vec::new(),
+                ordering: Vec::new(),
+                delivery_streamable: true,
+                pipeline_mode: PipelineMode::Pipelined,
+            },
+            compatibility: PlanCompatibility {
+                fingerprint: PlanFingerprint { version: 1, hash: 0 },
+                layout_version: None,
+                required_capabilities: CapabilitySet::EMPTY,
+                planning_config_hash: 0,
+                optimizer_version: 0,
+            },
+            required_capabilities: CapabilitySet::EMPTY,
+            parameter_schema: ParameterSchema {
+                params: Vec::new(),
+                name_to_slot: HashMap::new(),
+            },
+            parallel_fallback_reason: String::new(),
+            partition_spec: Some(spec.clone()),
+        });
+
+        cache.put_with_partition(query, &spec, plan.clone(), Vec::new());
+        assert!(
+            cache.get(query).is_none(),
+            "plain-text lookup must not serve a partitioned plan"
+        );
+        let cached = cache
+            .get_with_partition(query, &spec)
+            .expect("partition-keyed lookup should hit");
+        assert_eq!(cached.plan.fragment_count(), 0);
+
+        let other = make_spec(&[(0, 50), (50, 100)], Some(1));
+        assert!(
+            cache.get_with_partition(query, &other).is_none(),
+            "a different layout must not hit the cached partitioned plan"
+        );
     }
 }

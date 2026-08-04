@@ -13,22 +13,25 @@
 //! followed by a global `FinalAggregate`; all other shapes fall back to the
 //! serial builder with a recorded reason.
 
-use super::super::super::operators::spec::{BlockingSpec, SourceSpec};
+use super::super::super::operators::spec::{BlockingSpec, JoinSpec, SetSpec, SourceSpec};
 use super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::types::{
     FragmentId, FragmentSpec, PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec,
 };
-use super::assembler::{ArenaFragmentAllocator, ArenaPlanAssembler, FragmentCtx};
-use super::specs::{
-    build_aggregate_spec, build_filter_spec, build_limit_spec, build_project_spec, build_sort_spec,
-    build_source_spec, build_topn_spec, build_window_spec,
+use super::assembler::{
+    ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx,
+};use super::specs::{
+    build_aggregate_spec, build_expand_all_spec, build_filter_spec, build_limit_spec,
+    build_project_spec, build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
 };
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    MultipleInputNode, SingleInputNode,
+};
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::PartitionSource;
 
@@ -66,73 +69,152 @@ pub(super) fn build_partitioned(
     )>,
     PlanBuildError,
 > {
+    // Multi-branch: a set op or cross join over two independent scan chains,
+    // each partitioned with the shared ranges and gathered before the global
+    // binary operator.
+    if let Some(result) = build_partitioned_multi(node, spec, exec_ctx)? {
+        return Ok(Some(result));
+    }
+
     let chain = match decompose(node) {
         Some(chain) => chain,
         None => return Ok(None),
     };
-    let PartitionSource::VertexId { tag } = spec.source() else {
-        return Ok(None);
+    let scan = match spec.source() {
+        PartitionSource::VertexId { tag } => {
+            let PlanNodeEnum::ScanVertices(scan_node) = chain.scan else {
+                return Ok(None);
+            };
+            if scan_node.tag().map(|t| t.as_str()) != Some(tag.as_str()) {
+                return Ok(None);
+            }
+            chain.scan
+        }
+        PartitionSource::EdgeId { edge_type } => {
+            let PlanNodeEnum::ScanEdges(scan_node) = chain.scan else {
+                return Ok(None);
+            };
+            if scan_node.edge_type().as_deref() != Some(edge_type.as_str()) {
+                return Ok(None);
+            }
+            chain.scan
+        }
+        PartitionSource::Index { .. } => return Ok(None),
     };
-    let PlanNodeEnum::ScanVertices(scan_node) = chain.scan else {
-        return Ok(None);
-    };
-    if scan_node.tag().map(|t| t.as_str()) != Some(tag.as_str()) {
-        return Ok(None);
-    }
 
     let mut operators = Vec::new();
     let mut fragments = Vec::new();
     let mut op_alloc = PhysicalOperatorIdAllocator::new();
     let mut frag_alloc = ArenaFragmentAllocator::new();
 
+    let (root_fragment, root_operator) = build_chain_group(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        &chain,
+        scan,
+        spec,
+        exec_ctx,
+    )?;
+
+    Ok(Some((operators, fragments, root_fragment, root_operator)))
+}
+
+/// Build one partition group for a linear scan chain: one local fragment per
+/// range (scan + local Filter/Project + optional PartialAggregate), a
+/// Concatenate exchange, then the chain's global operators (including a
+/// FinalAggregate for split aggregates). Returns the group root.
+#[allow(clippy::too_many_arguments)]
+fn build_chain_group(
+    operators: &mut Vec<PhysicalOperatorSpec>,
+    fragments: &mut Vec<FragmentSpec>,
+    op_alloc: &mut PhysicalOperatorIdAllocator,
+    frag_alloc: &mut ArenaFragmentAllocator,
+    chain: &PartitionedChain,
+    scan: &PlanNodeEnum,
+    spec: &crate::query::planning::plan::PartitionSpec,
+    exec_ctx: &ExecutionContext,
+) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
     // 1. One local fragment per partition: StorageScanVertices bound to the
-    //    partition's vertex-id range, followed by the local Filter/Project
-    //    pipeline and, for split aggregates, the PartialAggregate phase.
+    //    partition's vertex-id range (or StorageScanEdges bound to a src-id
+    //    range for edge scans), followed by the local Filter/Project pipeline
+    //    and, for split aggregates, the PartialAggregate phase.
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
     for range in spec.ranges() {
-        let mut scan_spec = build_source_spec(chain.scan, exec_ctx)?;
+        let mut scan_spec = build_source_spec(scan, exec_ctx)?;
         match &mut scan_spec {
             SourceSpec::StorageScanVertices {
+                partition_range, ..
+            } => *partition_range = Some(range.clone()),
+            SourceSpec::StorageScanEdges {
                 partition_range, ..
             } => *partition_range = Some(range.clone()),
             _ => {
                 return Err(PlanBuildError::unsupported(
                     "PhysicalPlan",
-                    scan_node.id(),
-                    "partitioned scan must lower to a storage vertex scan",
+                    scan.id(),
+                    "partitioned scan must lower to a storage vertex or edge scan",
                 ));
             }
         }
-        let (fid, _) = ArenaPlanAssembler::push_source_op(
-            &mut operators,
-            &mut fragments,
-            &mut op_alloc,
-            &mut frag_alloc,
-            scan_node.id(),
+        let (mut fid, _) = ArenaPlanAssembler::push_source_op(
+            operators,
+            fragments,
+            op_alloc,
+            frag_alloc,
+            scan.id(),
             scan_spec,
         );
         for op in &chain.local {
-            let spec = match op {
-                PlanNodeEnum::Filter(filter) => build_filter_spec(filter)?,
-                PlanNodeEnum::Project(project) => build_project_spec(project)?,
-                _ => unreachable!("local chain holds filter/project operators only"),
-            };
-            ArenaPlanAssembler::push_unary_op(
-                &mut operators,
-                &mut fragments,
-                &mut op_alloc,
-                fid,
-                op.id(),
-                spec,
-            )?;
+            match op {
+                PlanNodeEnum::Filter(filter) => {
+                    let spec = build_filter_spec(filter)?;
+                    fid = ArenaPlanAssembler::push_unary_op(
+                        operators,
+                        fragments,
+                        op_alloc,
+                        fid,
+                        op.id(),
+                        spec,
+                    )?
+                    .0;
+                }
+                PlanNodeEnum::Project(project) => {
+                    let spec = build_project_spec(project)?;
+                    fid = ArenaPlanAssembler::push_unary_op(
+                        operators,
+                        fragments,
+                        op_alloc,
+                        fid,
+                        op.id(),
+                        spec,
+                    )?
+                    .0;
+                }
+                PlanNodeEnum::ExpandAll(expand) => {
+                    let spec = build_expand_all_spec(expand, exec_ctx)?;
+                    fid = ArenaPlanAssembler::push_graph_op(
+                        operators,
+                        fragments,
+                        op_alloc,
+                        frag_alloc,
+                        fid,
+                        op.id(),
+                        spec,
+                    )?
+                    .0;
+                }
+                _ => unreachable!("local chain holds filter/project/expand operators only"),
+            }
         }
         if let Some(agg) = chain.aggregate_split {
             let (partial, _) = split_aggregate(agg);
             ArenaPlanAssembler::push_blocking_op(
                 &mut FragmentCtx {
-                    operators: &mut operators,
-                    fragments: &mut fragments,
-                    op_alloc: &mut op_alloc,
+                    operators,
+                    fragments,
+                    op_alloc,
                 },
                 fid,
                 agg.id(),
@@ -145,10 +227,10 @@ pub(super) fn build_partitioned(
 
     // 2. Exchange fragment: Concatenate over all partition fragments.
     let mut child_fid = ArenaPlanAssembler::push_exchange_op(
-        &mut operators,
-        &mut fragments,
-        &mut op_alloc,
-        &mut frag_alloc,
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
         partition_fids,
         spec.partition_count(),
     )
@@ -160,10 +242,10 @@ pub(super) fn build_partitioned(
             if let Some(agg) = chain.aggregate_split {
                 let (_, final_spec) = split_aggregate(agg);
                 child_fid = ArenaPlanAssembler::push_global_blocking_op(
-                    &mut operators,
-                    &mut fragments,
-                    &mut op_alloc,
-                    &mut frag_alloc,
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
                     child_fid,
                     agg.id(),
                     final_spec,
@@ -174,23 +256,140 @@ pub(super) fn build_partitioned(
             }
         }
         child_fid = push_global_op(
-            &mut operators,
-            &mut fragments,
-            &mut op_alloc,
-            &mut frag_alloc,
+            operators,
+            fragments,
+            op_alloc,
+            frag_alloc,
             child_fid,
             op,
         )?
         .0;
     }
 
-    let root_fragment = child_fid;
     let root_operator = fragments
-        .get(root_fragment.0)
+        .get(child_fid.0)
         .map(|f| f.root_operator)
         .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
 
-    Ok(Some((operators, fragments, root_fragment, root_operator)))
+    Ok((child_fid, root_operator))
+}
+
+/// The binary operators over independent scan branches that E1a can partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndependentBranchOp {
+    Union,
+    UnionAll,
+    Minus,
+    Intersect,
+    CrossJoin,
+}
+
+/// Split a binary-op root into two independent branch inputs. Equality joins
+/// are rejected here (they need a hash exchange, see E1b).
+fn split_independent_branches(
+    node: &PlanNodeEnum,
+) -> Option<(&PlanNodeEnum, &PlanNodeEnum, IndependentBranchOp)> {
+    match node {
+        PlanNodeEnum::Union(union) => {
+            let op = if union.distinct() {
+                IndependentBranchOp::Union
+            } else {
+                IndependentBranchOp::UnionAll
+            };
+            Some((union.input(), union.union_input(), op))
+        }
+        PlanNodeEnum::Minus(minus) => Some((minus.input(), minus.minus_input(), IndependentBranchOp::Minus)),
+        PlanNodeEnum::Intersect(intersect) => {
+            Some((intersect.input(), intersect.intersect_input(), IndependentBranchOp::Intersect))
+        }
+        PlanNodeEnum::CrossJoin(join) => {
+            Some((join.left_input(), join.right_input(), IndependentBranchOp::CrossJoin))
+        }
+        _ => None,
+    }
+}
+
+/// Build a partitioned plan for a set op / cross join over two independent
+/// tagged vertex scan chains.
+fn build_partitioned_multi(
+    node: &PlanNodeEnum,
+    spec: &crate::query::planning::plan::PartitionSpec,
+    exec_ctx: &ExecutionContext,
+) -> Result<
+    Option<(
+        Vec<PhysicalOperatorSpec>,
+        Vec<FragmentSpec>,
+        FragmentId,
+        PhysicalOperatorId,
+    )>,
+    PlanBuildError,
+> {
+    let Some((left, right, op)) = split_independent_branches(node) else {
+        return Ok(None);
+    };
+    let PartitionSource::VertexId { .. } = spec.source() else {
+        return Ok(None);
+    };
+    let Some(left_chain) = decompose(left) else {
+        return Ok(None);
+    };
+    let Some(right_chain) = decompose(right) else {
+        return Ok(None);
+    };
+    // Multi-scan partitioning covers vertex scans only.
+    let (PlanNodeEnum::ScanVertices(_), PlanNodeEnum::ScanVertices(_)) =
+        (left_chain.scan, right_chain.scan)
+    else {
+        return Ok(None);
+    };
+
+    let mut operators = Vec::new();
+    let mut fragments = Vec::new();
+    let mut op_alloc = PhysicalOperatorIdAllocator::new();
+    let mut frag_alloc = ArenaFragmentAllocator::new();
+
+    let (left_fid, _) = build_chain_group(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        &left_chain,
+        left_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+    let (right_fid, _) = build_chain_group(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        &right_chain,
+        right_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+
+    let binary_spec: BinaryOperatorSpec = match op {
+            IndependentBranchOp::Union => SetSpec::Union.into(),
+            IndependentBranchOp::UnionAll => SetSpec::UnionAll.into(),
+            IndependentBranchOp::Minus => SetSpec::Minus.into(),
+            IndependentBranchOp::Intersect => SetSpec::Intersect.into(),
+            IndependentBranchOp::CrossJoin => JoinSpec::CrossJoin.into(),
+        };
+    let (root_fid, root_op) = ArenaPlanAssembler::push_binary_op(
+        &mut FragmentCtx {
+            operators: &mut operators,
+            fragments: &mut fragments,
+            op_alloc: &mut op_alloc,
+        },
+        &mut frag_alloc,
+        left_fid,
+        right_fid,
+        node.id(),
+        binary_spec,
+    )?;
+
+    Ok(Some((operators, fragments, root_fid, root_op)))
 }
 
 /// Push one global operator as a new fragment consuming the current child.
@@ -319,13 +518,19 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
     // chain is root-first, ending with the scan.
     let scan_index = chain.len() - 1;
 
-    // Local operators: Filter/Project directly above the scan, up to the
-    // first global operator.
+    // Local operators: Filter/Project/ExpandAll directly above the scan, up
+    // to the first global operator. ExpandAll must be the outermost local op
+    // (its expansion is partition-local in E4 anchored traversals).
     let mut i = scan_index;
     let mut local: Vec<&PlanNodeEnum> = Vec::new();
     while i > 0 {
         let op = chain[i - 1];
-        if matches!(op, PlanNodeEnum::Filter(_) | PlanNodeEnum::Project(_)) {
+        if matches!(
+            op,
+            PlanNodeEnum::Filter(_)
+                | PlanNodeEnum::Project(_)
+                | PlanNodeEnum::ExpandAll(_)
+        ) {
             local.push(op);
             i -= 1;
         } else {
@@ -357,11 +562,12 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
 }
 
 /// Walk the linear chain from `node` down to its scan. Returns `false` when
-/// an operator outside the supported set is encountered.
+/// an operator outside the supported set is encountered. An `ExpandAll` hop
+/// is allowed (E4 anchored bounded traversal): it stays partition-local.
 fn collect_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) -> bool {
     chain.push(node);
     match node {
-        PlanNodeEnum::ScanVertices(_) => true,
+        PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_) => true,
         PlanNodeEnum::Filter(filter) => collect_chain(filter.input(), chain),
         PlanNodeEnum::Project(project) => collect_chain(project.input(), chain),
         PlanNodeEnum::Limit(limit) => collect_chain(limit.input(), chain),
@@ -370,6 +576,13 @@ fn collect_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) 
         PlanNodeEnum::TopN(topn) => collect_chain(topn.input(), chain),
         PlanNodeEnum::Dedup(dedup) => collect_chain(dedup.input(), chain),
         PlanNodeEnum::Window(window) => collect_chain(window.input(), chain),
+        PlanNodeEnum::ExpandAll(expand) => {
+            if let Some(input) = expand.inputs().first() {
+                collect_chain(input, chain)
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }

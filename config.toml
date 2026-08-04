@@ -61,6 +61,22 @@ disabled_rules = []
 # 显式启用的规则列表（优先级高于默认）
 enabled_rules = []
 
+[parallel]
+# 是否启用查询内并行分区（默认关闭，行为与关闭时完全一致）
+enabled = false
+# 共享调度器的工作线程数
+workers = 1
+# 每个分区的最小行数（低于阈值拒绝分区）
+min_rows_per_partition = 100000
+# 单个扫描的最大分区数
+max_partitions = 1
+# 每个分区 worker 的最大缓冲块数（背压）
+max_buffered_chunks = 10
+# 可选的顶点 ID 范围（同时设置 start/end 才生效）
+# vertex_id_start = 0
+# vertex_id_end = 100000
+
+
 [monitoring]
 enabled = true
 memory_cache_size = 1000

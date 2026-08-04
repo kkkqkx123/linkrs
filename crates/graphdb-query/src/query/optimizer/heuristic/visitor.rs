@@ -11,10 +11,10 @@
 //! – Compatible with the existing architecture: Make use of the existing PlanNodeVisitor.
 
 use crate::query::optimizer::heuristic::context::RewriteContext;
-use crate::query::optimizer::heuristic::plan_rewriter::PlanRewriter;
+use crate::query::optimizer::heuristic::plan_rewriter::NodeRewriter;
 use crate::query::optimizer::heuristic::result::RewriteResult;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, PlanNodeClonable, SingleInputNode,
+    BinaryInputNode, MultipleInputNode, PlanNodeClonable, SingleInputNode,
 };
 use crate::query::planning::plan::core::nodes::base::plan_node_visitor::PlanNodeVisitor;
 use crate::query::planning::plan::PlanNodeEnum;
@@ -24,9 +24,10 @@ use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
 };
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
-    AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode, RollUpApplyNode,
-    UnionNode, UnwindNode,
+    ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
+    RollUpApplyNode, UnionNode, UnwindNode,
 };
+use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
 };
@@ -66,6 +67,9 @@ use crate::query::planning::plan::core::nodes::RemoveNode;
 
 use crate::query::planning::plan::core::nodes::access::IndexScanNode;
 use crate::query::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
+use crate::query::planning::plan::core::nodes::management::system_nodes::{
+    ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
+};
 use crate::query::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
 };
@@ -79,11 +83,11 @@ use crate::query::planning::plan::core::nodes::traversal::{
 /// Implement zero-cost abstraction by using the PlanNodeVisitor trait.
 pub struct ChildRewriteVisitor<'a> {
     ctx: &'a mut RewriteContext,
-    rewriter: &'a PlanRewriter,
+    rewriter: &'a dyn NodeRewriter,
 }
 
 impl<'a> ChildRewriteVisitor<'a> {
-    pub fn new(ctx: &'a mut RewriteContext, rewriter: &'a PlanRewriter) -> Self {
+    pub fn new(ctx: &'a mut RewriteContext, rewriter: &'a dyn NodeRewriter) -> Self {
         Self { ctx, rewriter }
     }
 }
@@ -210,6 +214,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_data_collect => DataCollectNode, DataCollect,
         visit_assign => AssignNode, Assign,
         visit_remove => RemoveNode, Remove,
+        visit_window => WindowNode, Window,
     );
 
     // Multi-input nodes (using inputs)
@@ -237,6 +242,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_bfs_shortest => BFSShortestNode, BFSShortest,
         visit_all_paths => AllPathsNode, AllPaths,
         visit_shortest_path => ShortestPathNode, ShortestPath,
+        visit_apply => ApplyNode, Apply,
     );
 
     // Leaf nodes (no inputs)
@@ -266,6 +272,9 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_fulltext_search => FulltextSearchNode, FulltextSearch,
         visit_fulltext_lookup => FulltextLookupNode, FulltextLookup,
         visit_match_fulltext => MatchFulltextNode, MatchFulltext,
+        visit_show_configs => ShowConfigsNode, ShowConfigs,
+        visit_show_queries => ShowQueriesNode, ShowQueries,
+        visit_show_sessions => ShowSessionsNode, ShowSessions,
     );
 
     // Management nodes (parameterized sub-enums)
@@ -366,6 +375,8 @@ mod tests {
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
+
+    use crate::query::optimizer::heuristic::plan_rewriter::PlanRewriter;
 
     #[test]
     fn test_child_rewrite_visitor_single_input() {

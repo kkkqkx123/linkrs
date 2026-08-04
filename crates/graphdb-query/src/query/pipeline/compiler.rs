@@ -4,6 +4,7 @@ use crate::query::binder::BoundStatement;
 use crate::query::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
 };
+use crate::query::optimizer::PartitioningConfig;
 use crate::query::parser::ast::Stmt;
 use crate::query::QueryContext;
 use crate::storage::QueryStorage;
@@ -144,6 +145,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .partitioning_config()
                 .max_workers
                 .max(1),
+            // Derive the config hash from the live partitioning configuration so
+            // the plan cache key changes whenever partitioning is toggled,
+            // resized, or re-ranged — forcing a replan instead of reusing a plan
+            // compiled under a different layout policy.
+            config_hash: Self::partitioning_config_hash(
+                self.optimizer_engine.partitioning_config(),
+            ),
             ..Default::default()
         };
         let cache_context = crate::query::cache::PlanCacheContext {
@@ -166,25 +174,62 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let (plan, _) = self.compile_from_bound(query_context, bound, ast)?;
         if super::prepared::is_read_only_cacheable(stmt) {
-            let dependent_tables = collect_dependent_tables(bound);
-            self.plan_cache.put_with_context(
-                query_text,
-                plan.clone(),
-                param_positions,
-                crate::query::cache::plan_cache::PlanCachePutContext {
-                    dependent_tables,
-                    space_name,
-                    schema_version,
-                    index_version,
-                    is_dml: false,
-                    is_transaction: false,
-                    optimizer_version: planning_config.optimizer_version,
-                    planning_config_hash: planning_config.config_hash,
-                    capability_set: 0,
-                },
-            );
+            // Partitioned plans are layout-dependent: store them under their
+            // partition fingerprint so a changed layout (ranges, source, or
+            // layout version) yields a cache miss instead of reusing a stale
+            // physical plan. Single-tree plans keep the plain-text key.
+            if let Some(spec) = plan.partition_spec() {
+                self.plan_cache.put_with_partition(
+                    query_text,
+                    spec,
+                    plan.clone(),
+                    param_positions,
+                );
+            } else {
+                let dependent_tables = collect_dependent_tables(bound);
+                self.plan_cache.put_with_context(
+                    query_text,
+                    plan.clone(),
+                    param_positions,
+                    crate::query::cache::plan_cache::PlanCachePutContext {
+                        dependent_tables,
+                        space_name,
+                        schema_version,
+                        index_version,
+                        is_dml: false,
+                        is_transaction: false,
+                        optimizer_version: planning_config.optimizer_version,
+                        planning_config_hash: planning_config.config_hash,
+                        capability_set: 0,
+                    },
+                );
+            }
         }
         Ok(plan)
+    }
+
+    /// Deterministic hash of the live partitioning configuration used to
+    /// scope plan-cache entries.  Toggling/enabling partitioning, changing
+    /// worker count, thresholds, or the trusted vertex-id range produces a
+    /// different hash so cached single-tree plans cannot be reused under a
+    /// different layout policy.
+    fn partitioning_config_hash(config: &PartitioningConfig) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        config.enabled.hash(&mut hasher);
+        config.min_rows_per_partition.hash(&mut hasher);
+        config.max_partitions.hash(&mut hasher);
+        config.max_workers.hash(&mut hasher);
+        match &config.vertex_id_range {
+            Some(range) => {
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            None => {
+                hasher.write_u8(0);
+            }
+        }
+        hasher.finish()
     }
 
     /// Build a `MetadataContext` for the current space from schema and index

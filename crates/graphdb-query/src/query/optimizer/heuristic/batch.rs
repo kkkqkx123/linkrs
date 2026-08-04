@@ -12,13 +12,69 @@
 //! - Has iteration limits and stop reasons
 //! - Records rule hits and diagnostics
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::query::optimizer::heuristic::context::RewriteContext;
+use crate::query::optimizer::heuristic::plan_rewriter::NodeRewriter;
 use crate::query::optimizer::heuristic::result::RewriteResult;
 use crate::query::optimizer::heuristic::rule_enum::RewriteRule;
+use crate::query::optimizer::heuristic::visitor::ChildRewriteVisitor;
 use crate::query::planning::plan::PlanNodeEnum;
+
+/// Recursive node rewriter that applies one optimization batch's rules
+/// bottom-up at every node in the plan tree.
+///
+/// A single batch's rules are applied at a node until the node stops
+/// changing (fixed point), then the walker recurses into the children and
+/// applies the rules there. This makes every rule effective regardless of
+/// the plan root type (e.g. an Aggregate above a Filter/ExpandAll).
+struct BatchNodeRewriter<'a> {
+    rules: &'a [RewriteRule],
+    max_iterations: usize,
+    applied: RefCell<usize>,
+    hits: RefCell<HashMap<String, usize>>,
+}
+
+impl NodeRewriter for BatchNodeRewriter<'_> {
+    fn rewrite_node(
+        &self,
+        ctx: &mut RewriteContext,
+        node: &PlanNodeEnum,
+        node_id: usize,
+    ) -> RewriteResult<PlanNodeEnum> {
+        // Rewrite children first (bottom-up).
+        let mut visitor = ChildRewriteVisitor::new(ctx, self);
+        let node = node.accept(&mut visitor)?;
+
+        ctx.register_node(node_id, node.clone());
+
+        // Apply the batch rules at this node until fixed point.
+        let mut current_node = node;
+        let mut changed = true;
+        let mut iterations = 0;
+        while changed && iterations < self.max_iterations {
+            changed = false;
+            iterations += 1;
+            for rule in self.rules {
+                if rule.matches(&current_node) {
+                    if let Some(result) = rule.apply(ctx, &current_node)? {
+                        if let Some(new_node) = result.first_new_node() {
+                            current_node = new_node.clone();
+                            *self.applied.borrow_mut() += 1;
+                            *self.hits.borrow_mut().entry(rule.name().to_string()).or_insert(0) += 1;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(current_node)
+    }
+}
 
 /// Optimization batch phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -361,7 +417,11 @@ impl BatchOptimizer {
         Ok((current_plan, stats))
     }
 
-    /// Execute one iteration of a batch
+    /// Execute one iteration of a batch.
+    ///
+    /// Walks the whole plan tree bottom-up, applying the batch's rules at
+    /// every node (not only at the root), so pushdown and merge rules are
+    /// effective for aggregate/grouping-rooted queries.
     fn batch_iteration(
         &self,
         plan: PlanNodeEnum,
@@ -372,26 +432,18 @@ impl BatchOptimizer {
         usize,
         std::collections::HashMap<String, usize>,
     )> {
-        let mut current_plan = plan;
-        let mut rules_applied = 0;
-        let mut rule_hits = std::collections::HashMap::new();
         let mut ctx = RewriteContext::new();
-
-        // Apply all rules in the batch
-        for rule in rules {
-            if rule.matches(&current_plan) {
-                if let Some(result) = rule.apply(&mut ctx, &current_plan)? {
-                    if let Some(new_node) = result.first_new_node() {
-                        current_plan = new_node.clone();
-                        rules_applied += 1;
-                        let rule_name = rule.name().to_string();
-                        *rule_hits.entry(rule_name).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-
-        Ok((current_plan, rules_applied, rule_hits))
+        let root_id = ctx.allocate_node_id();
+        let rewriter = BatchNodeRewriter {
+            rules,
+            max_iterations: self.max_iterations.load(Ordering::Relaxed),
+            applied: RefCell::new(0),
+            hits: RefCell::new(HashMap::new()),
+        };
+        let new_plan = rewriter.rewrite_node(&mut ctx, &plan, root_id)?;
+        let rules_applied = rewriter.applied.into_inner();
+        let rule_hits = rewriter.hits.into_inner();
+        Ok((new_plan, rules_applied, rule_hits))
     }
 
     /// Calculate fingerprint for a plan node

@@ -92,11 +92,33 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         }
     }
 
+    /// Create a new QueryApi using an externally configured optimizer engine,
+    /// so server-level settings (e.g. the `[parallel]` partitioning section)
+    /// reach the query pipeline. The engine instance is shared by value.
+    pub fn with_optimizer_engine(
+        storage: Arc<RwLock<S>>,
+        stats_manager: Arc<StatsManager>,
+        optimizer_engine: Arc<OptimizerEngine>,
+        schema_manager: Option<Arc<SchemaManager>>,
+    ) -> Self {
+        let pipeline = QueryPipelineManager::with_optimizer(
+            storage,
+            stats_manager,
+            optimizer_engine,
+        );
+        let pipeline = match schema_manager {
+            Some(sm) => pipeline.with_schema_manager(sm),
+            None => pipeline,
+        };
+        Self {
+            pipeline_manager: pipeline,
+        }
+    }
+
     /// Create a new QueryApi wired with an engine-level shared scheduler and
     /// a query registry, both created once at server startup and reused
     /// across all queries.
-    pub fn with_shared_scheduler(
-        storage: Arc<RwLock<S>>,
+    pub fn with_shared_scheduler(        storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
         optimizer_engine: Arc<OptimizerEngine>,
         shared_scheduler: Arc<SharedScheduler>,

@@ -159,6 +159,7 @@ impl PhysicalPlanBuilder {
             required_capabilities,
             parameter_schema: ctx.parameter_schema.clone(),
             parallel_fallback_reason: ctx.parallel_fallback_reason.clone(),
+            partition_spec: ctx.partition_spec.clone(),
         };
 
         Ok(plan)

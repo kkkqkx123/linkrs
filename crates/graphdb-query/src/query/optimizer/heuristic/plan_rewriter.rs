@@ -22,6 +22,22 @@ use crate::query::optimizer::heuristic::visitor::ChildRewriteVisitor;
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::planning::plan::PlanNodeEnum;
 
+/// Trait for a node rewriter used by [`ChildRewriteVisitor`].
+///
+/// Both [`PlanRewriter`] (bottom-up, all rules at every node) and the batch
+/// optimizer's node walker (rules grouped per optimization batch) drive the
+/// same child-walking visitor, so the tree traversal stays in one place.
+pub trait NodeRewriter {
+    /// Rewrite a single node: first rewrite its children, then apply the
+    /// registered rules to the node until the plan stops changing.
+    fn rewrite_node(
+        &self,
+        ctx: &mut RewriteContext,
+        node: &PlanNodeEnum,
+        node_id: usize,
+    ) -> RewriteResult<PlanNodeEnum>;
+}
+
 /// Plan Rewriter
 ///
 /// Manage all heuristic rewriting rules and apply them in order.
@@ -29,8 +45,7 @@ use crate::query::planning::plan::PlanNodeEnum;
 ///
 /// Use static distribution of enumeration-based storage rules to avoid the overhead associated with dynamic distribution.
 #[derive(Debug)]
-pub struct PlanRewriter {
-    /// List of registered rules (static distribution)
+pub struct PlanRewriter {    /// List of registered rules (static distribution)
     rules: Vec<RewriteRuleEnum>,
     /// The maximum number of iterations, to prevent an infinite loop.
     /// Uses `AtomicUsize` for interior mutability so `optimize` can sync the
@@ -104,7 +119,20 @@ impl PlanRewriter {
         new_plan.set_root(new_root);
         Ok(new_plan)
     }
+}
 
+impl NodeRewriter for PlanRewriter {
+    fn rewrite_node(
+        &self,
+        ctx: &mut RewriteContext,
+        node: &PlanNodeEnum,
+        node_id: usize,
+    ) -> RewriteResult<PlanNodeEnum> {
+        PlanRewriter::rewrite_node(self, ctx, node, node_id)
+    }
+}
+
+impl PlanRewriter {
     /// Rewrite a single plan node
     pub(crate) fn rewrite_node(
         &self,

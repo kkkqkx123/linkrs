@@ -52,6 +52,7 @@ pub use common::database::DatabaseConfig;
 pub use common::log::LogConfig;
 pub use common::monitoring::{MonitoringConfig, SlowQueryLogConfig};
 pub use common::optimizer::{OptimizerConfig, OptimizerRulesConfig};
+pub use common::parallel::ParallelConfig;
 pub use common::storage::{
     CompressionAlgorithm, QueryResourceConfig, StorageConfig, StorageEngine,
 };
@@ -546,6 +547,54 @@ max_memory_per_query = 1073741824
         );
         assert_eq!(config.common.storage.compression_level, 5);
         assert_eq!(config.common.query_resource.max_concurrent_queries, 50);
+    }
+
+    #[test]
+    fn test_parallel_config_load() {
+        let config_content = r#"
+[parallel]
+enabled = true
+workers = 4
+min_rows_per_partition = 20000
+max_partitions = 4
+max_buffered_chunks = 8
+vertex_id_start = 0
+vertex_id_end = 100000
+"#;
+
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
+
+        let config = Config::load(temp_file.path()).expect("Failed to load config");
+
+        assert!(config.common.parallel.enabled);
+        assert_eq!(config.common.parallel.workers, 4);
+        assert_eq!(config.common.parallel.min_rows_per_partition, 20_000);
+        assert_eq!(config.common.parallel.max_partitions, 4);
+        assert_eq!(config.common.parallel.max_buffered_chunks, 8);
+        assert_eq!(config.common.parallel.vertex_id_range(), Some(0..100_000));
+    }
+
+    #[test]
+    fn test_parallel_config_defaults_when_absent() {
+        let config_content = r#"
+[database]
+host = "0.0.0.0"
+"#;
+
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
+
+        let config = Config::load(temp_file.path()).expect("Failed to load config");
+
+        // Absent [parallel] section must keep the safe defaults.
+        assert!(!config.common.parallel.enabled);
+        assert_eq!(config.common.parallel.workers, 1);
+        assert!(config.common.parallel.vertex_id_range().is_none());
     }
 
     #[test]

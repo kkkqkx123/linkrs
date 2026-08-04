@@ -356,6 +356,49 @@ impl PartitionHandle {
         }
     }
 
+    /// Pull one chunk from an individual partition, blocking until data is
+    /// available instead of polling at the channel wait interval.
+    ///
+    /// This is the drain fast path for the [`GatherOperator::Concatenate`]
+    /// gather, which reads exactly one partition at a time: a blocking
+    /// receive wakes the instant the producer sends a chunk, removing the
+    /// up-to-`CHANNEL_WAIT` poll latency from the steady-state drain and
+    /// avoiding producer/consumer wakeup gaps.  Cancellation and worker
+    /// errors are still observed at each chunk boundary because producers
+    /// exit promptly on `stop`/cancel, which disconnects their sender.
+    pub fn next_for_partition_blocking(
+        &mut self,
+        partition_id: usize,
+    ) -> Result<Option<DataChunk>, QueryError> {
+        if partition_id >= self.receivers.len() {
+            return Err(QueryError::execution(format!(
+                "Morsel partition handle has no partition {partition_id}",
+            )));
+        }
+        match self.receivers[partition_id].recv() {
+            Ok(PartitionMessage::Chunk(buffered)) => {
+                release_queue_metrics(
+                    &self.buffered_chunks,
+                    &self.buffered_bytes,
+                    buffered.bytes,
+                );
+                Ok(Some(buffered.chunk))
+            }
+            Ok(PartitionMessage::Finished) => Ok(None),
+            Err(_) => {
+                self.check_worker_error()?;
+                if self.runtime.is_cancelled() {
+                    let _ = self.stop_and_join();
+                    return Err(QueryError::execution("Query cancelled".to_string()));
+                }
+                let _ = self.stop_and_join();
+                Err(QueryError::execution(format!(
+                    "Morsel partition {partition_id} disconnected before completion",
+                )))
+            }
+        }
+    }
+
     /// Pull one chunk from an individual partition.
     pub fn next_for_partition(
         &mut self,

@@ -157,7 +157,7 @@ impl GatherOperator {
             } => {
                 while *current_index < input_count(children, handle) {
                     base.ensure_not_cancelled()?;
-                    if let Some(chunk) = advance_input(children, handle, *current_index)? {
+                    if let Some(chunk) = advance_input_blocking(children, handle, *current_index)? {
                         if chunk.is_empty() {
                             continue;
                         }
@@ -288,6 +288,22 @@ fn advance_input(
 ) -> Result<Option<DataChunk>, QueryError> {
     if let Some(handle) = handle {
         handle.next_for_partition(index)
+    } else if index < children.len() {
+        children[index].advance()
+    } else {
+        Ok(None)
+    }
+}
+
+/// Advance one input using the blocking drain fast path (used by
+/// [`GatherOperator::Concatenate`], which reads one partition at a time).
+fn advance_input_blocking(
+    children: &mut [StreamingExecutor],
+    handle: &mut Option<PartitionHandle>,
+    index: usize,
+) -> Result<Option<DataChunk>, QueryError> {
+    if let Some(handle) = handle {
+        handle.next_for_partition_blocking(index)
     } else if index < children.len() {
         children[index].advance()
     } else {

@@ -9,7 +9,7 @@ use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult}
 use crate::query::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-    PlanNode, SingleInputNode,
+    MultipleInputNode, PlanNode, SingleInputNode,
 };
 use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
@@ -58,7 +58,6 @@ impl RewriteRule for PushFilterDownExpandAllRule {
     fn pattern(&self) -> Pattern {
         Pattern::new_with_name("Filter").with_dependency_name("ExpandAll")
     }
-
     fn apply(
         &self,
         _ctx: &mut RewriteContext,
@@ -89,6 +88,24 @@ impl RewriteRule for PushFilterDownExpandAllRule {
             return Ok(None);
         }
 
+        // If the filter references only the anchor (input) columns, push it
+        // BELOW the expand so only matching anchor vertices are expanded.
+        // Example: `WHERE a.value < 100` on `(a)-[:R]->(b)` should filter the
+        // anchor scan, not expand all 100k anchors and filter afterwards.
+        if Self::filter_references_only_input(filter_condition, expand_all) {
+            let mut new_filter = filter_node.clone();
+            let mut new_expand_all = expand_all.clone();
+            if let Some(anchor) = expand_all.inputs().first() {
+                new_filter.set_input(anchor.clone());
+                new_expand_all.inputs_mut().clear();
+                new_expand_all.add_input(PlanNodeEnum::Filter(new_filter));
+                let mut result = TransformResult::new();
+                result.erase_curr = true;
+                result.add_new_node(PlanNodeEnum::ExpandAll(new_expand_all));
+                return Ok(Some(result));
+            }
+        }
+
         // Create a new ExpandAll node.
         let mut new_expand_all = expand_all.clone();
 
@@ -105,6 +122,23 @@ impl RewriteRule for PushFilterDownExpandAllRule {
 }
 
 impl PushFilterDownExpandAllRule {
+    /// Check whether the filter references only variables produced by the
+    /// expand's anchor input. Such filters are safe to evaluate on the anchor
+    /// before expansion, avoiding full expansion of non-matching anchors.
+    fn filter_references_only_input(
+        filter_condition: &crate::core::types::ContextualExpression,
+        expand_all: &ExpandAllNode,
+    ) -> bool {
+        let Some(expression) = filter_condition.get_expression() else {
+            return false;
+        };
+        let referenced_vars = expression.get_variables();
+        let Some(first_input) = expand_all.inputs().first() else {
+            return false;
+        };
+        let input_cols = first_input.col_names();
+        referenced_vars.iter().all(|var| input_cols.contains(var))
+    }
     /// Check if a filter can be pushed down to an ExpandAll node.
     ///
     /// The filter can only be pushed down if all variables it references
@@ -213,5 +247,86 @@ mod tests {
         let expand_enum = PlanNodeEnum::ExpandAll(expand_all);
 
         assert!(rule.can_push_down(&filter_enum, &expand_enum));
+    }
+
+    fn anchor_scan(var: &str) -> PlanNodeEnum {
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("Node");
+        scan.set_col_names(vec![var.to_string()]);
+        PlanNodeEnum::ScanVertices(scan)
+    }
+
+    fn anchor_filter_expr(var: &str, property: &str) -> crate::core::types::ContextualExpression {
+        use crate::core::types::operators::BinaryOperator;
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::Value;
+        use std::sync::Arc;
+
+        let expr = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable(var.to_string())),
+                property: property.to_string(),
+            }),
+            op: BinaryOperator::LessThan,
+            right: Box::new(Expression::Literal(Value::Int(100))),
+        };
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+        crate::core::types::ContextualExpression::new(id, ctx)
+    }
+
+    fn filter_above(condition: crate::core::types::ContextualExpression, input: PlanNodeEnum) -> PlanNodeEnum {
+        use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        PlanNodeEnum::Filter(FilterNode::new(input, condition).expect("filter node"))
+    }
+
+    #[test]
+    fn pushes_anchor_only_filter_below_expand() {
+        let mut expand_all = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+        expand_all.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
+        expand_all.add_input(anchor_scan("a"));
+        let filter = filter_above(anchor_filter_expr("a", "value"), PlanNodeEnum::ExpandAll(expand_all));
+
+        let rule = PushFilterDownExpandAllRule::new();
+        let result = rule
+            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &filter)
+            .expect("rewrite");
+        let result = result.expect("some result");
+
+        let new_node = result.new_nodes.first().expect("node");
+        let PlanNodeEnum::ExpandAll(expanded) = new_node else {
+            panic!("expected ExpandAll root, got {new_node:?}");
+        };
+        // The filter must now be below the expand (on the anchor input).
+        let PlanNodeEnum::Filter(pushed) = expanded.inputs().first().expect("anchor input") else {
+            panic!("expected Filter below expand");
+        };
+        assert!(matches!(pushed.input(), PlanNodeEnum::ScanVertices(_)));
+        // The expand itself carries no filter anymore.
+        assert!(expanded.filter().is_none());
+    }
+
+    #[test]
+    fn keeps_neighbor_filter_absorbed_in_expand() {
+        let mut expand_all = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
+        expand_all.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
+        expand_all.add_input(anchor_scan("a"));
+        // Filter on the neighbor variable `b` must stay on the expand.
+        let filter = filter_above(anchor_filter_expr("b", "value"), PlanNodeEnum::ExpandAll(expand_all));
+
+        let rule = PushFilterDownExpandAllRule::new();
+        let result = rule
+            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &filter)
+            .expect("rewrite");
+        let result = result.expect("some result");
+        let new_node = result.new_nodes.first().expect("node");
+        let PlanNodeEnum::ExpandAll(expanded) = new_node else {
+            panic!("expected ExpandAll root");
+        };
+        assert!(
+            expanded.filter().is_some(),
+            "neighbor filter must stay absorbed on the expand"
+        );
     }
 }
