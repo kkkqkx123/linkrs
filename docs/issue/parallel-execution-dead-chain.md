@@ -1,6 +1,6 @@
 # 问题：端到端并行执行链路未接通（死链路）
 
-- 状态：新建（待修复）
+- 状态：已修复（commit `464f411`，2026-08-04 实测达标）
 - 类型：功能缺陷（既有 P8 并行设计的接线缺失，非新扩展）
 - 关联：`docs/archive/benches/phase3-parallel-storage-validation.md` §3（实测 `actual_workers` 恒为 1）
 - 关联代码：分区规划器、优化器、物理计划构建、执行器
@@ -42,3 +42,10 @@
 - 正确性：分区执行结果与串行逐值相等（count/sum/groupby/filter+agg），见 `docs/plan/columnar-phase3-parallel-storage-verification-design.md` §验证方案
 - 行为：`EXPLAIN ANALYZE` 显示 `actual_workers = min(partitions, workers)` 且 fallback_reason 为空
 - 性能：修复后重跑 `benches/parallel_scale_bench.rs`，Q1/Q2 E(4) ≥ 2x 且 η(4) ≥ 0.5 才继续并行扩展（多 scan / edge scan 分区）
+
+## 修复验证结果（2026-08-04，`taskset -c 0-7`）
+
+- **B1.1/B1.2/B1.3 全部落地**，端到端链路接通：Q1/Q2 实测 `actual_workers = requested_workers`（2/4/8），`EXPLAIN ANALYZE` 输出 `PartialAggregate ×N + Exchange + FinalAggregate`，`parallel_work_us > 0`
+- **性能达标**：Q1 E(4)=7.06、Q2 E(4)=5.83（≥ 2.0），η(4)=3.18/3.72（≥ 0.5）；E(8) 回落至 6.60/4.58（Exchange 汇聚 + 内存带宽约束）
+- Q3 图遍历按白名单回退串行，`fallback_reason="plan contains recursive graph traversal; partitioning not supported"` 可观测；workers=1 显示 `"partitioning is disabled"`
+- 完整数据与修复前对照见 `docs/archive/benches/phase3-parallel-storage-validation.md` §3
