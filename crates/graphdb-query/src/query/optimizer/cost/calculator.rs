@@ -749,6 +749,9 @@ impl CostCalculator {
 
             // Interval type
             Value::Interval(_) => self.config.fixed_type_cost_factor,
+
+            // Lightweight ID references (fixed size)
+            Value::VertexId(_) | Value::EdgeId(_) => self.config.fixed_type_cost_factor,
         }
     }
 

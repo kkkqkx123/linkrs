@@ -326,6 +326,22 @@ pub struct PartitionInput {
     pub properties: super::properties::PhysicalProperties,
 }
 
+/// Describes how partitioned inputs are distributed across workers.
+///
+/// Used by the validator and runtime to determine whether a hash exchange
+/// is needed before a join, or whether co-partitioned inputs can be
+/// connected directly without reshuffling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputDistribution {
+    /// All partition outputs are concatenated in partition order (E1a).
+    Concatenate,
+    /// Rows are redistributed by hash of key expressions into N buckets.
+    HashRepartition {
+        /// Slot index of the join key in the input row.
+        key_slot: usize,
+    },
+}
+
 /// Typed input port specification for a physical operator.
 ///
 /// This replaces the reliance on unlabeled `FragmentSpec.inputs` vectors
@@ -345,6 +361,9 @@ pub enum InputContract {
     PartitionedInputs {
         side: PartitionSide,
         members: Vec<PartitionInput>,
+        /// How the partition outputs are distributed. Defaults to Concatenate
+        /// for backward compatibility with existing exchange operators.
+        distribution: InputDistribution,
     },
 }
 

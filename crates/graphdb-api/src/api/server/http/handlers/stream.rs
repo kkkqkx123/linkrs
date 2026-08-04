@@ -273,5 +273,7 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         crate::core::Value::JsonB(j) => j.as_value().clone(),
         crate::core::Value::Uuid(u) => serde_json::Value::String(u.to_hyphenated_string()),
         crate::core::Value::Interval(i) => serde_json::Value::String(i.to_postgresql()),
+        crate::core::Value::VertexId(vid) => serde_json::Value::String(format!("{:?}", vid)),
+        crate::core::Value::EdgeId(eid) => serde_json::Value::String(format!("{:?}", eid)),
     }
 }

@@ -27,6 +27,7 @@ pub(super) struct GraphCtx<'a> {
     pub(super) direction: EdgeDirection,
     pub(super) base: &'a mut OperatorBase,
     pub(super) input: &'a mut StreamingExecutor,
+    pub(super) is_recursive: bool,
 }
 
 pub(super) struct ExpandCtx<'a> {
@@ -56,6 +57,7 @@ pub enum GraphOperator {
         col_names: Vec<String>,
         src_vids: Vec<Value>,
         step_limit: u32,
+        count_only: bool,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -172,6 +174,7 @@ impl GraphOperator {
                 col_names,
                 src_vids,
                 step_limit,
+                count_only,
             } => Self::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -181,6 +184,7 @@ impl GraphOperator {
                 col_names: col_names.clone(),
                 src_vids: src_vids.clone(),
                 step_limit: *step_limit,
+                count_only: *count_only,
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -275,11 +279,13 @@ impl GraphOperator {
                 col_names,
                 src_vids,
                 step_limit,
+                count_only,
             } => expand::handle_all(
                 &*filter_expr,
                 col_names.clone(),
                 src_vids.clone(),
                 *step_limit,
+                *count_only,
                 &mut GraphCtx {
                     storage,
                     space_name,
@@ -287,6 +293,7 @@ impl GraphOperator {
                     direction: *direction,
                     base,
                     input,
+                    is_recursive: false,
                 },
             ),
 
@@ -310,6 +317,7 @@ impl GraphOperator {
                     direction: *direction,
                     base,
                     input,
+                    is_recursive: true,
                 },
             ),
 
@@ -341,6 +349,7 @@ impl GraphOperator {
                     direction: EdgeDirection::Both,
                     base,
                     input,
+                    is_recursive: true,
                 },
             ),
 

@@ -155,6 +155,53 @@ impl ArenaPlanAssembler {
         (fid, op_id)
     }
 
+    /// Create a hash-repartition exchange fragment that redistributes rows
+    /// by hash of key expressions into `partition_count` buckets.
+    ///
+    /// Used by E1b for co-partition joins where the join key differs from
+    /// the partition key, requiring a shuffle to align partitions.
+    pub(crate) fn push_hash_exchange_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        partition_fids: Vec<FragmentId>,
+        partition_count: usize,
+        hash_expressions: Vec<crate::core::types::expr::Expression>,
+        input_layout: Option<SlotLayout>,
+        output_layout: Option<SlotLayout>,
+    ) -> (FragmentId, PhysicalOperatorId) {
+        let op_id = op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: None,
+            spec: OperatorKindSpec::Exchange(ExchangeSpec::RepartitionHash {
+                num_partitions: partition_count,
+                hash_expressions,
+                input_layout,
+                output_layout,
+            }),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_blocking(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name: "HashExchange",
+        });
+        fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Exchange,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: partition_fids,
+            output: None,
+            exchange_layout: None,
+        });
+        (fid, op_id)
+    }
+
     /// Create a new fragment holding one global unary operator that consumes
     /// `child_fid` (the partition exchange fragment).
     #[allow(clippy::too_many_arguments)]

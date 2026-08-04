@@ -386,6 +386,7 @@ impl TryFrom<&Value> for VertexId {
                 }
             }
             Value::Vertex(v) => Ok(v.vid),
+            Value::VertexId(vid) => Ok(*vid),
             _ => Err(crate::core::StorageError::invalid_input(
                 "Cannot convert Value to VertexId",
             )),

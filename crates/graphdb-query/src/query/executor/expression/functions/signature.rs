@@ -70,6 +70,8 @@ impl ValueType {
             Value::Uuid(_) => ValueType::Uuid,
             Value::Interval(_) => ValueType::Interval,
             Value::Empty => ValueType::Empty,
+            Value::VertexId(_) => ValueType::Vertex,
+            Value::EdgeId(_) => ValueType::Edge,
         }
     }
 

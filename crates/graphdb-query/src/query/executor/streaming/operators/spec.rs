@@ -298,6 +298,10 @@ pub enum GraphSpec {
         col_names: Vec<String>,
         src_vids: Vec<Value>,
         step_limit: u32,
+        /// When true, the expand operator only counts output rows instead of
+        /// materializing them. Used when the downstream is a simple COUNT(*)
+        /// aggregate with no GROUP BY or other aggregation functions.
+        count_only: bool,
     },
     Traverse {
         edge_types: Vec<String>,

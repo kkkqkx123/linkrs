@@ -464,3 +464,172 @@ fn partitioned_anchored_traversal_matches_serial_results() {
         "anchored traversal must execute on at least 2 workers, got actual={actual}:\n{plan}"
     );
 }
+
+#[test]
+fn explain_analyze_vertex_scan_reports_partition_spec() {
+    let storage = setup_storage();
+    let mut parallel = build_pipeline(&storage, 4);
+
+    let output = query_rows(
+        &mut parallel,
+        "EXPLAIN ANALYZE MATCH (n:Node) WHERE n.value < 800 RETURN n.value",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+
+    // E4: The partition spec must describe the vertex-id range partitioning.
+    assert!(
+        plan.contains("Partitioning:"),
+        "vertex scan plan must describe partition spec, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("partitioned into"),
+        "vertex scan plan must show partition count, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("ranges ["),
+        "vertex scan plan must show ranges, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("actual="),
+        "vertex scan plan must report actual workers, got:\n{plan}"
+    );
+    assert!(
+        !plan.contains("fallback_reason"),
+        "partitioned vertex scan must not fallback, got:\n{plan}"
+    );
+
+    // Verify actual workers >= 2 for 4-worker config.
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 2,
+        "vertex scan must use at least 2 workers, got actual={actual}:\n{plan}"
+    );
+}
+
+#[test]
+fn explain_analyze_union_plan_contains_exchange() {
+    let storage = setup_storage();
+    let mut parallel = build_pipeline(&storage, 2);
+
+    let output = query_rows(
+        &mut parallel,
+        "EXPLAIN MATCH (a:Node) RETURN a.value \
+         UNION ALL \
+         MATCH (b:Other) RETURN b.value",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+
+    // E1a: UNION ALL with two independent partitioned scans must include
+    // an Exchange (concatenate) fragment to merge partition outputs.
+    assert!(
+        plan.contains("Exchange"),
+        "union plan must contain Exchange node, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("Partitioning:"),
+        "union plan must describe partition spec, got:\n{plan}"
+    );
+}
+
+#[test]
+fn explain_analyze_4_workers_vertex_scan_uses_all_workers() {
+    let storage = setup_storage();
+    let mut parallel = build_pipeline(&storage, 4);
+
+    let output = query_rows(
+        &mut parallel,
+        "EXPLAIN ANALYZE MATCH (n:Node) RETURN count(n)",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 4,
+        "4-worker config should use at least 4 workers for full scan, got actual={actual}:\n{plan}"
+    );
+}
+
+#[test]
+fn plan_cache_replans_on_partition_config_change() {
+    let storage = setup_storage();
+    let q = "MATCH (n:Node) WHERE n.value < 800 RETURN count(n)";
+
+    // First execution with 2 workers: plans and caches.
+    let mut pipeline_2w = build_pipeline(&storage, 2);
+    let rows_2w = query_rows(&mut pipeline_2w, q);
+    assert_eq!(rows_2w, vec![vec![Value::BigInt(800)]]);
+
+    // Second execution with 4 workers: different planning_config_hash causes
+    // a cache miss, triggering replan with the new partition config.
+    let mut pipeline_4w = build_pipeline(&storage, 4);
+    let rows_4w = query_rows(&mut pipeline_4w, q);
+    assert_eq!(rows_4w, vec![vec![Value::BigInt(800)]]);
+
+    // Both must produce identical results despite different partition layouts.
+    assert_eq!(rows_2w, rows_4w, "cache replan must produce identical results");
+
+    // Verify the 4-worker plan actually uses more workers.
+    let output = query_rows(
+        &mut pipeline_4w,
+        "EXPLAIN ANALYZE MATCH (n:Node) WHERE n.value < 800 RETURN count(n)",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 2,
+        "replanned 4-worker query must use parallel execution, got actual={actual}:\n{plan}"
+    );
+}
+
+#[test]
+fn plan_cache_partition_fingerprint_changes_with_ranges() {
+    use graphdb_query::query::cache::plan_cache::PlanCacheKey;
+    use graphdb_query::query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
+    use std::ops::Range;
+
+    // Same source and layout_version but different ranges → different key.
+    let source = PartitionSource::VertexId {
+        tag: "Node".to_string(),
+    };
+    let spec_a = PartitionSpec::try_new(
+        vec![Range { start: 0, end: 500 }, Range { start: 500, end: 1000 }],
+        source.clone(),
+        Some(42),
+    )
+    .unwrap();
+    let spec_b = PartitionSpec::try_new(
+        vec![Range { start: 0, end: 250 }, Range { start: 250, end: 500 }, Range { start: 500, end: 750 }, Range { start: 750, end: 1000 }],
+        source.clone(),
+        Some(42),
+    )
+    .unwrap();
+
+    let key_a = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_a);
+    let key_b = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_b);
+    assert_ne!(key_a, key_b, "different ranges must produce different cache keys");
+
+    // Same ranges and layout_version → same key.
+    let spec_c = PartitionSpec::try_new(
+        vec![Range { start: 0, end: 500 }, Range { start: 500, end: 1000 }],
+        source.clone(),
+        Some(42),
+    )
+    .unwrap();
+    let key_c = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_c);
+    assert_eq!(key_a, key_c, "same spec must produce same cache key");
+}

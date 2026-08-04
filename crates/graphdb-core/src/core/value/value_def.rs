@@ -3,6 +3,7 @@
 use crate::core::DataSet;
 use crate::core::{
     types::DataType,
+    types::storage_ids::{EdgeId, VertexId},
     value::{
         date_time::{DateTimeValue, DateValue, TimeValue},
         decimal128::Decimal128Value,
@@ -67,6 +68,14 @@ pub enum Value {
     Uuid(UuidValue),
     /// Interval type (PostgreSQL compatible)
     Interval(IntervalValue),
+
+    /// Lightweight vertex ID reference (no heap allocation).
+    /// Used by expand fast path when only the vertex ID is needed
+    /// (e.g. count-only aggregation downstream).
+    VertexId(VertexId),
+    /// Lightweight edge ID reference (no heap allocation).
+    /// Used by expand fast path when only the edge ID is needed.
+    EdgeId(EdgeId),
 }
 
 impl Value {
@@ -114,6 +123,8 @@ impl Value {
             Value::JsonB(_) => DataType::JsonB,
             Value::Uuid(_) => DataType::Uuid,
             Value::Interval(_) => DataType::Interval,
+            Value::VertexId(_) => DataType::Vertex,
+            Value::EdgeId(_) => DataType::Edge,
         }
     }
 
@@ -305,6 +316,8 @@ impl Value {
             Value::JsonB(j) => std::mem::size_of::<Self>() + j.estimated_size(),
             Value::Uuid(_) => std::mem::size_of::<Self>(),
             Value::Interval(_) => std::mem::size_of::<Self>(),
+            Value::VertexId(_) => std::mem::size_of::<Self>(),
+            Value::EdgeId(_) => std::mem::size_of::<Self>(),
         }
     }
 
@@ -422,6 +435,8 @@ impl std::fmt::Display for Value {
             Value::JsonB(j) => write!(f, "JsonB({})", j.to_json_string()),
             Value::Uuid(u) => write!(f, "Uuid({})", u),
             Value::Interval(i) => write!(f, "Interval({})", i),
+            Value::VertexId(vid) => write!(f, "VertexId({:?})", vid),
+            Value::EdgeId(eid) => write!(f, "EdgeId({:?})", eid),
         }
     }
 }

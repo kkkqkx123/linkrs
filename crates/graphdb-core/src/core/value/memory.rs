@@ -75,6 +75,9 @@ impl MemoryEstimatable for Value {
 
             // Interval type (fixed size)
             Value::Interval(_) => base_size,
+
+            // Lightweight ID references (fixed size)
+            Value::VertexId(_) | Value::EdgeId(_) => base_size,
         }
     }
 }

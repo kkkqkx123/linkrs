@@ -94,6 +94,7 @@ pub(super) fn handle_all(
     col_names: Vec<String>,
     src_vids: Vec<Value>,
     step_limit: u32,
+    count_only: bool,
     ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
     let storage = ctx.storage;
@@ -106,26 +107,75 @@ pub(super) fn handle_all(
         return Err(QueryError::execution("ExpandAll not opened".to_string()));
     }
 
+    let use_fast_path = step_limit == 1
+        && filter_expr.is_none()
+        && src_vids.is_empty()
+        && !ctx.is_recursive;
+
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(mut chunk) = input.advance()? {
         chunk.materialize_selection();
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
-            if let Some(output) = common::expand_on_chunk(
-                chunk,
-                Arc::clone(&base.output_layout),
-                &*reader,
-                src_vids.clone(),
-                step_limit,
-                &mut ExpandCtx {
-                    space_name,
-                    edge_types,
-                    direction,
-                    filter_expr,
-                    col_names_template: col_names.clone(),
-                    cancel_token: cancel_token.clone(),
-                },
-            )? {
+
+            if count_only && use_fast_path {
+                let count = common::expand_count_only(
+                    chunk,
+                    &*reader,
+                    src_vids.clone(),
+                    &mut ExpandCtx {
+                        space_name,
+                        edge_types,
+                        direction,
+                        filter_expr,
+                        col_names_template: col_names.clone(),
+                        cancel_token: cancel_token.clone(),
+                    },
+                )?;
+                if count > 0 {
+                    let mut out_row = Vec::with_capacity(1);
+                    out_row.push(Value::BigInt(count));
+                    return Ok(Some(DataChunk::new_with_layout(
+                        vec![out_row],
+                        Arc::clone(&base.output_layout),
+                    )));
+                }
+                continue;
+            }
+
+            let expand_result = if use_fast_path {
+                common::expand_single_step(
+                    chunk,
+                    Arc::clone(&base.output_layout),
+                    &*reader,
+                    src_vids.clone(),
+                    &mut ExpandCtx {
+                        space_name,
+                        edge_types,
+                        direction,
+                        filter_expr,
+                        col_names_template: col_names.clone(),
+                        cancel_token: cancel_token.clone(),
+                    },
+                )?
+            } else {
+                common::expand_on_chunk(
+                    chunk,
+                    Arc::clone(&base.output_layout),
+                    &*reader,
+                    src_vids.clone(),
+                    step_limit,
+                    &mut ExpandCtx {
+                        space_name,
+                        edge_types,
+                        direction,
+                        filter_expr,
+                        col_names_template: col_names.clone(),
+                        cancel_token: cancel_token.clone(),
+                    },
+                )?
+            };
+            if let Some(output) = expand_result {
                 return Ok(Some(output));
             }
         } else {

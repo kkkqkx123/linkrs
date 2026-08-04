@@ -319,6 +319,14 @@ impl Hash for Value {
                 27u8.hash(state);
                 i.hash(state);
             }
+            Value::VertexId(vid) => {
+                28u8.hash(state);
+                vid.hash(state);
+            }
+            Value::EdgeId(eid) => {
+                29u8.hash(state);
+                eid.hash(state);
+            }
         }
     }
 }
@@ -669,6 +677,8 @@ impl Value {
             Value::Vector(_) => 25,
             Value::Uuid(_) => 26,
             Value::Interval(_) => 27,
+            Value::VertexId(_) => 28,
+            Value::EdgeId(_) => 29,
         }
     }
 }

@@ -10,8 +10,9 @@ use super::super::super::operators::spec::{
 use super::super::super::slot::{combine_layouts, SlotLayout};
 use super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::types::{
-    CapabilitySet, FragmentInput, FragmentSpec, InputContract, OperatorKindSpec, OutputContract,
-    PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec, StateOwnership,
+    CapabilitySet, FragmentInput, FragmentSpec, InputContract, InputDistribution, OperatorKindSpec,
+    OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec,
+    StateOwnership,
 };
 use crate::query::executor::build_error::PlanBuildError;
 
@@ -145,8 +146,40 @@ pub(super) fn populate_input_contracts(
                         InputContract::NoInput
                     }
                 }
+                OperatorKindSpec::Exchange(ExchangeSpec::RepartitionHash {
+                    hash_expressions,
+                    ..
+                }) => {
+                    let key_slot = hash_expressions
+                        .first()
+                        .and_then(|expr| {
+                            if let crate::core::types::expr::Expression::Variable(name) = expr {
+                                inputs.first().and_then(|input| {
+                                    input.layout.slot_id(name)
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    InputContract::PartitionedInputs {
+                        side: PartitionSide::Unary,
+                        distribution: InputDistribution::HashRepartition { key_slot },
+                        members: inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(partition_id, input)| PartitionInput {
+                                partition_id,
+                                fragment: input.fragment,
+                                layout: Arc::clone(&input.layout),
+                                properties: input.properties.clone(),
+                            })
+                            .collect(),
+                    }
+                }
                 OperatorKindSpec::Exchange(_) => InputContract::PartitionedInputs {
                     side: PartitionSide::Unary,
+                    distribution: InputDistribution::Concatenate,
                     members: inputs
                         .iter()
                         .enumerate()
