@@ -25,6 +25,7 @@ mod storage_scan;
 mod util;
 
 pub use neighbors::NeighborScanState;
+pub use storage_scan::{column_block_enabled, set_column_block_enabled};
 
 /// Source operator with arena-based state for counters.
 ///

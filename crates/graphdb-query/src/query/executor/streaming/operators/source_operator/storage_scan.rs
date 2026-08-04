@@ -1,19 +1,37 @@
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use crate::core::{error::QueryError, Value};
-use crate::query::executor::streaming::chunk::DataChunk;
+use crate::core::error::QueryError;
+use crate::core::Value;
+use crate::query::executor::streaming::chunk::{DataChunk, TypedColumn};
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::open_edge_scan;
 use crate::storage::open_vertex_scan;
-use crate::storage::{RequiredProperty, ScanOptions, StorageError};
+use crate::storage::{RequiredProperty, ScanOptions, StorageError, VertexColumnBatch};
 
 use super::util::{
     attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
     reserve_memory_with_extra, storage_error,
 };
 use super::SourceOperator;
+
+/// Runtime switch: storage column-block scan mode (A1).
+///
+/// Rollback knob — set to `false` to keep the row-based scan path exactly as
+/// before the column-block path existed. Default off.
+static COLUMN_BLOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable the storage column-block scan mode (A1).
+pub fn set_column_block_enabled(enabled: bool) {
+    COLUMN_BLOCK_ENABLED.store(enabled, AtomicOrdering::Relaxed);
+}
+
+/// Whether the storage column-block scan mode is currently enabled.
+pub fn column_block_enabled() -> bool {
+    COLUMN_BLOCK_ENABLED.load(AtomicOrdering::Relaxed)
+}
 
 /// Open the storage-backed scan source variants, creating the cursor that
 /// streams batches from storage.
@@ -46,6 +64,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                                 .collect()
                         }),
                         predicate: (!predicate.is_empty()).then(|| predicate.clone()),
+                        column_block_mode: column_block_enabled(),
                         ..ScanOptions::default()
                     },
                 )
@@ -123,28 +142,38 @@ pub(crate) fn next(
             projected_properties,
             ..
         } => {
-            let flatten = projected_properties.clone();
-            if flatten.is_empty() {
-                next_cursor_chunk(
+            if column_block_enabled() {
+                next_column_chunk(
                     cursor,
                     space_name,
                     "StorageScanVertices",
                     base,
-                    move |vertex| make_flat_vertex_row(vertex, &flatten),
-                    |cur, batch_size| cur.next_batch(batch_size),
+                    projected_properties,
                 )
             } else {
-                // Flat path: pull records directly from storage (skipping
-                // per-row Vertex/HashMap boxing) and widen them into the flat
-                // property layout.
-                next_cursor_chunk(
-                    cursor,
-                    space_name,
-                    "StorageScanVertices",
-                    base,
-                    move |record| make_flat_vertex_record_row(record, &flatten),
-                    |cur, batch_size| cur.next_flat_batch(batch_size),
-                )
+                let flatten = projected_properties.clone();
+                if flatten.is_empty() {
+                    next_cursor_chunk(
+                        cursor,
+                        space_name,
+                        "StorageScanVertices",
+                        base,
+                        move |vertex| make_flat_vertex_row(vertex, &flatten),
+                        |cur, batch_size| cur.next_batch(batch_size),
+                    )
+                } else {
+                    // Flat path: pull records directly from storage (skipping
+                    // per-row Vertex/HashMap boxing) and widen them into the flat
+                    // property layout.
+                    next_cursor_chunk(
+                        cursor,
+                        space_name,
+                        "StorageScanVertices",
+                        base,
+                        move |record| make_flat_vertex_record_row(record, &flatten),
+                        |cur, batch_size| cur.next_flat_batch(batch_size),
+                    )
+                }
             }
         }
         SourceOperator::StorageScanEdges {
@@ -217,5 +246,153 @@ where
             return Ok(Some(chunk));
         }
         *cursor = Some(cur);
+    }
+}
+
+/// Column-block pull loop over a storage cursor (A1).
+///
+/// Pulls a [`VertexColumnBatch`], builds the chunk's typed column layout
+/// directly from the batch columns (skipping the intermediate per-row
+/// `Vec<Value>` materialization that `build_typed_columns` would re-read),
+/// and accounts the typed allocation in the chunk's memory reservation.
+fn next_column_chunk(
+    cursor: &mut Option<Box<dyn crate::storage::VertexCursor>>,
+    space_name: &str,
+    source: &str,
+    base: &mut OperatorBase,
+    projected_properties: &[String],
+) -> Result<Option<DataChunk>, QueryError> {
+    base.ensure_not_cancelled()?;
+    let mut cur = match cursor.take() {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let batch = cur
+        .next_column_batch(projected_properties, base.chunk_size)
+        .map_err(|error| storage_error(source, "read column batch", space_name, error))?;
+    if batch.is_empty() {
+        return Ok(None);
+    }
+    let chunk = build_column_chunk(base, batch, projected_properties)?;
+    *cursor = Some(cur);
+    Ok(Some(chunk))
+}
+
+/// Assemble a [`DataChunk`] from a [`VertexColumnBatch`], building the typed
+/// column layout straight from the batch columns.
+fn build_column_chunk(
+    base: &OperatorBase,
+    batch: VertexColumnBatch,
+    flatten: &[String],
+) -> Result<DataChunk, QueryError> {
+    let layout = Arc::clone(&base.output_layout);
+    let row_count = batch.len();
+
+    // Pre-compute per-column `Value` vectors once (used for both the rows and
+    // the fallback typed columns).
+    let mut prop_values: Vec<Vec<Value>> = Vec::with_capacity(batch.columns.len());
+    for column in &batch.columns {
+        prop_values.push(
+            (0..row_count)
+                .map(|row| {
+                    column
+                        .values
+                        .value_at(row)
+                        .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                })
+                .collect(),
+        );
+    }
+
+    let mut rows = Vec::with_capacity(row_count);
+    for (row, tag_name) in batch.tag_names.iter().enumerate() {
+        let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
+        for (index, column) in batch.columns.iter().enumerate() {
+            let value = &prop_values[index][row];
+            if !matches!(value, Value::Null(_)) {
+                properties.insert(column.name.clone(), value.clone());
+            }
+        }
+        let tags = if tag_name.is_empty() {
+            Vec::new()
+        } else {
+            vec![crate::core::Tag::new(tag_name.clone(), properties.clone())]
+        };
+        let vertex = crate::core::Vertex {
+            vid: batch.vids[row],
+            id: batch.internal_ids[row],
+            tags,
+            properties,
+        };
+        let mut row_vec = Vec::with_capacity(flatten.len() + 1);
+        // Replicates Vertex::property_value semantics: vertex property first,
+        // then a tag whose name equals the property yields the tag's property
+        // map, otherwise null.
+        let flat_values: Vec<Value> = flatten
+            .iter()
+            .map(|prop| {
+                vertex
+                    .property_value(prop)
+                    .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+            })
+            .collect();
+        row_vec.push(Value::Vertex(Box::new(vertex)));
+        row_vec.extend(flat_values);
+        rows.push(row_vec);
+    }
+
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    if crate::query::executor::streaming::chunk::typed_columns_enabled() {
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
+        typed.push(TypedColumn::Fallback(
+            chunk.rows.iter().map(|r| r[0].clone()).collect(),
+        ));
+        for prop in flatten {
+            match batch.columns.iter().position(|c| c.name == *prop) {
+                Some(index) => typed.push(typed_from_column(
+                    &batch.columns[index].values,
+                    &prop_values[index],
+                )),
+                None => typed.push(TypedColumn::Fallback(
+                    (0..row_count)
+                        .map(|_| Value::Null(crate::core::value::NullType::Null))
+                        .collect(),
+                )),
+            }
+        }
+        chunk.typed_columns = Some(typed);
+    }
+
+    if let Some(runtime) = base.runtime.as_ref() {
+        runtime.columnar_stats().record_column_block_hit();
+    }
+
+    let typed_bytes = chunk
+        .typed_columns
+        .as_ref()
+        .map(|cols| cols.iter().map(TypedColumn::estimated_size).sum())
+        .unwrap_or(0);
+    let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
+    let chunk = attach_columnar_stats(base, chunk);
+    Ok(if let Some(r) = reservation {
+        chunk.with_memory_reservation(r)
+    } else {
+        chunk
+    })
+}
+
+/// Convert a storage [`ColumnValues`] into the chunk's [`TypedColumn`].
+fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) -> TypedColumn {
+    match values {
+        crate::storage::ColumnValues::I64 { values: v, .. } if values.all_valid() => {
+            TypedColumn::I64(v.clone())
+        }
+        crate::storage::ColumnValues::F64 { values: v, .. } if values.all_valid() => {
+            TypedColumn::F64(v.clone())
+        }
+        crate::storage::ColumnValues::I32 { values: v, .. } if values.all_valid() => {
+            TypedColumn::I32(v.clone())
+        }
+        _ => TypedColumn::Fallback(fallback.to_vec()),
     }
 }

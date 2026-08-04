@@ -23,6 +23,13 @@ impl VertexTimestamp {
         }
     }
 
+    /// Pre-allocate capacity for `additional` more entries in both vectors
+    /// (used by batch inserts to avoid repeated resize reallocation).
+    pub fn reserve(&mut self, additional: usize) {
+        self.start_ts.reserve(additional);
+        self.end_ts.reserve(additional);
+    }
+
     pub fn insert(&mut self, index: u32, ts: Timestamp) {
         let idx = index as usize;
         if idx >= self.start_ts.len() {

@@ -50,6 +50,8 @@ pub struct ColumnarStats {
     pub selection_attached: AtomicU64,
     /// Chunks materialized at a selection boundary.
     pub selection_materialized: AtomicU64,
+    /// Chunks produced by a source via the storage column-block path (A1).
+    pub column_block_hits: AtomicU64,
 }
 
 impl ColumnarStats {
@@ -78,6 +80,11 @@ impl ColumnarStats {
     /// Record a chunk materialized at a selection boundary.
     pub fn record_selection_materialized(&self) {
         self.selection_materialized.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk produced via the storage column-block path (A1).
+    pub fn record_column_block_hit(&self) {
+        self.column_block_hits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Fraction of evaluation calls that hit the columnar fast path.

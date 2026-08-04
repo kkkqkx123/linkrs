@@ -59,6 +59,10 @@ struct BufferPoolInner<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Syn
     loader: Mutex<Option<LoaderFn<K, T>>>,
     writer: Mutex<Option<WriterFn<K, T>>>,
     memory_accounting: Mutex<Option<Arc<MemoryAccounting>>>,
+    /// Total weighted size of the cached items. Maintained incrementally so
+    /// `current_usage` is O(1) instead of scanning the whole map on every
+    /// insert (which made batch inserts quadratic in cache size).
+    usage: AtomicU64,
 }
 
 impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T> {
@@ -72,6 +76,7 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
                 loader: Mutex::new(None),
                 writer: Mutex::new(None),
                 memory_accounting: Mutex::new(None),
+                usage: AtomicU64::new(0),
             }),
         }
     }
@@ -125,9 +130,25 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
 
         let cached = CachedItem::new(item, size);
         let mut items = self.inner.items.lock();
-        items.insert(key.clone(), cached);
+        let is_new = match items.insert(key.clone(), cached) {
+            None => {
+                self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+                true
+            }
+            Some(previous) => {
+                // Overwrite: adjust usage by the size delta so the counter
+                // stays exact even when the same key is cached at a different
+                // size.
+                let previous_size = previous.size as u64;
+                if previous_size != size_u64 {
+                    self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+                    self.inner.usage.fetch_sub(previous_size, Ordering::Relaxed);
+                }
+                false
+            }
+        };
         let mut ids = self.inner.cached_ids.lock();
-        if !ids.contains(&key) {
+        if is_new {
             ids.push(key);
         }
         drop(ids);
@@ -147,8 +168,7 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
     }
 
     pub(crate) fn current_usage(&self) -> u64 {
-        let items = self.inner.items.lock();
-        items.values().map(|c| c.size as u64).sum()
+        self.inner.usage.load(Ordering::Acquire)
     }
 
     pub(crate) fn evict(&self, target_bytes: u64) -> u64 {
@@ -200,6 +220,7 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
                         }
                     }
                     let item_size = item.size as u64;
+                    self.inner.usage.fetch_sub(item_size, Ordering::Relaxed);
                     evicted += item_size;
                     if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
                         accounting.release_category(MemoryCategory::Cache, item_size);
@@ -240,9 +261,18 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
     {
         let mut items = self.inner.items.lock();
         let before = items.len();
-        items.retain(|k, v| f(k, &v.item));
+        let mut removed_bytes = 0u64;
+        items.retain(|k, v| {
+            if f(k, &v.item) {
+                true
+            } else {
+                removed_bytes += v.size as u64;
+                false
+            }
+        });
         let removed = before - items.len();
         if removed > 0 {
+            self.inner.usage.fetch_sub(removed_bytes, Ordering::Relaxed);
             let mut ids = self.inner.cached_ids.lock();
             ids.retain(|i| items.contains_key(i));
         }
@@ -357,5 +387,38 @@ mod tests {
         assert_eq!(pool.len(), 0);
         pool.insert(1, "x", 1);
         assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn current_usage_counter_matches_sum_after_eviction_and_overwrite() {
+        let pool = BufferPool::<u32, &str>::new(10_000);
+        for i in 0..100u32 {
+            pool.insert(i, "x", 8);
+        }
+        assert_eq!(pool.current_usage(), 800);
+        assert_eq!(pool.len(), 100);
+
+        // Overwriting a key with a different size adjusts the counter.
+        pool.insert(50, "x", 16);
+        assert_eq!(pool.current_usage(), 808);
+        assert_eq!(pool.len(), 100);
+
+        // Eviction under capacity pressure decrements the counter.
+        let evicted = pool.evict(200);
+        assert!(evicted >= 200);
+        assert_eq!(
+            pool.current_usage(),
+            pool.len() as u64 * 8 + 8,
+            "usage must equal the sum of remaining item sizes"
+        );
+
+        // retain decrements the counter for removed entries.
+        let removed = pool.retain(|&k, _| k % 2 == 0);
+        assert!(removed > 0);
+        let expected: u64 = {
+            let items = pool.inner.items.lock();
+            items.values().map(|c| c.size as u64).sum()
+        };
+        assert_eq!(pool.current_usage(), expected);
     }
 }

@@ -478,6 +478,105 @@ impl ShardedVertexTable {
         }
     }
 
+    /// Resolve the external vertex IDs of `global_ids` that are valid at `ts`
+    /// (A1).  Aligned with the input; invalid ids yield `None`.
+    pub fn resolve_valid_ids(
+        &self,
+        global_ids: &[u32],
+        ts: Timestamp,
+    ) -> Vec<Option<crate::core::types::VertexId>> {
+        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
+        for (out_idx, &global_id) in global_ids.iter().enumerate() {
+            let (shard_idx, local_id) = self.decode_id(global_id);
+            groups[shard_idx].push((out_idx, local_id));
+        }
+        let mut out: Vec<Option<crate::core::types::VertexId>> =
+            global_ids.iter().map(|_| None).collect();
+        for (shard_idx, group) in groups.into_iter().enumerate() {
+            if group.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
+            let table = self.shards[shard_idx].table.lock();
+            let resolved = table.resolve_valid_ids(&locals, ts);
+            for ((out_idx, _), vid) in group.into_iter().zip(resolved) {
+                out[out_idx] = vid;
+            }
+        }
+        out
+    }
+
+    /// Column-major batch decode (A1).  Input global ids are grouped by shard,
+    /// decoded column-at-a-time per shard, then merged back into input order.
+    /// When `names` is empty every column of the table is decoded.
+    pub fn get_projected_columns(
+        &self,
+        global_ids: &[u32],
+        ts: Timestamp,
+        names: &[String],
+    ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
+        let resolved_names: Vec<String> = if names.is_empty() {
+            let table = self.shards[0].table.lock();
+            table
+                .schema()
+                .properties
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        } else {
+            names.to_vec()
+        };
+        let types: Vec<Option<crate::core::types::DataType>> = {
+            let table = self.shards[0].table.lock();
+            resolved_names
+                .iter()
+                .map(|n| table.data_type_of(n))
+                .collect()
+        };
+
+        let mut groups: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.num_shards];
+        for (out_idx, &global_id) in global_ids.iter().enumerate() {
+            let (shard_idx, local_id) = self.decode_id(global_id);
+            groups[shard_idx].push((out_idx, local_id));
+        }
+
+        let mut merged: Vec<(String, crate::storage::cursor::ColumnValues)> = resolved_names
+            .iter()
+            .map(|n| {
+                (
+                    n.clone(),
+                    crate::storage::cursor::ColumnValues::General(vec![None; global_ids.len()]),
+                )
+            })
+            .collect();
+
+        for (shard_idx, group) in groups.into_iter().enumerate() {
+            if group.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
+            let table = self.shards[shard_idx].table.lock();
+            let decoded = table.get_projected_columns(&locals, ts, &resolved_names);
+            for (name, column) in decoded {
+                if let Some((_, target)) = merged.iter_mut().find(|(n, _)| n == &name) {
+                    column.scatter(target, &group);
+                }
+            }
+        }
+
+        for (index, data_type) in types.into_iter().enumerate() {
+            if let Some(data_type) = data_type {
+                let general = merged[index].1.to_general();
+                if let Some(typed) = crate::storage::cursor::ColumnValues::from_general_with_type(
+                    general, &data_type,
+                ) {
+                    merged[index].1 = typed;
+                }
+            }
+        }
+        merged
+    }
+
     pub fn active_snapshot_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {

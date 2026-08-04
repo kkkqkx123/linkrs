@@ -29,6 +29,13 @@ pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
     }
     fn is_null(&self, row_idx: usize) -> bool;
     fn memory_usage(&self) -> usize;
+    /// Pre-allocate capacity for `additional` more rows.
+    ///
+    /// Batch inserts call this once before writing a run of rows so the
+    /// underlying buffers (raw data, offsets, null bitmap) avoid repeated
+    /// reallocation. The default is a no-op so single-row/small-batch paths
+    /// are unaffected.
+    fn reserve(&mut self, additional: usize);
     fn clear(&mut self);
     fn resize(&mut self, new_count: usize);
     fn null_bitmap(&self) -> Option<&BitVec<u8, Lsb0>>;
@@ -168,6 +175,13 @@ impl ColumnStorage for FixedWidthColumn {
             .as_ref()
             .map(|b| row_idx < b.len() && b[row_idx])
             .unwrap_or(false)
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.data.reserve(additional * self.element_size.max(1));
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.reserve(additional);
+        }
     }
 
     fn memory_usage(&self) -> usize {
@@ -370,6 +384,16 @@ impl ColumnStorage for VariableWidthColumn {
             .unwrap_or(false)
     }
 
+    fn reserve(&mut self, additional: usize) {
+        self.offsets.reserve(additional);
+        // String payloads vary per row; reserve the per-row length prefix
+        // overhead plus a small slack so extend_from_slice rarely reallocs.
+        self.data.reserve(additional * 16);
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.reserve(additional);
+        }
+    }
+
     fn memory_usage(&self) -> usize {
         let data_size = self.data.len();
         let offsets_size = self.offsets.len() * std::mem::size_of::<usize>();
@@ -449,6 +473,66 @@ fn ensure_bitmap_len(bitmap: &mut BitVec<u8, Lsb0>, min_len: usize) {
     if bitmap.len() < min_len {
         bitmap.resize(min_len, false);
     }
+}
+
+/// Decode `rows` of `column` into a typed [`ColumnValues`] array.
+///
+/// BigInt/Double/Int columns are decoded into dense typed vectors plus a
+/// validity bitmap; any unexpected value type degrades the whole column to
+/// `General`.  All other types decode per-row into `General`.
+fn decode_column_values(column: &Column, rows: &[usize]) -> crate::storage::cursor::ColumnValues {
+    match &column.data_type {
+        DataType::BigInt => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get(row) {
+                    Some(Value::BigInt(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column(column, rows),
+                    None => values.push(0),
+                }
+            }
+            crate::storage::cursor::ColumnValues::I64 { values, valid }
+        }
+        DataType::Double => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get(row) {
+                    Some(Value::Double(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column(column, rows),
+                    None => values.push(0.0),
+                }
+            }
+            crate::storage::cursor::ColumnValues::F64 { values, valid }
+        }
+        DataType::Int => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get(row) {
+                    Some(Value::Int(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column(column, rows),
+                    None => values.push(0),
+                }
+            }
+            crate::storage::cursor::ColumnValues::I32 { values, valid }
+        }
+        _ => general_column(column, rows),
+    }
+}
+
+fn general_column(column: &Column, rows: &[usize]) -> crate::storage::cursor::ColumnValues {
+    crate::storage::cursor::ColumnValues::General(rows.iter().map(|&r| column.get(r)).collect())
 }
 
 fn write_fixed_value(
@@ -805,6 +889,12 @@ impl Column {
     pub fn clear(&mut self) {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
+    }
+
+    /// Pre-allocate capacity for `additional` more rows in the underlying
+    /// storage buffers (used by batch inserts).
+    pub fn reserve(&mut self, additional: usize) {
+        self.inner_mut().reserve(additional);
     }
 
     pub fn resize(&mut self, new_count: usize) {
@@ -1190,6 +1280,11 @@ impl ColumnStore {
             .and_then(|&idx| self.columns.get(idx))
     }
 
+    /// The declared data type of the column `name`, if it exists.
+    pub fn data_type_of(&self, name: &str) -> Option<DataType> {
+        self.get_column(name).map(|c| c.data_type.clone())
+    }
+
     pub fn get_column_mut(&mut self, name: &str) -> Option<&mut Column> {
         self.name_to_index
             .get(name)
@@ -1275,6 +1370,42 @@ impl ColumnStore {
         out
     }
 
+    /// Column-major batch decode (A1 column-block path).
+    ///
+    /// Decodes the requested columns for `rows` column-at-a-time into typed
+    /// [`ColumnValues`] arrays.  When `names` is empty every column of the
+    /// store is decoded.  The output carries one `(name, values)` entry per
+    /// requested column in `names` order (all columns order when `names` is
+    /// empty); columns that do not exist yield an all-null column.
+    pub fn get_projected_columns(
+        &self,
+        rows: &[usize],
+        names: &[String],
+    ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
+        if names.is_empty() {
+            self.columns
+                .iter()
+                .map(|column| {
+                    let values = decode_column_values(column, rows);
+                    (column.name.clone(), values)
+                })
+                .collect()
+        } else {
+            names
+                .iter()
+                .map(|name| {
+                    let values = match self.get_column(name) {
+                        Some(column) => decode_column_values(column, rows),
+                        None => {
+                            crate::storage::cursor::ColumnValues::General(vec![None; rows.len()])
+                        }
+                    };
+                    (name.clone(), values)
+                })
+                .collect()
+        }
+    }
+
     pub fn set_property(
         &mut self,
         row_idx: usize,
@@ -1330,6 +1461,13 @@ impl ColumnStore {
 
     pub fn column_count(&self) -> usize {
         self.columns.len()
+    }
+
+    /// Pre-allocate capacity for `additional` more rows in every column.
+    pub fn reserve(&mut self, additional: usize) {
+        for column in &mut self.columns {
+            column.reserve(additional);
+        }
     }
 
     pub fn row_count(&self) -> usize {

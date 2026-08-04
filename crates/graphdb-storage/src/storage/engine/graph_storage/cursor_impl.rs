@@ -161,9 +161,223 @@ impl VertexCursor for GraphVertexCursor {
             }
         })
     }
+
+    fn next_column_batch(
+        &mut self,
+        prop_names: &[String],
+        batch_size: usize,
+    ) -> Result<crate::storage::cursor::VertexColumnBatch, StorageError> {
+        if self.exhausted || self.tags.labels.is_empty() {
+            return Ok(crate::storage::cursor::VertexColumnBatch::empty());
+        }
+        let batch_size = batch_size.max(1);
+        loop {
+            let batch = self.collect_column_batch(prop_names, batch_size)?;
+            if !batch.is_empty() || self.exhausted {
+                return Ok(batch);
+            }
+            // Every row collected in this window was filtered out by the
+            // pushed predicates: keep going so an empty window never ends the
+            // scan early (mirrors the row-based scan loop).
+        }
+    }
 }
 
 impl GraphVertexCursor {
+    /// Collect one column-major batch: gather candidates across tables,
+    /// decode the requested columns, apply pushed predicates and the row
+    /// limit, and assemble the final [`VertexColumnBatch`].
+    fn collect_column_batch(
+        &mut self,
+        prop_names: &[String],
+        batch_size: usize,
+    ) -> Result<crate::storage::cursor::VertexColumnBatch, StorageError> {
+        let data_store = self.ctx.data_store().clone();
+        let names = self.tags.names.clone();
+        let result = data_store.with_vertex_tables(|tables| {
+            let mut vids: Vec<VertexId> = Vec::new();
+            let mut internal_ids: Vec<u32> = Vec::new();
+            let mut tag_names: Vec<String> = Vec::new();
+            // Union of decoded column names, grown as tables are processed.
+            let mut union_names: Vec<String> = Vec::new();
+            let mut columns: Vec<crate::storage::cursor::ColumnValues> = Vec::new();
+
+            while internal_ids.len() < batch_size && !self.exhausted {
+                if self.current_table.is_none() {
+                    self.load_next_table(tables);
+                    continue;
+                }
+                if self.pending_idx >= self.pending_ids.len() {
+                    self.current_table = None;
+                    self.current_label = None;
+                    self.pending_ids.clear();
+                    self.pending_idx = 0;
+                    continue;
+                }
+
+                let end = (self.pending_idx + (batch_size - internal_ids.len()))
+                    .min(self.pending_ids.len());
+                let ids = &self.pending_ids[self.pending_idx..end];
+                self.pending_idx = end;
+
+                let Some(table) = self.current_table.clone() else {
+                    continue;
+                };
+                let label_id = self.current_label;
+                let tag_name = label_id
+                    .and_then(|l| names.get(&l))
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+
+                // Decode names for this table run.  A full-row decode (empty
+                // projection) decodes every column of the table; otherwise the
+                // projection plus any pushed-predicate columns.
+                let run_names: Vec<String> = if prop_names.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut run = prop_names.to_vec();
+                    for predicate in &self.predicate {
+                        let column = predicate.column().to_string();
+                        if !run.contains(&column) {
+                            run.push(column);
+                        }
+                    }
+                    run
+                };
+
+                let ids_vec: Vec<u32> = ids.to_vec();
+                let resolved = table.resolve_valid_ids(&ids_vec, self.ts);
+                let mut run_internal: Vec<u32> = Vec::new();
+                let mut run_vids: Vec<VertexId> = Vec::new();
+                for (pos, &id) in ids_vec.iter().enumerate() {
+                    let Some(vid) = resolved[pos] else {
+                        continue;
+                    };
+                    if let Some(ref range) = self.id_range {
+                        match vid.as_int64() {
+                            Some(vid) if (range.start..range.end).contains(&vid) => {}
+                            _ => continue,
+                        }
+                    }
+                    if self.offset_remaining > 0 {
+                        self.offset_remaining -= 1;
+                        continue;
+                    }
+                    run_internal.push(id);
+                    run_vids.push(vid);
+                }
+
+                let run_rows = run_internal.len();
+                if run_rows == 0 {
+                    continue;
+                }
+
+                let decoded = table.get_projected_columns(&run_internal, self.ts, &run_names);
+
+                // Merge the run into the batch's column union.
+                let before = internal_ids.len();
+                for (name, _) in &decoded {
+                    if !union_names.contains(name) {
+                        union_names.push(name.clone());
+                        let mut new_column =
+                            crate::storage::cursor::ColumnValues::General(Vec::new());
+                        new_column.append_nulls(before);
+                        columns.push(new_column);
+                    }
+                }
+                for (index, uname) in union_names.iter().enumerate() {
+                    match decoded.iter().position(|(n, _)| n == uname) {
+                        Some(run_index) => {
+                            let run_column = decoded[run_index].1.clone();
+                            columns[index].append(run_column);
+                        }
+                        None => columns[index].append_nulls(run_rows),
+                    }
+                }
+
+                internal_ids.extend(run_internal);
+                vids.extend(run_vids);
+                tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
+            }
+
+            (
+                internal_ids,
+                vids,
+                tag_names,
+                union_names,
+                columns,
+                self.exhausted,
+            )
+        });
+
+        let (internal_ids, vids, tag_names, union_names, mut columns, _exhausted) = result;
+
+        // Apply pushed predicates over the decoded columns.
+        let (final_ids, final_vids, final_tags) = if self.predicate.is_empty() {
+            (internal_ids, vids, tag_names)
+        } else {
+            let mut keep = vec![true; internal_ids.len()];
+            for predicate in &self.predicate {
+                match union_names.iter().position(|n| n == predicate.column()) {
+                    Some(index) => {
+                        let column = &columns[index];
+                        for (row, ok) in keep.iter_mut().enumerate() {
+                            if *ok && !predicate.matches_column(column, row) {
+                                *ok = false;
+                            }
+                        }
+                    }
+                    None => keep.fill(false),
+                }
+            }
+            if keep.iter().any(|&k| !k) {
+                let mut kept_ids = Vec::with_capacity(keep.iter().filter(|&&k| k).count());
+                let mut kept_vids = Vec::with_capacity(kept_ids.capacity());
+                let mut kept_tags = Vec::with_capacity(kept_ids.capacity());
+                for (row, &k) in keep.iter().enumerate() {
+                    if k {
+                        kept_ids.push(internal_ids[row]);
+                        kept_vids.push(vids[row]);
+                        kept_tags.push(tag_names[row].clone());
+                    }
+                }
+                for column in columns.iter_mut() {
+                    column.compact(&keep);
+                }
+                (kept_ids, kept_vids, kept_tags)
+            } else {
+                (internal_ids, vids, tag_names)
+            }
+        };
+
+        let mut batch = Self::assemble_column_batch(
+            prop_names,
+            union_names,
+            columns,
+            final_ids,
+            final_vids,
+            final_tags,
+        );
+
+        // Apply the scan limit on the returned rows.
+        if let Some(limit) = self.limit {
+            let remaining = limit.saturating_sub(self.emitted);
+            if batch.len() > remaining {
+                batch.vids.truncate(remaining);
+                batch.internal_ids.truncate(remaining);
+                batch.tag_names.truncate(remaining);
+                for column in batch.columns.iter_mut() {
+                    column.values.truncate(remaining);
+                }
+                self.emitted += remaining;
+                self.exhausted = true;
+            } else {
+                self.emitted += batch.len();
+            }
+        }
+
+        Ok(batch)
+    }
     /// Shared scan loop over the vertex tables, building one output row per
     /// emitted vertex. The `build` closure receives the decoded fields
     /// (external vid, internal id, tag name, projected properties as a plain
@@ -253,6 +467,57 @@ impl GraphVertexCursor {
         });
 
         Ok(batch)
+    }
+
+    /// Assemble the final [`VertexColumnBatch`] from the decoded union columns.
+    ///
+    /// When `prop_names` is non-empty only those columns are returned (in
+    /// projection order, missing columns as all-null); an empty `prop_names`
+    /// returns every decoded column.
+    fn assemble_column_batch(
+        prop_names: &[String],
+        union_names: Vec<String>,
+        columns: Vec<crate::storage::cursor::ColumnValues>,
+        internal_ids: Vec<u32>,
+        vids: Vec<VertexId>,
+        tag_names: Vec<String>,
+    ) -> crate::storage::cursor::VertexColumnBatch {
+        let output_columns: Vec<crate::storage::cursor::PropertyColumn> = if prop_names.is_empty() {
+            union_names
+                .into_iter()
+                .zip(columns)
+                .map(|(name, values)| crate::storage::cursor::PropertyColumn {
+                    name,
+                    data_type: crate::core::types::DataType::Empty,
+                    values,
+                })
+                .collect()
+        } else {
+            let row_count = vids.len();
+            prop_names
+                .iter()
+                .map(|name| {
+                    let values = union_names
+                        .iter()
+                        .position(|n| n == name)
+                        .and_then(|index| columns.get(index).cloned())
+                        .unwrap_or_else(|| {
+                            crate::storage::cursor::ColumnValues::General(vec![None; row_count])
+                        });
+                    crate::storage::cursor::PropertyColumn {
+                        name: name.clone(),
+                        data_type: crate::core::types::DataType::Empty,
+                        values,
+                    }
+                })
+                .collect()
+        };
+        crate::storage::cursor::VertexColumnBatch {
+            vids,
+            internal_ids: internal_ids.into_iter().map(|id| id as i64).collect(),
+            tag_names,
+            columns: output_columns,
+        }
     }
 }
 

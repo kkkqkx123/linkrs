@@ -247,6 +247,54 @@ impl VertexTable {
         out
     }
 
+    /// Resolve the external vertex IDs of `internal_ids` that are valid at
+    /// `ts`.  The output is aligned with the input; invalid ids yield `None`.
+    pub fn resolve_valid_ids(&self, internal_ids: &[u32], ts: Timestamp) -> Vec<Option<VertexId>> {
+        if !self.is_open {
+            return internal_ids.iter().map(|_| None).collect();
+        }
+        internal_ids
+            .iter()
+            .map(|&id| {
+                if !self.timestamps.is_valid(id, ts) {
+                    return None;
+                }
+                match self.id_indexer.get_key(id) {
+                    Some(IdKey::Int(i)) => Some(VertexId::from_int64(i)),
+                    Some(IdKey::Text(s)) => Some(VertexId::from_string(&s)),
+                    None => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Column-major batch decode (A1).  Decodes the requested columns for
+    /// `internal_ids` column-at-a-time into typed [`ColumnValues`] arrays.
+    /// The ids must already be valid at `ts`; validity is not re-checked here.
+    pub fn get_projected_columns(
+        &self,
+        internal_ids: &[u32],
+        _ts: Timestamp,
+        names: &[String],
+    ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
+        if !self.is_open {
+            return names
+                .iter()
+                .map(|n| {
+                    (
+                        n.clone(),
+                        crate::storage::cursor::ColumnValues::General(vec![
+                            None;
+                            internal_ids.len()
+                        ]),
+                    )
+                })
+                .collect();
+        }
+        let row_indices: Vec<usize> = internal_ids.iter().map(|&id| id as usize).collect();
+        self.columns.get_projected_columns(&row_indices, names)
+    }
+
     pub fn get_projected_by_internal_id(
         &self,
         internal_id: u32,
@@ -507,6 +555,11 @@ impl VertexTable {
         self.id_indexer.get_key(internal_id)
     }
 
+    /// Declared data type of the column `name`, if it exists in the schema.
+    pub fn data_type_of(&self, name: &str) -> Option<crate::core::types::DataType> {
+        self.columns.data_type_of(name)
+    }
+
     pub fn total_count(&self) -> usize {
         self.id_indexer.len()
     }
@@ -527,9 +580,16 @@ impl VertexTable {
         (allocated.saturating_sub(deleted), allocated)
     }
 
-    /// Pre-allocate ID indexer capacity for `additional` more vertices.
-    pub fn reserve_id_capacity(&self, additional: usize) {
+    /// Pre-allocate capacity for `additional` more vertices in the ID indexer,
+    /// the column buffers, and the timestamp vectors.
+    ///
+    /// Without column/timestamp reservation, every appended row in a large
+    /// batch resizes the backing `Vec`s one element at a time, making bulk
+    /// inserts quadratic in the table size.
+    pub fn reserve_id_capacity(&mut self, additional: usize) {
         self.id_indexer.reserve(additional);
+        self.columns.reserve(additional);
+        self.timestamps.reserve(additional);
     }
 
     pub fn scan(&self, ts: Timestamp) -> VertexIterator<'_> {
