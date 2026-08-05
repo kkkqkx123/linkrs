@@ -12,7 +12,7 @@ thiserror.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 chrono.workspace = true
-tantivy = { version = "0.26.0", optional = true }
+tantivy = { version = "0.27.0", optional = true }
 jieba-rs = { version = "0.9", optional = true }
 tantivy-tokenizer-api = { version = "0.7", optional = true }
 dashmap.workspace = true

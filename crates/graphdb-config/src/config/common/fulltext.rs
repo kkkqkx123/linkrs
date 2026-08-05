@@ -36,6 +36,18 @@ impl TokenizerKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Bm25Params {
+    pub k1: f32,
+    pub b: f32,
+}
+
+impl Default for Bm25Params {
+    fn default() -> Self {
+        Self { k1: 1.2, b: 0.75 }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TantivyConfig {
     pub writer_memory_budget: usize,
@@ -43,6 +55,8 @@ pub struct TantivyConfig {
     pub tokenizer: TokenizerKind,
     #[serde(default = "default_doc_store_cache_num_blocks")]
     pub doc_store_cache_num_blocks: usize,
+    #[serde(default)]
+    pub bm25_params: Bm25Params,
 }
 
 fn default_doc_store_cache_num_blocks() -> usize {
@@ -55,6 +69,7 @@ impl Default for TantivyConfig {
             writer_memory_budget: 50_000_000,
             tokenizer: TokenizerKind::default(),
             doc_store_cache_num_blocks: 100,
+            bm25_params: Bm25Params::default(),
         }
     }
 }

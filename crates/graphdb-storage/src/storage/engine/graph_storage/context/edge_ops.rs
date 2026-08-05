@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cold::ColdSnapshot;
-use crate::storage::edge::EdgeRecord;
+use crate::storage::edge::{EdgeRecord, Nbr};
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::vertex::ShardedVertexTable;
@@ -335,6 +335,50 @@ impl GraphStorageContext {
         Some(records)
     }
 
+    /// Raw out-edge neighbors of `src` (no `EdgeRecord` materialization, no
+    /// property decode).  The neighbor endpoint is encoded in `Nbr.neighbor`.
+    /// Returns the resolved internal src id together with the neighbors.
+    pub fn out_nbrs(
+        &self,
+        edge_label: LabelId,
+        src_label: LabelId,
+        _dst_label: LabelId,
+        src_id: VertexId,
+        ts: Timestamp,
+    ) -> Option<(u32, Vec<Nbr>)> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let (src_internal, actual_src) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let src_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
+                    let actual_src = if src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                            .unwrap_or(src_label)
+                    } else {
+                        src_label
+                    };
+                    Some((src_internal, actual_src))
+                })?;
+
+        let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut nbrs = Vec::new();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
+            {
+                nbrs.extend(table.merged_out_nbrs(src_internal, ts));
+            }
+            nbrs
+        });
+        Some((src_internal, nbrs))
+    }
+
     pub fn in_edges(
         &self,
         edge_label: LabelId,
@@ -374,5 +418,49 @@ impl GraphStorageContext {
             records
         });
         Some(records)
+    }
+
+    /// Raw in-edge neighbors of `dst` (no `EdgeRecord` materialization, no
+    /// property decode).  The neighbor endpoint is encoded in `Nbr.neighbor`.
+    /// Returns the resolved internal dst id together with the neighbors.
+    pub fn in_nbrs(
+        &self,
+        edge_label: LabelId,
+        _src_label: LabelId,
+        dst_label: LabelId,
+        dst_id: VertexId,
+        ts: Timestamp,
+    ) -> Option<(u32, Vec<Nbr>)> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let (dst_internal, actual_dst) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let dst_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
+                    let actual_dst = if dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                            .unwrap_or(dst_label)
+                    } else {
+                        dst_label
+                    };
+                    Some((dst_internal, actual_dst))
+                })?;
+
+        let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut nbrs = Vec::new();
+            for table in edge_tables
+                .values()
+                .map(|arc| arc.read())
+                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
+            {
+                nbrs.extend(table.merged_in_nbrs(dst_internal, ts));
+            }
+            nbrs
+        });
+        Some((dst_internal, nbrs))
     }
 }

@@ -154,11 +154,32 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             pairs.push(Pair::new("spill_threshold", format!("{}", threshold)));
         }
 
+        // Annotated ExpandAll hops surface their de-materialization mode.
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Graph(
+            crate::query::executor::streaming::operators::spec::GraphSpec::ExpandAll {
+                count_only,
+                emit_raw_ids,
+                ..
+            },
+        ) = &op_spec.spec
+        {
+            if *count_only {
+                pairs.push(crate::query::planning::plan::explain::Pair::new(
+                    "mode",
+                    "count_only",
+                ));
+            } else if *emit_raw_ids {
+                pairs.push(crate::query::planning::plan::explain::Pair::new(
+                    "mode",
+                    "id_only",
+                ));
+            }
+        }
+
         // Try to extract output column names from SourceSpec
         if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(src_spec) =
             &op_spec.spec
-        {
-            let col_names: Vec<String> = match src_spec {
+        {            let col_names: Vec<String> = match src_spec {
                 crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. }
                 | crate::query::executor::streaming::operators::spec::SourceSpec::StandaloneValues { col_names, .. }
                 => col_names.clone(),

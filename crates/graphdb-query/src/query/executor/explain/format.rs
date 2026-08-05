@@ -41,9 +41,9 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
     output.push('\n');
 
     // Header with clear column names
-    output.push_str("+------+------------------+------------+------------------+--------------------------------------------------+------------------+\n");
-    output.push_str("| id   | name             | deps       | profiling_data   | operator_info                                    | output_var       |\n");
-    output.push_str("+------+------------------+------------+------------------+--------------------------------------------------+------------------+\n");
+    output.push_str("+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+\n");
+    output.push_str("| id   | name             | deps       | profiling_data                                    | operator_info                                    | output_var       |\n");
+    output.push_str("+------+------------------+------------+--------------------------------------------------+--------------------------------------------------+------------------+\n");
 
     // Rows
     for node in &plan_desc.plan_node_descs {
@@ -77,7 +77,7 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
         } else {
             "-".to_string()
         };
-        let profile = truncate_or_pad(&profile, 16);
+        let profile = truncate_or_pad(&profile, 48);
 
         // Format operator info
         let info = node

@@ -17,7 +17,7 @@ pub mod warmup;
 #[cfg(test)]
 mod isolation_test;
 
-pub use crate::config::common::fulltext::{TantivyConfig, TokenizerKind};
+pub use crate::config::common::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
 pub use config::{FulltextConfig, SyncConfig, SyncFailurePolicy};
 pub use engine::{ConsistencyState, EngineType};
 pub use error::{Result, SearchError};

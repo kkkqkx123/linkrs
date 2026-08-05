@@ -214,6 +214,24 @@ pub struct ExpandAllNode {
     col_names: Vec<String>,
     /// Input variable name for getting input from ExecutionContext
     input_var: Option<String>,
+    /// When true, the destination vertex is emitted as a raw `Value::VertexId`
+    /// (and the edge column as `Value::Null`) instead of materializing the full
+    /// `Value::Vertex(Box)` / `Value::Edge(Box)`.  Only safe when the
+    /// destination is used solely as the seed of a subsequent hop (or not
+    /// referenced downstream at all).  Annotated by the optimizer's
+    /// `ExpandPushdown` batch.
+    id_only: bool,
+    /// When true, this is the terminal hop of an expansion chain feeding a
+    /// count-only aggregate.  The executor skips output-row materialization
+    /// and returns the edge count per chunk.  Implies `id_only`.  Annotated by
+    /// the optimizer's `ExpandPushdown` batch.
+    count_only: bool,
+    /// When true (always alongside `id_only`), the hop's *source* column is
+    /// also emitted as a raw `Value::VertexId` instead of cloning the full
+    /// `Value::Vertex(Box)` carried in from upstream.  Only safe when the
+    /// source variable is not referenced by any ancestor.  Annotated by the
+    /// optimizer's `ExpandPushdown` batch.
+    lightweight_source: bool,
 }
 
 impl ExpandAllNode {
@@ -238,6 +256,9 @@ impl ExpandAllNode {
             output_var: None,
             col_names: Vec::new(),
             input_var: None,
+            id_only: false,
+            count_only: false,
+            lightweight_source: false,
         }
     }
 
@@ -361,6 +382,30 @@ impl ExpandAllNode {
 
     pub fn set_input_var(&mut self, input_var: String) {
         self.input_var = Some(input_var);
+    }
+
+    pub fn id_only(&self) -> bool {
+        self.id_only
+    }
+
+    pub fn set_id_only(&mut self, id_only: bool) {
+        self.id_only = id_only;
+    }
+
+    pub fn count_only(&self) -> bool {
+        self.count_only
+    }
+
+    pub fn set_count_only(&mut self, count_only: bool) {
+        self.count_only = count_only;
+    }
+
+    pub fn lightweight_source(&self) -> bool {
+        self.lightweight_source
+    }
+
+    pub fn set_lightweight_source(&mut self, lightweight_source: bool) {
+        self.lightweight_source = lightweight_source;
     }
 
     pub fn dependencies(

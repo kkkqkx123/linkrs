@@ -663,6 +663,518 @@ fn append_cold_node_edges(
     Ok(())
 }
 
+/// Resolve an internal vertex-table id to its external `VertexId` without the
+/// string round-trip when a direct raw lookup is available.
+fn internal_to_external_vertex_id(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    internal: u32,
+    fallback: &VertexId,
+    ts: Timestamp,
+) -> VertexId {
+    if label != 0 {
+        ctx.get_external_id_by_internal_id(label, internal)
+            .unwrap_or_else(|| vid_from_str(&external_id_string(ctx, label, internal, fallback, ts)))
+    } else {
+        vid_from_str(&external_id_string(ctx, 0, internal, fallback, ts))
+    }
+}
+
+/// Lightweight batch neighbor read used by de-materialized expand hops
+/// (`id_only`/`count_only`).
+///
+/// Resolves the edge-type schema once for the whole batch and reads MVCC
+/// neighbors directly from the CSR (skipping `EdgeRecord` materialization and
+/// per-edge property decoding).  Cold snapshots are merged with the same
+/// `(neighbor_internal, rank)` dedup as [`get_node_edges`].  Returns the
+/// external destination/source `VertexId` per input source, in input order.
+pub(crate) fn neighbor_dst_ids_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<Vec<VertexId>>> {
+    record_schema_read(ctx, space);
+    let edge_type_infos = ctx.schema_manager().list_edge_types(space)?;
+    let ts = ctx.get_read_timestamp();
+
+    // Resolve the edge-type schema once for the whole batch.
+    let mut resolved = Vec::new();
+    for edge_info in &edge_type_infos {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
+    }
+
+    let mut results = Vec::with_capacity(src_ids.len());
+    let has_cold = !ctx.cold_snapshots().read().is_empty();
+    for src_id in src_ids {
+        record_vertex_read(ctx, *src_id);
+        let mut neighbors: Vec<VertexId> = Vec::new();
+        // Dedup is only required to merge cold snapshots against hot data;
+        // without cold snapshots each edge is returned at most once by the
+        // merged CSR path, so the set is skipped entirely.
+        let mut seen: Option<HashSet<(u32, u32, i64)>> = has_cold.then(HashSet::new);
+        for (edge_label_id, src_label_id, dst_label_id) in &resolved {
+            append_hot_neighbors(
+                ctx,
+                &mut neighbors,
+                seen.as_mut(),
+                src_id,
+                *edge_label_id,
+                *src_label_id,
+                *dst_label_id,
+                direction,
+                ts,
+            );
+            append_cold_neighbors(
+                ctx,
+                &mut neighbors,
+                seen.as_mut(),
+                src_id,
+                *edge_label_id,
+                *src_label_id,
+                *dst_label_id,
+                direction,
+                ts,
+            );
+        }
+        results.push(neighbors);
+    }
+    Ok(results)
+}
+
+/// Batch out-degree read for count-only expand tails.  Counts distinct edges
+/// (`(neighbor_internal, rank)` deduped across hot and cold) per source, with
+/// the schema resolved once for the whole batch.
+pub(crate) fn out_degree_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src_ids: &[VertexId],
+    direction: EdgeDirection,
+    edge_types: &[String],
+) -> StorageResult<Vec<usize>> {
+    record_schema_read(ctx, space);
+    let edge_type_infos = ctx.schema_manager().list_edge_types(space)?;
+    let ts = ctx.get_read_timestamp();
+
+    let mut resolved = Vec::new();
+    for edge_info in &edge_type_infos {
+        if !edge_types.is_empty() && !edge_types.contains(&edge_info.edge_type_name) {
+            continue;
+        }
+        let Some(src_label_id) = endpoint_label_id(ctx, space, &edge_info.src_tag_name)? else {
+            continue;
+        };
+        let Some(dst_label_id) = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? else {
+            continue;
+        };
+        resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
+    }
+
+    let mut results = Vec::with_capacity(src_ids.len());
+    for src_id in src_ids {
+        record_vertex_read(ctx, *src_id);
+        let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
+        for (edge_label_id, src_label_id, dst_label_id) in &resolved {
+            count_hot_neighbors(
+                ctx,
+                &mut seen,
+                src_id,
+                *edge_label_id,
+                *src_label_id,
+                *dst_label_id,
+                direction,
+                ts,
+            );
+            count_cold_neighbors(
+                ctx,
+                &mut seen,
+                src_id,
+                *edge_label_id,
+                *src_label_id,
+                *dst_label_id,
+                direction,
+                ts,
+            );
+        }
+        results.push(seen.len());
+    }
+    Ok(results)
+}
+
+/// Append hot-CSR neighbors of `src_id` (direction-dependent endpoint) to
+/// `neighbors`, deduped by the full `(src_internal, dst_internal, rank)` edge
+/// identity (matching [`get_node_edges`] semantics).  When `seen` is `None`
+/// (no cold snapshots to merge) every edge is accepted.
+#[allow(clippy::too_many_arguments)]
+fn append_hot_neighbors(
+    ctx: &GraphStorageContext,
+    neighbors: &mut Vec<VertexId>,
+    mut seen: Option<&mut HashSet<(u32, u32, i64)>>,
+    src_id: &VertexId,
+    edge_label_id: LabelId,
+    src_label_id: LabelId,
+    dst_label_id: LabelId,
+    direction: EdgeDirection,
+    ts: Timestamp,
+) {
+    let mut unique = |key: (u32, u32, i64)| -> bool {
+        match seen.as_deref_mut() {
+            Some(seen) => seen.insert(key),
+            None => true,
+        }
+    };
+    match direction {
+        EdgeDirection::Out => {
+            if let Some((src_internal, nbrs)) =
+                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        let dst_internal = dst_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                dst_label_id,
+                                dst_internal,
+                                &dst_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+        }
+        EdgeDirection::In => {
+            if let Some((dst_internal, nbrs)) =
+                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        let src_internal = src_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                src_label_id,
+                                src_internal,
+                                &src_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+        }
+        EdgeDirection::Both => {
+            if let Some((src_internal, nbrs)) =
+                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        let dst_internal = dst_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                dst_label_id,
+                                dst_internal,
+                                &dst_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+            if let Some((dst_internal, nbrs)) =
+                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        let src_internal = src_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                src_label_id,
+                                src_internal,
+                                &src_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Append cold-snapshot neighbors of `src_id` with the same dedup as the hot
+/// path, mirroring [`append_cold_node_edges`] but without materializing
+/// `Edge` records.
+#[allow(clippy::too_many_arguments)]
+fn append_cold_neighbors(
+    ctx: &GraphStorageContext,
+    neighbors: &mut Vec<VertexId>,
+    mut seen: Option<&mut HashSet<(u32, u32, i64)>>,
+    src_id: &VertexId,
+    edge_label_id: LabelId,
+    src_label_id: LabelId,
+    dst_label_id: LabelId,
+    direction: EdgeDirection,
+    ts: Timestamp,
+) {
+    let mut unique = |key: (u32, u32, i64)| -> bool {
+        match seen.as_deref_mut() {
+            Some(seen) => seen.insert(key),
+            None => true,
+        }
+    };
+    let cold = ctx.cold_snapshots().read();
+    let Some(snapshots) = cold.get(&edge_label_id) else {
+        return;
+    };
+    for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
+        match direction {
+            EdgeDirection::Out => {
+                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) else {
+                    continue;
+                };
+                for nbr in snapshot.get_out_edges(src_internal) {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        let dst_internal = dst_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                dst_label_id,
+                                dst_internal,
+                                &dst_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+            EdgeDirection::In => {
+                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) else {
+                    continue;
+                };
+                for nbr in snapshot.get_in_edges(dst_internal) {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        let src_internal = src_internal as u32;
+                        if unique((src_internal, dst_internal, rank)) {
+                            let ext = internal_to_external_vertex_id(
+                                ctx,
+                                src_label_id,
+                                src_internal,
+                                &src_internal_vid,
+                                ts,
+                            );
+                            neighbors.push(ext);
+                        }
+                    }
+                }
+            }
+            EdgeDirection::Both => {
+                if let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) {
+                    for nbr in snapshot.get_out_edges(src_internal) {
+                        let (dst_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                            let dst_internal = dst_internal as u32;
+                            if unique((src_internal, dst_internal, rank)) {
+                                let ext = internal_to_external_vertex_id(
+                                    ctx,
+                                    dst_label_id,
+                                    dst_internal,
+                                    &dst_internal_vid,
+                                    ts,
+                                );
+                                neighbors.push(ext);
+                            }
+                        }
+                    }
+                }
+                if let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) {
+                    for nbr in snapshot.get_in_edges(dst_internal) {
+                        let (src_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        if let Some(src_internal) = src_internal_vid.as_int64() {
+                            let src_internal = src_internal as u32;
+                            if unique((src_internal, dst_internal, rank)) {
+                                let ext = internal_to_external_vertex_id(
+                                    ctx,
+                                    src_label_id,
+                                    src_internal,
+                                    &src_internal_vid,
+                                    ts,
+                                );
+                                neighbors.push(ext);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Count hot-CSR neighbors of `src_id` into `seen` (dedup by full edge
+/// identity `(src_internal, dst_internal, rank)`).
+#[allow(clippy::too_many_arguments)]
+fn count_hot_neighbors(
+    ctx: &GraphStorageContext,
+    seen: &mut HashSet<(u32, u32, i64)>,
+    src_id: &VertexId,
+    edge_label_id: LabelId,
+    src_label_id: LabelId,
+    dst_label_id: LabelId,
+    direction: EdgeDirection,
+    ts: Timestamp,
+) {
+    match direction {
+        EdgeDirection::Out => {
+            if let Some((src_internal, nbrs)) =
+                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        seen.insert((src_internal, dst_internal as u32, rank));
+                    }
+                }
+            }
+        }
+        EdgeDirection::In => {
+            if let Some((dst_internal, nbrs)) =
+                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        seen.insert((src_internal as u32, dst_internal, rank));
+                    }
+                }
+            }
+        }
+        EdgeDirection::Both => {
+            if let Some((src_internal, nbrs)) =
+                ctx.out_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        seen.insert((src_internal, dst_internal as u32, rank));
+                    }
+                }
+            }
+            if let Some((dst_internal, nbrs)) =
+                ctx.in_nbrs(edge_label_id, src_label_id, dst_label_id, *src_id, ts)
+            {
+                for nbr in nbrs {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        seen.insert((src_internal as u32, dst_internal, rank));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Count cold-snapshot neighbors of `src_id` into `seen`.
+#[allow(clippy::too_many_arguments)]
+fn count_cold_neighbors(
+    ctx: &GraphStorageContext,
+    seen: &mut HashSet<(u32, u32, i64)>,
+    src_id: &VertexId,
+    edge_label_id: LabelId,
+    src_label_id: LabelId,
+    dst_label_id: LabelId,
+    direction: EdgeDirection,
+    ts: Timestamp,
+) {
+    let cold = ctx.cold_snapshots().read();
+    let Some(snapshots) = cold.get(&edge_label_id) else {
+        return;
+    };
+    for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
+        match direction {
+            EdgeDirection::Out => {
+                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) else {
+                    continue;
+                };
+                for nbr in snapshot.get_out_edges(src_internal) {
+                    let (dst_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                        seen.insert((src_internal, dst_internal as u32, rank));
+                    }
+                }
+            }
+            EdgeDirection::In => {
+                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) else {
+                    continue;
+                };
+                for nbr in snapshot.get_in_edges(dst_internal) {
+                    let (src_internal_vid, rank) =
+                        TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                    if let Some(src_internal) = src_internal_vid.as_int64() {
+                        seen.insert((src_internal as u32, dst_internal, rank));
+                    }
+                }
+            }
+            EdgeDirection::Both => {
+                if let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) {
+                    for nbr in snapshot.get_out_edges(src_internal) {
+                        let (dst_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                            seen.insert((src_internal, dst_internal as u32, rank));
+                        }
+                    }
+                }
+                if let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) {
+                    for nbr in snapshot.get_in_edges(dst_internal) {
+                        let (src_internal_vid, rank) =
+                            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                        if let Some(src_internal) = src_internal_vid.as_int64() {
+                            seen.insert((src_internal as u32, dst_internal, rank));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn scan_edges_by_type(
     ctx: &GraphStorageContext,
     space: &str,

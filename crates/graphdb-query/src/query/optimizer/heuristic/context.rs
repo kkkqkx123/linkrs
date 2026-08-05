@@ -26,6 +26,10 @@ pub struct RewriteContext {
     nodes_by_id: RefCell<HashMap<usize, Rc<RefCell<PlanNodeWrapper>>>>,
     /// Expression context
     expr_context: Arc<ExpressionAnalysisContext>,
+    /// ID of the node whose rules are currently being applied.  The plan root
+    /// always receives the first allocated id (0), so whole-plan rules can
+    /// detect they are running at the root.
+    current_node_id: usize,
 }
 
 /// Plan Node Wrapper
@@ -55,6 +59,7 @@ impl Default for RewriteContext {
             plan_node_to_id: RefCell::new(HashMap::new()),
             nodes_by_id: RefCell::new(HashMap::new()),
             expr_context: Arc::new(ExpressionAnalysisContext::new()),
+            current_node_id: usize::MAX,
         }
     }
 }
@@ -72,6 +77,7 @@ impl RewriteContext {
             plan_node_to_id: RefCell::new(HashMap::new()),
             nodes_by_id: RefCell::new(HashMap::new()),
             expr_context,
+            current_node_id: usize::MAX,
         }
     }
 
@@ -93,6 +99,17 @@ impl RewriteContext {
             .borrow_mut()
             .insert(node_id, wrapper.clone());
         wrapper
+    }
+
+    /// Set the id of the node whose rules are currently being applied.
+    pub fn set_current_node_id(&mut self, node_id: usize) {
+        self.current_node_id = node_id;
+    }
+
+    /// ID of the node whose rules are currently being applied.  The plan root
+    /// is registered with id 0.
+    pub fn current_node_id(&self) -> usize {
+        self.current_node_id
     }
 
     /// Find a node by its ID

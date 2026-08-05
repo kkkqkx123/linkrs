@@ -259,3 +259,7 @@ harness = false
 [[bench]]
 name = "traversal_perf_bench"
 harness = false
+
+[[bench]]
+name = "neighbor_batch_bench"
+harness = false

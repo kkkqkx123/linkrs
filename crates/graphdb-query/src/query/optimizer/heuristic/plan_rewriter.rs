@@ -145,6 +145,7 @@ impl PlanRewriter {
 
         // Registering nodes with the context
         ctx.register_node(node_id, node.clone());
+        ctx.set_current_node_id(node_id);
 
         // Apply the iteration rules until convergence is achieved.
         let mut current_node = node;

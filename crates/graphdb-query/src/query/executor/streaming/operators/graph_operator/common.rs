@@ -69,39 +69,85 @@ pub(super) fn row_passes_filter(
     )
 }
 
+/// Pre-resolve the seed-variable slot for the fast expand paths.  Mirrors the
+/// historical extraction priority (`"vid"`, `"src"`, the first col-name
+/// template entry, then column 0) without building a per-row expression
+/// context.
+fn seed_slot(layout: &SlotLayout, col_names_template: &[String]) -> usize {
+    if let Some(slot) = layout.slot_id("vid") {
+        return slot;
+    }
+    if let Some(slot) = layout.slot_id("src") {
+        return slot;
+    }
+    if let Some(name) = col_names_template.first() {
+        if let Some(slot) = layout.slot_id(name) {
+            return slot;
+        }
+    }
+    0
+}
+
+/// Forward a seed row into an id_only expand output with the source column
+/// replaced by a lightweight `Value::VertexId`, so intermediate hops never
+/// deep-clone the full `Value::Vertex(Box)` (with its property maps) that a
+/// storage scan puts in the entity column.
+fn lightweight_seed_row(row: &[Value], src_slot: usize, vid: VertexId) -> Vec<Value> {
+    if matches!(row.get(src_slot), Some(Value::VertexId(_))) {
+        return row.to_vec();
+    }
+    let mut out = Vec::with_capacity(row.len());
+    for (i, val) in row.iter().enumerate() {
+        if i == src_slot {
+            out.push(Value::VertexId(vid));
+        } else {
+            out.push(val.clone());
+        }
+    }
+    out
+}
+
 /// Fast path for single-step expand (step_limit == 1, no filter).
 ///
 /// Avoids TraversalRuntime construction (HashSet, VecDeque, TraversalConfig)
 /// and directly calls storage for each seed vertex's edges.
 /// Estimated ~4x speedup vs the generic `expand_on_chunk` path.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expand_single_step(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
     src_vids: Vec<Value>,
     emit_raw_ids: bool,
+    lightweight_source: bool,
     ctx: &mut ExpandCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
     let space_name = ctx.space_name;
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
 
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
 
     for row in &chunk.rows {
-        let context = ValueRowContext::new(row.clone(), chunk.get_layout());
-        let src_name = ctx.col_names_template.first().map(|s| s.as_str());
-        let vid_val = context
-            .get_variable("vid")
-            .or_else(|| context.get_variable("src"))
-            .or_else(|| src_name.and_then(|name| context.get_variable(name)))
-            .or_else(|| row.first().cloned())
+        let vid_val = row
+            .get(seed_slot)
+            .or_else(|| row.first())
+            .cloned()
             .unwrap_or(Value::Null(crate::core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             seed_vids.push(vid);
-            seed_rows.push(row.clone());
+            // Raw-id path: forward a lightweight seed row (the source column
+            // replaced by `Value::VertexId`) so the output never deep-clones
+            // the full `Value::Vertex(Box)` carried in from upstream.
+            let seed_row = if emit_raw_ids && lightweight_source {
+                lightweight_seed_row(row, seed_slot, vid)
+            } else {
+                row.clone()
+            };
+            seed_rows.push(seed_row);
         }
     }
 
@@ -116,6 +162,31 @@ pub(super) fn expand_single_step(
 
     let seed_width = seed_rows.first().map_or(0, |r| r.len());
     let mut buf = ExpandOutputBuffer::new(seed_width, chunk.rows.len() * 4);
+
+    if emit_raw_ids {
+        // Raw-id path: one batched storage read for the whole chunk, no
+        // `Value::Vertex(Box)` / `Value::Edge(Box)` allocation.
+        let neighbors = reader.neighbor_dst_ids_batch(
+            space_name,
+            &seed_vids,
+            direction,
+            edge_types,
+        )?;
+        for (dst_ids, seed_row) in neighbors.iter().zip(seed_rows.iter()) {
+            for dst in dst_ids {
+                buf.push_row(
+                    seed_row,
+                    Value::Null(crate::core::NullType::Null),
+                    Value::VertexId(*dst),
+                );
+            }
+        }
+        let out_rows = buf.finish();
+        if out_rows.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)));
+    }
 
     for (vid, seed_row) in seed_vids.iter().zip(seed_rows.iter()) {
         let edges = reader.get_node_edges(space_name, vid, direction)?;
@@ -137,21 +208,14 @@ pub(super) fn expand_single_step(
                 }
             };
 
-            let (edge_val, dst_val) = if emit_raw_ids {
-                (
-                    Value::Null(crate::core::NullType::Null),
-                    Value::VertexId(dst_vid),
-                )
-            } else {
-                let dst_vertex = reader
-                    .get_vertex(space_name, &dst_vid)?
-                    .unwrap_or_else(|| crate::core::Vertex::with_vid(dst_vid));
-                (
-                    Value::Edge(Box::new(edge.clone())),
-                    Value::Vertex(Box::new(dst_vertex)),
-                )
-            };
-            buf.push_row(seed_row, edge_val, dst_val);
+            let dst_vertex = reader
+                .get_vertex(space_name, &dst_vid)?
+                .unwrap_or_else(|| crate::core::Vertex::with_vid(dst_vid));
+            buf.push_row(
+                seed_row,
+                Value::Edge(Box::new(edge.clone())),
+                Value::Vertex(Box::new(dst_vertex)),
+            );
         }
     }
 
@@ -167,7 +231,8 @@ pub(super) fn expand_single_step(
 ///
 /// When the downstream is a simple COUNT(*) aggregate, this function avoids
 /// materializing output rows entirely. It only counts the number of edges
-/// matching the criteria for each seed vertex.
+/// matching the criteria for each seed vertex, via the batched out-degree
+/// storage accessor.
 pub(super) fn expand_count_only(
     chunk: DataChunk,
     reader: &dyn QueryStorage,
@@ -177,17 +242,15 @@ pub(super) fn expand_count_only(
     let space_name = ctx.space_name;
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
 
     let mut seed_vids: Vec<VertexId> = Vec::new();
 
     for row in &chunk.rows {
-        let context = ValueRowContext::new(row.clone(), chunk.get_layout());
-        let src_name = ctx.col_names_template.first().map(|s| s.as_str());
-        let vid_val = context
-            .get_variable("vid")
-            .or_else(|| context.get_variable("src"))
-            .or_else(|| src_name.and_then(|name| context.get_variable(name)))
-            .or_else(|| row.first().cloned())
+        let vid_val = row
+            .get(seed_slot)
+            .or_else(|| row.first())
+            .cloned()
             .unwrap_or(Value::Null(crate::core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
@@ -203,17 +266,8 @@ pub(super) fn expand_count_only(
         }
     }
 
-    let mut total_count: i64 = 0;
-    for vid in &seed_vids {
-        let edges = reader.get_node_edges(space_name, vid, direction)?;
-        for edge in &edges {
-            if edge_types.is_empty() || edge_types.contains(&edge.edge_type) {
-                total_count += 1;
-            }
-        }
-    }
-
-    Ok(total_count)
+    let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+    Ok(degrees.iter().map(|&d| d as i64).sum())
 }
 
 pub(super) fn expand_on_chunk(
@@ -228,19 +282,17 @@ pub(super) fn expand_on_chunk(
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
     let filter_expr = ctx.filter_expr;
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
 
     // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
 
     for row in &chunk.rows {
-        let context = ValueRowContext::new(row.clone(), chunk.get_layout());
-        let src_name = ctx.col_names_template.first().map(|s| s.as_str());
-        let vid_val = context
-            .get_variable("vid")
-            .or_else(|| context.get_variable("src"))
-            .or_else(|| src_name.and_then(|name| context.get_variable(name)))
-            .or_else(|| row.first().cloned())
+        let vid_val = row
+            .get(seed_slot)
+            .or_else(|| row.first())
+            .cloned()
             .unwrap_or(Value::Null(crate::core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {

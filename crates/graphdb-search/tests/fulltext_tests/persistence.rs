@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use graphdb_search::search::{EngineType, FulltextConfig, FulltextIndexManager};
+use graphdb_search::search::{Bm25Params, EngineType, FulltextConfig, FulltextIndexManager};
 
 fn create_manager_with_path(path: &std::path::Path) -> Arc<FulltextIndexManager> {
     let config = FulltextConfig {
@@ -327,5 +327,52 @@ async fn test_dropped_index_persistence() {
     assert!(
         !manager.has_index(1, "Article", "content"),
         "Dropped index should not persist"
+    );
+}
+
+/// TC-FT-PERSIST-011: Custom BM25 Params Are Persisted And Restored
+#[tokio::test]
+async fn test_custom_bm25_params_persistence() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let config = FulltextConfig {
+        enabled: true,
+        index_path: temp_dir.path().to_path_buf(),
+        default_engine: EngineType::Bm25,
+        sync: graphdb_search::search::SyncConfig::default(),
+        tantivy: graphdb_search::search::TantivyConfig {
+            bm25_params: Bm25Params { k1: 2.5, b: 0.4 },
+            ..Default::default()
+        },
+        cache_size: 100,
+        max_result_cache: 1000,
+        result_cache_ttl_secs: 60,
+    };
+
+    {
+        let manager =
+            Arc::new(FulltextIndexManager::new(config).expect("Failed to create manager"));
+        manager
+            .create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .await
+            .expect("Failed to create index");
+    }
+
+    let meta_path = temp_dir.path().join("space_ft_1_Article_content/meta.json");
+    assert!(meta_path.exists(), "Index meta.json should exist");
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&meta_path).expect("Failed to read meta.json"),
+    )
+    .expect("Failed to parse meta.json");
+    assert_eq!(
+        meta["index_settings"]["bm25_params"],
+        serde_json::json!({ "k1": 2.5, "b": 0.4 }),
+        "Custom BM25 params should be written into meta.json"
+    );
+
+    let restored = create_manager_with_path(temp_dir.path());
+    assert!(
+        restored.has_index(1, "Article", "content"),
+        "Index should persist after manager restart"
     );
 }

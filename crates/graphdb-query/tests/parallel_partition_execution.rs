@@ -429,7 +429,7 @@ fn partitioned_anchored_traversal_matches_serial_results() {
     let mut serial = build_pipeline(&storage, 1);
     let mut parallel = build_pipeline(&storage, 2);
 
-    // E4: anchored 1-hop partitions the anchor scan by vid range; each
+    // anchored 1-hop partitions the anchor scan by vid range; each
     // partition expands locally and the global aggregate merges the counts.
     let q = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)";
     let serial_rows = query_rows(&mut serial, q);
@@ -476,7 +476,7 @@ fn explain_analyze_vertex_scan_reports_partition_spec() {
     );
     let plan = output[0][0].to_string().unwrap_or_default();
 
-    // E4: The partition spec must describe the vertex-id range partitioning.
+    // The partition spec must describe the vertex-id range partitioning.
     assert!(
         plan.contains("Partitioning:"),
         "vertex scan plan must describe partition spec, got:\n{plan}"
@@ -524,7 +524,7 @@ fn explain_analyze_union_plan_contains_exchange() {
     );
     let plan = output[0][0].to_string().unwrap_or_default();
 
-    // E1a: UNION ALL with two independent partitioned scans must include
+    // UNION ALL with two independent partitioned scans must include
     // an Exchange (concatenate) fragment to merge partition outputs.
     assert!(
         plan.contains("Exchange"),
@@ -632,4 +632,117 @@ fn plan_cache_partition_fingerprint_changes_with_ranges() {
     .unwrap();
     let key_c = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_c);
     assert_eq!(key_a, key_c, "same spec must produce same cache key");
+}
+
+#[test]
+fn two_hop_id_only_seeds_feed_next_hop() {
+    // A1.5: hop1 is annotated id_only (b feeds only the next hop), so hop2's
+    // seeds come from hop1's `Value::VertexId` output column. The chain must
+    // produce the same count as the full materialization path.
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let mut parallel = build_pipeline(&storage, 2);
+
+    // 2000 anchors x 2 hops x 2 edges = 8000 paths; count(c) counts rows.
+    let q = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
+    let serial_rows = query_rows(&mut serial, q);
+    let parallel_rows = query_rows(&mut parallel, q);
+    assert_eq!(serial_rows, parallel_rows, "A1.5 2-hop id_only chain mismatch");
+    assert_eq!(serial_rows, vec![vec![Value::BigInt(8000)]]);
+
+    // The plan must annotate hop1 id_only and hop2 count_only.
+    let output = query_rows(&mut serial, "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)");
+    let plan = output[0][0].to_string().unwrap_or_default();
+    let expand_pos = plan.find("ExpandAll").expect("expand");
+    let info_after_first = &plan[expand_pos..];
+    assert!(
+        info_after_first.contains("mode:id_only"),
+        "hop1 must be id_only, got:\n{plan}"
+    );
+    assert!(
+        info_after_first.contains("mode:count_only"),
+        "hop2 must be count_only, got:\n{plan}"
+    );
+}
+
+#[test]
+fn referenced_source_keeps_full_vertex() {
+    // A source variable projected out (RETURN a.value) forces the hop to keep
+    // the full vertex in its output; the de-materialized chain must not
+    // lightweight it. Each of the 2000 anchors has 2 out-edges -> 4000 rows,
+    // each carrying the anchor's `value` (= its id).
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let rows = query_rows(&mut serial, "MATCH (a:Node)-[:Link]->(b:Node) RETURN a.value");
+    assert_eq!(rows.len(), 4000, "1-hop with projected source must return 4000 rows");
+    let mut values: Vec<i64> = rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::BigInt(v) => *v,
+            other => panic!("unexpected source value: {other:?}"),
+        })
+        .collect();
+    values.sort_unstable();
+    let mut expected: Vec<i64> = (0..2000i64).flat_map(|i| [i, i]).collect();
+    expected.sort_unstable();
+    assert_eq!(values, expected, "projected source values must match the anchors");
+}
+
+#[test]
+fn middle_var_referenced_blocks_id_only() {
+    // When the middle variable is referenced by a property predicate, hop1
+    // must NOT be annotated id_only (the predicate needs the real vertex).
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+
+    // b in {0..1999 with group_id < 10} = 1000 middles (group_id = id % 20),
+    // each reached from 2 anchors and having 2 out edges -> 4000 paths.
+    let q = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) WHERE b.group_id < 10 RETURN count(c)";
+    let rows = query_rows(&mut serial, q);
+    assert_eq!(
+        rows,
+        vec![vec![Value::BigInt(4000)]],
+        "id_only must be blocked when b is referenced"
+    );
+}
+
+#[test]
+fn parallel_unanchored_two_hop_matches_serial() {
+    // the de-materialized 2-hop chain partitions by anchor range; each
+    // partition runs the full bounded traversal locally and the global
+    // aggregate merges the per-partition counts.
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let mut parallel = build_pipeline(&storage, 2);
+
+    let q = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
+    let serial_rows = query_rows(&mut serial, q);
+    let parallel_rows = query_rows(&mut parallel, q);
+    assert_eq!(
+        serial_rows,
+        parallel_rows,
+        "C1 2-hop parallel count mismatch"
+    );
+    assert_eq!(serial_rows, vec![vec![Value::BigInt(8000)]]);
+
+    // The partitioned 2-hop must actually run on at least 2 workers.
+    let output = query_rows(
+        &mut parallel,
+        "EXPLAIN ANALYZE MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+    assert!(
+        plan.contains("Partitioning:"),
+        "2-hop plan must carry a partition spec, got:\n{plan}"
+    );
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 2,
+        "2-hop traversal must execute on at least 2 workers, got actual={actual}:\n{plan}"
+    );
 }

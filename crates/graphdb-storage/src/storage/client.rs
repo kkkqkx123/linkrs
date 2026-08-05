@@ -68,6 +68,33 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         node_id: &VertexId,
         direction: EdgeDirection,
     ) -> Result<Vec<Edge>, StorageError>;
+
+    /// Lightweight batch neighbor read used by de-materialized expand hops
+    /// (`id_only`/`count_only`).  Resolves the edge-type schema once for the
+    /// batch and reads MVCC neighbors directly from the CSR, skipping
+    /// `EdgeRecord` materialization and per-edge property decoding.  Cold
+    /// snapshots are merged with the same dedup semantics as [`get_node_edges`].
+    ///
+    /// Returns the external neighbor `VertexId`s per input source id, in input
+    /// order.
+    fn neighbor_dst_ids_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<Vec<VertexId>>, StorageError>;
+
+    /// Batch out-degree read for count-only expand tails.  Counts distinct
+    /// edges (deduped across hot and cold) per source id, in input order.
+    fn out_degree_batch(
+        &self,
+        space: &str,
+        src_ids: &[VertexId],
+        direction: EdgeDirection,
+        edge_types: &[String],
+    ) -> Result<Vec<usize>, StorageError>;
+
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;

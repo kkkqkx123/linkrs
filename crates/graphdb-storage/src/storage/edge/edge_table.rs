@@ -189,6 +189,16 @@ impl EdgeStore {
         self.0.in_edges(dst, ts)
     }
 
+    /// Raw out-edge neighbors of `src` without property decoding.
+    pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<super::Nbr> {
+        self.0.merged_out_nbrs(src, ts)
+    }
+
+    /// Raw in-edge neighbors of `dst` without property decoding.
+    pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<super::Nbr> {
+        self.0.merged_in_nbrs(dst, ts)
+    }
+
     pub fn update_edge_property(
         &mut self,
         src: u32,

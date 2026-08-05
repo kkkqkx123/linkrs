@@ -389,6 +389,15 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         OperatorKindSpec::Sink(_) => {
             SlotLayout::from_names(&["operation".to_string(), "count".to_string()])
         }
+        OperatorKindSpec::Graph(GraphSpec::ExpandAll {
+            col_names,
+            count_only: true,
+            ..
+        }) => {
+            // A count-only expand emits a single per-chunk edge-count column.
+            let _ = col_names;
+            SlotLayout::from_names(&["_expand_count".to_string()])
+        }
         OperatorKindSpec::Graph(
             GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. },
         ) => {

@@ -177,6 +177,74 @@ fn cold_snapshot_node_edges_in_and_both() {
     assert_eq!(both[0].dst, VertexId::from_int64(2));
 }
 
+/// Phase B: the batched accessors must merge cold snapshots with the same
+/// dedup semantics as `get_node_edges`.
+#[test]
+fn cold_snapshot_batch_accessors_match_get_node_edges() {
+    let (_dir, mut storage, _space_id) = setup_snapshot_pair();
+
+    let alice = common::create_person_vertex(1, "Alice", 30);
+    let bob = common::create_person_vertex(2, "Bob", 25);
+    let carol = common::create_person_vertex(3, "Carol", 35);
+    storage.insert_vertex("test_space", alice).unwrap();
+    storage.insert_vertex("test_space", bob).unwrap();
+    storage.insert_vertex("test_space", carol).unwrap();
+    storage
+        .insert_edge("test_space", common::create_knows_edge(1, 2, 2020))
+        .unwrap();
+    storage
+        .insert_edge("test_space", common::create_knows_edge(1, 3, 2021))
+        .unwrap();
+
+    export_and_load(&storage, _dir.path(), "knows.lkcs");
+
+    // Remove one edge from hot only; the other stays hot. Both must be served
+    // (one from hot, one from cold) without duplicates.
+    storage
+        .delete_edge(
+            "test_space",
+            &VertexId::from_int64(1),
+            &VertexId::from_int64(3),
+            "KNOWS",
+            0,
+        )
+        .unwrap();
+
+    let seeds = [VertexId::from_int64(1), VertexId::from_int64(2)];
+    let direction = EdgeDirection::Out;
+    let batch = storage
+        .neighbor_dst_ids_batch("test_space", &seeds, direction, &[])
+        .unwrap();
+    let mut got = batch.clone();
+    for row in got.iter_mut() {
+        row.sort();
+        row.dedup();
+    }
+    let mut want: Vec<Vec<VertexId>> = seeds
+        .iter()
+        .map(|s| {
+            let mut dsts: Vec<_> = storage
+                .get_node_edges("test_space", s, direction)
+                .unwrap()
+                .iter()
+                .map(|e| e.dst)
+                .collect();
+            dsts.sort();
+            dsts.dedup();
+            dsts
+        })
+        .collect();
+    assert_eq!(got, want, "cold + hot neighbor batch mismatch");
+
+    let degrees = storage.out_degree_batch("test_space", &seeds, direction, &[]).unwrap();
+    let want_degrees: Vec<usize> = seeds
+        .iter()
+        .map(|s| storage.get_node_edges("test_space", s, direction).unwrap().len())
+        .collect();
+    assert_eq!(degrees, want_degrees, "cold + hot degree batch mismatch");
+}
+
+
 #[test]
 fn cold_snapshot_scan_edges_by_type() {
     let (_dir, mut storage, _space_id) = setup_snapshot_pair();

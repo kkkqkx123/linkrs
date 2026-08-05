@@ -89,6 +89,7 @@ pub(super) fn handle(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_all(
     filter_expr: &Option<Expression>,
     col_names: Vec<String>,
@@ -96,6 +97,7 @@ pub(super) fn handle_all(
     step_limit: u32,
     count_only: bool,
     emit_raw_ids: bool,
+    lightweight_source: bool,
     ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
     let storage = ctx.storage;
@@ -151,6 +153,7 @@ pub(super) fn handle_all(
                     &*reader,
                     src_vids.clone(),
                     emit_raw_ids,
+                    lightweight_source,
                     &mut ExpandCtx {
                         space_name,
                         edge_types,

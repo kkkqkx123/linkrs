@@ -108,6 +108,8 @@ impl StorageReader for MockStorage {
             .cloned())
     }
     mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, neighbor_dst_ids_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, out_degree_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<usize>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>, Ok(0));

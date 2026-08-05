@@ -23,6 +23,7 @@ use super::assembler::{
 };use super::specs::{
     build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec, build_limit_spec,
     build_project_spec, build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
+    count_only_expand_below, is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
@@ -49,10 +50,6 @@ struct PartitionedChain<'a> {
     /// when it is the first global operator and all its functions support
     /// partial accumulation.
     aggregate_split: Option<&'a AggregateNode>,
-    /// When true, the outermost local ExpandAll is followed by a count-only
-    /// aggregate (no GROUP BY, only COUNT functions).  The ExpandAll spec
-    /// should set `count_only: true` to avoid materializing output rows.
-    count_only_expand: bool,
 }
 
 /// Try to build a partitioned physical plan from the logical root.
@@ -197,7 +194,10 @@ fn build_chain_group(
                     .0;
                 }
                 PlanNodeEnum::ExpandAll(expand) => {
-                    let spec = build_expand_all_spec_with_flags(expand, exec_ctx, chain.count_only_expand)?;
+                    // A1.4: drive count_only from the node annotation so only
+                    // the chain-tail expand skips row materialization; middle
+                    // hops keep emitting raw destination ids for the next hop.
+                    let spec = build_expand_all_spec_with_flags(expand, exec_ctx, expand.count_only())?;
                     fid = ArenaPlanAssembler::push_graph_op(
                         operators,
                         fragments,
@@ -579,22 +579,11 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
         _ => None,
     };
 
-    // Detect count-only expand: the outermost local operator is ExpandAll and
-    // the first global operator is a count-only aggregate (no GROUP BY, only
-    // COUNT functions).  In this case the ExpandAll can skip materializing
-    // output rows entirely.
-    let count_only_expand = if let Some(PlanNodeEnum::ExpandAll(_)) = local.first() {
-        matches!(global.first(), Some(PlanNodeEnum::Aggregate(agg)) if is_count_only_aggregate(agg))
-    } else {
-        false
-    };
-
     Some(PartitionedChain {
         scan: chain[scan_index],
         local,
         global,
         aggregate_split,
-        count_only_expand,
     })
 }
 
@@ -625,13 +614,29 @@ fn collect_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) 
 }
 
 /// Build the partial and final aggregate specs for a split aggregate node.
+///
+/// When the aggregate consumes a `count_only` expand (through its Project
+/// pass-through), the `COUNT` functions are rewritten to `SUM(_expand_count)`
+/// so the per-chunk edge counts are summed instead of counted as rows.
 fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
     let group_by_expressions: Vec<Expression> = node
         .group_keys()
         .iter()
         .map(|key| Expression::Variable(key.clone()))
         .collect();
-    let aggregate_functions = node.aggregation_functions().to_vec();
+    let count_only = is_count_only_aggregate(node)
+        && count_only_expand_below(node.input()).is_some();
+    let aggregate_functions: Vec<AggregateFunction> = node
+        .aggregation_functions()
+        .iter()
+        .map(|func| {
+            if count_only {
+                AggregateFunction::Sum(COUNT_ONLY_COLUMN.to_string())
+            } else {
+                func.clone()
+            }
+        })
+        .collect();
     let output_col_names = node.col_names().to_vec();
     (
         BlockingSpec::PartialAggregate {
@@ -661,18 +666,6 @@ fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
                 | AggregateFunction::Avg(_)
         )
     })
-}
-
-/// Check whether an aggregate node is a simple count-only aggregate: no GROUP
-/// BY keys and all aggregate functions are COUNT.  This pattern allows the
-/// upstream ExpandAll to skip materializing output rows entirely.
-fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
-    agg.group_keys().is_empty()
-        && !agg.aggregation_functions().is_empty()
-        && agg
-            .aggregation_functions()
-            .iter()
-            .all(|f| matches!(f, AggregateFunction::Count(_)))
 }
 
 #[cfg(test)]

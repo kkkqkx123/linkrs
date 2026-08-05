@@ -537,6 +537,20 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             node_id: &VertexId,
             direction: crate::core::EdgeDirection,
         ) -> Result<Vec<Edge>, StorageError>;
+        fn neighbor_dst_ids_batch(
+            &self,
+            space: &str,
+            src_ids: &[VertexId],
+            direction: crate::core::EdgeDirection,
+            edge_types: &[String],
+        ) -> Result<Vec<Vec<VertexId>>, StorageError>;
+        fn out_degree_batch(
+            &self,
+            space: &str,
+            src_ids: &[VertexId],
+            direction: crate::core::EdgeDirection,
+            edge_types: &[String],
+        ) -> Result<Vec<usize>, StorageError>;
         fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
         fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
         fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;

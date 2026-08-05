@@ -271,9 +271,25 @@ impl PartitioningPlanner {
             .iter()
             .filter(|n| matches!(n, PlanNodeEnum::ExpandAll(_)))
             .count();
-        if expand_count != 1 {
+        if expand_count == 0 {
             return Some(Self::fallback(
-                "anchored traversal must contain exactly one ExpandAll hop",
+                "anchored traversal must contain at least one ExpandAll hop",
+            ));
+        }
+        // C1: every ExpandAll hop must be de-materialized (id_only/count_only)
+        // and filter-free, so each partition runs the full bounded chain over
+        // its anchor subrange without changing row semantics.
+        let hops_ok = chain.iter().all(|n| match n {
+            PlanNodeEnum::ExpandAll(expand) => {
+                expand.filter().is_none()
+                    && expand.step_limit().unwrap_or(1) == 1
+                    && (expand.id_only() || expand.count_only())
+            }
+            _ => true,
+        });
+        if !hops_ok {
+            return Some(Self::fallback(
+                "anchored traversal hops must be filter-free and de-materialized (id_only/count_only)",
             ));
         }
         let PlanNodeEnum::ScanVertices(scan) = chain[chain.len() - 1] else {
@@ -956,13 +972,17 @@ mod tests {
     #[test]
     fn anchored_traversal_selects_partition_layout() {
         use crate::core::EdgeDirection;
-        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+            MultipleInputNode, PlanNode,
+        };
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
         let stats = make_stats();
         let mut scan = ScanVerticesNode::new(1, "space");
         scan.set_tag("person");
         let mut expand = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+        expand.set_step_limit(1);
+        expand.set_id_only(true);
         expand.add_input(PlanNodeEnum::ScanVertices(scan));
         let plan = PlanNodeEnum::ExpandAll(expand);
 
@@ -979,9 +999,11 @@ mod tests {
     }
 
     #[test]
-    fn two_hop_traversal_is_rejected() {
+    fn two_hop_traversal_is_rejected_without_annotation() {
         use crate::core::EdgeDirection;
-        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+            MultipleInputNode, PlanNode,
+        };
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
         let stats = make_stats();
@@ -996,9 +1018,46 @@ mod tests {
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(
-            decision.reason.contains("exactly one ExpandAll"),
-            "two-hop traversals must be rejected, got: {}",
+            decision.reason.contains("de-materialized"),
+            "unannotated two-hop traversals must be rejected, got: {}",
             decision.reason
+        );
+    }
+
+    #[test]
+    fn annotated_two_hop_traversal_selects_partition_layout() {
+        use crate::core::EdgeDirection;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+            MultipleInputNode, PlanNode,
+        };
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+
+        // C1: a fully de-materialized (id_only / count_only), filter-free
+        // two-hop chain is partitionable by the anchor vertex range.
+        let stats = make_stats();
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag("person");
+        let mut hop1 = ExpandAllNode::new(1, vec!["follows".to_string()], "OUT");
+        hop1.set_step_limit(1);
+        hop1.set_id_only(true);
+        hop1.set_col_names(vec!["a".to_string(), "e1".to_string(), "b".to_string()]);
+        hop1.add_input(PlanNodeEnum::ScanVertices(scan));
+        let mut hop2 = ExpandAllNode::new(2, vec!["follows".to_string()], "OUT");
+        hop2.set_step_limit(1);
+        hop2.set_count_only(true);
+        hop2.set_col_names(vec!["b".to_string(), "e2".to_string(), "c".to_string()]);
+        hop2.add_input(PlanNodeEnum::ExpandAll(hop1));
+        let plan = PlanNodeEnum::ExpandAll(hop2);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("annotated two-hop traversal should partition");
+        assert_eq!(spec.partition_count(), 4);
+        assert!(
+            matches!(spec.source(), PartitionSource::VertexId { tag } if tag == "person"),
+            "anchor scan tag is the partition source"
         );
     }
 

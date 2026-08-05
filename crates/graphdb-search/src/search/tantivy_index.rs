@@ -6,9 +6,12 @@ use std::time::Instant;
 
 use tantivy::collector::TopDocs;
 use tantivy::doc;
+use tantivy::index::Bm25Params as TantivyBm25Params;
+use tantivy::index::IndexSettings;
 use tantivy::query::QueryParser;
 use tantivy::schema::Value as SchemaValue;
 use tantivy::schema::*;
+use tantivy::IndexBuilder;
 use tantivy::IndexWriter;
 use tantivy::TantivyDocument;
 
@@ -20,7 +23,7 @@ use crate::search::engine::ConsistencyState;
 use crate::search::error::SearchError;
 use crate::search::result::{IndexStats, SearchResult};
 
-pub use crate::config::common::fulltext::{TantivyConfig, TokenizerKind};
+pub use crate::config::common::fulltext::{Bm25Params, TantivyConfig, TokenizerKind};
 
 fn build_schema(config: &TantivyConfig) -> (Schema, Field, Field) {
     let tokenizer_name = config.tokenizer.name();
@@ -108,7 +111,17 @@ impl TantivySearchEngine {
         let index = if path.join("meta.json").exists() {
             tantivy::Index::open_in_dir(path)?
         } else {
-            tantivy::Index::create_in_dir(path, schema.clone())?
+            let bm25_params = TantivyBm25Params {
+                k1: config.bm25_params.k1,
+                b: config.bm25_params.b,
+            };
+            IndexBuilder::new()
+                .schema(schema.clone())
+                .settings(IndexSettings {
+                    bm25_params: Some(bm25_params),
+                    ..Default::default()
+                })
+                .create_in_dir(path)?
         };
 
         #[cfg(feature = "jieba")]

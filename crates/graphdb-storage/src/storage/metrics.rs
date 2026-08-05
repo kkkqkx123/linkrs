@@ -37,6 +37,8 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         fn scan_vertices_by_prop(&self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>;
         fn get_edge(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<Option<Edge>, StorageError>;
         fn get_node_edges(&self, space: &str, node_id: &VertexId, direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>;
+        fn neighbor_dst_ids_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>;
+        fn out_degree_batch(&self, space: &str, src_ids: &[VertexId], direction: EdgeDirection, edge_types: &[String]) -> Result<Vec<usize>, StorageError>;
         fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
         fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
         fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;

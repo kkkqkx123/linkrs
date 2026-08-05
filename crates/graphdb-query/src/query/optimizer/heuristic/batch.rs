@@ -50,6 +50,7 @@ impl NodeRewriter for BatchNodeRewriter<'_> {
         let node = node.accept(&mut visitor)?;
 
         ctx.register_node(node_id, node.clone());
+        ctx.set_current_node_id(node_id);
 
         // Apply the batch rules at this node until fixed point.
         let mut current_node = node;
@@ -85,6 +86,8 @@ pub enum OptimizationBatch {
     PredicatePushdown,
     /// Property pruning: remove unused properties
     PropertyPruning,
+    /// Expand pushdown: annotate ExpandAll hops with id_only/count_only
+    ExpandPushdown,
     /// Decorrelation: transform correlated subqueries
     Decorrelation,
     /// Cleanup: eliminate redundant operations
@@ -98,6 +101,7 @@ impl OptimizationBatch {
             OptimizationBatch::Normalize => "normalize",
             OptimizationBatch::PredicatePushdown => "predicate_pushdown",
             OptimizationBatch::PropertyPruning => "property_pruning",
+            OptimizationBatch::ExpandPushdown => "expand_pushdown",
             OptimizationBatch::Decorrelation => "decorrelation",
             OptimizationBatch::Cleanup => "cleanup",
         }
@@ -109,6 +113,7 @@ impl OptimizationBatch {
             OptimizationBatch::Normalize => 10,
             OptimizationBatch::PredicatePushdown => 50,
             OptimizationBatch::PropertyPruning => 20,
+            OptimizationBatch::ExpandPushdown => 10,
             OptimizationBatch::Decorrelation => 30,
             OptimizationBatch::Cleanup => 30,
         }
@@ -243,6 +248,9 @@ impl BatchOptimizer {
                 OptimizationBatch::PropertyPruning
             }
 
+            // Expand pushdown batch: whole-plan annotation of traversal hops.
+            ExpandPushdownAnnotate(_) => OptimizationBatch::ExpandPushdown,
+
             // Limit pushdown (part of normalize)
             PushLimitDownGetVertices(_)
             | PushLimitDownGetEdges(_)
@@ -302,6 +310,7 @@ impl BatchOptimizer {
             OptimizationBatch::Normalize,
             OptimizationBatch::PredicatePushdown,
             OptimizationBatch::PropertyPruning,
+            OptimizationBatch::ExpandPushdown,
             OptimizationBatch::Decorrelation,
             OptimizationBatch::Cleanup,
         ];

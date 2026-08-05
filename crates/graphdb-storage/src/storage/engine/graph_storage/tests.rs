@@ -1237,6 +1237,101 @@ mod tests {
         assert_eq!(in_edges.len(), 1);
     }
 
+    /// Phase B acceptance: the batched accessors must agree with
+    /// `get_node_edges` for out/in/both directions and edge-type filtering.
+    #[test]
+    fn test_batch_accessors_match_get_node_edges() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        setup_knows_edge(&mut storage);
+
+        for i in 1..=5i64 {
+            insert_test_vertex(&mut storage, i, &format!("v{i}"));
+        }
+        for (src, dst) in [(1i64, 2), (1, 3), (2, 3), (3, 1), (4, 1)] {
+            let edge = Edge::new(
+                VertexId::from_int64(src),
+                VertexId::from_int64(dst),
+                "KNOWS".to_string(),
+                0,
+                std::collections::HashMap::new(),
+            );
+            storage.insert_edge("test_space", edge).unwrap();
+        }
+
+        let seeds = [VertexId::from_int64(1), VertexId::from_int64(2), VertexId::from_int64(5)];
+        let knowses = vec!["KNOWS".to_string()];
+
+        for direction in [EdgeDirection::Out, EdgeDirection::In, EdgeDirection::Both] {
+            for (edge_types, label) in [
+                (Vec::<String>::new(), "all"),
+                (knowses.clone(), "KNOWS"),
+            ] {
+                // Reference: distinct dst ids from get_node_edges.
+                let mut expected: Vec<Vec<VertexId>> = Vec::new();
+                for seed in &seeds {
+                    let edges = storage
+                        .get_node_edges("test_space", seed, direction)
+                        .unwrap();
+                    let mut dsts: Vec<VertexId> = edges
+                        .iter()
+                        .filter(|e| edge_types.is_empty() || edge_types.contains(&e.edge_type))
+                        .map(|e| {
+                            if matches!(direction, EdgeDirection::Out) {
+                                e.dst
+                            } else if matches!(direction, EdgeDirection::In) {
+                                e.src
+                            } else if e.src == *seed {
+                                e.dst
+                            } else {
+                                e.src
+                            }
+                        })
+                        .collect();
+                    dsts.sort();
+                    dsts.dedup();
+                    expected.push(dsts);
+                }
+
+                let batch = storage
+                    .neighbor_dst_ids_batch("test_space", &seeds, direction, &edge_types)
+                    .unwrap();
+                let mut actual: Vec<Vec<VertexId>> = batch
+                    .into_iter()
+                    .map(|mut dsts| {
+                        dsts.sort();
+                        dsts.dedup();
+                        dsts
+                    })
+                    .collect();
+                assert_eq!(expected, actual, "neighbor batch mismatch ({label}, {direction:?})");
+
+                let degrees: Vec<usize> = storage
+                    .out_degree_batch("test_space", &seeds, direction, &edge_types)
+                    .unwrap();
+                let expected_degrees: Vec<usize> = seeds
+                    .iter()
+                    .map(|seed| {
+                        storage
+                            .get_node_edges("test_space", seed, direction)
+                            .unwrap()
+                            .iter()
+                            .filter(|edge| {
+                                edge_types.is_empty() || edge_types.contains(&edge.edge_type)
+                            })
+                            .count()
+                    })
+                    .collect();
+                assert_eq!(
+                    expected_degrees, degrees,
+                    "degree batch mismatch ({label}, {direction:?})"
+                );
+            }
+        }
+    }
+
+
     #[test]
     fn test_scan_edges_by_type() {
         let mut storage = create_test_storage();

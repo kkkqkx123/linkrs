@@ -307,6 +307,10 @@ pub enum GraphSpec {
         /// output.  Eliminates heap allocation for downstream operators that
         /// only need the identifier (e.g. another expand hop, count, join key).
         emit_raw_ids: bool,
+        /// When true (always alongside `emit_raw_ids`), the hop's source
+        /// column is also emitted as a `Value::VertexId` instead of cloning
+        /// the full `Value::Vertex(Box)` carried in from upstream.
+        lightweight_source: bool,
     },
     Traverse {
         edge_types: Vec<String>,

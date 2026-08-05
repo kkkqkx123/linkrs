@@ -695,21 +695,7 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == Timestamp::MAX
-            && !self.snapshot_dirty
-            && self.current_snapshot_out.is_some()
-        {
-            // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
-            self.merged_edges_of_current(&self.out_csr, src)
-        } else {
-            self.merged_edges_of(
-                &self.out_csr,
-                &self.out_segments,
-                Some(&self.sparse_vertex_index_out),
-                src,
-                ts,
-            )
-        };
+        let nbrs = self.merged_out_nbrs(src, ts);
 
         // Optimization: prefetch all properties first to improve cache locality
         let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
@@ -743,23 +729,29 @@ impl TimeTravelEdgeStore {
             .collect()
     }
 
+    /// Raw out-edge neighbors of `src` (MVCC-merged, snapshot-consistent) with
+    /// no property decoding.  Destination endpoint is encoded in `nbr.neighbor`.
+    pub fn merged_out_nbrs(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
+        if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some() {
+            // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
+            self.merged_edges_of_current(&self.out_csr, src)
+        } else {
+            self.merged_edges_of(
+                &self.out_csr,
+                &self.out_segments,
+                Some(&self.sparse_vertex_index_out),
+                src,
+                ts,
+            )
+        }
+    }
+
     pub fn in_edges(&self, dst: u32, ts: Timestamp) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
         }
 
-        let nbrs =
-            if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
-                self.merged_edges_of_current_in(&self.in_csr, dst)
-            } else {
-                self.merged_edges_of(
-                    &self.in_csr,
-                    &self.in_segments,
-                    Some(&self.sparse_vertex_index_in),
-                    dst,
-                    ts,
-                )
-            };
+        let nbrs = self.merged_in_nbrs(dst, ts);
 
         // Optimization: prefetch all properties first to improve cache locality
         let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
@@ -791,6 +783,22 @@ impl TimeTravelEdgeStore {
                 }
             })
             .collect()
+    }
+
+    /// Raw in-edge neighbors of `dst` (MVCC-merged, snapshot-consistent) with
+    /// no property decoding.  Source endpoint is encoded in `nbr.neighbor`.
+    pub fn merged_in_nbrs(&self, dst: u32, ts: Timestamp) -> Vec<Nbr> {
+        if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
+            self.merged_edges_of_current_in(&self.in_csr, dst)
+        } else {
+            self.merged_edges_of(
+                &self.in_csr,
+                &self.in_segments,
+                Some(&self.sparse_vertex_index_in),
+                dst,
+                ts,
+            )
+        }
     }
 
     pub fn has_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> bool {

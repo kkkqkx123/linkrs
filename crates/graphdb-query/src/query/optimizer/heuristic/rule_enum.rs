@@ -29,6 +29,7 @@
 use crate::query::optimizer::heuristic::aggregate;
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::elimination;
+use crate::query::optimizer::heuristic::expand_pushdown;
 use crate::query::optimizer::heuristic::join_optimization;
 use crate::query::optimizer::heuristic::limit_pushdown;
 use crate::query::optimizer::heuristic::merge;
@@ -174,6 +175,12 @@ define_rewrite_rules! {
 
         // ==================== Aggregation Optimization Rules ====================
         PushFilterDownAggregate(aggregate::PushFilterDownAggregateRule),
+
+        // ==================== Expand Pushdown Annotation Rules ====================
+        // Runs after PredicatePushdown so filters are already pushed into the
+        // scans/expands; annotates ExpandAll hops with id_only/count_only so
+        // the executor can skip full vertex/edge materialization.
+        ExpandPushdownAnnotate(expand_pushdown::ExpandPushdownAnnotateRule),
 
         // ==================== JOIN Optimization Rules ====================
         PushProjectDownJoin(join_optimization::PushProjectDownJoinRule),
@@ -335,6 +342,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushFilterDownAggregate(
             aggregate::PushFilterDownAggregateRule::new(),
         ));
+        registry.add(RewriteRule::ExpandPushdownAnnotate(
+            expand_pushdown::ExpandPushdownAnnotateRule::new(),
+        ));
         registry.add(RewriteRule::PushProjectDownJoin(
             join_optimization::PushProjectDownJoinRule::new(),
         ));
@@ -373,7 +383,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 46);
+        assert_eq!(registry.len(), 47);
     }
 
     #[test]

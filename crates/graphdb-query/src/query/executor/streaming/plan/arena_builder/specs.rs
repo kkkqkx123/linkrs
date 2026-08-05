@@ -14,7 +14,7 @@ use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
 
 fn fulltext_query_to_string(
     expr: &crate::query::parser::ast::fulltext::FulltextQueryExpr,
@@ -379,9 +379,61 @@ pub(super) fn build_filter_spec(
     Ok(UnarySpec::Filter { predicate })
 }
 
+/// Name of the single column a count-only expand emits (the per-chunk edge
+/// count).  The count-only aggregate above rewrites `COUNT` to
+/// `SUM(_expand_count)` over this column.
+pub(super) const COUNT_ONLY_COLUMN: &str = "_expand_count";
+
+/// Walk down from `node` through consecutive `Project` operators to find a
+/// `count_only`-annotated `ExpandAll`.  Any other operator (including a
+/// `Filter`) interrupts the walk and returns `None`.
+///
+/// The optimizer's `ExpandPushdown` batch only sets `count_only` when the
+/// chain between the expand and its count-only aggregate consists of pure
+/// `Project` pass-throughs, so a successful walk guarantees the count column
+/// flows untouched into the aggregate.
+pub(super) fn count_only_expand_below(
+    node: &PlanNodeEnum,
+) -> Option<crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode> {
+    let mut current = node;
+    loop {
+        match current {
+            PlanNodeEnum::Project(project) => current = project.input(),
+            PlanNodeEnum::ExpandAll(expand) if expand.count_only() => return Some(expand.clone()),
+            _ => return None,
+        }
+    }
+}
+
+/// Whether the aggregate node is a simple count-only aggregate: no GROUP BY
+/// keys and all aggregate functions are COUNT.  This pattern allows the
+/// upstream ExpandAll to skip materializing output rows entirely.
+pub(super) fn is_count_only_aggregate(
+    agg: &crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode,
+) -> bool {
+    agg.group_keys().is_empty()
+        && !agg.aggregation_functions().is_empty()
+        && agg
+            .aggregation_functions()
+            .iter()
+            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count(_)))
+}
+
 pub(super) fn build_project_spec(
     node: &crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode,
 ) -> Result<UnarySpec, PlanBuildError> {
+    // A Project sitting directly above a count_only expand only forwards the
+    // aggregate argument of a count-only aggregate.  Replace it with a
+    // pass-through of the expand's single count column so the count flows
+    // unchanged into the rewritten `SUM(_expand_count)` aggregate.
+    if let Some(expand) = count_only_expand_below(node.input()) {
+        if project_forwards_expand_dst(node, &expand) {
+            return Ok(UnarySpec::Project {
+                output_expressions: vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
+                output_col_names: vec![COUNT_ONLY_COLUMN.to_string()],
+            });
+        }
+    }
     let columns = node.columns();
     let output_expressions: Vec<Expression> = columns
         .iter()
@@ -391,6 +443,30 @@ pub(super) fn build_project_spec(
         output_expressions,
         output_col_names: node.col_names().to_vec(),
     })
+}
+
+/// True when every column of `project` is a bare reference to the count-only
+/// expand's destination variable (the aggregate argument being forwarded).
+fn project_forwards_expand_dst(
+    project: &crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode,
+    expand: &crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
+) -> bool {
+    let Some(dst_var) = expand.col_names().get(2) else {
+        return false;
+    };
+    !project.columns().is_empty()
+        && project.columns().iter().all(|col| {
+            col.expression
+                .expression()
+                .and_then(|meta| {
+                    if let Expression::Variable(var) = meta.inner() {
+                        Some(var.as_str() == dst_var)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(false)
+        })
 }
 
 pub(super) fn build_limit_spec(
@@ -480,10 +556,20 @@ pub(super) fn build_aggregate_spec(
         .iter()
         .map(|key| Expression::Variable(key.clone()))
         .collect();
+    let count_only = is_count_only_aggregate(node)
+        && count_only_expand_below(node.input()).is_some();
     let agg_functions = node.aggregation_functions();
     let aggregate_functions: Vec<(AggregateFunction, Expression)> = agg_functions
         .iter()
         .map(|func| {
+            if count_only {
+                // The input is a count_only expand emitting one per-chunk edge
+                // count per chunk.  Sum those counts instead of counting rows.
+                return (
+                    AggregateFunction::Sum(COUNT_ONLY_COLUMN.to_string()),
+                    Expression::Variable(COUNT_ONLY_COLUMN.to_string()),
+                );
+            }
             let expr = match func {
                 AggregateFunction::Count(Some(field)) => Expression::Variable(field.clone()),
                 AggregateFunction::Sum(field) => Expression::Variable(field.clone()),
@@ -602,7 +688,7 @@ pub(super) fn build_expand_all_spec(
     node: &crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<GraphSpec, PlanBuildError> {
-    build_expand_all_spec_with_flags(node, _exec_ctx, false)
+    build_expand_all_spec_with_flags(node, _exec_ctx, node.count_only())
 }
 
 pub(super) fn build_expand_all_spec_with_flags(
@@ -622,7 +708,8 @@ pub(super) fn build_expand_all_spec_with_flags(
         src_vids: node.src_vids().to_vec(),
         step_limit: node.step_limit().unwrap_or(1),
         count_only,
-        emit_raw_ids: false,
+        emit_raw_ids: node.id_only() || node.count_only(),
+        lightweight_source: node.lightweight_source(),
     })
 }
 
