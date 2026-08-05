@@ -79,6 +79,7 @@ pub(super) fn expand_single_step(
     output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
     src_vids: Vec<Value>,
+    emit_raw_ids: bool,
     ctx: &mut ExpandCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
     let space_name = ctx.space_name;
@@ -136,14 +137,21 @@ pub(super) fn expand_single_step(
                 }
             };
 
-            let dst_vertex = reader
-                .get_vertex(space_name, &dst_vid)?
-                .unwrap_or_else(|| crate::core::Vertex::with_vid(dst_vid));
-            buf.push_row(
-                seed_row,
-                Value::Edge(Box::new(edge.clone())),
-                Value::Vertex(Box::new(dst_vertex)),
-            );
+            let (edge_val, dst_val) = if emit_raw_ids {
+                (
+                    Value::Null(crate::core::NullType::Null),
+                    Value::VertexId(dst_vid),
+                )
+            } else {
+                let dst_vertex = reader
+                    .get_vertex(space_name, &dst_vid)?
+                    .unwrap_or_else(|| crate::core::Vertex::with_vid(dst_vid));
+                (
+                    Value::Edge(Box::new(edge.clone())),
+                    Value::Vertex(Box::new(dst_vertex)),
+                )
+            };
+            buf.push_row(seed_row, edge_val, dst_val);
         }
     }
 

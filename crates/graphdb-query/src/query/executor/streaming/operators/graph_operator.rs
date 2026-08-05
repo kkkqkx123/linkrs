@@ -58,6 +58,7 @@ pub enum GraphOperator {
         src_vids: Vec<Value>,
         step_limit: u32,
         count_only: bool,
+        emit_raw_ids: bool,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -175,6 +176,7 @@ impl GraphOperator {
                 src_vids,
                 step_limit,
                 count_only,
+                emit_raw_ids,
             } => Self::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -185,6 +187,7 @@ impl GraphOperator {
                 src_vids: src_vids.clone(),
                 step_limit: *step_limit,
                 count_only: *count_only,
+                emit_raw_ids: *emit_raw_ids,
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -280,12 +283,14 @@ impl GraphOperator {
                 src_vids,
                 step_limit,
                 count_only,
+                emit_raw_ids,
             } => expand::handle_all(
                 &*filter_expr,
                 col_names.clone(),
                 src_vids.clone(),
                 *step_limit,
                 *count_only,
+                *emit_raw_ids,
                 &mut GraphCtx {
                     storage,
                     space_name,

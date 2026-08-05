@@ -602,6 +602,14 @@ pub(super) fn build_expand_all_spec(
     node: &crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<GraphSpec, PlanBuildError> {
+    build_expand_all_spec_with_flags(node, _exec_ctx, false)
+}
+
+pub(super) fn build_expand_all_spec_with_flags(
+    node: &crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode,
+    _exec_ctx: &ExecutionContext,
+    count_only: bool,
+) -> Result<GraphSpec, PlanBuildError> {
     Ok(GraphSpec::ExpandAll {
         edge_types: node.edge_types().to_vec(),
         direction: match node.direction().to_lowercase().as_str() {
@@ -613,7 +621,8 @@ pub(super) fn build_expand_all_spec(
         col_names: node.col_names().to_vec(),
         src_vids: node.src_vids().to_vec(),
         step_limit: node.step_limit().unwrap_or(1),
-        count_only: false,
+        count_only,
+        emit_raw_ids: false,
     })
 }
 

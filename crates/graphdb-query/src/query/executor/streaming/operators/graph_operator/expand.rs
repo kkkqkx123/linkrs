@@ -95,6 +95,7 @@ pub(super) fn handle_all(
     src_vids: Vec<Value>,
     step_limit: u32,
     count_only: bool,
+    emit_raw_ids: bool,
     ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
     let storage = ctx.storage;
@@ -149,6 +150,7 @@ pub(super) fn handle_all(
                     Arc::clone(&base.output_layout),
                     &*reader,
                     src_vids.clone(),
+                    emit_raw_ids,
                     &mut ExpandCtx {
                         space_name,
                         edge_types,

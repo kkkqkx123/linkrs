@@ -302,6 +302,11 @@ pub enum GraphSpec {
         /// materializing them. Used when the downstream is a simple COUNT(*)
         /// aggregate with no GROUP BY or other aggregation functions.
         count_only: bool,
+        /// When true, emit `Value::VertexId` / `Value::EdgeId` instead of
+        /// full `Value::Vertex(Box)` / `Value::Edge(Box)` in the expand
+        /// output.  Eliminates heap allocation for downstream operators that
+        /// only need the identifier (e.g. another expand hop, count, join key).
+        emit_raw_ids: bool,
     },
     Traverse {
         edge_types: Vec<String>,

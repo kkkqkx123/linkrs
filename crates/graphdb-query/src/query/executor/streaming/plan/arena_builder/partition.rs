@@ -21,7 +21,7 @@ use super::super::types::{
 use super::assembler::{
     ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx,
 };use super::specs::{
-    build_aggregate_spec, build_expand_all_spec, build_filter_spec, build_limit_spec,
+    build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec, build_limit_spec,
     build_project_spec, build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
 };
 use crate::core::types::expr::Expression;
@@ -49,6 +49,10 @@ struct PartitionedChain<'a> {
     /// when it is the first global operator and all its functions support
     /// partial accumulation.
     aggregate_split: Option<&'a AggregateNode>,
+    /// When true, the outermost local ExpandAll is followed by a count-only
+    /// aggregate (no GROUP BY, only COUNT functions).  The ExpandAll spec
+    /// should set `count_only: true` to avoid materializing output rows.
+    count_only_expand: bool,
 }
 
 /// Try to build a partitioned physical plan from the logical root.
@@ -193,7 +197,7 @@ fn build_chain_group(
                     .0;
                 }
                 PlanNodeEnum::ExpandAll(expand) => {
-                    let spec = build_expand_all_spec(expand, exec_ctx)?;
+                    let spec = build_expand_all_spec_with_flags(expand, exec_ctx, chain.count_only_expand)?;
                     fid = ArenaPlanAssembler::push_graph_op(
                         operators,
                         fragments,
@@ -274,7 +278,7 @@ fn build_chain_group(
     Ok((child_fid, root_operator))
 }
 
-/// The binary operators over independent scan branches that E1a can partition.
+/// The binary operators over independent scan branches that E1a/E1b can partition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IndependentBranchOp {
     Union,
@@ -282,10 +286,12 @@ enum IndependentBranchOp {
     Minus,
     Intersect,
     CrossJoin,
+    /// E1b: equality join on the partition key (vertex-id).
+    InnerJoin,
 }
 
-/// Split a binary-op root into two independent branch inputs. Equality joins
-/// are rejected here (they need a hash exchange, see E1b).
+/// Split a binary-op root into two independent branch inputs.  Equality joins
+/// on a simple variable key (vertex-id) are supported by E1b.
 fn split_independent_branches(
     node: &PlanNodeEnum,
 ) -> Option<(&PlanNodeEnum, &PlanNodeEnum, IndependentBranchOp)> {
@@ -304,6 +310,23 @@ fn split_independent_branches(
         }
         PlanNodeEnum::CrossJoin(join) => {
             Some((join.left_input(), join.right_input(), IndependentBranchOp::CrossJoin))
+        }
+        PlanNodeEnum::InnerJoin(join) => {
+            // E1b: allow equality join when the join key is a simple variable
+            // reference (i.e. the vertex-id partition key).
+            let keys_are_simple = join.hash_keys().len() == 1
+                && join.probe_keys().len() == 1
+                && join.hash_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
+                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                })
+                && join.probe_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
+                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                });
+            if keys_are_simple {
+                Some((join.left_input(), join.right_input(), IndependentBranchOp::InnerJoin))
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -375,6 +398,9 @@ fn build_partitioned_multi(
             IndependentBranchOp::Minus => SetSpec::Minus.into(),
             IndependentBranchOp::Intersect => SetSpec::Intersect.into(),
             IndependentBranchOp::CrossJoin => JoinSpec::CrossJoin.into(),
+            IndependentBranchOp::InnerJoin => JoinSpec::InnerJoin {
+                join_condition: None,
+            }.into(),
         };
     let (root_fid, root_op) = ArenaPlanAssembler::push_binary_op(
         &mut FragmentCtx {
@@ -553,11 +579,22 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
         _ => None,
     };
 
+    // Detect count-only expand: the outermost local operator is ExpandAll and
+    // the first global operator is a count-only aggregate (no GROUP BY, only
+    // COUNT functions).  In this case the ExpandAll can skip materializing
+    // output rows entirely.
+    let count_only_expand = if let Some(PlanNodeEnum::ExpandAll(_)) = local.first() {
+        matches!(global.first(), Some(PlanNodeEnum::Aggregate(agg)) if is_count_only_aggregate(agg))
+    } else {
+        false
+    };
+
     Some(PartitionedChain {
         scan: chain[scan_index],
         local,
         global,
         aggregate_split,
+        count_only_expand,
     })
 }
 
@@ -624,6 +661,18 @@ fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
                 | AggregateFunction::Avg(_)
         )
     })
+}
+
+/// Check whether an aggregate node is a simple count-only aggregate: no GROUP
+/// BY keys and all aggregate functions are COUNT.  This pattern allows the
+/// upstream ExpandAll to skip materializing output rows entirely.
+fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
+    agg.group_keys().is_empty()
+        && !agg.aggregation_functions().is_empty()
+        && agg
+            .aggregation_functions()
+            .iter()
+            .all(|f| matches!(f, AggregateFunction::Count(_)))
 }
 
 #[cfg(test)]

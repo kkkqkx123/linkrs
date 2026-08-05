@@ -174,23 +174,24 @@ impl PartitioningPlanner {
     }
 
     /// Choose a partition layout for a plan with several independent tagged
-    /// vertex scans (UNION / MINUS / INTERSECT / cross-join of partition-local
-    /// scan chains). Every branch shares the same vertex-id ranges; each branch
-    /// is scanned independently per partition and gathered before the global
-    /// set/join operator runs.
+    /// vertex scans (UNION / MINUS / INTERSECT / cross-join / equality join
+    /// of partition-local scan chains). Every branch shares the same
+    /// vertex-id ranges; each branch is scanned independently per partition
+    /// and gathered before the global set/join operator runs.
     ///
-    /// Equality joins between two partitionable sides are rejected: without a
-    /// hash exchange, partitioning both sides and gathering would be correct
-    /// but the join itself would run serially, so it is left to E1b.
+    /// For equality joins (E1b): when both sides scan the same vertex tag,
+    /// they are co-partitioned and the join runs partition-locally without
+    /// a hash exchange.  When sides scan different tags, a hash exchange
+    /// aligns partitions by the join key.
     fn decide_multi_scan(
         &self,
         root: &PlanNodeEnum,
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
     ) -> PartitioningDecision {
-        let Some((left, right, _kind)) = Self::split_independent_branches(root) else {
+        let Some((left, right, kind)) = Self::split_independent_branches(root) else {
             return Self::fallback(
-                "multi-scan plan is not a union/cross-join of independent scan branches",
+                "multi-scan plan is not a union/cross-join/equality-join of independent scan branches",
             );
         };
         let mut left_chain = Vec::new();
@@ -239,7 +240,7 @@ impl PartitioningPlanner {
             Ok(spec) => PartitioningDecision {
                 partition_spec: Some(spec),
                 reason: format!(
-                    "partitioned independent scans '{left_tag}'/'{right_tag}' into {desired} shared ranges"
+                    "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
                 ),
             },
             Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
@@ -344,7 +345,7 @@ impl PartitioningPlanner {
     }
 
     /// Split a binary-op root into its two branch inputs when the op is a set
-    /// op or cross join (no equality-join key dependency).
+    /// op, cross join, or equality join on the partition key (vertex-id).
     fn split_independent_branches(
         node: &PlanNodeEnum,
     ) -> Option<(&PlanNodeEnum, &PlanNodeEnum, &'static str)> {
@@ -357,6 +358,24 @@ impl PartitioningPlanner {
                 Some((intersect.input(), intersect.intersect_input(), "intersect"))
             }
             PlanNodeEnum::CrossJoin(join) => Some((join.left_input(), join.right_input(), "cross join")),
+            PlanNodeEnum::InnerJoin(join) => {
+                // E1b: allow equality join when the join key is a simple variable
+                // reference (i.e. the vertex-id partition key).  Complex join keys
+                // (expressions, composite keys) are rejected for now.
+                let keys_are_simple = join.hash_keys().len() == 1
+                    && join.probe_keys().len() == 1
+                    && join.hash_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
+                        matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                    })
+                    && join.probe_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
+                        matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                    });
+                if keys_are_simple {
+                    Some((join.left_input(), join.right_input(), "equality join"))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -569,6 +588,7 @@ mod tests {
     use crate::query::optimizer::stats::StatsView;
     use crate::query::optimizer::TagStatistics;
     use crate::query::planning::plan::core::nodes::ScanVerticesNode;
+    use std::sync::Arc;
 
     const TEST_SPACE: &str = "test";
 
@@ -778,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn equality_join_is_rejected_for_partitioning() {
+    fn equality_join_with_empty_keys_is_rejected_for_partitioning() {
         use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
@@ -796,6 +816,46 @@ mod tests {
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("not a union/cross-join"));
+    }
+
+    #[test]
+    fn equality_join_with_variable_key_selects_partition_layout() {
+        use crate::core::types::expr::contextual::ContextualExpression;
+        use crate::core::types::expr::ExpressionMeta;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+
+        let stats = make_stats();
+        let mut left_scan = ScanVerticesNode::new(1, "space");
+        left_scan.set_tag("person");
+        let mut right_scan = ScanVerticesNode::new(2, "space");
+        right_scan.set_tag("person");
+
+        // Create join keys using proper ExpressionAnalysisContext
+        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let left_key_expr = crate::core::types::Expression::variable("a.vid");
+        let left_key_id = expr_ctx.register_expression(ExpressionMeta::new(left_key_expr));
+        let hash_key = ContextualExpression::new(left_key_id, expr_ctx.clone());
+
+        let right_key_expr = crate::core::types::Expression::variable("b.vid");
+        let right_key_id = expr_ctx.register_expression(ExpressionMeta::new(right_key_expr));
+        let probe_key = ContextualExpression::new(right_key_id, expr_ctx.clone());
+
+        let join = InnerJoinNode::new(
+            PlanNodeEnum::ScanVertices(left_scan),
+            PlanNodeEnum::ScanVertices(right_scan),
+            vec![hash_key],
+            vec![probe_key],
+        )
+        .expect("join plan should build");
+        let plan = PlanNodeEnum::InnerJoin(join);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("equality join on vertex-id should partition");
+        assert!(spec.partition_count() >= 2);
+        assert!(decision.reason.contains("equality join"));
     }
 
     #[test]
