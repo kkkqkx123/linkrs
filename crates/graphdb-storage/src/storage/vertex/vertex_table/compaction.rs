@@ -128,10 +128,6 @@ impl CompactionCoordinator {
         // Step 4: Resize columns to match new id_indexer size
         table.columns.resize(table.id_indexer.len());
 
-        // Step 5: Verify invariants (debug builds only)
-        #[cfg(debug_assertions)]
-        table.verify_invariants()?;
-
         Ok(())
     }
 

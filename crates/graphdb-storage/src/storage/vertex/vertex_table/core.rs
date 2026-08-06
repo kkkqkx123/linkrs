@@ -19,7 +19,6 @@ use super::super::{
     ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema,
     VertexTimestamp,
 };
-use crate::core::error::storage::StorageErrorKind;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::encoding::EncodingSelector;
 use crate::storage::mvcc::SnapshotHandle;
@@ -642,8 +641,7 @@ impl VertexTable {
 
         total += self.columns.used_memory_size();
 
-        total += self.timestamps.valid_count(super::super::MAX_TIMESTAMP - 1)
-            * std::mem::size_of::<Timestamp>();
+        total += self.timestamps.size() * std::mem::size_of::<Timestamp>();
 
         // Account for actual label_name usage
         total += self.label_name.len();
@@ -654,62 +652,7 @@ impl VertexTable {
         total
     }
 
-    /// Verify internal consistency after compaction.
-    /// Should be called after compact() in debug builds.
-    ///
-    /// Invariants checked:
-    /// 1. Every key in id_indexer has a valid timestamp entry
-    /// 2. Every valid timestamp entry has a corresponding key in id_indexer
-    /// 3. Column count matches id_indexer.len()
-    /// 4. All column indices are within bounds
-    #[cfg(debug_assertions)]
-    pub fn verify_invariants(&self) -> StorageResult<()> {
-        let id_count = self.id_indexer.len();
 
-        // Check 1: Every key in id_indexer has a valid timestamp entry
-        for (key, idx) in self.id_indexer.iter() {
-            let start_ts = self.timestamps.get_start_ts(idx);
-            if start_ts.is_none() {
-                return Err(StorageError::new(
-                    StorageErrorKind::StorageError,
-                    format!("ID {} for key {:?} missing in timestamps", idx, key),
-                ));
-            }
-        }
-
-        // Check 2: Every valid timestamp entry has a corresponding key in id_indexer
-        for idx in 0..self.timestamps.size() {
-            if let Some(_start_ts) = self.timestamps.get_start_ts(idx as u32) {
-                let key = self.id_indexer.get_key(idx as u32);
-                if key.is_none() {
-                    return Err(StorageError::new(
-                        StorageErrorKind::StorageError,
-                        format!("Timestamp entry {} missing in id_indexer", idx),
-                    ));
-                }
-            }
-        }
-
-        // Check 3: Column count matches id_indexer.len()
-        if self.columns.row_count() != id_count {
-            return Err(StorageError::new(
-                StorageErrorKind::StorageError,
-                format!(
-                    "Column count ({}) mismatch with id_indexer.len() ({})",
-                    self.columns.row_count(),
-                    id_count
-                ),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// No-op in release builds for performance
-    #[cfg(not(debug_assertions))]
-    pub fn verify_invariants(&self) -> StorageResult<()> {
-        Ok(())
-    }
 
     // ==================== MVCC Methods ====================
 

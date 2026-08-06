@@ -72,7 +72,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 if !has_included {
                     return Ok(());
                 }
-                let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
+                let latest_gen = runtime.generation(manifest.manifest().generation);
                 let reverse_prefix = KeyBuilder::build_edge_reverse_key(
                     space_id, edge_src, edge_dst, edge_type, ranking, index_name,
                 )?;
@@ -81,7 +81,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 let mut existing_encoded: HashSet<Vec<u8>> = HashSet::new();
                 let mut existing_columns = Vec::new();
                 let mut covering_populated = false;
-                if let Some(latest_gen) = chain.first() {
+                if let Some(latest_gen) = latest_gen {
                     for shard in latest_gen.shards() {
                         if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                             continue;

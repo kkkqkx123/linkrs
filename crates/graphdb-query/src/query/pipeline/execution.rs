@@ -26,22 +26,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     /// Convenience entry: parse, bind auto-commit storage for DML, compile,
     /// execute, and finalize in one call.  Used by tests and the embedded API.
+    ///
+    /// Finalization of the auto-bound operation storage is performed by
+    /// [`execute_prepared_materialized`].
     pub fn execute_query_with_space(
         &mut self,
         query_text: &str,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
         let request = self.prepare_request_with_auto_commit(query_text, space_info)?;
-        match self.execute_prepared_materialized(&request) {
-            Ok(result) => {
-                self.finalize_operation_storage(request.operation_storage.as_ref(), true)?;
-                Ok(result)
-            }
-            Err(error) => {
-                self.finalize_operation_storage(request.operation_storage.as_ref(), false)?;
-                Err(error)
-            }
-        }
+        self.execute_prepared_materialized(&request)
     }
 
     pub fn execute_query_stream_with_request(
@@ -183,6 +177,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 profile.total_duration_us = total_start.elapsed().as_micros() as u64;
                 self.stats_manager
                     .record_failed_query(profile.clone(), error_info);
+                let _ = request.finalize_owned_operation(false);
                 return Err(e);
             }
         };
@@ -210,11 +205,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     profile.total_duration_us = total_start.elapsed().as_micros() as u64;
                     self.stats_manager
                         .record_failed_query(profile.clone(), error_info);
+                    let _ = request.finalize_owned_operation(false);
                     return Err(e);
                 }
             };
 
-        let physical_plan = self.build_physical_plan(&optimized_plan, &request.query_context)?;
+        let physical_plan = match self.build_physical_plan(&optimized_plan, &request.query_context)
+        {
+            Ok(plan) => plan,
+            Err(e) => {
+                let _ = request.finalize_owned_operation(false);
+                return Err(e);
+            }
+        };
 
         let execute_start = Instant::now();
         let result = match self.execute_compiled_with_scope(
@@ -235,6 +238,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 profile.total_duration_us = total_start.elapsed().as_micros() as u64;
                 self.stats_manager
                     .record_failed_query(profile.clone(), error_info);
+                let _ = request.finalize_owned_operation(false);
                 return Err(e);
             }
         };
@@ -257,6 +261,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.stats_manager.record_query_metrics(&metrics);
         self.stats_manager.record_query_profile(profile.clone());
 
+        request.finalize_owned_operation(true)?;
         Ok((result, metrics, profile))
     }
 

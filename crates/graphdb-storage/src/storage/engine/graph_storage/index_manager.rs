@@ -533,9 +533,7 @@ pub(crate) fn rebuild_tag_index(
     fail_if_generation_fault_is_injected(GenerationFaultPoint::SnapshotBuild)?;
 
     // ── Phase: CatchingUp ──────────────────────────────────────────────────
-    build_state
-        .transition_to_catching_up()
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_catching_up()?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager().set_tag_index_status(
@@ -569,9 +567,7 @@ pub(crate) fn rebuild_tag_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
-    build_state
-        .transition_to_publishing(barrier_lsn)
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_publishing(barrier_lsn)?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::BarrierEstablished)?;
     ctx.index_metadata_manager().set_tag_index_status(
@@ -611,8 +607,7 @@ pub(crate) fn rebuild_tag_index(
             checkpoint_file: gen_dir.clone(),
             checksum: None,
         }],
-    )
-    .map_err(StorageError::db_error)?;
+    )?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
     if let Some(manifest_path) = manifest_path {
@@ -635,9 +630,7 @@ pub(crate) fn rebuild_tag_index(
     // ── Phase: Active ──────────────────────────────────────────────────────
     // Mark the index as active and remove the build state so it is not
     // re-processed on the next startup.
-    build_state
-        .transition_to_active()
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_active()?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager()
@@ -827,9 +820,7 @@ pub(crate) fn rebuild_edge_index(
     fail_if_generation_fault_is_injected(GenerationFaultPoint::SnapshotBuild)?;
 
     // ── Phase: CatchingUp ──────────────────────────────────────────────────
-    build_state
-        .transition_to_catching_up()
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_catching_up()?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager().set_edge_index_status(
@@ -860,9 +851,7 @@ pub(crate) fn rebuild_edge_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
-    build_state
-        .transition_to_publishing(barrier_lsn)
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_publishing(barrier_lsn)?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::BarrierEstablished)?;
     ctx.index_metadata_manager().set_edge_index_status(
@@ -902,8 +891,7 @@ pub(crate) fn rebuild_edge_index(
             checkpoint_file: gen_dir.clone(),
             checksum: None,
         }],
-    )
-    .map_err(StorageError::db_error)?;
+    )?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
     if let Some(manifest_path) = manifest_path {
@@ -924,9 +912,7 @@ pub(crate) fn rebuild_edge_index(
     fail_if_generation_fault_is_injected(GenerationFaultPoint::FenceRelease)?;
 
     // ── Phase: Active ──────────────────────────────────────────────────────
-    build_state
-        .transition_to_active()
-        .map_err(StorageError::invalid_operation)?;
+    build_state.transition_to_active()?;
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager().set_edge_index_status(
@@ -1519,17 +1505,9 @@ mod tests {
     }
 
     #[test]
-    fn test_generation_build_state_can_resume_semantics() {
+    fn test_generation_build_state_transitions() {
         let building = generation_state(1, 10);
-        assert!(!building.can_resume());
         assert!(!building.is_active());
-
-        let mut catching_up = generation_state(1, 10);
-        catching_up
-            .transition_to_catching_up()
-            .expect("Building should transition to CatchingUp");
-        assert!(catching_up.can_resume());
-        assert!(!catching_up.is_active());
 
         let mut active = generation_state(1, 10);
         active
@@ -1541,7 +1519,6 @@ mod tests {
         active
             .transition_to_active()
             .expect("Publishing should transition to Active");
-        assert!(!active.can_resume());
         assert!(active.is_active());
     }
 

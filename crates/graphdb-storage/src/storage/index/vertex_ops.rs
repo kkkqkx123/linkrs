@@ -50,8 +50,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
             let covering = index_definition.as_ref().is_some_and(|idx| idx.covering);
             let new_values = effective_index_values(index_definition.as_ref(), props, Vec::new());
 
-            let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
-
+            let latest_gen = runtime.generation(manifest.manifest().generation);
             let reverse_prefix =
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
             let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
@@ -59,7 +58,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
             let mut existing_encoded: HashSet<Vec<u8>> = HashSet::new();
             let mut existing_columns = Vec::new();
             let mut covering_populated = false;
-            if let Some(latest_gen) = chain.first() {
+            if let Some(latest_gen) = latest_gen {
                 for shard in latest_gen.shards() {
                     if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                         continue;

@@ -48,4 +48,4 @@ pub use manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
     ManifestCatalogStats, ManifestHandle,
 };
-pub use traits::{EdgeIndexOps, IndexGcOps, VertexIndexOps};
+pub use traits::{EdgeIndexOps, VertexIndexOps};

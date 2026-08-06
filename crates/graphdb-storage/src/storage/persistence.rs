@@ -5,6 +5,7 @@
 
 use crate::core::error::StorageError;
 use crate::core::StorageResult;
+use std::path::Path;
 
 /// Magic bytes identifying GraphDB persistence files
 pub const PERSISTENCE_MAGIC: [u8; 4] = *b"GRDB";
@@ -87,6 +88,26 @@ pub fn write_versioned_payload(buf: &mut Vec<u8>, version: u32, payload: &[u8]) 
     buf.extend_from_slice(&VERSIONED_PAYLOAD_MAGIC);
     buf.extend_from_slice(&version.to_le_bytes());
     buf.extend_from_slice(payload);
+}
+
+/// Atomically write `bytes` to `path`: write to a temporary sibling file,
+/// fsync it, rename over the target, then fsync the parent directory so the
+/// rename is durable. On any error the target path is left untouched.
+pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> StorageResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| StorageError::db_error(format!("Path {} has no parent", path.display())))?;
+    std::fs::create_dir_all(parent)?;
+    let temporary = path.with_extension("tmp");
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temporary, path)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 /// Read and validate a versioned payload from a reader.

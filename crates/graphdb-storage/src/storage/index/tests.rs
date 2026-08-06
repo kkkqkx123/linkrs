@@ -241,7 +241,6 @@ fn resolve_split_crash_recovery_discards_building_state() {
         start_lsn: CommitLsn::new(10),
         barrier_lsn: None,
         state: GenerationState::Building,
-        terminal_reason: None,
     };
     write_crashed_build_state(&index_root, &crashed);
 
@@ -278,7 +277,6 @@ fn resolve_split_crash_recovery_discards_catching_up_state() {
         start_lsn: CommitLsn::new(10),
         barrier_lsn: None,
         state: GenerationState::CatchingUp,
-        terminal_reason: None,
     };
     write_crashed_build_state(&index_root, &crashed);
 
@@ -336,7 +334,6 @@ fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
         start_lsn: CommitLsn::new(10),
         barrier_lsn: Some(CommitLsn::new(50)),
         state: GenerationState::Publishing,
-        terminal_reason: None,
     };
     write_crashed_build_state(&index_root, &publishing);
 
@@ -377,7 +374,6 @@ fn resolve_split_crash_recovery_discards_publishing_without_manifest() {
         start_lsn: CommitLsn::new(10),
         barrier_lsn: Some(CommitLsn::new(50)),
         state: GenerationState::Publishing,
-        terminal_reason: None,
     };
     write_crashed_build_state(&index_root, &publishing);
 
@@ -823,4 +819,66 @@ fn memory_limit_triggers_compaction() {
 
     // Cleanup - reset limit
     manager.set_memory_limit_bytes(0);
+}
+
+#[test]
+fn retire_generations_reclaims_retired_checkpoint_dirs() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+    let index = create_tag_index("name_idx", "Person");
+    manager
+        .register_native_index(1, &index)
+        .expect("register index");
+
+    manager
+        .update_vertex_indexes_mvcc(
+            1,
+            &Value::Int(1),
+            "name_idx",
+            &[("name".to_string(), Value::string("Alice"))],
+            100,
+        )
+        .expect("first update");
+    manager
+        .update_vertex_indexes_mvcc(
+            1,
+            &Value::Int(2),
+            "name_idx",
+            &[("name".to_string(), Value::string("Bob"))],
+            200,
+        )
+        .expect("second update");
+
+    // Simulate durable checkpoints for the two retired generations by
+    // materializing their shard directories at the manifest-declared paths.
+    let catalog = manager
+        .manifest_catalog(1, 1)
+        .expect("manifest catalog should exist");
+    let retired = catalog.retired_reclaimable(|_| true);
+    assert_eq!(retired.len(), 2);
+    for manifest in &retired {
+        for shard in &manifest.shards {
+            std::fs::create_dir_all(&shard.checkpoint_file)
+                .expect("fixture checkpoint dir should be created");
+        }
+    }
+    let index_root = directory.path().join("indexes").join("1").join("1");
+    let gen1 = index_root.join("generation-1");
+    let gen2 = index_root.join("generation-2");
+    assert!(gen1.is_dir(), "generation 1 checkpoint should exist");
+    assert!(gen2.is_dir(), "generation 2 checkpoint should exist");
+
+    // Advancing safe_ts past both retired generations' max_ts removes them
+    // from the runtime and reclaims their checkpoint files.
+    let retired_count = manager.retire_generations(300);
+    assert_eq!(retired_count, 2);
+
+    assert!(
+        !gen1.exists(),
+        "generation 1 files should be reclaimed after retirement"
+    );
+    assert!(
+        !gen2.exists(),
+        "generation 2 files should be reclaimed after retirement"
+    );
 }

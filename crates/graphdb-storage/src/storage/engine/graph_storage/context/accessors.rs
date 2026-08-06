@@ -8,7 +8,7 @@ use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cold::ColdSnapshot;
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
-use crate::storage::index::IndexGcOps;
+
 use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::StorageOperationContext;
 
@@ -278,11 +278,11 @@ impl GraphStorageContext {
             .persistent
             .index_data_manager
             .read()
-            .memory_usage_bytes();
+            .cached_memory_usage_bytes();
         self.persistent
             .resource_accounting
             .report_usage(MemoryCategory::Index, index_bytes);
-        let tombstone_count = self.persistent.index_data_manager.read().tombstone_count();
+        let tombstone_count = self.persistent.index_data_manager.read().cached_tombstone_count() as usize;
         let tombstone_memory_bytes = (tombstone_count as u64).saturating_mul(64);
         self.persistent
             .resource_accounting

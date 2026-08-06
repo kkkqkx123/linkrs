@@ -263,3 +263,7 @@ harness = false
 [[bench]]
 name = "neighbor_batch_bench"
 harness = false
+
+[[bench]]
+name = "indexed_bulk_load_bench"
+harness = false

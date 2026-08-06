@@ -105,108 +105,142 @@ fn serialize_chunk_raw<W: Write>(writer: &mut W, chunk: &Chunk) -> std::io::Resu
     Ok(())
 }
 
+/// Reader that hashes every byte it reads. Used to verify the CRC32 tail of a
+/// chunk file against the exact bytes that were serialized (a chunk is written
+/// atomically via tmp+rename, so its payload and CRC are always consistent).
+struct CrcReader<'a, R: Read> {
+    inner: &'a mut R,
+    hasher: crc32fast::Hasher,
+}
+
+impl<R: Read> Read for CrcReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
 pub(crate) fn deserialize_chunk<R: Read>(reader: &mut R) -> std::io::Result<Chunk> {
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic)?;
-    if magic != CHUNK_MAGIC {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Chunk magic mismatch: got {magic:?}, expected {CHUNK_MAGIC:?}"),
-        ));
-    }
-
-    let mut version_bytes = [0u8; 4];
-    reader.read_exact(&mut version_bytes)?;
-    let version = u32::from_le_bytes(version_bytes);
-    if version != CHUNK_VERSION {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Unsupported chunk version: {version}, expected {CHUNK_VERSION}"),
-        ));
-    }
-
-    let mut id_bytes = [0u8; 4];
-    reader.read_exact(&mut id_bytes)?;
-    let id = ChunkId::from_le_bytes(id_bytes);
-
-    let mut count_bytes = [0u8; 4];
-    reader.read_exact(&mut count_bytes)?;
-    let count = u32::from_le_bytes(count_bytes) as usize;
-
-    let mut entries = Vec::with_capacity(count);
-    for _ in 0..count {
-        let mut key_len_bytes = [0u8; 4];
-        reader.read_exact(&mut key_len_bytes)?;
-        let key_len = u32::from_le_bytes(key_len_bytes) as usize;
-        let mut key = vec![0u8; key_len];
-        reader.read_exact(&mut key)?;
-
-        let mut created_ts_bytes = [0u8; 8];
-        reader.read_exact(&mut created_ts_bytes)?;
-        let created_ts = u64::from_le_bytes(created_ts_bytes);
-
-        let mut has_deleted = [0u8; 1];
-        reader.read_exact(&mut has_deleted)?;
-        let deleted_ts = if has_deleted[0] == 1 {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf)?;
-            Some(u64::from_le_bytes(buf))
-        } else {
-            None
+    let (id, entries, computed) = {
+        let mut crc_reader = CrcReader {
+            inner: &mut *reader,
+            hasher: crc32fast::Hasher::new(),
         };
-
-        let mut has_ev = [0u8; 1];
-        reader.read_exact(&mut has_ev)?;
-        let entity_version = if has_ev[0] == 1 {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf)?;
-            Some(u64::from_le_bytes(buf))
-        } else {
-            None
-        };
-
-        let mut num_inc_bytes = [0u8; 4];
-        reader.read_exact(&mut num_inc_bytes)?;
-        let num_included = u32::from_le_bytes(num_inc_bytes) as usize;
-        let mut included_columns = Vec::with_capacity(num_included);
-        for _ in 0..num_included {
-            let mut name_len_bytes = [0u8; 4];
-            reader.read_exact(&mut name_len_bytes)?;
-            let name_len = u32::from_le_bytes(name_len_bytes) as usize;
-            let mut name_bytes = vec![0u8; name_len];
-            reader.read_exact(&mut name_bytes)?;
-            let name = String::from_utf8(name_bytes)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-            let mut val_len_bytes = [0u8; 4];
-            reader.read_exact(&mut val_len_bytes)?;
-            let val_len = u32::from_le_bytes(val_len_bytes) as usize;
-            let mut val_bytes = vec![0u8; val_len];
-            reader.read_exact(&mut val_bytes)?;
-            let value = OrderedCodec::new()
-                .decode(&val_bytes)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-            included_columns.push((name, value));
+        let mut magic = [0u8; 4];
+        crc_reader.read_exact(&mut magic)?;
+        if magic != CHUNK_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Chunk magic mismatch: got {magic:?}, expected {CHUNK_MAGIC:?}"),
+            ));
         }
 
-        let entity_ref = EntityRefReader::read(reader)?;
+        let mut version_bytes = [0u8; 4];
+        crc_reader.read_exact(&mut version_bytes)?;
+        let version = u32::from_le_bytes(version_bytes);
+        if version != CHUNK_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unsupported chunk version: {version}, expected {CHUNK_VERSION}"),
+            ));
+        }
 
-        entries.push((
-            key,
-            IndexRecord {
-                created_ts,
-                deleted_ts,
-                entity_version,
-                included_columns: Some(included_columns),
-                entity_ref,
-            },
-        ));
-    }
+        let mut id_bytes = [0u8; 4];
+        crc_reader.read_exact(&mut id_bytes)?;
+        let id = ChunkId::from_le_bytes(id_bytes);
 
-    // Read and verify CRC32
+        let mut count_bytes = [0u8; 4];
+        crc_reader.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+
+        let mut entries = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut key_len_bytes = [0u8; 4];
+            crc_reader.read_exact(&mut key_len_bytes)?;
+            let key_len = u32::from_le_bytes(key_len_bytes) as usize;
+            let mut key = vec![0u8; key_len];
+            crc_reader.read_exact(&mut key)?;
+
+            let mut created_ts_bytes = [0u8; 8];
+            crc_reader.read_exact(&mut created_ts_bytes)?;
+            let created_ts = u64::from_le_bytes(created_ts_bytes);
+
+            let mut has_deleted = [0u8; 1];
+            crc_reader.read_exact(&mut has_deleted)?;
+            let deleted_ts = if has_deleted[0] == 1 {
+                let mut buf = [0u8; 8];
+                crc_reader.read_exact(&mut buf)?;
+                Some(u64::from_le_bytes(buf))
+            } else {
+                None
+            };
+
+            let mut has_ev = [0u8; 1];
+            crc_reader.read_exact(&mut has_ev)?;
+            let entity_version = if has_ev[0] == 1 {
+                let mut buf = [0u8; 8];
+                crc_reader.read_exact(&mut buf)?;
+                Some(u64::from_le_bytes(buf))
+            } else {
+                None
+            };
+
+            let mut num_inc_bytes = [0u8; 4];
+            crc_reader.read_exact(&mut num_inc_bytes)?;
+            let num_included = u32::from_le_bytes(num_inc_bytes) as usize;
+            let mut included_columns = Vec::with_capacity(num_included);
+            for _ in 0..num_included {
+                let mut name_len_bytes = [0u8; 4];
+                crc_reader.read_exact(&mut name_len_bytes)?;
+                let name_len = u32::from_le_bytes(name_len_bytes) as usize;
+                let mut name_bytes = vec![0u8; name_len];
+                crc_reader.read_exact(&mut name_bytes)?;
+                let name = String::from_utf8(name_bytes).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+
+                let mut val_len_bytes = [0u8; 4];
+                crc_reader.read_exact(&mut val_len_bytes)?;
+                let val_len = u32::from_le_bytes(val_len_bytes) as usize;
+                let mut val_bytes = vec![0u8; val_len];
+                crc_reader.read_exact(&mut val_bytes)?;
+                let value = OrderedCodec::new().decode(&val_bytes).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+                included_columns.push((name, value));
+            }
+
+            let entity_ref = EntityRefReader::read(&mut crc_reader)?;
+
+            entries.push((
+                key,
+                IndexRecord {
+                    created_ts,
+                    deleted_ts,
+                    entity_version,
+                    included_columns: Some(included_columns),
+                    entity_ref,
+                },
+            ));
+        }
+        let computed = crc_reader.hasher.finalize();
+        (id, entries, computed)
+    };
+
+    // Read and verify the trailing CRC32, which covers every byte read above.
     let mut stored_crc = [0u8; 4];
     reader.read_exact(&mut stored_crc)?;
-    let _crc = u32::from_le_bytes(stored_crc);
+    let stored = u32::from_le_bytes(stored_crc);
+    if stored != computed {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Chunk {} CRC mismatch: stored {stored:#010x}, computed {computed:#010x}",
+                id
+            ),
+        ));
+    }
 
     Ok(Chunk::new(id, entries))
 }
@@ -479,6 +513,31 @@ mod tests {
         assert_eq!(loaded.id, 7);
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].1.created_ts, 42);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupted_chunk_file_is_rejected_by_crc() {
+        let dir = std::env::temp_dir().join("chunk_test_corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let entries = vec![(vec![1, 2, 3], IndexRecord::new(42))];
+        let chunk = Chunk::new(7, entries);
+        let path = dir.join("test_chunk.bin");
+        write_chunk_file(&path, &chunk).unwrap();
+
+        // Flip a byte in the payload without updating the trailing CRC.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[10] ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let result = read_chunk_file(&path);
+        assert!(
+            result.is_err(),
+            "a corrupted chunk payload must be rejected by its CRC"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

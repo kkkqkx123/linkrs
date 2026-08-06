@@ -837,7 +837,7 @@ impl GenerationRuntime {
 
 /// The sole mutable native-index data owner for one index.
 pub(crate) struct IndexRuntime {
-    generations: ArcSwap<HashMap<IndexGeneration, Arc<GenerationRuntime>>>,
+    generations: RwLock<HashMap<IndexGeneration, Arc<GenerationRuntime>>>,
     barrier_lsn: AtomicU64,
     barrier_wait: Mutex<()>,
     barrier_cv: Condvar,
@@ -851,13 +851,13 @@ impl IndexRuntime {
 
     pub(crate) fn new_with_pool_capacity(manifest: &IndexManifest, pool_capacity: u64) -> Self {
         Self {
-            generations: ArcSwap::new(Arc::new(HashMap::from([(
+            generations: RwLock::new(HashMap::from([(
                 manifest.generation,
                 Arc::new(GenerationRuntime::empty_with_pool_capacity(
                     manifest,
                     pool_capacity,
                 )),
-            )]))),
+            )])),
             barrier_lsn: AtomicU64::new(0),
             barrier_wait: Mutex::new(()),
             barrier_cv: Condvar::new(),
@@ -869,13 +869,13 @@ impl IndexRuntime {
         pool_capacity: u64,
     ) -> StorageResult<Self> {
         Ok(Self {
-            generations: ArcSwap::new(Arc::new(HashMap::from([(
+            generations: RwLock::new(HashMap::from([(
                 manifest.generation,
                 Arc::new(GenerationRuntime::load_with_pool_capacity(
                     manifest,
                     pool_capacity,
                 )?),
-            )]))),
+            )])),
             barrier_lsn: AtomicU64::new(0),
             barrier_wait: Mutex::new(()),
             barrier_cv: Condvar::new(),
@@ -883,33 +883,20 @@ impl IndexRuntime {
     }
 
     pub(crate) fn generation(&self, generation: IndexGeneration) -> Option<Arc<GenerationRuntime>> {
-        self.generations.load().get(&generation).cloned()
+        self.generations.read().get(&generation).cloned()
     }
 
     pub(crate) fn install_generation(&self, generation: GenerationRuntime) {
         let gen = generation.generation;
-        let arc = Arc::new(generation);
-        self.generations.rcu(|map| {
-            let mut m = map.as_ref().clone();
-            m.insert(gen, Arc::clone(&arc));
-            m
-        });
+        self.generations.write().insert(gen, Arc::new(generation));
     }
 
     pub(crate) fn remove_generation(&self, generation: IndexGeneration) -> bool {
-        if !self.generations.load().contains_key(&generation) {
-            return false;
-        }
-        self.generations.rcu(|map| {
-            let mut m = map.as_ref().clone();
-            m.remove(&generation);
-            m
-        });
-        true
+        self.generations.write().remove(&generation).is_some()
     }
 
     pub(crate) fn generations(&self) -> Vec<Arc<GenerationRuntime>> {
-        self.generations.load().values().cloned().collect()
+        self.generations.read().values().cloned().collect()
     }
 
     /// Return all generations in chain order (newest first, up to `max_generation`).
@@ -919,7 +906,7 @@ impl IndexRuntime {
         &self,
         max_generation: IndexGeneration,
     ) -> StorageResult<Vec<Arc<GenerationRuntime>>> {
-        let gens = self.generations.load();
+        let gens = self.generations.read();
         let newest = gens
             .keys()
             .filter(|g| **g <= max_generation)
@@ -939,7 +926,7 @@ impl IndexRuntime {
 
     pub(crate) fn memory_usage_bytes(&self) -> u64 {
         self.generations
-            .load()
+            .read()
             .values()
             .map(|generation| generation.memory_usage_bytes())
             .sum()
@@ -959,7 +946,7 @@ impl IndexRuntime {
             low_water
         };
         let mut remaining = current_usage.saturating_sub(target);
-        let gens = self.generations.load();
+        let gens = self.generations.read();
         // Find the active (highest) generation — never evict from it
         let active_gen = gens.keys().max().copied();
         for (gen_id, gen) in gens.iter() {

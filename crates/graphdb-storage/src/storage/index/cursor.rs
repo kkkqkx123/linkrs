@@ -3,7 +3,7 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::cursor::IndexScanPlan;
 use crate::storage::index::edge_index_manager::{compute_edge_index_scan_range, EdgeIndexCursor};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
-use crate::storage::index::manifest::ManifestCatalog;
+use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
 use crate::storage::index::shard_runtime::GenerationRuntime;
 use crate::storage::index::types::IndexRecord;
 use crate::storage::index::types::StaleChecker;
@@ -146,6 +146,7 @@ impl IndexDataManagerImpl {
         let handle = catalog.acquire();
         let manifest = handle.manifest();
         let chain = runtime.generation_chain_until(manifest.generation)?;
+        let chain_handles = pin_chain_manifests(catalog, &chain);
 
         let (start, end) = compute_vertex_index_scan_range(space_id, index, plan)?;
         let shard_iterators: Vec<ChainForwardIterator> = manifest
@@ -170,7 +171,7 @@ impl IndexDataManagerImpl {
             shard_iterators,
             plan,
             stale_checker,
-            Some(handle),
+            chain_handles,
         ))
     }
 
@@ -195,6 +196,7 @@ impl IndexDataManagerImpl {
         let handle = catalog.acquire();
         let manifest = handle.manifest();
         let chain = runtime.generation_chain_until(manifest.generation)?;
+        let chain_handles = pin_chain_manifests(catalog, &chain);
 
         let (start, end) = compute_edge_index_scan_range(space_id, index, plan)?;
         let shard_iterators: Vec<ChainForwardIterator> = manifest
@@ -218,7 +220,21 @@ impl IndexDataManagerImpl {
             shard_iterators,
             plan,
             stale_checker,
-            Some(handle),
+            chain_handles,
         ))
     }
+}
+
+/// Acquire a manifest pin for every generation in a runtime chain (newest
+/// first). Holding these handles fences each chain generation's physical files
+/// from reclamation for as long as the cursor is alive, so a cursor can never
+/// outlive the checkpoint data it may lazily reload after chunk eviction.
+fn pin_chain_manifests(
+    catalog: &ManifestCatalog,
+    chain: &[Arc<GenerationRuntime>],
+) -> Vec<ManifestHandle> {
+    chain
+        .iter()
+        .filter_map(|gen| catalog.acquire_generation(gen.generation))
+        .collect()
 }

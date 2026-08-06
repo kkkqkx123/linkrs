@@ -120,6 +120,50 @@ impl ShardedVertexTable {
         (hash as usize) & (self.num_shards - 1)
     }
 
+    #[cfg(test)]
+    pub(crate) fn verify_invariants(&self) -> crate::core::StorageResult<()> {
+        use crate::core::error::storage::StorageErrorKind;
+        
+        for shard in &self.shards {
+            let table = shard.table.lock();
+            let id_count = table.id_indexer.len();
+
+            for (key, idx) in table.id_indexer.iter() {
+                let start_ts = table.timestamps.get_start_ts(idx);
+                if start_ts.is_none() {
+                    return Err(crate::core::StorageError::new(
+                        StorageErrorKind::StorageError,
+                        format!("ID {} for key {:?} missing in timestamps", idx, key),
+                    ));
+                }
+            }
+
+            for idx in 0..table.timestamps.size() {
+                if let Some(_start_ts) = table.timestamps.get_start_ts(idx as u32) {
+                    let key = table.id_indexer.get_key(idx as u32);
+                    if key.is_none() {
+                        return Err(crate::core::StorageError::new(
+                            StorageErrorKind::StorageError,
+                            format!("Timestamp entry {} missing in id_indexer", idx),
+                        ));
+                    }
+                }
+            }
+
+            if table.columns.row_count() != id_count {
+                return Err(crate::core::StorageError::new(
+                    StorageErrorKind::StorageError,
+                    format!(
+                        "Column count ({}) mismatch with id_indexer.len() ({})",
+                        table.columns.row_count(),
+                        id_count
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Segment that covers `local_id` in shard `idx`.
     fn segment_of(&self, idx: usize, local_id: u32) -> u32 {
         idx as u32 + (local_id >> SEGMENT_SLOTS_BITS) * self.num_shards as u32
@@ -709,15 +753,6 @@ impl ShardedVertexTable {
             .unwrap_or(0);
         self.segment_allocator
             .store(max_segment + 1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    // ==================== Verification ====================
-
-    pub fn verify_invariants(&self) -> StorageResult<()> {
-        for shard in &self.shards {
-            shard.table.lock().verify_invariants()?;
-        }
         Ok(())
     }
 }

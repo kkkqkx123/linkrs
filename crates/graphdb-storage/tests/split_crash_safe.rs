@@ -138,7 +138,6 @@ fn split_startup_reconciles_publishing_state() {
             start_lsn: CommitLsn::new(1),
             barrier_lsn: Some(CommitLsn::new(1)),
             state: GenerationState::Publishing,
-            terminal_reason: None,
         };
         let serialized = postcard::to_allocvec(&build_state).expect("build state should serialize");
         // Versioned payload wrapper: [LNKF][version:u32 LE][postcard payload],

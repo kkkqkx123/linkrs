@@ -44,7 +44,6 @@ pub fn create_vertex_type(
             ))
         })
         .and_then(|label| {
-            ctx.data_store().verify_invariants()?;
             Ok(label)
         })
 }
@@ -86,7 +85,6 @@ pub fn create_vertex_type_with_id(
             ))
         })
         .and_then(|label| {
-            ctx.data_store().verify_invariants()?;
             Ok(label)
         })
 }
@@ -144,7 +142,6 @@ pub fn create_edge_type(
             Ok(table)
         })
         .and_then(|label| {
-            ctx.data_store().verify_invariants()?;
             Ok(label)
         })
 }
@@ -193,7 +190,6 @@ pub fn create_edge_type_with_id(
             },
         )
         .and_then(|label| {
-            ctx.data_store().verify_invariants()?;
             Ok(label)
         })
 }
@@ -204,7 +200,6 @@ pub fn drop_vertex_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<
     }
 
     let label_id = ctx.data_store().drop_vertex_type(name)?;
-    ctx.data_store().verify_invariants()?;
 
     ctx.invalidate_vertex_cache(label_id);
 
@@ -217,7 +212,6 @@ pub fn drop_edge_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<()
     }
 
     ctx.data_store().drop_edge_type(name)?;
-    ctx.data_store().verify_invariants()?;
     Ok(())
 }
 

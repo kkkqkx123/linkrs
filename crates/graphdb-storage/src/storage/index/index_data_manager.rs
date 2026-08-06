@@ -24,7 +24,6 @@ use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use crate::storage::persistence::{read_versioned_payload, write_versioned_payload};
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -53,6 +52,10 @@ pub struct IndexDataManagerImpl {
     pub(crate) eviction_high_ratio: Arc<AtomicU64>,
     /// Eviction low-water ratio (stored as ratio * 10000 as integer).
     pub(crate) eviction_low_ratio: Arc<AtomicU64>,
+    /// Cached total tombstone count, maintained incrementally on the write path
+    /// and resynced by the (rare) GC/retirement/compaction paths. Keeps the
+    /// per-statement admission check from scanning every generation.
+    pub(crate) cached_tombstone_count: Arc<AtomicU64>,
 }
 
 impl IndexDataManagerImpl {
@@ -82,7 +85,44 @@ impl IndexDataManagerImpl {
             eviction_enabled: Arc::new(AtomicBool::new(true)),
             eviction_high_ratio: Arc::new(AtomicU64::new(8500)),
             eviction_low_ratio: Arc::new(AtomicU64::new(6500)),
+            cached_tombstone_count: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Cheap O(1) read of the cached tombstone count. See
+    /// [`cached_tombstone_count`](Self::cached_tombstone_count).
+    pub fn cached_tombstone_count(&self) -> u64 {
+        self.cached_tombstone_count.load(Ordering::Relaxed)
+    }
+
+    /// Resync the cached tombstone count from a full scan. Called by the rare
+    /// GC/retirement/compaction paths where generations are physically removed.
+    pub(crate) fn resync_tombstone_count(&self) {
+        let count = self.full_tombstone_count();
+        self.cached_tombstone_count
+            .store(count as u64, Ordering::Relaxed);
+    }
+
+    /// Count tombstoned entries across all runtimes, generations and shards.
+    fn full_tombstone_count(&self) -> usize {
+        let mut count = 0;
+        for runtime in self.runtimes.read().values() {
+            for generation in runtime.generations() {
+                for shard in generation.shards() {
+                    for (_, entry) in shard.read_forward().snapshot() {
+                        if entry.deleted_ts.is_some() {
+                            count += 1;
+                        }
+                    }
+                    for (_, entry) in shard.read_reverse().snapshot() {
+                        if entry.deleted_ts.is_some() {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        count
     }
 
     pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
@@ -238,6 +278,16 @@ impl IndexDataManagerImpl {
             .sum()
     }
 
+    /// Cheap O(1) snapshot of index memory usage maintained by
+    /// publish/retire/split paths via `sync_memory_usage`.
+    ///
+    /// Safe to call on hot paths (e.g. per-statement write admission checks)
+    /// where a full traversal over all runtimes and generations would be
+    /// quadratic in the number of generations.
+    pub fn cached_memory_usage_bytes(&self) -> u64 {
+        self.total_memory_usage.load(Ordering::Relaxed)
+    }
+
     /// Sync cached memory counter with actual usage.
     pub(crate) fn sync_memory_usage(&self) {
         let usage = self.memory_usage_bytes();
@@ -316,11 +366,8 @@ impl IndexDataManagerImpl {
                     checkpoint_file: self.initial_checkpoint_path(space_id, index_id),
                     checksum: None,
                 }],
-            )
-            .map_err(StorageError::db_error)?;
-            e.insert(Arc::new(
-                ManifestCatalog::new(manifest).map_err(StorageError::db_error)?,
-            ));
+            )?;
+            e.insert(Arc::new(ManifestCatalog::new(manifest)?));
         }
         drop(catalogs);
         let catalog = self
@@ -523,8 +570,7 @@ impl IndexDataManagerImpl {
         ));
         self.manifest_catalog(manifest.space_id, manifest.index_id)
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?
-            .publish(manifest)
-            .map_err(StorageError::db_error)?;
+            .publish(manifest)?;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_publish();
         }
@@ -534,6 +580,7 @@ impl IndexDataManagerImpl {
         if let Some(catalog) = self.manifest_catalog(identity.space_id, identity.index_id) {
             self.record_manifest_state(&catalog);
         }
+        self.sync_memory_usage();
         Ok(())
     }
 
@@ -604,13 +651,21 @@ impl IndexDataManagerImpl {
             })
             .collect();
         let next_manifest =
-            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)
-                .map_err(StorageError::db_error)?;
+            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)?;
 
         let current_gen = runtime.generation(current.generation);
 
         // Compute key prefixes for memory deduplication of the fixed key portion
         let (forward_prefix, reverse_prefix) = self.compute_prefixes(identity);
+        let delta_tombstones: u64 = delta
+            .iter()
+            .flat_map(|(_, (forward, reverse))| {
+                forward
+                    .values()
+                    .chain(reverse.values())
+                    .filter(|record| record.deleted_ts.is_some())
+            })
+            .count() as u64;
         let generation = GenerationRuntime::empty_with_maps(
             &next_manifest,
             forward_prefix,
@@ -627,16 +682,24 @@ impl IndexDataManagerImpl {
             ));
         }
 
+        // Fold the freshly installed generation's own footprint into the cached
+        // memory counter. The publish path runs once per statement per index in
+        // auto-commit bulk loads, so a full traversal here would be quadratic in
+        // the total number of generations; a full resync is deferred to the rare
+        // retirement/eviction/compaction paths which already call sync_memory_usage.
+        let generation_bytes = generation.memory_usage_bytes();
         runtime.install_generation(generation);
-        catalog
-            .publish(next_manifest)
-            .map_err(StorageError::db_error)?;
+        catalog.publish(next_manifest)?;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_publish();
         }
         self.record_manifest_state(&catalog);
-        // Recompute cached memory counter
-        self.sync_memory_usage();
+        self.total_memory_usage
+            .fetch_add(generation_bytes, Ordering::Relaxed);
+        if delta_tombstones > 0 {
+            self.cached_tombstone_count
+                .fetch_add(delta_tombstones, Ordering::Relaxed);
+        }
         // Check memory limit and trigger compaction if needed
         let _ = self.check_memory_limit();
         Ok(())
@@ -672,10 +735,73 @@ impl IndexDataManagerImpl {
             }
             if retired > 0 {
                 self.record_manifest_state(&catalog);
+                if let Err(error) = self.reclaim_retired_generations(identity) {
+                    log::warn!(
+                        "Failed to reclaim retired generation files for index {} (space {}): {error}",
+                        identity.index_id,
+                        identity.space_id
+                    );
+                }
                 self.sync_memory_usage();
+                self.resync_tombstone_count();
             }
         }
         retired
+    }
+
+    /// Acquire a manifest pin for every generation in a runtime chain, fencing
+    /// their checkpoint files from reclamation for as long as the returned
+    /// handles are alive. Every holder of a generation chain (cursor or
+    /// transient snapshot) must pin the chain's manifests, otherwise a
+    /// reclamation could delete files that a lazy chunk reload still needs.
+    fn pin_chain_manifests(
+        &self,
+        catalog: &ManifestCatalog,
+        chain: &[Arc<GenerationRuntime>],
+    ) -> Vec<ManifestHandle> {
+        chain
+            .iter()
+            .filter_map(|gen| catalog.acquire_generation(gen.generation))
+            .collect()
+    }
+
+    /// Delete the checkpoint files of retired generations that are both free
+    /// of reader handles (per the manifest catalog) and no longer installed in
+    /// the runtime. Removes the manifest from the catalog only after its files
+    /// have been physically deleted, so a failed deletion retries later.
+    /// Returns the number of checkpoint directories reclaimed.
+    pub(crate) fn reclaim_retired_generations(
+        &self,
+        identity: IndexIdentity,
+    ) -> StorageResult<usize> {
+        let Some(catalog) = self.manifest_catalog(identity.space_id, identity.index_id) else {
+            return Ok(0);
+        };
+        let runtime = self.runtime(identity.space_id, identity.index_id)?;
+        let active_generation = catalog.acquire().manifest().generation;
+        let candidates = catalog.retired_reclaimable(|manifest| {
+            manifest.generation < active_generation
+                && runtime.generation(manifest.generation).is_none()
+        });
+        let mut reclaimed = 0;
+        for manifest in candidates {
+            for shard in &manifest.shards {
+                if shard.checkpoint_file.is_dir() {
+                    std::fs::remove_dir_all(&shard.checkpoint_file)?;
+                    reclaimed += 1;
+                }
+            }
+            // Best-effort removal of the now-empty per-generation directory.
+            if let Some(parent) = manifest
+                .shards
+                .first()
+                .and_then(|s| s.checkpoint_file.parent())
+            {
+                remove_dir_if_empty(parent);
+            }
+            catalog.remove_retired(manifest.generation);
+        }
+        Ok(reclaimed)
     }
 
     pub(crate) fn compact_native_index(
@@ -729,6 +855,9 @@ impl IndexDataManagerImpl {
         // Step 1: Snapshot full generation chain, merging visible entries
         let maps = {
             let chain = runtime.generation_chain_until(current.generation)?;
+            // Pin the generation chain so a concurrent reclamation cannot
+            // delete checkpoint files this snapshot may lazily reload.
+            let _chain_pins = self.pin_chain_manifests(&catalog, &chain);
             let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
             for shard_def in &current.shards {
                 let mut forward = BTreeMap::new();
@@ -775,8 +904,7 @@ impl IndexDataManagerImpl {
             })
             .collect();
         let next_manifest =
-            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)
-                .map_err(StorageError::db_error)?;
+            IndexManifest::new(identity.space_id, identity.index_id, next_gen, new_shards)?;
 
         // Step 3: Create generation runtime and flush before publishing
         let current_gen = runtime.generation(current.generation);
@@ -805,9 +933,7 @@ impl IndexDataManagerImpl {
         }
 
         runtime.install_generation(next_runtime);
-        catalog
-            .publish(next_manifest)
-            .map_err(StorageError::db_error)?;
+        catalog.publish(next_manifest)?;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_publish();
         }
@@ -819,6 +945,10 @@ impl IndexDataManagerImpl {
                 runtime.remove_generation(current.generation);
             }
         }
+
+        // Reclaim checkpoint files of generations that are both unreferenced
+        // by any reader handle and no longer installed in the runtime.
+        self.reclaim_retired_generations(identity)?;
 
         self.sync_memory_usage();
 
@@ -840,7 +970,6 @@ impl IndexDataManagerImpl {
     ) -> StorageResult<()> {
         std::fs::create_dir_all(index_root)?;
         let path = self.build_state_path(index_root);
-        let temporary = path.with_extension("tmp");
         let serialized = postcard::to_allocvec(state)
             .map_err(|e| StorageError::serialize_error(e.to_string()))?;
         let mut versioned = Vec::new();
@@ -849,16 +978,7 @@ impl IndexDataManagerImpl {
             crate::core::types::StorageVersion::CURRENT as u32,
             &serialized,
         );
-        {
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&versioned)?;
-            file.sync_all()?;
-        }
-        std::fs::rename(&temporary, &path)?;
-        if let Some(parent) = path.parent() {
-            std::fs::File::open(parent)?.sync_all()?;
-        }
-        Ok(())
+        crate::storage::persistence::write_file_atomic(&path, &versioned)
     }
 
     pub(crate) fn load_build_state(
@@ -892,10 +1012,7 @@ impl IndexDataManagerImpl {
             index_root.join(format!("generation-{}", build_state.generation.get()));
         if matches!(
             build_state.state,
-            GenerationState::Building
-                | GenerationState::CatchingUp
-                | GenerationState::Failed
-                | GenerationState::Cancelled
+            GenerationState::Building | GenerationState::CatchingUp
         ) {
             log::warn!(
                 "Discarding incomplete split build state for gen {} (state={:?})",
@@ -1048,10 +1165,12 @@ impl IndexDataManagerImpl {
                 },
             ],
         );
-        let next = IndexManifest::new(space_id, index_id, generation, shards)
-            .map_err(StorageError::db_error)?;
+        let next = IndexManifest::new(space_id, index_id, generation, shards)?;
         let mut maps = {
             let chain = runtime.generation_chain_until(current.generation)?;
+            // Pin the generation chain so a concurrent reclamation cannot
+            // delete the checkpoint files this snapshot may lazily reload.
+            let _chain_pins = self.pin_chain_manifests(&catalog, &chain);
             let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
             for current_shard in &current.shards {
                 let mut forward = BTreeMap::new();
@@ -1133,9 +1252,7 @@ impl IndexDataManagerImpl {
             maps
         };
 
-        build_state
-            .transition_to_catching_up()
-            .map_err(StorageError::invalid_operation)?;
+        build_state.transition_to_catching_up()?;
         self.save_build_state(index_root, &build_state)?;
 
         let active_manifest = catalog.acquire().manifest().clone();
@@ -1199,9 +1316,7 @@ impl IndexDataManagerImpl {
             }
         }
 
-        build_state
-            .transition_to_publishing(barrier_lsn)
-            .map_err(StorageError::invalid_operation)?;
+        build_state.transition_to_publishing(barrier_lsn)?;
         self.save_build_state(index_root, &build_state)?;
 
         let current_gen = runtime.generation(current.generation);
@@ -1220,7 +1335,7 @@ impl IndexDataManagerImpl {
 
         next.store(&index_root.join("manifest.bin"))?;
         runtime.install_generation(next_runtime);
-        catalog.publish(next).map_err(StorageError::db_error)?;
+        catalog.publish(next)?;
         runtime.establish_barrier_lsn(barrier_lsn);
         self.record_barrier_lsn(IndexIdentity { space_id, index_id }, barrier_lsn);
         runtime.wait_for_barrier_lsn(barrier_lsn);
@@ -1228,10 +1343,9 @@ impl IndexDataManagerImpl {
             stats.record_generation_publish();
         }
         self.record_manifest_state(&catalog);
+        self.reclaim_retired_generations(IndexIdentity { space_id, index_id })?;
 
-        build_state
-            .transition_to_active()
-            .map_err(StorageError::invalid_operation)?;
+        build_state.transition_to_active()?;
         self.remove_build_state(index_root)?;
         Ok(())
     }
@@ -1274,7 +1388,7 @@ impl IndexDataManagerImpl {
                         space_id: manifest.space_id,
                         index_id: manifest.index_id,
                     },
-                    Arc::new(ManifestCatalog::new(manifest).map_err(StorageError::db_error)?),
+                    Arc::new(ManifestCatalog::new(manifest)?),
                 );
             }
         }
@@ -1296,7 +1410,7 @@ impl IndexDataManagerImpl {
                         space_id: manifest.space_id,
                         index_id: manifest.index_id,
                     },
-                    Arc::new(ManifestCatalog::new(manifest).map_err(StorageError::db_error)?),
+                    Arc::new(ManifestCatalog::new(manifest)?),
                 );
             }
         }
@@ -1323,6 +1437,7 @@ impl IndexDataManagerImpl {
             })?;
             let handle = catalog.acquire();
             let chain = runtime.generation_chain_until(handle.manifest().generation)?;
+            let _chain_pins = self.pin_chain_manifests(&catalog, &chain);
 
             let reverse_prefix =
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
@@ -1448,6 +1563,7 @@ impl IndexDataManagerImpl {
             })?;
             let handle = catalog.acquire();
             let chain = runtime.generation_chain_until(handle.manifest().generation)?;
+            let _chain_pins = self.pin_chain_manifests(&catalog, &chain);
 
             let reverse_prefix = KeyBuilder::build_edge_reverse_key(
                 space_id, src, dst, edge_type, ranking, index_name,
@@ -1568,6 +1684,7 @@ impl IndexDataManagerImpl {
             })?;
             let handle = catalog.acquire();
             let chain = runtime.generation_chain_until(handle.manifest().generation)?;
+            let _chain_pins = self.pin_chain_manifests(&catalog, &chain);
 
             let (prefix, end) = match index_type {
                 IndexType::TagIndex => {
@@ -1653,6 +1770,14 @@ impl IndexDataManagerImpl {
             self.publish_delta_generation(identity, delta, write_ts)?;
         }
         Ok(())
+    }
+}
+
+/// Remove `path` only when it is an empty directory (e.g. a generation
+/// directory left behind after its shard checkpoints were reclaimed).
+fn remove_dir_if_empty(path: &Path) {
+    if path.is_dir() && std::fs::read_dir(path).is_ok_and(|mut it| it.next().is_none()) {
+        let _ = std::fs::remove_dir(path);
     }
 }
 

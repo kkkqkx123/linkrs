@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -11,9 +11,6 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::cursor::PartitionSelector;
 
 const MANIFEST_FORMAT_VERSION: u16 = 3;
-
-const DEFAULT_MAX_RETIRED: usize = 100;
-const DEFAULT_MAX_HOLD_DURATION_SECS: u64 = 3600;
 
 // ── Crash-safe generation rebuild state machine ──
 
@@ -34,10 +31,6 @@ pub enum GenerationState {
     /// The new generation is published and active.
     /// On crash: nothing to do.
     Active,
-    /// The build failed before publication and must be restarted explicitly.
-    Failed,
-    /// The build was cancelled before publication and its files may be reclaimed.
-    Cancelled,
 }
 
 /// Persisted tracking data for one native index generation build.
@@ -55,8 +48,6 @@ pub struct GenerationBuildState {
     pub barrier_lsn: Option<CommitLsn>,
     /// Current state in the Building → CatchingUp → Publishing → Active sequence.
     pub state: GenerationState,
-    /// Durable diagnostic for terminal failure or cancellation.
-    pub terminal_reason: Option<String>,
 }
 
 impl GenerationBuildState {
@@ -71,53 +62,30 @@ impl GenerationBuildState {
             start_lsn,
             barrier_lsn: None,
             state: GenerationState::Building,
-            terminal_reason: None,
         }
     }
 
-    pub fn transition_to_catching_up(&mut self) -> Result<(), String> {
+    pub fn transition_to_catching_up(&mut self) -> StorageResult<()> {
         self.require_state(GenerationState::Building)?;
         self.state = GenerationState::CatchingUp;
         Ok(())
     }
 
-    pub fn transition_to_publishing(&mut self, barrier_lsn: CommitLsn) -> Result<(), String> {
+    pub fn transition_to_publishing(&mut self, barrier_lsn: CommitLsn) -> StorageResult<()> {
         self.require_state(GenerationState::CatchingUp)?;
         if barrier_lsn < self.start_lsn {
-            return Err("Generation barrier LSN precedes the snapshot LSN".to_string());
+            return Err(StorageError::invalid_operation(
+                "Generation barrier LSN precedes the snapshot LSN",
+            ));
         }
         self.barrier_lsn = Some(barrier_lsn);
         self.state = GenerationState::Publishing;
         Ok(())
     }
 
-    pub fn transition_to_active(&mut self) -> Result<(), String> {
+    pub fn transition_to_active(&mut self) -> StorageResult<()> {
         self.require_state(GenerationState::Publishing)?;
         self.state = GenerationState::Active;
-        Ok(())
-    }
-
-    pub fn transition_to_failed(&mut self, reason: impl Into<String>) -> Result<(), String> {
-        if matches!(
-            self.state,
-            GenerationState::Active | GenerationState::Cancelled
-        ) {
-            return Err(format!("Cannot fail a {:?} generation", self.state));
-        }
-        self.state = GenerationState::Failed;
-        self.terminal_reason = Some(reason.into());
-        Ok(())
-    }
-
-    pub fn transition_to_cancelled(&mut self, reason: impl Into<String>) -> Result<(), String> {
-        if matches!(
-            self.state,
-            GenerationState::Publishing | GenerationState::Active
-        ) {
-            return Err(format!("Cannot cancel a {:?} generation", self.state));
-        }
-        self.state = GenerationState::Cancelled;
-        self.terminal_reason = Some(reason.into());
         Ok(())
     }
 
@@ -125,18 +93,14 @@ impl GenerationBuildState {
         self.state == GenerationState::Active
     }
 
-    pub fn can_resume(&self) -> bool {
-        self.state == GenerationState::CatchingUp
-    }
-
-    fn require_state(&self, expected: GenerationState) -> Result<(), String> {
+    fn require_state(&self, expected: GenerationState) -> StorageResult<()> {
         if self.state == expected {
             Ok(())
         } else {
-            Err(format!(
+            Err(StorageError::invalid_operation(format!(
                 "Invalid generation transition from {:?}; expected {:?}",
                 self.state, expected
-            ))
+            )))
         }
     }
 }
@@ -168,27 +132,35 @@ impl IndexShard {
                 .is_none_or(|(query_upper, shard_lower)| query_upper > shard_lower)
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> StorageResult<()> {
         if self
             .lower
             .as_ref()
             .zip(self.upper.as_ref())
             .is_some_and(|(lower, upper)| lower >= upper)
         {
-            return Err(format!(
+            return Err(StorageError::db_error(format!(
                 "Index shard {} has an empty or inverted range",
                 self.shard_id
-            ));
+            )));
         }
         if self.checkpoint_file.as_os_str().is_empty() {
-            return Err(format!(
+            return Err(StorageError::db_error(format!(
                 "Index shard {} has no checkpoint file",
                 self.shard_id
-            ));
+            )));
         }
         Ok(())
     }
 
+    /// Compute the integrity checksum of the referenced checkpoint.
+    ///
+    /// Only single-file checkpoints carry a stable digest: a persistent shard
+    /// checkpoint is a directory whose contents (`forward_chunks/`,
+    /// `reverse_chunks/`, `index.wal`) are rewritten in place while the
+    /// generation is active, so a manifest-stored digest would go stale between
+    /// stores. Directory corruption is instead detected at read time by the
+    /// per-chunk CRC32 embedded in every chunk file (see `serialize.rs`).
     pub fn compute_checksum(&self) -> StorageResult<Option<u32>> {
         if self.checkpoint_file.as_os_str().is_empty() {
             return Ok(None);
@@ -244,7 +216,7 @@ impl IndexManifest {
         index_id: u64,
         generation: IndexGeneration,
         shards: Vec<IndexShard>,
-    ) -> Result<Self, String> {
+    ) -> StorageResult<Self> {
         let manifest = Self {
             format_version: MANIFEST_FORMAT_VERSION,
             space_id,
@@ -256,49 +228,64 @@ impl IndexManifest {
         Ok(manifest)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> StorageResult<()> {
         if self.format_version != MANIFEST_FORMAT_VERSION {
-            return Err(format!(
+            return Err(StorageError::db_error(format!(
                 "Unsupported index manifest version {}",
                 self.format_version
-            ));
+            )));
         }
         if self.shards.is_empty() {
-            return Err("Index manifest must contain at least one shard".to_string());
+            return Err(StorageError::db_error(
+                "Index manifest must contain at least one shard",
+            ));
         }
         if self
             .shards
             .first()
             .is_some_and(|shard| shard.lower.is_some())
         {
-            return Err("The first index shard must have an unbounded lower range".to_string());
+            return Err(StorageError::db_error(
+                "The first index shard must have an unbounded lower range",
+            ));
         }
         if self
             .shards
             .last()
             .is_some_and(|shard| shard.upper.is_some())
         {
-            return Err("The last index shard must have an unbounded upper range".to_string());
+            return Err(StorageError::db_error(
+                "The last index shard must have an unbounded upper range",
+            ));
         }
         for shard in &self.shards {
             shard.validate()?;
         }
         for pair in self.shards.windows(2) {
             if pair[0].shard_id == pair[1].shard_id {
-                return Err(format!("Duplicate index shard id {}", pair[0].shard_id));
+                return Err(StorageError::db_error(format!(
+                    "Duplicate index shard id {}",
+                    pair[0].shard_id
+                )));
             }
             if pair[0].upper != pair[1].lower {
-                return Err(format!(
+                return Err(StorageError::db_error(format!(
                     "Index shards {} and {} are not contiguous",
                     pair[0].shard_id, pair[1].shard_id
-                ));
+                )));
             }
         }
         Ok(())
     }
 
+    /// Route `key` to its owning shard via binary search over the sorted,
+    /// contiguous shard ranges.
     pub fn route_key(&self, key: &[u8]) -> Option<&IndexShard> {
-        self.shards.iter().find(|shard| shard.contains(key))
+        let idx = self
+            .shards
+            .partition_point(|shard| shard.lower.as_deref().is_none_or(|lower| lower <= key));
+        let shard = self.shards.get(idx.wrapping_sub(1))?;
+        shard.contains(key).then_some(shard)
     }
 
     pub fn select_shards(&self, selector: &PartitionSelector) -> Vec<&IndexShard> {
@@ -353,11 +340,7 @@ impl IndexManifest {
     }
 
     pub fn store(&self, path: &Path) -> StorageResult<()> {
-        self.validate().map_err(StorageError::db_error)?;
-        let parent = path.parent().ok_or_else(|| {
-            StorageError::db_error("Index manifest path has no parent".to_string())
-        })?;
-        std::fs::create_dir_all(parent)?;
+        self.validate()?;
         let with_checksums = self.with_checksums()?;
         let bytes = postcard::to_allocvec(&with_checksums).map_err(|error| {
             StorageError::db_error(format!("Serialize index manifest: {error}"))
@@ -368,16 +351,7 @@ impl IndexManifest {
             crate::core::types::StorageVersion::CURRENT as u32,
             &bytes,
         );
-        let temporary = path.with_extension("tmp");
-        {
-            use std::io::Write;
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&versioned)?;
-            file.sync_all()?;
-        }
-        std::fs::rename(&temporary, path)?;
-        std::fs::File::open(parent)?.sync_all()?;
-        Ok(())
+        crate::storage::persistence::write_file_atomic(path, &versioned)
     }
 
     pub fn load(path: &Path) -> StorageResult<Self> {
@@ -390,7 +364,7 @@ impl IndexManifest {
         )?;
         let manifest: Self = postcard::from_bytes(&payload)
             .map_err(|error| StorageError::db_error(format!("Read index manifest: {error}")))?;
-        manifest.validate().map_err(StorageError::db_error)?;
+        manifest.validate()?;
         for shard in &manifest.shards {
             shard.verify_checksum()?;
         }
@@ -407,7 +381,19 @@ impl IndexManifest {
     }
 }
 
-/// A cursor-owned pin that prevents reclamation of its physical generation.
+/// A cursor-owned pin that prevents reclamation of a generation's physical files.
+///
+/// # Arc-count invariant
+///
+/// The strong count of the wrapped `Arc<IndexManifest>` is the authoritative
+/// reader reference count: exactly one reference is held by
+/// [`ManifestCatalog`] (the `active` slot or a `retired` entry) and every
+/// additional reference is owned by a live handle produced via
+/// [`ManifestCatalog::acquire`] or [`ManifestCatalog::acquire_generation`].
+/// A retired generation is therefore reclaimable exactly when its count is 1
+/// (only the catalog's own entry). Code outside this module must never clone
+/// a manifest `Arc` directly — always go through the catalog so reclamation
+/// stays sound.
 #[derive(Debug, Clone)]
 pub struct ManifestHandle(Arc<IndexManifest>);
 
@@ -424,14 +410,20 @@ struct RetiredManifest {
 }
 
 /// Publishes immutable manifests and fences reclamation with reader handles.
+///
+/// Reclamation contract: a retired manifest may be removed from the catalog
+/// only when no reader handle references it (see [`ManifestHandle`]). The
+/// physical checkpoint files of a generation additionally require that the
+/// generation is no longer installed in the runtime — the caller coordinates
+/// both conditions (see `IndexDataManagerImpl::reclaim_retired_generations`).
+/// The catalog never drops a reader-pinned entry, so a live handle can always
+/// be re-acquired for any generation still present in the retired list.
 #[derive(Debug)]
 pub struct ManifestCatalog {
     active: RwLock<Arc<IndexManifest>>,
     retired: Mutex<Vec<RetiredManifest>>,
     published: AtomicU64,
     reclaimed_files: AtomicU64,
-    max_retired: usize,
-    max_hold_duration: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,30 +437,17 @@ pub struct ManifestCatalogStats {
 }
 
 impl ManifestCatalog {
-    pub fn new(manifest: IndexManifest) -> Result<Self, String> {
-        Self::with_options(
-            manifest,
-            DEFAULT_MAX_RETIRED,
-            Duration::from_secs(DEFAULT_MAX_HOLD_DURATION_SECS),
-        )
-    }
-
-    pub fn with_options(
-        manifest: IndexManifest,
-        max_retired: usize,
-        max_hold_duration: Duration,
-    ) -> Result<Self, String> {
+    pub fn new(manifest: IndexManifest) -> StorageResult<Self> {
         manifest.validate()?;
         Ok(Self {
             active: RwLock::new(Arc::new(manifest)),
             retired: Mutex::new(Vec::new()),
             published: AtomicU64::new(0),
             reclaimed_files: AtomicU64::new(0),
-            max_retired,
-            max_hold_duration,
         })
     }
 
+    /// Acquire a pin on the active manifest.
     pub fn acquire(&self) -> ManifestHandle {
         let guard = self.active.read();
         #[cfg(debug_assertions)]
@@ -479,14 +458,35 @@ impl ManifestCatalog {
         ManifestHandle(Arc::clone(&guard))
     }
 
-    pub fn publish(&self, manifest: IndexManifest) -> Result<ManifestHandle, String> {
+    /// Acquire a pin on the manifest of a specific generation, whether it is
+    /// currently active or already retired. This lets cursors fence the whole
+    /// generation chain (parents included) from reclamation.
+    pub fn acquire_generation(&self, generation: IndexGeneration) -> Option<ManifestHandle> {
+        {
+            let active = self.active.read();
+            if active.generation == generation {
+                return Some(ManifestHandle(Arc::clone(&active)));
+            }
+        }
+        let retired = self.retired.lock();
+        retired
+            .iter()
+            .find(|entry| entry.manifest.generation == generation)
+            .map(|entry| ManifestHandle(Arc::clone(&entry.manifest)))
+    }
+
+    pub fn publish(&self, manifest: IndexManifest) -> StorageResult<ManifestHandle> {
         manifest.validate()?;
         let mut active = self.active.write();
         if manifest.index_id != active.index_id {
-            return Err("Cannot publish a manifest for another index".to_string());
+            return Err(StorageError::invalid_operation(
+                "Cannot publish a manifest for another index",
+            ));
         }
         if manifest.generation <= active.generation {
-            return Err("Index generation must increase".to_string());
+            return Err(StorageError::invalid_operation(
+                "Index generation must increase",
+            ));
         }
 
         let next = Arc::new(manifest);
@@ -500,25 +500,12 @@ impl ManifestCatalog {
             );
         }
 
-        let mut retired = self.retired.lock();
-        let now = Instant::now();
-        if retired.len() >= self.max_retired {
-            retired.retain(|e| {
-                if now.duration_since(e.retired_at) > self.max_hold_duration {
-                    log::warn!(
-                        "Force-reclaiming retired manifest (gen {}) after {:?}",
-                        e.manifest.generation,
-                        now.duration_since(e.retired_at)
-                    );
-                    self.reclaimed_files
-                        .fetch_add(e.manifest.shards.len() as u64, Ordering::Relaxed);
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        retired.push(RetiredManifest {
+        // Retire the previous manifest without dropping it: reader-pinned
+        // entries must stay tracked so their files remain reclaimable later
+        // and so `acquire_generation` can re-pin them. Reclamation is driven
+        // by the caller (see `IndexDataManagerImpl::reclaim_retired_generations`),
+        // not by a bounded sweep here.
+        self.retired.lock().push(RetiredManifest {
             manifest: previous,
             retired_at: Instant::now(),
         });
@@ -526,8 +513,8 @@ impl ManifestCatalog {
         Ok(ManifestHandle(next))
     }
 
-    /// Returns files from generations that have no cursor-owned handles.
-    /// The checkpoint owner performs deletion after its own durable fence.
+    /// Returns files from retired generations that no longer have any reader
+    /// handle. The caller is responsible for deleting the physical files.
     pub fn take_reclaimable_files(&self) -> Vec<PathBuf> {
         self.take_reclaimable_manifests()
             .into_iter()
@@ -540,30 +527,14 @@ impl ManifestCatalog {
             .collect()
     }
 
-    /// Returns fully retired manifests after their last cursor handle is gone.
-    /// Also force-reclaims manifests that exceeded the configured hold duration.
+    /// Remove and return every retired manifest whose last reader handle is
+    /// gone (Arc count of 1). Entries still referenced by a live handle are
+    /// kept so their files remain trackable.
     pub fn take_reclaimable_manifests(&self) -> Vec<IndexManifest> {
         let mut retired = self.retired.lock();
-        let now = Instant::now();
         let mut manifests = Vec::new();
-        #[cfg(debug_assertions)]
-        {
-            for entry in retired.iter() {
-                let count = Arc::strong_count(&entry.manifest);
-                if count > 1 {
-                    log::trace!(
-                        "ManifestCatalog: retired gen {} has {} readers (age {:?})",
-                        entry.manifest.generation,
-                        count - 1,
-                        now.duration_since(entry.retired_at),
-                    );
-                }
-            }
-        }
         retired.retain(|entry| {
-            if Arc::strong_count(&entry.manifest) == 1
-                || now.duration_since(entry.retired_at) > self.max_hold_duration
-            {
+            if Arc::strong_count(&entry.manifest) == 1 {
                 manifests.push((*entry.manifest).clone());
                 false
             } else {
@@ -573,6 +544,31 @@ impl ManifestCatalog {
         let total = manifests.iter().map(|m| m.shards.len() as u64).sum();
         self.reclaimed_files.fetch_add(total, Ordering::Relaxed);
         manifests
+    }
+
+    /// Peek (without removing) the retired manifests that have no reader
+    /// handle and satisfy `matches`. The caller decides whether the physical
+    /// files can actually be deleted (e.g. the generation is no longer
+    /// installed in the runtime) and then removes them with
+    /// [`remove_retired`](Self::remove_retired).
+    pub fn retired_reclaimable<F>(&self, matches: F) -> Vec<IndexManifest>
+    where
+        F: Fn(&IndexManifest) -> bool,
+    {
+        let retired = self.retired.lock();
+        retired
+            .iter()
+            .filter(|entry| Arc::strong_count(&entry.manifest) == 1 && matches(&entry.manifest))
+            .map(|entry| (*entry.manifest).clone())
+            .collect()
+    }
+
+    /// Forget a retired manifest after its physical files have been reclaimed.
+    pub fn remove_retired(&self, generation: IndexGeneration) -> bool {
+        let mut retired = self.retired.lock();
+        let before = retired.len();
+        retired.retain(|entry| entry.manifest.generation != generation);
+        retired.len() != before
     }
 
     pub fn stats(&self) -> ManifestCatalogStats {
@@ -598,7 +594,6 @@ impl ManifestCatalog {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::time::Duration;
 
     use super::{IndexManifest, IndexShard, ManifestCatalog};
     use crate::core::types::IndexGeneration;
@@ -659,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn reader_handle_fences_retired_generation_reclamation() {
+    fn reader_pin_keeps_retired_manifest_tracked_until_last_handle_drops() {
         let catalog = ManifestCatalog::new(manifest(1, vec![shard(0, None, None)]))
             .expect("catalog should be valid");
         let old_reader = catalog.acquire();
@@ -670,8 +665,16 @@ mod tests {
             ))
             .expect("new manifest should publish");
 
+        // The pinned generation 1 must stay in the retired list and be
+        // re-acquirable even though it has no dedicated reader handle.
         assert!(catalog.take_reclaimable_files().is_empty());
         assert_eq!(catalog.stats().retired_generations, 1);
+        let pin = catalog
+            .acquire_generation(IndexGeneration::new(1))
+            .expect("retired generation should be re-acquirable");
+        drop(pin);
+        assert!(catalog.take_reclaimable_files().is_empty());
+
         drop(old_reader);
         assert_eq!(
             catalog.take_reclaimable_files(),
@@ -682,13 +685,9 @@ mod tests {
     }
 
     #[test]
-    fn force_reclaim_expired_retired_manifests() {
-        let catalog = ManifestCatalog::with_options(
-            manifest(1, vec![shard(0, None, None)]),
-            100,
-            Duration::from_millis(50),
-        )
-        .expect("catalog should be valid");
+    fn retired_reclaimable_filters_by_caller_predicate() {
+        let catalog = ManifestCatalog::new(manifest(1, vec![shard(0, None, None)]))
+            .expect("catalog should be valid");
         let old_reader = catalog.acquire();
         catalog
             .publish(manifest(
@@ -696,45 +695,47 @@ mod tests {
                 vec![shard(0, None, Some(b"m")), shard(1, Some(b"m"), None)],
             ))
             .expect("new manifest should publish");
+        catalog
+            .publish(manifest(3, vec![shard(0, None, None)]))
+            .expect("new manifest should publish");
 
-        assert!(catalog.take_reclaimable_files().is_empty());
+        // Generation 1 is still reader-pinned; only generation 2 matches.
+        let candidates = catalog.retired_reclaimable(|m| m.generation.get() == 2);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].generation.get(), 2);
+
+        // Peeking must not remove anything.
+        assert_eq!(catalog.stats().retired_generations, 2);
+
+        assert!(catalog.remove_retired(IndexGeneration::new(2)));
+        assert!(!catalog.remove_retired(IndexGeneration::new(99)));
         assert_eq!(catalog.stats().retired_generations, 1);
 
-        std::thread::sleep(Duration::from_millis(100));
+        drop(old_reader);
+        catalog.take_reclaimable_manifests();
+        assert_eq!(catalog.stats().retired_generations, 0);
+    }
 
+    #[test]
+    fn published_handle_still_reads_old_manifest_until_released() {
+        let catalog = ManifestCatalog::new(manifest(1, vec![shard(0, None, None)]))
+            .expect("catalog should be valid");
+        let first = catalog.acquire();
+        let second = catalog
+            .publish(manifest(2, vec![shard(0, None, None)]))
+            .expect("new manifest should publish");
+
+        // Publishing returns a handle to the new manifest; the old handle
+        // still references generation 1 and fences it from reclamation.
+        assert_eq!(second.manifest().generation.get(), 2);
+        assert_eq!(first.manifest().generation.get(), 1);
+        assert!(catalog.take_reclaimable_files().is_empty());
+
+        drop(first);
         assert_eq!(
             catalog.take_reclaimable_files(),
             vec![PathBuf::from("0.index")]
         );
-        assert_eq!(catalog.stats().retired_generations, 0);
-        assert_eq!(catalog.stats().reclaimed_files, 1);
-
-        drop(old_reader);
-    }
-
-    #[test]
-    fn publish_expired_eviction_allows_overage_then_reclaims() {
-        let catalog = ManifestCatalog::with_options(
-            manifest(1, vec![shard(0, None, None)]),
-            1,
-            Duration::from_millis(50),
-        )
-        .expect("catalog should be valid");
-        let old_reader = catalog.acquire();
-        catalog
-            .publish(manifest(2, vec![shard(0, None, None)]))
-            .expect("second manifest should publish");
-
-        std::thread::sleep(Duration::from_millis(100));
-
-        catalog
-            .publish(manifest(3, vec![shard(0, None, None)]))
-            .expect("third manifest should publish");
-
-        assert_eq!(catalog.stats().retired_generations, 1);
-        assert_eq!(catalog.stats().reclaimed_files, 1);
-
-        drop(old_reader);
     }
 
     #[test]

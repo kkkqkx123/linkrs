@@ -54,12 +54,42 @@ pub struct PreparedRequest {
     pub statement_class: StatementClass,
     pub transaction_scope: TransactionScope,
     pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    /// Whether `operation_storage` was auto-bound during `prepare_request`
+    /// (i.e. not provided by the caller). The pipeline owns its lifecycle and
+    /// must call `finalize_operation` after execution; otherwise one MVCC
+    /// snapshot per statement is leaked, degrading loads to O(n²).
+    pub owns_operation_storage: bool,
     /// Fully resolved bound IR, produced by the Binder.
     pub bound_statement: Option<BoundStatement>,
     /// Cloned AST statement for classification and diagnostic matching.
     pub stmt: Stmt,
     /// The parsed AST, retained for the legacy `transform()` planning path.
     pub ast: Arc<crate::query::parser::ast::stmt::Ast>,
+}
+
+impl PreparedRequest {
+    /// Finalize the auto-bound operation storage after execution.
+    ///
+    /// Unregisters the MVCC snapshots registered by `with_auto_commit_context()`
+    /// during binding and commits/releases the write-timestamp lease. Skipping
+    /// this leaks one `active_snapshots` entry per statement; every later
+    /// `register_snapshot` then rescans the growing map to recompute
+    /// `min_active_snapshot_ts`, degrading bulk loads to O(n²).
+    ///
+    /// No-op unless this request owns its operation storage (i.e. it was
+    /// auto-bound by `prepare_request` rather than supplied by the caller).
+    pub(crate) fn finalize_owned_operation(&self, committed: bool) -> DBResult<()> {
+        if !self.owns_operation_storage {
+            return Ok(());
+        }
+        if let Some(storage) = &self.operation_storage {
+            storage
+                .write()
+                .finalize_operation(committed)
+                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        }
+        Ok(())
+    }
 }
 
 // ── Statement classification ───────────────────────────────────────────────
@@ -191,22 +221,30 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let auto_commit_needs_binding =
             needs_write && rctx.operation_storage.is_none() && rctx.auto_commit;
 
-        let (operation_storage, rctx) = if auto_commit_needs_binding {
-            let storage = self.bind_auto_commit_storage()?;
-            let mut updated = (*rctx).clone();
-            let op_ctx = storage.read().operation_context();
-            updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
-            updated.operation_context = op_ctx.as_deref().cloned();
-            updated.operation_storage = Some(storage.clone());
-            (Some(storage), Arc::new(updated))
-        } else {
-            (rctx.operation_storage.clone(), rctx)
-        };
+        let (operation_storage, rctx, owns_operation_storage) =
+            if auto_commit_needs_binding {
+                let storage = self.bind_auto_commit_storage()?;
+                let mut updated = (*rctx).clone();
+                let op_ctx = storage.read().operation_context();
+                updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
+                updated.operation_context = op_ctx.as_deref().cloned();
+                updated.operation_storage = Some(storage.clone());
+                (Some(storage), Arc::new(updated), true)
+            } else {
+                (rctx.operation_storage.clone(), rctx, false)
+            };
 
         let query_context = self.query_context_for_request(rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
         let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
-        Self::finalize_prepare(query_text, query_context, ast, operation_storage, bound)
+        Self::finalize_prepare(
+            query_text,
+            query_context,
+            ast,
+            operation_storage,
+            owns_operation_storage,
+            bound,
+        )
     }
 
     /// Parse and bind, with auto-commit storage for DML.
@@ -232,6 +270,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         ast: Arc<crate::query::parser::ast::stmt::Ast>,
         operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        owns_operation_storage: bool,
         bound_statement: Option<BoundStatement>,
     ) -> DBResult<PreparedRequest> {
         let stmt = ast.stmt().clone();
@@ -244,6 +283,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             statement_class,
             transaction_scope,
             operation_storage,
+            owns_operation_storage,
             bound_statement,
             stmt,
             ast,
@@ -252,6 +292,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     /// Compile (or get cached) and execute a prepared request with materialize sink.
     pub(crate) fn execute_prepared(
+        &mut self,
+        request: &PreparedRequest,
+        transaction_id: Option<TransactionId>,
+    ) -> DBResult<ExecutionResult> {
+        match self.execute_prepared_inner(request, transaction_id) {
+            Ok(result) => {
+                request.finalize_owned_operation(true)?;
+                Ok(result)
+            }
+            Err(error) => {
+                let _ = request.finalize_owned_operation(false);
+                Err(error)
+            }
+        }
+    }
+
+    fn execute_prepared_inner(
         &mut self,
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
@@ -297,6 +354,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         request: &PreparedRequest,
     ) -> DBResult<ExecutionResult> {
+        match self.execute_prepared_materialized_inner(request) {
+            Ok(result) => {
+                request.finalize_owned_operation(true)?;
+                Ok(result)
+            }
+            Err(error) => {
+                let _ = request.finalize_owned_operation(false);
+                Err(error)
+            }
+        }
+    }
+
+    fn execute_prepared_materialized_inner(
+        &mut self,
+        request: &PreparedRequest,
+    ) -> DBResult<ExecutionResult> {
         if request.statement_class == StatementClass::Diagnostic {
             return self.execute_diagnostic(request);
         }
@@ -336,6 +409,44 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     }
 
     pub(crate) fn execute_prepared_streaming(
+        &mut self,
+        request: &PreparedRequest,
+        transaction_id: Option<TransactionId>,
+    ) -> DBResult<StreamingQueryResult> {
+        match self.execute_prepared_streaming_inner(request, transaction_id) {
+            Ok(stream) => {
+                if request.owns_operation_storage {
+                    if let Some(storage) = request.operation_storage.clone() {
+                        // Finalize when the stream ends: commit after full
+                        // consumption, abort on error, cancellation, or drop.
+                        let commit_storage = storage.clone();
+                        let abort_storage = storage;
+                        stream.set_transaction_finalizer_with_result(
+                            Box::new(move || {
+                                commit_storage
+                                    .write()
+                                    .finalize_operation(true)
+                                    .map_err(|error| error.to_string())
+                            }),
+                            Box::new(move || {
+                                abort_storage
+                                    .write()
+                                    .finalize_operation(false)
+                                    .map_err(|error| error.to_string())
+                            }),
+                        );
+                    }
+                }
+                Ok(stream)
+            }
+            Err(error) => {
+                let _ = request.finalize_owned_operation(false);
+                Err(error)
+            }
+        }
+    }
+
+    fn execute_prepared_streaming_inner(
         &mut self,
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
@@ -497,20 +608,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .bind_auto_commit_context()
             .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
         Ok(Arc::new(RwLock::new(bound)))
-    }
-
-    pub(crate) fn finalize_operation_storage(
-        &self,
-        storage: Option<&Arc<RwLock<dyn QueryStorage>>>,
-        committed: bool,
-    ) -> DBResult<()> {
-        if let Some(storage) = storage {
-            storage
-                .write()
-                .finalize_operation(committed)
-                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
-        }
-        Ok(())
     }
 
     // ── Cache helpers ──────────────────────────────────────────────────────

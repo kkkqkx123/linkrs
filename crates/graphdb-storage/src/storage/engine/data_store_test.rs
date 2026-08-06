@@ -5,6 +5,70 @@ mod tests {
     use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::storage::engine::data_store::{EdgeTableKey, GraphDataStore};
     use crate::storage::vertex::{ShardedVertexTable, VertexSchema};
+    use crate::core::{StorageError, StorageResult};
+
+    /// Test-only extension trait for invariant verification.
+    trait VerifyInvariants {
+        fn verify_invariants(&self) -> StorageResult<()>;
+    }
+
+    impl VerifyInvariants for GraphDataStore {
+        fn verify_invariants(&self) -> StorageResult<()> {
+            let vertex_names = self.read_vertex_label_names();
+            let edge_names = self.read_edge_label_names();
+            let vertex_counter = self.read_vertex_counter();
+            let edge_counter = self.read_edge_counter();
+            let vertex_tables = self.read_vertex_tables();
+            let edge_tables = self.read_edge_tables();
+            let edge_index = self.test_read_edge_label_index();
+
+            for (name, label) in &*vertex_names {
+                if !vertex_tables.contains_key(label) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "vertex label '{}' points to missing table {}",
+                        name, label
+                    )));
+                }
+            }
+            for (name, label) in &*edge_names {
+                if !edge_index.contains_key(label) {
+                    return Err(StorageError::invalid_operation(format!(
+                        "edge label '{}' has no indexed partitions",
+                        name
+                    )));
+                }
+            }
+            for (key, table_arc) in &*edge_tables {
+                if !edge_index
+                    .get(&key.edge_label)
+                    .is_some_and(|keys| keys.contains(key))
+                {
+                    return Err(StorageError::invalid_operation(format!(
+                        "edge table {:?} is missing from reverse index",
+                        key
+                    )));
+                }
+                let table = table_arc.read();
+                if table.schema().label_id != key.edge_label {
+                    return Err(StorageError::invalid_operation(format!(
+                        "edge table {:?} has mismatched schema label",
+                        key
+                    )));
+                }
+            }
+            for table in vertex_tables.values() {
+                table.verify_invariants()?;
+            }
+            if vertex_tables.keys().any(|label| *label >= *vertex_counter)
+                || edge_index.keys().any(|label| *label >= *edge_counter)
+            {
+                return Err(StorageError::invalid_operation(
+                    "label counter does not cover registered labels".to_string(),
+                ));
+            }
+            Ok(())
+        }
+    }
 
     fn vertex_table(label: u32, name: &str) -> ShardedVertexTable {
         let schema = VertexSchema {

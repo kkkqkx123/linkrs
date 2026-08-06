@@ -299,7 +299,7 @@ impl GraphDataStore {
     // Catalog lock order for operations that touch multiple registries:
     // label names -> label counters -> vertex tables -> edge tables -> edge label index.
     // A caller must never retain one of these guards while requesting an earlier guard.
-    fn read_vertex_tables(
+    pub(crate) fn read_vertex_tables(
         &self,
     ) -> CatalogReadGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         let started = Instant::now();
@@ -321,7 +321,8 @@ impl GraphDataStore {
         self.read_vertex_tables()
     }
 
-    fn read_vertex_label_names(&self) -> CatalogReadGuard<'_, HashMap<String, LabelId>> {
+    #[cfg(test)]
+    pub(crate) fn read_vertex_label_names(&self) -> CatalogReadGuard<'_, HashMap<String, LabelId>> {
         let started = Instant::now();
         let guard = self.vertex_label_names.read();
         self.lock_metrics
@@ -334,7 +335,8 @@ impl GraphDataStore {
         }
     }
 
-    fn read_edge_label_names(&self) -> CatalogReadGuard<'_, HashMap<String, LabelId>> {
+    #[cfg(test)]
+    pub(crate) fn read_edge_label_names(&self) -> CatalogReadGuard<'_, HashMap<String, LabelId>> {
         let started = Instant::now();
         let guard = self.edge_label_names.read();
         self.lock_metrics
@@ -347,7 +349,8 @@ impl GraphDataStore {
         }
     }
 
-    fn read_vertex_counter(&self) -> CatalogReadGuard<'_, LabelId> {
+    #[cfg(test)]
+    pub(crate) fn read_vertex_counter(&self) -> CatalogReadGuard<'_, LabelId> {
         let started = Instant::now();
         let guard = self.vertex_label_counter.read();
         self.lock_metrics
@@ -360,7 +363,8 @@ impl GraphDataStore {
         }
     }
 
-    fn read_edge_counter(&self) -> CatalogReadGuard<'_, LabelId> {
+    #[cfg(test)]
+    pub(crate) fn read_edge_counter(&self) -> CatalogReadGuard<'_, LabelId> {
         let started = Instant::now();
         let guard = self.edge_label_counter.read();
         self.lock_metrics
@@ -427,7 +431,7 @@ impl GraphDataStore {
         }
     }
 
-    fn read_edge_tables(
+    pub(crate) fn read_edge_tables(
         &self,
     ) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         let started = Instant::now();
@@ -516,6 +520,11 @@ impl GraphDataStore {
             acquired_at: Instant::now(),
             operation: CatalogLockOperation::EdgeLabelIndex,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_read_edge_label_index(&self) -> CatalogReadGuard<'_, HashMap<LabelId, Vec<EdgeTableKey>>> {
+        self.read_edge_label_index()
     }
 
     pub(crate) fn lock_metrics(&self) -> CatalogLockMetricsSnapshot {
@@ -913,62 +922,6 @@ impl GraphDataStore {
         };
         let mut guard = table_arc.write();
         operation(&mut guard)
-    }
-
-    pub(crate) fn verify_invariants(&self) -> StorageResult<()> {
-        let vertex_names = self.read_vertex_label_names();
-        let edge_names = self.read_edge_label_names();
-        let vertex_counter = self.read_vertex_counter();
-        let edge_counter = self.read_edge_counter();
-        let vertex_tables = self.read_vertex_tables();
-        let edge_tables = self.read_edge_tables();
-        let edge_index = self.read_edge_label_index();
-
-        for (name, label) in &*vertex_names {
-            if !vertex_tables.contains_key(label) {
-                return Err(StorageError::invalid_operation(format!(
-                    "vertex label '{}' points to missing table {}",
-                    name, label
-                )));
-            }
-        }
-        for (name, label) in &*edge_names {
-            if !edge_index.contains_key(label) {
-                return Err(StorageError::invalid_operation(format!(
-                    "edge label '{}' has no indexed partitions",
-                    name
-                )));
-            }
-        }
-        for (key, table_arc) in &*edge_tables {
-            if !edge_index
-                .get(&key.edge_label)
-                .is_some_and(|keys| keys.contains(key))
-            {
-                return Err(StorageError::invalid_operation(format!(
-                    "edge table {:?} is missing from reverse index",
-                    key
-                )));
-            }
-            let table = table_arc.read();
-            if table.schema().label_id != key.edge_label {
-                return Err(StorageError::invalid_operation(format!(
-                    "edge table {:?} has mismatched schema label",
-                    key
-                )));
-            }
-        }
-        for table in vertex_tables.values() {
-            table.verify_invariants()?;
-        }
-        if vertex_tables.keys().any(|label| *label >= *vertex_counter)
-            || edge_index.keys().any(|label| *label >= *edge_counter)
-        {
-            return Err(StorageError::invalid_operation(
-                "label counter does not cover registered labels".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 

@@ -94,14 +94,6 @@ impl VertexTimestamp {
         None
     }
 
-    pub fn valid_count(&self, ts: Timestamp) -> usize {
-        self.start_ts
-            .iter()
-            .enumerate()
-            .filter(|(i, &start)| start != INVALID_TIMESTAMP && start <= ts && self.end_ts[*i] > ts)
-            .count()
-    }
-
     pub fn size(&self) -> usize {
         self.start_ts.len()
     }
@@ -222,19 +214,6 @@ mod tests {
         assert!(vts.get_end_ts(0).is_none());
         assert!(vts.is_valid(0, 150));
         assert!(vts.is_valid(0, 250));
-    }
-
-    #[test]
-    fn test_valid_count() {
-        let mut vts = VertexTimestamp::new();
-
-        vts.insert(0, 100);
-        vts.insert(1, 101);
-        vts.insert(2, 102);
-        vts.remove(1, 200);
-
-        assert_eq!(vts.valid_count(150), 3);
-        assert_eq!(vts.valid_count(250), 2);
     }
 
     // ==================== P0 Priority Tests ====================

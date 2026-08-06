@@ -31,26 +31,8 @@ impl IndexGcOps for IndexDataManagerImpl {
     }
 
     fn tombstone_count(&self) -> usize {
-        let mut count = 0;
-        for runtime in self.runtimes.read().values() {
-            for generation in runtime.generations() {
-                for shard in generation.shards() {
-                    let fwd = shard.read_forward();
-                    for (_, entry) in fwd.snapshot() {
-                        if entry.deleted_ts.is_some() {
-                            count += 1;
-                        }
-                    }
-                    let rev = shard.read_reverse();
-                    for (_, entry) in rev.snapshot() {
-                        if entry.deleted_ts.is_some() {
-                            count += 1;
-                        }
-                    }
-                }
-            }
-        }
-        count
+        self.resync_tombstone_count();
+        self.cached_tombstone_count() as usize
     }
 }
 

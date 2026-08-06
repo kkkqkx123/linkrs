@@ -89,7 +89,7 @@ pub struct VertexIndexCursor {
     invisible_skipped: u64,
     malformed_skipped: u64,
     stale_skipped: u64,
-    manifest_handle: Option<ManifestHandle>,
+    manifest_handles: Vec<ManifestHandle>,
     stale_checker: Option<StaleChecker>,
     partition_id_range: Option<std::ops::Range<i64>>,
 }
@@ -107,7 +107,7 @@ impl std::fmt::Debug for VertexIndexCursor {
             .field("invisible_skipped", &self.invisible_skipped)
             .field("malformed_skipped", &self.malformed_skipped)
             .field("stale_skipped", &self.stale_skipped)
-            .field("manifest_handle", &self.manifest_handle)
+            .field("manifest_handles_count", &self.manifest_handles.len())
             .field("stale_checker", &self.stale_checker.as_ref().map(|_| "…"))
             .finish()
     }
@@ -118,7 +118,7 @@ impl VertexIndexCursor {
         shard_iterators: Vec<ChainForwardIterator>,
         plan: &IndexScanPlan,
         stale_checker: Option<StaleChecker>,
-        manifest_handle: Option<ManifestHandle>,
+        manifest_handles: Vec<ManifestHandle>,
     ) -> Self {
         Self {
             shard_iterators,
@@ -132,7 +132,7 @@ impl VertexIndexCursor {
             invisible_skipped: 0,
             malformed_skipped: 0,
             stale_skipped: 0,
-            manifest_handle,
+            manifest_handles,
             stale_checker,
             partition_id_range: plan.partition_id_range.clone(),
         }
