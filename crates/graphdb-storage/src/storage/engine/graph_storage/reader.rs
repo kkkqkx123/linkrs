@@ -698,7 +698,6 @@ pub(crate) fn neighbor_dst_ids_batch(
     record_schema_read(ctx, space);
     let edge_type_infos = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_read_timestamp();
-
     // Resolve the edge-type schema once for the whole batch.
     let mut resolved = Vec::new();
     for edge_info in &edge_type_infos {

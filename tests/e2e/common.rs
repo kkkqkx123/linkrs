@@ -11,6 +11,9 @@ use graphdb::core::StatsManager;
 use graphdb::core::Value;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps};
 use graphdb::sync::SyncManager;
+use graphdb::transaction::{
+    TransactionId, TransactionManager, TransactionManagerConfig, TransactionOptions,
+};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -34,8 +37,10 @@ pub struct TestDb {
     stats_manager: Arc<StatsManager>,
     schema_manager: Arc<SchemaManager>,
     query_api: QueryApi<GraphStorage>,
+    transaction_manager: Arc<TransactionManager>,
     current_space_id: Option<u64>,
     current_space_name: Option<String>,
+    current_transaction: Option<TransactionId>,
     /// Whether a vector coordinator is available (Qdrant is running and healthy).
     /// Vector tests check this to skip gracefully when Qdrant is not available.
     pub has_vector_coordinator: bool,
@@ -138,6 +143,11 @@ impl TestDb {
             schema_manager.clone(),
             sync_manager,
         );
+        let transaction_manager = Arc::new(TransactionManager::with_shared_version_manager(
+            TransactionManagerConfig::default(),
+            stats_manager.clone(),
+            storage.read().version_manager(),
+        ));
 
         Self {
             temp_dir: Some(temp_dir),
@@ -145,8 +155,10 @@ impl TestDb {
             stats_manager,
             schema_manager,
             query_api,
+            transaction_manager,
             current_space_id: None,
             current_space_name: None,
+            current_transaction: None,
             has_vector_coordinator,
         }
     }
@@ -179,6 +191,11 @@ impl TestDb {
             schema_manager.clone(),
             sync_manager,
         );
+        let transaction_manager = Arc::new(TransactionManager::with_shared_version_manager(
+            TransactionManagerConfig::default(),
+            stats_manager.clone(),
+            storage.read().version_manager(),
+        ));
 
         Self {
             temp_dir: None,
@@ -186,8 +203,10 @@ impl TestDb {
             stats_manager,
             schema_manager,
             query_api,
+            transaction_manager,
             current_space_id: None,
             current_space_name: None,
+            current_transaction: None,
             has_vector_coordinator,
         }
     }
@@ -209,14 +228,92 @@ impl TestDb {
 
     /// Execute a query using a persistent session context
     pub fn execute_query(&mut self, query: &str) -> CoreResult<QueryResult> {
-        let ctx = graphdb::api::core::types::QueryRequest {
-            space_id: self.current_space_id,
-            space_name: self.current_space_name.clone(),
-            auto_commit: true,
-            transaction_id: None,
-            parameters: None,
+        let trimmed = query.trim().to_uppercase();
+        if trimmed.starts_with("BEGIN") || trimmed.starts_with("START TRANSACTION") {
+            if self.current_transaction.is_some() {
+                return Err(graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "A transaction is already active".to_string(),
+                ));
+            }
+            let txn_id = self
+                .transaction_manager
+                .begin_transaction(TransactionOptions::default())
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            self.current_transaction = Some(txn_id);
+            return Ok(empty_query_result());
+        }
+        if trimmed.starts_with("COMMIT") {
+            let txn_id = self.current_transaction.ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "No active transaction to commit".to_string(),
+                )
+            })?;
+            self.transaction_manager
+                .commit_transaction(txn_id)
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            self.current_transaction = None;
+            return Ok(empty_query_result());
+        }
+        if trimmed.starts_with("ROLLBACK") {
+            let txn_id = self.current_transaction.ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "No active transaction to roll back".to_string(),
+                )
+            })?;
+            self.transaction_manager
+                .abort_transaction(txn_id)
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            self.current_transaction = None;
+            return Ok(empty_query_result());
+        }
+
+        // Statements inside an explicit transaction are executed against a
+        // transaction-bound storage context (mirroring the embedded Session
+        // flow) so writes stay isolated until COMMIT / ROLLBACK.
+        let result = if let Some(txn_id) = self.current_transaction {
+            let (ctx, statement_start) = self
+                .transaction_manager
+                .begin_statement(txn_id)
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            let execution = self
+                .transaction_manager
+                .create_execution(txn_id, false)
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            let txn_ctx = graphdb::api::core::types::QueryRequest {
+                space_id: self.current_space_id,
+                space_name: self.current_space_name.clone(),
+                auto_commit: false,
+                transaction_id: Some(txn_id),
+                parameters: None,
+            };
+            let result = self.query_api.execute_with_execution(query, txn_ctx, &execution);
+            self.transaction_manager
+                .finish_statement(&ctx, statement_start)
+                .map_err(|e| {
+                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
+                })?;
+            result
+        } else {
+            let ctx = graphdb::api::core::types::QueryRequest {
+                space_id: self.current_space_id,
+                space_name: self.current_space_name.clone(),
+                auto_commit: true,
+                transaction_id: None,
+                parameters: None,
+            };
+            self.query_api.execute(query, ctx)
         };
-        let result = self.query_api.execute(query, ctx)?;
+        let result = result?;
 
         // Track space switching from USE statements
         if result.columns.iter().any(|c| c == "space_name") {
@@ -231,6 +328,14 @@ impl TestDb {
         }
 
         Ok(result)
+    }
+}
+
+fn empty_query_result() -> QueryResult {
+    QueryResult {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        metadata: Default::default(),
     }
 }
 

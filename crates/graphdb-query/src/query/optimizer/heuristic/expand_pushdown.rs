@@ -120,8 +120,14 @@ fn collect_expand_alls<'a>(
     }
 }
 
-/// Decide `id_only` for an expand hop: its destination variable must not be
-/// referenced by any ancestor, and the hop must support the raw-id fast path.
+/// Decide `id_only` for an expand hop: neither its destination variable nor its
+/// edge variable may be referenced by any ancestor, and the hop must support
+/// the raw-id fast path.
+///
+/// The raw-id fast path emits `Value::Null` for the edge column and
+/// `Value::VertexId` for the destination column, so `id_only` is only valid
+/// when neither column is consumed downstream (e.g. `count(f)` would wrongly
+/// become 0 because the null edge is not counted).
 fn expand_id_only(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> bool {
     if !fast_path_compatible(expand) {
         return false;
@@ -129,12 +135,17 @@ fn expand_id_only(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> bool {
     let Some(dst_var) = expand.col_names().get(2) else {
         return false;
     };
+    let Some(edge_var) = expand.col_names().get(1) else {
+        return false;
+    };
     // Every ancestor must be a known node type whose references we can audit,
-    // and none of them may reference the destination variable.  Unknown
-    // ancestors (delete operators, loops, path algorithms, ...) conservatively
-    // block the annotation.
+    // and none of them may reference the destination or edge variable.
+    // Unknown ancestors (delete operators, loops, path algorithms, ...)
+    // conservatively block the annotation.
     ancestors.iter().all(|anc| {
-        known_reference_ancestor(anc) && !node_references_var(anc, dst_var)
+        known_reference_ancestor(anc)
+            && !node_references_var(anc, dst_var)
+            && !node_references_var(anc, edge_var)
     })
 }
 
@@ -514,6 +525,23 @@ mod tests {
         PlanNodeEnum::Aggregate(agg)
     }
 
+    fn project_pass_var(input: PlanNodeEnum, var: &str) -> PlanNodeEnum {
+        let expr = Expression::Variable(var.to_string());
+        let col = crate::core::YieldColumn {
+            expression: ctx_expr(expr),
+            alias: var.to_string(),
+            is_matched: false,
+        };
+        PlanNodeEnum::Project(ProjectNode::new(input, vec![col]).expect("project should build"))
+    }
+
+    fn count_field_agg(input: PlanNodeEnum, field: &str) -> PlanNodeEnum {
+        let agg =
+            AggregateNode::new(input, vec![], vec![AggregateFunction::Count(Some(field.to_string()))])
+                .expect("aggregate should build");
+        PlanNodeEnum::Aggregate(agg)
+    }
+
     fn expand_alls(root: &PlanNodeEnum) -> Vec<ExpandAllNode> {
         let mut out = Vec::new();
         collect_expand_alls(root, &mut Vec::new(), &mut out);
@@ -608,6 +636,27 @@ mod tests {
         assert!(
             !hop_by_dst(&hops, "c").count_only(),
             "no count-only aggregate above hop2"
+        );
+    }
+
+    #[test]
+    fn count_of_edge_blocks_id_only() {
+        // MATCH (a:Node)-[f:Link]->(b) RETURN count(f)  -> the edge `f` is
+        // consumed by the aggregate, so id_only must not be applied (it would
+        // nullify the edge column and turn count(f) into 0).
+        let chain = count_field_agg(
+            project_pass_var(
+                hop("Link", ["a", "f", "b"], anchor_scan("a")),
+                "f",
+            ),
+            "f",
+        );
+        let (annotated, _) = annotate_expand_all(&chain);
+        let hops = expand_alls(&annotated);
+        let hop = hop_by_dst(&hops, "b");
+        assert!(
+            !hop.id_only(),
+            "edge variable is referenced by count(f), so id_only must be blocked"
         );
     }
 }
