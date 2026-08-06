@@ -65,6 +65,9 @@ pub struct PreparedRequest {
     pub stmt: Stmt,
     /// The parsed AST, retained for the legacy `transform()` planning path.
     pub ast: Arc<crate::query::parser::ast::stmt::Ast>,
+    /// P1: whether the query text is a shape-normalized DML template that may
+    /// reuse a cached physical plan with per-statement parameter values.
+    pub dml_shape_cacheable: bool,
 }
 
 impl PreparedRequest {
@@ -216,34 +219,66 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
-        let parser_result = self.parse_into_context(query_text)?;
-        let needs_write = requires_write_storage(parser_result.ast.stmt());
-        let auto_commit_needs_binding =
-            needs_write && rctx.operation_storage.is_none() && rctx.auto_commit;
+        let mut parser_result = self.parse_into_context(query_text)?;
 
-        let (operation_storage, rctx, owns_operation_storage) =
+        // P1: shape-normalize DML statements so structurally identical
+        // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
+        // literal values as parameters at execution time.
+        let (effective_query, effective_rctx, dml_shape_cacheable) =
+            if self.dml_shape_cache_enabled
+                && super::dml_shape::is_dml_shape_candidate(parser_result.ast.stmt())
+            {
+                if let Some(shape) = super::dml_shape::normalize_dml(parser_result.ast.stmt()) {
+                    let normalized = self.parse_into_context(&shape.normalized_text)?;
+                    let mut updated = (*rctx).clone();
+                    updated.query = shape.normalized_text.clone();
+                    for (index, value) in shape.values.iter().enumerate() {
+                        updated
+                            .parameters
+                            .insert(format!("{}{}", super::dml_shape::DML_PARAM_PREFIX, index), value.clone());
+                    }
+                    parser_result = normalized;
+                    (shape.normalized_text, Arc::new(updated), true)
+                } else {
+                    (query_text.to_string(), rctx, false)
+                }
+            } else {
+                (query_text.to_string(), rctx, false)
+            };
+
+        let needs_write = requires_write_storage(parser_result.ast.stmt());
+        let auto_commit_needs_binding = needs_write
+            && effective_rctx.operation_storage.is_none()
+            && effective_rctx.auto_commit;
+
+        let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
                 let storage = self.bind_auto_commit_storage()?;
-                let mut updated = (*rctx).clone();
+                let mut updated = (*effective_rctx).clone();
                 let op_ctx = storage.read().operation_context();
                 updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
                 updated.operation_context = op_ctx.as_deref().cloned();
                 updated.operation_storage = Some(storage.clone());
                 (Some(storage), Arc::new(updated), true)
             } else {
-                (rctx.operation_storage.clone(), rctx, false)
+                (
+                    effective_rctx.operation_storage.clone(),
+                    effective_rctx,
+                    false,
+                )
             };
 
-        let query_context = self.query_context_for_request(rctx, space_info.as_ref());
+        let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
         let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
         Self::finalize_prepare(
-            query_text,
+            &effective_query,
             query_context,
             ast,
             operation_storage,
             owns_operation_storage,
             bound,
+            dml_shape_cacheable,
         )
     }
 
@@ -272,6 +307,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         owns_operation_storage: bool,
         bound_statement: Option<BoundStatement>,
+        dml_shape_cacheable: bool,
     ) -> DBResult<PreparedRequest> {
         let stmt = ast.stmt().clone();
         let statement_class = classify_statement(&stmt);
@@ -287,6 +323,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             bound_statement,
             stmt,
             ast,
+            dml_shape_cacheable,
         })
     }
 
@@ -327,6 +364,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             })?,
             &request.stmt,
             &request.ast,
+            request.dml_shape_cacheable,
         )?;
         let start = Instant::now();
         let scope = transaction_id
@@ -376,19 +414,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if request.statement_class == StatementClass::Analyze {
             return self.execute_analyze(request);
         }
-        let physical_plan = if let Some(ref bound) = request.bound_statement {
-            let (plan, _) =
-                self.compile_from_bound(request.query_context.clone(), bound, &request.ast)?;
-            plan
-        } else {
-            self.compile_or_get_cached(
-                &request.query_text,
-                request.query_context.clone(),
-                request.bound_statement.as_ref().unwrap(),
-                &request.stmt,
-                &request.ast,
-            )?
-        };
+        let physical_plan = self.compile_or_get_cached(
+            &request.query_text,
+            request.query_context.clone(),
+            request.bound_statement.as_ref().ok_or_else(|| {
+                DBError::from(QueryError::execution("No bound statement".to_string()))
+            })?,
+            &request.stmt,
+            &request.ast,
+            request.dml_shape_cacheable,
+        )?;
         let execution_start = Instant::now();
         let result = self.execute_compiled_with_scope(
             physical_plan,
@@ -463,7 +498,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let result = self.execute_prepared_materialized(request)?;
             return Ok(StreamingQueryResult::from_execution_result(result));
         }
-        let physical_plan = if let Some(ref bound) = request.bound_statement {
+        let physical_plan = if request.dml_shape_cacheable {
+            self.compile_or_get_cached(
+                &request.query_text,
+                request.query_context.clone(),
+                request.bound_statement.as_ref().unwrap(),
+                &request.stmt,
+                &request.ast,
+                true,
+            )?
+        } else if let Some(ref bound) = request.bound_statement {
             let (plan, _) =
                 self.compile_from_bound(request.query_context.clone(), bound, &request.ast)?;
             plan
@@ -474,6 +518,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 request.bound_statement.as_ref().unwrap(),
                 &request.stmt,
                 &request.ast,
+                false,
             )?
         };
         let scope = transaction_id

@@ -1548,13 +1548,16 @@ fn update_vertex_indexes(
         if indexed_props.is_empty() && !included_changed {
             continue;
         }
-        // Check unique constraint before inserting.
+        // Check unique constraint before inserting. The pending-aware lookup
+        // (P2) reads unpublished index deltas in-memory instead of forcing a
+        // generation publish per statement, which would defeat delta
+        // accumulation during batch loads with unique indexes.
         if index.is_unique {
             let index_data = ctx.index_data_manager();
             for (_prop_name, prop_value) in &indexed_props {
                 let existing = index_data
                     .read()
-                    .lookup_tag_index(space_id, &index, prop_value)?;
+                    .lookup_tag_index_pending_aware(space_id, &index, prop_value)?;
                 if !existing.is_empty() && !existing.contains(vertex_id) {
                     return Err(StorageError::conflict(format!(
                         "Unique index '{}' violated: value {:?} already exists",

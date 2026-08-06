@@ -2,6 +2,7 @@
 
 mod compiler;
 mod diagnostics;
+pub(crate) mod dml_shape;
 mod execution;
 mod frontend;
 mod prepared;
@@ -9,6 +10,7 @@ mod prepared;
 use crate::core::metadata::index_manager::IndexMetadataManager;
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
+use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::SessionTransactionController;
@@ -47,6 +49,28 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
     pub(crate) statistics_sample_limit: usize,
+    /// P1: whether shape-normalized DML statements reuse cached physical plans.
+    ///
+    /// When enabled, structurally identical INSERT/UPDATE/DELETE statements
+    /// (only differing in literal values) are compiled once and reused via the
+    /// plan cache, binding per-statement values as parameters.  Disabling
+    /// restores per-statement compilation (rollback path).
+    pub(crate) dml_shape_cache_enabled: bool,
+    /// P6 Level 2: memoize the last shape-normalized DML physical plan so a
+    /// run of consecutive same-shape statements skips parameter extraction,
+    /// cache-key construction, and the moka lookup entirely. Keyed by
+    /// (normalized text, schema version, param type signature); one entry.
+    pub(crate) last_dml_plan: parking_lot::Mutex<Option<LastDmlPlan>>,
+    /// Observation counter for P6 Level 2 memo hits.
+    pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
+}
+
+/// Memoized same-shape DML plan entry (P6 Level 2).
+pub(crate) struct LastDmlPlan {
+    pub normalized_text: String,
+    pub schema_version: Option<u64>,
+    pub param_sig: u64,
+    pub plan: Arc<PhysicalPlan>,
 }
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
@@ -83,6 +107,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,
+            dml_shape_cache_enabled: true,
+            last_dml_plan: parking_lot::Mutex::new(None),
+            last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -211,6 +238,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: 10_000,
+            dml_shape_cache_enabled: true,
+            last_dml_plan: parking_lot::Mutex::new(None),
+            last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -259,5 +289,21 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn with_sync_manager(mut self, sync_manager: Arc<SyncManager>) -> Self {
         self.sync_manager = Some(sync_manager);
         self
+    }
+
+    /// Toggle P1 DML shape plan caching (independent switch / rollback path).
+    pub fn with_dml_shape_cache(mut self, enabled: bool) -> Self {
+        self.dml_shape_cache_enabled = enabled;
+        self
+    }
+
+    /// Whether P1 DML shape plan caching is enabled.
+    pub fn dml_shape_cache_enabled(&self) -> bool {
+        self.dml_shape_cache_enabled
+    }
+
+    /// The underlying storage binding, if any.
+    pub fn storage(&self) -> Option<Arc<RwLock<S>>> {
+        self.storage.clone()
     }
 }

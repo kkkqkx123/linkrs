@@ -21,6 +21,7 @@ pub(crate) mod mvcc;
 pub(crate) mod naming;
 pub(crate) mod schema;
 
+mod batch_ops;
 mod metrics;
 pub(crate) mod persistence;
 pub(crate) mod safe_read;
@@ -30,6 +31,7 @@ pub(crate) mod vertex;
 #[cfg(any(test, feature = "test-support"))]
 mod test_mock;
 
+pub use batch_ops::AutoCommitBatchOps;
 pub use client::{
     CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
     StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
@@ -44,7 +46,7 @@ pub use cursor::{
     VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
-pub use engine::graph_storage::GraphStorage;
+pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage};
 pub use engine::persistence_coordinator::{
     CatalogLockDiagnostic, CheckpointStats, PersistenceConfig, PersistenceDiagnostics,
     PersistenceFaultPoint, SnapshotStats,

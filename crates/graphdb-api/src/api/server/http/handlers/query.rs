@@ -44,6 +44,37 @@ pub async fn execute<
     Ok(JsonResponse(result?))
 }
 
+pub async fn execute_batch<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + crate::storage::AutoCommitBatchOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<BatchQueryRequest>,
+) -> Result<JsonResponse<BatchQueryResponse>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+
+    let outcomes = graph_service
+        .execute_batch(request.session_id, &request.statements)
+        .await;
+
+    let results = outcomes
+        .into_iter()
+        .map(|outcome| match outcome {
+            Ok(exec_result) => execution_result_to_response(exec_result),
+            Err(e) => QueryResponse::error("QUERY_ERROR".to_string(), e, None),
+        })
+        .collect();
+
+    Ok(JsonResponse(BatchQueryResponse { results }))
+}
+
 pub async fn validate<
     S: StorageClient
         + StorageSchemaContextOps

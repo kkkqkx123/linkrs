@@ -36,6 +36,9 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             col_names,
         } => {
             let mut context = DefaultExpressionContext::new();
+            if let Some(params) = base.runtime.as_ref().and_then(|rt| rt.parameter_values()) {
+                context = context.with_parameters(params);
+            }
             let mut rows = Vec::with_capacity(values.len());
             for row in values {
                 let mut evaluated = Vec::with_capacity(row.len());

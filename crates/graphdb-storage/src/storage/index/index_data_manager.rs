@@ -22,10 +22,10 @@ use crate::storage::index::shard_runtime::{
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use crate::storage::persistence::{read_versioned_payload, write_versioned_payload};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -56,6 +56,83 @@ pub struct IndexDataManagerImpl {
     /// and resynced by the (rare) GC/retirement/compaction paths. Keeps the
     /// per-statement admission check from scanning every generation.
     pub(crate) cached_tombstone_count: Arc<AtomicU64>,
+    /// P2: per-index deltas awaiting publication into a new generation.
+    ///
+    /// Writes accumulate here (O(1) per statement) instead of publishing a new
+    /// generation per statement. The pending delta is folded into a fresh
+    /// generation when the entry count reaches `delta_publish_threshold` or
+    /// when a read needs a stable snapshot (`publish_pending_delta`).
+    pub(crate) pending_deltas: Arc<Mutex<HashMap<IndexIdentity, PendingDelta>>>,
+    /// P2: number of pending entries that triggers publication of a new
+    /// generation. A value of 0 or 1 disables accumulation, restoring the
+    /// per-statement publish behavior (rollback path).
+    pub(crate) delta_publish_threshold: Arc<AtomicUsize>,
+}
+
+/// Accumulated index deltas awaiting publication into a new generation (P2).
+#[derive(Debug, Default, Clone)]
+pub(crate) struct PendingDelta {
+    /// Per-shard forward/reverse maps with FULL (prefix-included) keys.
+    pub(crate) per_shard: HashMap<u32, IndexMaps>,
+    /// Number of entries accumulated (sum of forward + reverse keys).
+    pub(crate) entries: usize,
+    /// Latest write timestamp among the accumulated entries.
+    pub(crate) write_ts: Timestamp,
+}
+
+/// Mutable accumulators for a pending-delta existing-value scan.
+pub(crate) struct PendingExistingScan<'a> {
+    pub existing_values: &'a mut Vec<Value>,
+    pub existing_encoded: &'a mut HashSet<Vec<u8>>,
+    pub existing_columns: &'a mut Vec<(String, Value)>,
+    pub covering_populated: &'a mut bool,
+}
+
+/// Merge pending-delta reverse entries for `[reverse_prefix, reverse_end)`
+/// into the caller's existing-value scan, so the write path observes
+/// previously accumulated (but not yet published) entries when computing the
+/// diff for a re-written entity.
+pub(crate) fn merge_pending_existing_values(
+    pending: &PendingDelta,
+    reverse_prefix: &[u8],
+    reverse_end: &[u8],
+    write_ts: Timestamp,
+    is_edge: bool,
+    scan: &mut PendingExistingScan<'_>,
+) {
+    use std::ops::Bound;
+    for (_, rev_map) in pending.per_shard.values() {
+        for (key, record) in rev_map.range((
+            Bound::Included(reverse_prefix.to_vec()),
+            Bound::Excluded(reverse_end.to_vec()),
+        )) {
+            if !record.is_visible_at(write_ts) {
+                continue;
+            }
+            let extracted = if is_edge {
+                KeyParser::extract_value_from_edge_reverse_suffix(key)
+            } else {
+                KeyParser::extract_value_from_reverse_suffix(key)
+            };
+            if let Ok(encoded) = extracted {
+                if scan.existing_encoded.insert(encoded.clone()) {
+                    if let Ok(value) = OrderedCodec::new().decode(&encoded) {
+                        scan.existing_values.push(
+                            crate::storage::index::key_codec::key_builder::normalize_int_value(
+                                &value,
+                            ),
+                        );
+                    }
+                }
+            }
+            if !*scan.covering_populated {
+                if let Some(cols) = &record.included_columns {
+                    scan.existing_columns.clone_from(cols);
+                    *scan.covering_populated = true;
+                }
+            }
+        }
+    }
 }
 
 impl IndexDataManagerImpl {
@@ -86,6 +163,8 @@ impl IndexDataManagerImpl {
             eviction_high_ratio: Arc::new(AtomicU64::new(8500)),
             eviction_low_ratio: Arc::new(AtomicU64::new(6500)),
             cached_tombstone_count: Arc::new(AtomicU64::new(0)),
+            pending_deltas: Arc::new(Mutex::new(HashMap::new())),
+            delta_publish_threshold: Arc::new(AtomicUsize::new(512)),
         }
     }
 
@@ -93,6 +172,15 @@ impl IndexDataManagerImpl {
     /// [`cached_tombstone_count`](Self::cached_tombstone_count).
     pub fn cached_tombstone_count(&self) -> u64 {
         self.cached_tombstone_count.load(Ordering::Relaxed)
+    }
+
+    /// Number of retired generations awaiting reclamation across all indexes.
+    pub fn retired_generation_count(&self) -> usize {
+        self.manifest_catalogs
+            .read()
+            .values()
+            .map(|catalog| catalog.retired_reclaimable(|_| true).len())
+            .sum()
     }
 
     /// Resync the cached tombstone count from a full scan. Called by the rare
@@ -120,6 +208,16 @@ impl IndexDataManagerImpl {
                         }
                     }
                 }
+            }
+        }
+        // P2: include deltas still awaiting generation publication.
+        for entry in self.pending_deltas.lock().values() {
+            for (forward, reverse) in entry.per_shard.values() {
+                count += forward
+                    .values()
+                    .chain(reverse.values())
+                    .filter(|record| record.deleted_ts.is_some())
+                    .count();
             }
         }
         count
@@ -609,6 +707,123 @@ impl IndexDataManagerImpl {
         }
     }
 
+    /// Accumulate a delta into the pending buffer, publishing a new generation
+    /// once the entry threshold is reached.
+    ///
+    /// When `delta_publish_threshold <= 1` the delta is published immediately,
+    /// preserving the legacy per-statement publish behavior (rollback path).
+    pub(crate) fn accumulate_delta(
+        &self,
+        identity: IndexIdentity,
+        delta: HashMap<u32, IndexMaps>,
+        write_ts: Timestamp,
+    ) -> StorageResult<()> {
+        let threshold = self.delta_publish_threshold.load(Ordering::Relaxed).max(1);
+        if threshold <= 1 {
+            let tombstones = delta
+                .values()
+                .flat_map(|(forward, reverse)| forward.values().chain(reverse.values()))
+                .filter(|record| record.deleted_ts.is_some())
+                .count() as u64;
+            if tombstones > 0 {
+                self.cached_tombstone_count
+                    .fetch_add(tombstones, Ordering::Relaxed);
+            }
+            return self.publish_delta_generation(identity, delta, write_ts);
+        }
+
+        let mut pending = self.pending_deltas.lock();
+        let entry = pending.entry(identity).or_default();
+        let mut added = 0usize;
+        // Merge a (key, record) pair into a pending map, keeping the tombstone
+        // counter accurate: a NEW tombstone increments it, and overwriting a
+        // pending tombstone with a live entry decrements it (the tombstoned record
+        // never reaches a generation, so it must not stay counted).
+        let merge_record = |map: &mut BTreeMap<Vec<u8>, IndexRecord>,
+                            key: Vec<u8>,
+                            record: IndexRecord,
+                            counter: &std::sync::atomic::AtomicU64| {
+            let record_is_tombstone = record.deleted_ts.is_some();
+            match map.insert(key, record) {
+                Some(old) => match (old.deleted_ts.is_some(), record_is_tombstone) {
+                    (false, true) => {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                    (true, false) => {
+                        counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                            Some(count.saturating_sub(1))
+                        });
+                    }
+                    _ => {}
+                },
+                None => {
+                    if record_is_tombstone {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        };
+        for (shard_id, (forward, reverse)) in delta {
+            let (pending_fwd, pending_rev) = entry.per_shard.entry(shard_id).or_default();
+            added += forward.len() + reverse.len();
+            for (key, record) in forward {
+                merge_record(pending_fwd, key, record, &self.cached_tombstone_count);
+            }
+            for (key, record) in reverse {
+                merge_record(pending_rev, key, record, &self.cached_tombstone_count);
+            }
+        }
+        entry.entries += added;
+        entry.write_ts = entry.write_ts.max(write_ts);
+
+        if entry.entries >= threshold {
+            let to_publish = pending.remove(&identity).expect("entry exists");
+            drop(pending);
+            return self.publish_delta_generation(
+                identity,
+                to_publish.per_shard,
+                to_publish.write_ts,
+            );
+        }
+        Ok(())
+    }
+
+    /// Publish any pending delta for `identity` as a new generation, making it
+    /// visible through the normal generation-chain read path. Reads call this
+    /// first so they observe all committed writes.
+    pub(crate) fn publish_pending_delta(&self, identity: IndexIdentity) -> StorageResult<()> {
+        let to_publish = {
+            let mut pending = self.pending_deltas.lock();
+            let Some(entry) = pending.remove(&identity) else {
+                return Ok(());
+            };
+            if entry.per_shard.is_empty() {
+                return Ok(());
+            }
+            Some((entry.per_shard, entry.write_ts))
+        };
+        if let Some((per_shard, write_ts)) = to_publish {
+            self.publish_delta_generation(identity, per_shard, write_ts)?;
+        }
+        Ok(())
+    }
+
+    /// Configure the P2 delta-publish threshold (entries per generation).
+    pub fn set_delta_publish_threshold(&self, threshold: usize) {
+        self.delta_publish_threshold
+            .store(threshold.max(1), Ordering::Relaxed);
+    }
+
+    /// Number of entries pending publication for `identity`.
+    #[cfg(test)]
+    pub(crate) fn pending_delta_entries(&self, identity: IndexIdentity) -> usize {
+        self.pending_deltas
+            .lock()
+            .get(&identity)
+            .map(|entry| entry.entries)
+            .unwrap_or(0)
+    }
+
     /// Publish a delta generation — a new generation that contains only changed
     /// (inserted/updated) entries. The new generation inherits all unchanged
     /// entries from its parent via the generation chain fallback read path.
@@ -657,15 +872,6 @@ impl IndexDataManagerImpl {
 
         // Compute key prefixes for memory deduplication of the fixed key portion
         let (forward_prefix, reverse_prefix) = self.compute_prefixes(identity);
-        let delta_tombstones: u64 = delta
-            .iter()
-            .flat_map(|(_, (forward, reverse))| {
-                forward
-                    .values()
-                    .chain(reverse.values())
-                    .filter(|record| record.deleted_ts.is_some())
-            })
-            .count() as u64;
         let generation = GenerationRuntime::empty_with_maps(
             &next_manifest,
             forward_prefix,
@@ -696,10 +902,6 @@ impl IndexDataManagerImpl {
         self.record_manifest_state(&catalog);
         self.total_memory_usage
             .fetch_add(generation_bytes, Ordering::Relaxed);
-        if delta_tombstones > 0 {
-            self.cached_tombstone_count
-                .fetch_add(delta_tombstones, Ordering::Relaxed);
-        }
         // Check memory limit and trigger compaction if needed
         let _ = self.check_memory_limit();
         Ok(())
@@ -820,6 +1022,8 @@ impl IndexDataManagerImpl {
         safe_ts: Timestamp,
         force: bool,
     ) -> StorageResult<bool> {
+        // P2: fold pending writes into the generation chain before compacting.
+        self.publish_pending_delta(identity)?;
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
             .ok_or_else(|| {
@@ -1061,6 +1265,8 @@ impl IndexDataManagerImpl {
         F: FnOnce() -> StorageResult<CommitLsn>,
         G: FnOnce(CommitLsn, CommitLsn) -> StorageResult<Vec<OutboxIntent>>,
     {
+        // P2: fold pending writes into the generation chain before splitting.
+        self.publish_pending_delta(identity)?;
         let IndexIdentity { space_id, index_id } = identity;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_build();
@@ -1428,6 +1634,9 @@ impl IndexDataManagerImpl {
             return Ok(());
         };
         let identity = IndexIdentity { space_id, index_id };
+        // P2: fold pending writes into the chain so their entries can be
+        // tombstoned; otherwise a delete would miss accumulated entries.
+        self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
@@ -1534,7 +1743,7 @@ impl IndexDataManagerImpl {
         };
 
         if !delta.is_empty() {
-            self.publish_delta_generation(identity, delta, write_ts)?;
+            self.accumulate_delta(identity, delta, write_ts)?;
         }
         Ok(())
     }
@@ -1554,6 +1763,9 @@ impl IndexDataManagerImpl {
             return Ok(());
         };
         let identity = IndexIdentity { space_id, index_id };
+        // P2: fold pending writes into the chain so their entries can be
+        // tombstoned; otherwise a delete would miss accumulated entries.
+        self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
@@ -1661,7 +1873,7 @@ impl IndexDataManagerImpl {
         };
 
         if !delta.is_empty() {
-            self.publish_delta_generation(identity, delta, write_ts)?;
+            self.accumulate_delta(identity, delta, write_ts)?;
         }
         Ok(())
     }
@@ -1675,6 +1887,8 @@ impl IndexDataManagerImpl {
         write_ts: Timestamp,
     ) -> StorageResult<()> {
         let identity = IndexIdentity { space_id, index_id };
+        // P2: fold pending writes into the chain before clearing the index.
+        self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
@@ -1767,7 +1981,7 @@ impl IndexDataManagerImpl {
         };
 
         if !delta.is_empty() {
-            self.publish_delta_generation(identity, delta, write_ts)?;
+            self.accumulate_delta(identity, delta, write_ts)?;
         }
         Ok(())
     }

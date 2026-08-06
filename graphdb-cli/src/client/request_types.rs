@@ -25,6 +25,14 @@ pub(crate) struct QueryRequest {
     pub parameters: HashMap<String, String>,
 }
 
+/// Batch query request: multiple auto-commit DML statements executed inside a
+/// single shared auto-commit batch window on the server (P4/P6).
+#[derive(Debug, Serialize)]
+pub(crate) struct BatchQueryRequest {
+    pub session_id: i64,
+    pub statements: Vec<String>,
+}
+
 /// Begin transaction request
 #[derive(Debug, Serialize)]
 pub(crate) struct BeginTransactionRequest {

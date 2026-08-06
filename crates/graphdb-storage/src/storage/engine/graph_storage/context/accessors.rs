@@ -58,7 +58,46 @@ impl GraphStorageContext {
         bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = None;
         bound.write_gate_lease = None;
+        bound.auto_commit_window = None;
         bound
+    }
+
+    /// Register MVCC snapshots for an auto-commit operation at `timestamp`.
+    ///
+    /// Scatter-gather: collect table references under a brief catalog READ
+    /// lock (so concurrent transactions and DDL never block on the catalog
+    /// write lock here), then register each table under its own per-table
+    /// lock outside the catalog lock. Shared by the per-statement
+    /// `with_auto_commit_context` path and the batch window (P4).
+    pub(crate) fn register_auto_commit_snapshots(
+        &self,
+        timestamp: Timestamp,
+    ) -> StorageResult<(Vec<(LabelId, SnapshotHandle)>, bool)> {
+        let mut vertex_handles = Vec::new();
+        let vertex_tables: Vec<(
+            LabelId,
+            Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
+        )> = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .iter()
+                .map(|(label_id, table)| (*label_id, table.clone()))
+                .collect()
+        });
+        for (label_id, vertex_table) in vertex_tables {
+            if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
+                vertex_handles.push((label_id, handle));
+            }
+        }
+
+        let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> = self
+            .persistent
+            .data_store
+            .with_edge_tables(|tables| tables.values().cloned().collect());
+        for edge_table in edge_tables {
+            edge_table.write().register_snapshot(timestamp);
+        }
+
+        Ok((vertex_handles, true))
     }
 
     pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
@@ -99,35 +138,10 @@ impl GraphStorageContext {
         };
 
         // Register MVCC snapshots to prevent GC from cleaning data during the
-        // transaction. Scatter-gather: collect table references under a brief
-        // catalog READ lock (so concurrent transactions and DDL never block on
-        // the catalog write lock here), then register each table under its own
-        // per-table lock outside the catalog lock.
-        let vertex_tables: Vec<(LabelId, Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>)> =
-            self.persistent
-                .data_store
-                .with_vertex_tables(|tables| {
-                    tables
-                        .iter()
-                        .map(|(label_id, table)| (*label_id, table.clone()))
-                        .collect()
-                });
-        for (label_id, vertex_table) in vertex_tables {
-            if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
-                context
-                    .mvcc_vertex_snapshot_handles
-                    .push((label_id, handle));
-            }
-        }
-
-        let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
-            self.persistent
-                .data_store
-                .with_edge_tables(|tables| tables.values().cloned().collect());
-        for edge_table in edge_tables {
-            edge_table.write().register_snapshot(timestamp);
-        }
-        context.mvcc_edge_snapshot_registered = true;
+        // transaction (see `register_auto_commit_snapshots`).
+        let (vertex_handles, edge_registered) = self.register_auto_commit_snapshots(timestamp)?;
+        context.mvcc_vertex_snapshot_handles = vertex_handles;
+        context.mvcc_edge_snapshot_registered = edge_registered;
 
         bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
@@ -138,6 +152,33 @@ impl GraphStorageContext {
         bound.write_gate_lease = Some(write_gate_lease);
         bound.auto_commit_undo = Some(undo_log);
         Ok(bound)
+    }
+
+    /// Open an auto-commit batch window (P4).
+    ///
+    /// Acquires the auto-commit write gate for the whole window; MVCC
+    /// snapshots are registered lazily on the first statement bound via the
+    /// window and unregistered at `finalize` (or `Drop`). Must be called on
+    /// the pristine (unbound) base context.
+    pub(crate) fn begin_auto_commit_batch(
+        &self,
+    ) -> StorageResult<Arc<super::AutoCommitBatchWindow>> {
+        let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
+        let mut clean = self.clone();
+        clean.operation_context = None;
+        clean.write_timestamp_lease = None;
+        clean.write_gate_lease = None;
+        clean.auto_commit_undo = None;
+        clean.auto_commit_window = None;
+        Ok(Arc::new(super::AutoCommitBatchWindow {
+            base_ctx: Arc::new(clean),
+            gate_lease: write_gate_lease,
+            first_ts: parking_lot::Mutex::new(None),
+            vertex_snapshot_handles: parking_lot::Mutex::new(Vec::new()),
+            edge_snapshot_registered: std::sync::atomic::AtomicBool::new(false),
+            statement_count: std::sync::atomic::AtomicU64::new(0),
+            snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
+        }))
     }
 
     pub(crate) fn restore_auto_transaction_id(&self, max_transaction_id: u64) {
@@ -176,41 +217,53 @@ impl GraphStorageContext {
         let timestamp = operation.write_timestamp.ok_or_else(|| {
             StorageError::db_error("Auto-commit operation has no write timestamp")
         })?;
+        let transaction_id = operation.transaction_id;
 
-        // Clone handles to avoid borrowing issues
-        let vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)> =
-            operation.mvcc_vertex_snapshot_handles.clone();
+        // Window-bound statements (P4) share the batch window's MVCC
+        // snapshots; the window unregisters them once at `finalize`. Only
+        // per-statement contexts (registered by `with_auto_commit_context`)
+        // unregister here.
+        if self.auto_commit_window.is_none() {
+            // Clone handles to avoid borrowing issues
+            let vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)> =
+                operation.mvcc_vertex_snapshot_handles.clone();
 
-        // Unregister MVCC vertex snapshots (scatter-gather, brief read lock).
-        if !vertex_snapshot_handles.is_empty() {
-            let tables: Vec<(LabelId, Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>)> =
-                self.persistent
+            // Unregister MVCC vertex snapshots (scatter-gather, brief read lock).
+            if !vertex_snapshot_handles.is_empty() {
+                let tables: Vec<(
+                    LabelId,
+                    Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
+                )> = self
+                    .persistent
                     .data_store
                     .with_vertex_tables(|vertex_tables| {
                         vertex_snapshot_handles
                             .iter()
                             .filter_map(|(label_id, _)| {
-                                vertex_tables.get(label_id).map(|table| (*label_id, table.clone()))
+                                vertex_tables
+                                    .get(label_id)
+                                    .map(|table| (*label_id, table.clone()))
                             })
                             .collect()
                     });
-            for (label_id, vertex_table) in tables {
-                for (handle_label, handle) in &vertex_snapshot_handles {
-                    if *handle_label == label_id {
-                        let _ = vertex_table.unregister_snapshot(*handle);
+                for (label_id, vertex_table) in tables {
+                    for (handle_label, handle) in &vertex_snapshot_handles {
+                        if *handle_label == label_id {
+                            let _ = vertex_table.unregister_snapshot(*handle);
+                        }
                     }
                 }
             }
-        }
 
-        // Unregister MVCC edge snapshots
-        if operation.mvcc_edge_snapshot_registered {
-            let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
-                self.persistent
-                    .data_store
-                    .with_edge_tables(|tables| tables.values().cloned().collect());
-            for edge_table in edge_tables {
-                edge_table.write().unregister_snapshot(timestamp);
+            // Unregister MVCC edge snapshots
+            if operation.mvcc_edge_snapshot_registered {
+                let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
+                    self.persistent
+                        .data_store
+                        .with_edge_tables(|tables| tables.values().cloned().collect());
+                for edge_table in edge_tables {
+                    edge_table.write().unregister_snapshot(timestamp);
+                }
             }
         }
 
@@ -233,11 +286,25 @@ impl GraphStorageContext {
         if let Some(lease) = &self.write_gate_lease {
             lease.release();
         }
+        // P5.2: drop any residue staged-WAL for this auto-commit transaction
+        // (per-statement entries are normally committed by `commit_auto_if_needed`;
+        // this guarantees the staged map stays bounded even on error paths).
+        if let Some(transaction_id) = transaction_id {
+            self.persistent.staged_wal.remove(&transaction_id);
+        }
+        // P5: keep index generation retirement bounded during long auto-commit
+        // loads (throttled; no-op when no GC manager is assembled).
+        self.maybe_run_index_gc();
         Ok(())
     }
 
     pub fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
         self.runtime.start_index_gc()
+    }
+
+    /// P5: opportunistically run an index-GC pass (throttled).
+    pub(crate) fn maybe_run_index_gc(&self) {
+        self.runtime.maybe_run_index_gc();
     }
 
     pub fn stop_index_gc(&self) {
@@ -330,7 +397,11 @@ impl GraphStorageContext {
         self.persistent
             .resource_accounting
             .report_usage(MemoryCategory::Index, index_bytes);
-        let tombstone_count = self.persistent.index_data_manager.read().cached_tombstone_count() as usize;
+        let tombstone_count = self
+            .persistent
+            .index_data_manager
+            .read()
+            .cached_tombstone_count() as usize;
         let tombstone_memory_bytes = (tombstone_count as u64).saturating_mul(64);
         self.persistent
             .resource_accounting
@@ -617,6 +688,11 @@ impl GraphStorageContext {
 
     pub(crate) fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) {
         self.persistent.staged_wal.remove(&transaction_id);
+    }
+
+    /// Number of staged-WAL entries held for in-flight transactions.
+    pub(crate) fn staged_wal_len(&self) -> usize {
+        self.persistent.staged_wal.len()
     }
 
     pub(crate) fn defer_edge_insert(

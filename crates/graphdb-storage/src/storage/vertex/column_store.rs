@@ -107,6 +107,9 @@ pub struct FixedWidthColumn {
     element_size: usize,
     null_bitmap: Option<BitVec<u8, Lsb0>>,
     row_count: usize,
+    /// O(1) count of null rows, maintained incrementally on set/resize/clear
+    /// so `used_memory_size` does not rescan the bitmap (which is O(n)).
+    null_count: usize,
 }
 
 impl FixedWidthColumn {
@@ -118,6 +121,7 @@ impl FixedWidthColumn {
             element_size: elem_size,
             null_bitmap: if nullable { Some(BitVec::new()) } else { None },
             row_count: 0,
+            null_count: 0,
         }
     }
 }
@@ -138,6 +142,12 @@ impl ColumnStorage for FixedWidthColumn {
     }
 
     fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        let was_null = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false);
+
         let offset = row_idx * self.element_size;
         if offset + self.element_size > self.data.len() {
             self.data.resize(offset + self.element_size, 0);
@@ -155,6 +165,21 @@ impl ColumnStorage for FixedWidthColumn {
                 if let Some(ref mut bitmap) = self.null_bitmap {
                     ensure_bitmap_len(bitmap, row_idx + 1);
                     bitmap.set(row_idx, true);
+                }
+            }
+        }
+
+        if self.null_bitmap.is_some() {
+            match value {
+                Some(v) if !v.is_null() => {
+                    if was_null {
+                        self.null_count = self.null_count.saturating_sub(1);
+                    }
+                }
+                _ => {
+                    if !was_null {
+                        self.null_count += 1;
+                    }
                 }
             }
         }
@@ -200,6 +225,7 @@ impl ColumnStorage for FixedWidthColumn {
             bitmap.clear();
         }
         self.row_count = 0;
+        self.null_count = 0;
     }
 
     fn resize(&mut self, new_count: usize) {
@@ -211,6 +237,14 @@ impl ColumnStorage for FixedWidthColumn {
                 bitmap.set(i, true);
             }
         }
+        if let Some(bitmap) = &self.null_bitmap {
+            if new_count >= old_count {
+                self.null_count += new_count - old_count;
+            } else {
+                // Shrink: recompute (rare; happens during load/compaction).
+                self.null_count = bitmap.count_ones();
+            }
+        }
         self.row_count = new_count;
     }
 
@@ -219,10 +253,7 @@ impl ColumnStorage for FixedWidthColumn {
     }
 
     fn null_count(&self) -> usize {
-        self.null_bitmap
-            .as_ref()
-            .map(|b| b.count_ones())
-            .unwrap_or(0)
+        self.null_count
     }
 
     fn load_data_from_raw(
@@ -244,6 +275,11 @@ impl ColumnStorage for FixedWidthColumn {
             bv.resize(bitmap_bit_len, false);
             bv
         });
+        self.null_count = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.count_ones())
+            .unwrap_or(0);
         self.row_count = self.data.len() / elem_size;
     }
 
@@ -268,6 +304,9 @@ pub struct VariableWidthColumn {
     null_bitmap: Option<BitVec<u8, Lsb0>>,
     row_count: usize,
     data_type: DataType,
+    /// O(1) count of null rows, maintained incrementally (see
+    /// [`FixedWidthColumn::null_count`]).
+    null_count: usize,
 }
 
 impl VariableWidthColumn {
@@ -278,6 +317,7 @@ impl VariableWidthColumn {
             null_bitmap: if nullable { Some(BitVec::new()) } else { None },
             row_count: 0,
             data_type,
+            null_count: 0,
         }
     }
 }
@@ -341,6 +381,12 @@ impl ColumnStorage for VariableWidthColumn {
     }
 
     fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        let was_null = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false);
+
         while self.offsets.len() <= row_idx {
             self.offsets.push(self.data.len());
         }
@@ -363,6 +409,17 @@ impl ColumnStorage for VariableWidthColumn {
                     ensure_bitmap_len(bitmap, row_idx + 1);
                     bitmap.set(row_idx, true);
                 }
+            }
+        }
+
+        if self.null_bitmap.is_some() {
+            let becomes_null = value.is_none_or(|v| v.is_null());
+            if becomes_null {
+                if !was_null {
+                    self.null_count += 1;
+                }
+            } else if was_null {
+                self.null_count = self.null_count.saturating_sub(1);
             }
         }
 
@@ -412,6 +469,7 @@ impl ColumnStorage for VariableWidthColumn {
             bitmap.clear();
         }
         self.row_count = 0;
+        self.null_count = 0;
     }
 
     fn resize(&mut self, new_count: usize) {
@@ -423,6 +481,13 @@ impl ColumnStorage for VariableWidthColumn {
                 bitmap.set(i, true);
             }
         }
+        if let Some(bitmap) = &self.null_bitmap {
+            if new_count >= old_count {
+                self.null_count += new_count - old_count;
+            } else {
+                self.null_count = bitmap.count_ones();
+            }
+        }
         self.row_count = new_count;
     }
 
@@ -431,10 +496,7 @@ impl ColumnStorage for VariableWidthColumn {
     }
 
     fn null_count(&self) -> usize {
-        self.null_bitmap
-            .as_ref()
-            .map(|b| b.count_ones())
-            .unwrap_or(0)
+        self.null_count
     }
 
     fn load_data_from_raw(
@@ -450,6 +512,11 @@ impl ColumnStorage for VariableWidthColumn {
             bv.resize(bitmap_bit_len, false);
             bv
         });
+        self.null_count = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.count_ones())
+            .unwrap_or(0);
         if !offsets.is_empty() {
             self.offsets = offsets.into_iter().map(|o| o as usize).collect();
             self.row_count = self.offsets.len();
@@ -1891,6 +1958,41 @@ mod tests {
         assert_eq!(col.get(2), Some(Value::string("world")));
         assert!(col.is_null(3));
         assert_eq!(col.null_count(), 2);
+    }
+
+    /// P3: the O(1) `null_count` counter must stay in sync with the null
+    /// bitmap through set / re-set / resize operations.
+    #[test]
+    fn test_null_count_counter_tracks_bitmap() {
+        let mut col = Column::new("text".to_string(), 0, DataType::String, true);
+
+        col.set(0, Some(&Value::string("a"))).unwrap();
+        col.set(1, None).unwrap();
+        col.set(2, Some(&Value::string("b"))).unwrap();
+        col.set(3, None).unwrap();
+        assert_eq!(col.null_count(), 2);
+
+        // Flip existing null → non-null and non-null → null.
+        col.set(1, Some(&Value::string("c"))).unwrap();
+        col.set(2, None).unwrap();
+        assert_eq!(col.null_count(), 2);
+
+        // Grow via resize: new rows are null.
+        col.resize(6);
+        assert_eq!(col.null_count(), 4);
+
+        // Setting values into grown rows.
+        col.set(4, Some(&Value::string("d"))).unwrap();
+        assert_eq!(col.null_count(), 3);
+
+        let expected = col
+            .null_bitmap()
+            .map(|b| b.count_ones())
+            .unwrap_or(0);
+        assert_eq!(col.null_count(), expected);
+
+        col.clear();
+        assert_eq!(col.null_count(), 0);
     }
 
     /// Test: Verify integer column type conversions and boundaries

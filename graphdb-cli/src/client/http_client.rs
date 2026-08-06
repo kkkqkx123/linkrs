@@ -10,7 +10,7 @@ use crate::client::response_types::*;
 use crate::client::schema::PropertyDef;
 use crate::client::stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
 use crate::client::transaction::{TransactionInfo, TransactionOptions};
-use crate::client::types::{EdgeTypeInfo, QueryResult, SpaceInfo, TagInfo};
+use crate::client::types::{EdgeTypeInfo, QueryErrorInfo, QueryResult, SpaceInfo, TagInfo};
 use crate::client::validation::{ValidationError, ValidationResult, ValidationWarning};
 use crate::client::vector::{VectorMatch, VectorSearchResult};
 use crate::utils::error::{CliError, Result};
@@ -136,12 +136,66 @@ impl HttpClient {
 
         let query_resp: QueryResponse = response.json().await?;
 
+        Ok(Self::query_response_to_result(query_resp))
+    }
+
+    /// Execute multiple auto-commit DML statements inside a single shared
+    /// auto-commit batch window on the server (P4/P6). Returns one
+    /// [`QueryResult`] per input statement, in order; failures are reported
+    /// per statement (inline `error`) and do not abort the rest of the batch.
+    pub async fn execute_query_batch(
+        &self,
+        statements: &[String],
+        session_id: i64,
+    ) -> Result<Vec<QueryResult>> {
+        if statements.is_empty() {
+            return Ok(Vec::new());
+        }
+        let url = format!("{}/query/batch", self.base_url);
+        let request = BatchQueryRequest {
+            session_id,
+            statements: statements.to_vec(),
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Batch query failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let batch_resp: BatchQueryResponse = response.json().await?;
+        Ok(batch_resp
+            .results
+            .into_iter()
+            .map(Self::query_response_to_result)
+            .collect())
+    }
+
+    /// Convert a raw `QueryResponse` into a [`QueryResult`], mapping the
+    /// `success` flag onto an inline error like the single-query path.
+    fn query_response_to_result(query_resp: QueryResponse) -> QueryResult {
         if !query_resp.success {
             let err = query_resp.error.unwrap_or(QueryError {
                 code: "UNKNOWN".to_string(),
                 message: "Unknown error".to_string(),
             });
-            return Err(CliError::query(format!("{}: {}", err.code, err.message)));
+            return QueryResult {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                execution_time_ms: 0,
+                rows_scanned: 0,
+                error: Some(QueryErrorInfo {
+                    code: err.code,
+                    message: err.message,
+                    details: None,
+                }),
+            };
         }
 
         let data = query_resp.data.unwrap_or(QueryData {
@@ -155,14 +209,14 @@ impl HttpClient {
             rows_scanned: 0,
         });
 
-        Ok(QueryResult {
+        QueryResult {
             columns: data.columns,
             rows: data.rows,
             row_count: data.row_count,
             execution_time_ms: metadata.execution_time_ms,
             rows_scanned: metadata.rows_scanned,
             error: None,
-        })
+        }
     }
 
     /// Execute a query without variable substitution

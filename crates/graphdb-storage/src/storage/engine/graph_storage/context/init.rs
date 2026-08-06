@@ -22,8 +22,10 @@ impl GraphStorageContext {
             write_timestamp_lease: None,
             write_gate_lease: None,
             auto_commit_undo: None,
+            auto_commit_window: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
+        .with_default_index_gc()
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
@@ -43,9 +45,18 @@ impl GraphStorageContext {
                 write_timestamp_lease: None,
                 write_gate_lease: None,
                 auto_commit_undo: None,
+                auto_commit_window: None,
                 cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
             }
+            .with_default_index_gc()
         })
+    }
+
+    /// P5: assemble the index GC manager by default so generation retirement
+    /// and reclamation stay bounded. Callers that manage GC themselves can
+    /// replace this via [`with_index_gc`](Self::with_index_gc).
+    fn with_default_index_gc(self) -> Self {
+        self.with_index_gc(IndexGcConfig::default())
     }
 
     pub fn with_index_gc(mut self, config: IndexGcConfig) -> Self {
@@ -77,6 +88,7 @@ impl GraphStorageContext {
             write_timestamp_lease: self.write_timestamp_lease.clone(),
             write_gate_lease: self.write_gate_lease.clone(),
             auto_commit_undo: self.auto_commit_undo.clone(),
+            auto_commit_window: self.auto_commit_window.clone(),
             cold_snapshots: self.cold_snapshots.clone(),
         }
     }

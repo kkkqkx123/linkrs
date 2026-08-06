@@ -1133,3 +1133,97 @@ impl<
         Ok(ExecutionResult::Success)
     }
 }
+
+impl<S> GraphService<S>
+where
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + crate::storage::AutoCommitBatchOps
+        + 'static,
+{
+    /// Execute a batch of auto-commit DML statements inside one shared
+    /// auto-commit batch window (P4/P6): the write gate is acquired and MVCC
+    /// snapshots registered once for the whole batch instead of once per
+    /// statement. Each statement is permission-checked individually and runs
+    /// independently (own timestamp / transaction id / undo log); a failure
+    /// rolls back only its own statement and does not abort the rest of the
+    /// batch.
+    ///
+    /// Inside an explicit transaction (or a non-auto-commit session) execution
+    /// falls back to per-statement [`execute`](Self::execute), preserving
+    /// transaction semantics. Returns one outcome per input statement, in
+    /// order.
+    pub async fn execute_batch(
+        &self,
+        session_id: i64,
+        statements: &[String],
+    ) -> Vec<Result<ExecutionResult, String>> {
+        let Some(session) = self.session_manager.find_session(session_id) else {
+            return statements
+                .iter()
+                .map(|_| Err(format!("Invalid session ID: {session_id}")))
+                .collect();
+        };
+        session.charge();
+        let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
+        let username = session.user();
+
+        // The batch window is for auto-commit DML only. Inside an explicit
+        // transaction (or a non-auto-commit session) fall back to
+        // per-statement execution so transaction semantics are preserved.
+        if session.current_transaction().is_some() || !session.is_auto_commit() {
+            let mut results = Vec::with_capacity(statements.len());
+            for stmt in statements {
+                results.push(self.execute(session_id, stmt).await);
+            }
+            return results;
+        }
+
+        // Permission-check first so denied statements are never executed.
+        let mut denied: Vec<(usize, String)> = Vec::new();
+        let mut permitted: Vec<String> = Vec::with_capacity(statements.len());
+        for (index, stmt) in statements.iter().enumerate() {
+            if !self.permission_manager.is_admin(&username) {
+                let permission = self.extract_permission_from_statement(stmt);
+                if let Err(e) = self
+                    .permission_manager
+                    .check_permission(&username, space_id, permission)
+                {
+                    denied.push((index, format!("Permission check failed: {}", e)));
+                    continue;
+                }
+            }
+            permitted.push(stmt.clone());
+        }
+
+        let query_request = crate::api::core::QueryRequest {
+            space_id: session.space().map(|s| s.id),
+            space_name: session.space().map(|s| s.name),
+            auto_commit: true,
+            transaction_id: None,
+            parameters: None,
+        };
+        let outcomes = self
+            .query_api
+            .write()
+            .execute_batch(&permitted, query_request);
+
+        let mut results = Vec::with_capacity(statements.len());
+        let mut permitted_outcomes = outcomes.into_iter();
+        for index in 0..statements.len() {
+            if let Some((_, error)) = denied.iter().find(|(i, _)| *i == index) {
+                results.push(Err(error.clone()));
+                continue;
+            }
+            match permitted_outcomes.next() {
+                Some(Ok(result)) => results.push(Ok(Self::convert_to_execution_result(result))),
+                Some(Err(error)) => results.push(Err(error.to_string())),
+                None => results.push(Err("Batch outcome missing".to_string())),
+            }
+        }
+        results
+    }
+}

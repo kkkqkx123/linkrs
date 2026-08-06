@@ -10,7 +10,7 @@ use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::{QueryStorage, StorageClient, StorageOperationContext};
+use crate::storage::{AutoCommitBatchOps, QueryStorage, StorageClient, StorageOperationContext};
 use crate::sync::SyncManager;
 use crate::transaction::TransactionExecution;
 use parking_lot::RwLock;
@@ -101,11 +101,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         optimizer_engine: Arc<OptimizerEngine>,
         schema_manager: Option<Arc<SchemaManager>>,
     ) -> Self {
-        let pipeline = QueryPipelineManager::with_optimizer(
-            storage,
-            stats_manager,
-            optimizer_engine,
-        );
+        let pipeline =
+            QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine);
         let pipeline = match schema_manager {
             Some(sm) => pipeline.with_schema_manager(sm),
             None => pipeline,
@@ -118,7 +115,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// Create a new QueryApi wired with an engine-level shared scheduler and
     /// a query registry, both created once at server startup and reused
     /// across all queries.
-    pub fn with_shared_scheduler(        storage: Arc<RwLock<S>>,
+    pub fn with_shared_scheduler(
+        storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
         optimizer_engine: Arc<OptimizerEngine>,
         shared_scheduler: Arc<SharedScheduler>,
@@ -165,6 +163,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     pub fn collect_statistics(&self, space: &str, force: bool) -> Result<(), String> {
         self.pipeline_manager.collect_statistics(space, force)?;
         Ok(())
+    }
+
+    /// Query-plan-cache hit rate across all executed statements.
+    pub fn plan_cache_hit_rate(&self) -> f64 {
+        self.pipeline_manager.plan_cache_metrics().hit_rate()
+    }
+
+    /// Number of entries currently held in the query plan cache.
+    pub fn plan_cache_len(&self) -> usize {
+        self.pipeline_manager.plan_cache().len()
     }
 
     /// Create a new QueryApi instance with vector search support
@@ -600,5 +608,80 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 Err(CoreError::Internal(msg))
             }
         }
+    }
+}
+
+impl<S> QueryApi<S>
+where
+    S: StorageClient + Clone + AutoCommitBatchOps + 'static,
+{
+    /// Execute a batch of auto-commit DML statements inside a single
+    /// [`AutoCommitBatchWindow`](crate::storage::AutoCommitBatchWindow) (P4/P6).
+    ///
+    /// Acquires the auto-commit write gate and registers MVCC snapshots once
+    /// for the whole batch instead of once per statement. Each statement still
+    /// executes independently: it allocates its own write timestamp /
+    /// transaction id / undo log, commits on success, and rolls back its own
+    /// partial writes on failure. Intended for auto-commit DML loads (e.g.
+    /// `load_gql_file`); mixed-in read statements are harmless but do not
+    /// share any batching benefit. **DDL statements must not be mixed in**:
+    /// they are not exercised through the auto-commit window and may leave
+    /// the window inconsistent.
+    ///
+    /// Errors do not abort the batch: every statement runs to completion and
+    /// the returned vector holds one `Ok`/`Err` per input statement, in order.
+    /// The window is always finalized before returning.
+    pub fn execute_batch(
+        &mut self,
+        queries: &[String],
+        ctx: QueryRequest,
+    ) -> Vec<Result<QueryResult, CoreError>> {
+        let mut results = Vec::with_capacity(queries.len());
+        let base_storage = match self.pipeline_manager.storage() {
+            Some(storage) => storage,
+            None => {
+                for _ in queries {
+                    results.push(Err(CoreError::Internal("No storage binding".to_string())));
+                }
+                return results;
+            }
+        };
+
+        let window = match base_storage.read().begin_auto_commit_batch() {
+            Ok(window) => window,
+            Err(error) => {
+                for _ in queries {
+                    results.push(Err(CoreError::StorageError(error.to_string())));
+                }
+                return results;
+            }
+        };
+
+        for query in queries {
+            let stmt_storage = match base_storage.read().bind_auto_commit_statement(&window) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    results.push(Err(CoreError::StorageError(error.to_string())));
+                    continue;
+                }
+            };
+            let mut batch_ctx = ctx.clone();
+            batch_ctx.auto_commit = true;
+            batch_ctx.transaction_id = None;
+            results.push(self.execute_with_operation_storage(query, batch_ctx, stmt_storage));
+        }
+
+        if let Err(error) = base_storage.read().finalize_auto_commit_batch(&window) {
+            results.push(Err(CoreError::StorageError(error.to_string())));
+        }
+        results
+    }
+
+    /// Number of P6 Level 2 same-shape DML plan-memo hits since pipeline
+    /// creation (observation for the batch-load regression test).
+    pub fn dml_plan_memo_hits(&self) -> u64 {
+        self.pipeline_manager
+            .last_dml_plan_hits
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }

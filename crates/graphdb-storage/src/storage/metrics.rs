@@ -29,6 +29,29 @@ impl<S: StorageClient> MetricsStorage<S> {
     }
 }
 
+impl<S: StorageClient + crate::storage::AutoCommitBatchOps> crate::storage::AutoCommitBatchOps
+    for MetricsStorage<S>
+{
+    fn begin_auto_commit_batch(&self) -> StorageResult<Arc<crate::storage::AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_batch()
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<crate::storage::AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        let inner = self.inner.bind_auto_commit_statement(window)?;
+        Ok(Self { inner })
+    }
+
+    fn finalize_auto_commit_batch(
+        &self,
+        window: &crate::storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_batch(window)
+    }
+}
+
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;

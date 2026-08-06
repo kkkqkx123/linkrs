@@ -825,6 +825,9 @@ fn memory_limit_triggers_compaction() {
 fn retire_generations_reclaims_retired_checkpoint_dirs() {
     let directory = tempfile::tempdir().expect("tempdir");
     let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+    // P2: force per-statement publication so each update below creates a
+    // retired generation (the accumulation path is covered elsewhere).
+    manager.set_delta_publish_threshold(1);
     let index = create_tag_index("name_idx", "Person");
     manager
         .register_native_index(1, &index)
@@ -880,5 +883,191 @@ fn retire_generations_reclaims_retired_checkpoint_dirs() {
     assert!(
         !gen2.exists(),
         "generation 2 files should be reclaimed after retirement"
+    );
+}
+
+// --- P2: delta accumulation batches generation publication ---
+
+#[test]
+fn delta_accumulation_batches_generation_publication() {
+    use crate::storage::index::traits::VertexIndexOps;
+
+    let manager = IndexDataManagerImpl::new();
+    let index = create_tag_index("name_idx", "Person");
+    manager.register_native_index(1, &index).unwrap();
+
+    // Default threshold (64): 200 entries → a handful of generations instead
+    // of one per statement.
+    for i in 0..200u64 {
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(i as i32),
+                "name_idx",
+                &[("name".to_string(), Value::string(format!("person_{i}")))],
+                i + 1,
+            )
+            .unwrap();
+    }
+
+    let runtime = manager.runtime(1, 1).unwrap();
+    let published = runtime.generations().len();
+    assert!(
+        published <= 2,
+        "200 writes (400 entries) below the 512-entry threshold should stay pending, got {published}"
+    );
+
+    // A read flushes any remaining pending delta and sees all writes.
+    let results = manager
+        .lookup_tag_index(1, &index, &Value::string("person_150"))
+        .unwrap();
+    assert_eq!(results, vec![Value::Int(150)]);
+
+    // The pending buffer is drained after the read.
+    let identity = crate::storage::index::types::IndexIdentity {
+        space_id: 1,
+        index_id: 1,
+    };
+    assert_eq!(manager.pending_delta_entries(identity), 0);
+}
+
+#[test]
+fn delta_accumulation_rollback_path_publishes_per_statement() {
+    use crate::storage::index::traits::VertexIndexOps;
+
+    let manager = IndexDataManagerImpl::new();
+    manager.set_delta_publish_threshold(1);
+    let index = create_tag_index("name_idx", "Person");
+    manager.register_native_index(1, &index).unwrap();
+
+    for i in 0..10u64 {
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(i as i32),
+                "name_idx",
+                &[("name".to_string(), Value::string(format!("person_{i}")))],
+                i + 1,
+            )
+            .unwrap();
+    }
+
+    let runtime = manager.runtime(1, 1).unwrap();
+    // 1 base generation from registration + 10 statement publications.
+    assert_eq!(
+        runtime.generations().len(),
+        11,
+        "threshold 1 must publish one generation per statement"
+    );
+}
+
+/// The pending-aware lookup (P2, no generation publish) must agree with the
+/// publish-first lookup on live entries, tombstones, and overwrites while the
+/// delta is still buffered.
+#[test]
+fn pending_aware_lookup_matches_published_lookup() {
+    use crate::storage::index::traits::VertexIndexOps;
+
+    let manager = IndexDataManagerImpl::new();
+    let index = create_tag_index("name_idx", "Person");
+    manager.register_native_index(1, &index).unwrap();
+
+    // Writes accumulate in the pending buffer (default threshold 512).
+    for i in 0..10u64 {
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(i as i32),
+                "name_idx",
+                &[("name".to_string(), Value::string(format!("name_{i}")))],
+                i + 1,
+            )
+            .unwrap();
+    }
+
+    // Pending-aware read (no publish) sees the live entries.
+    assert_eq!(
+        manager
+            .lookup_tag_index_pending_aware_mvcc(
+                1,
+                &index,
+                &Value::string("name_3"),
+                MAX_TIMESTAMP,
+            )
+            .unwrap(),
+        vec![Value::Int(3)]
+    );
+    assert_eq!(
+        manager
+            .lookup_tag_index_pending_aware_mvcc(
+                1,
+                &index,
+                &Value::string("name_9"),
+                MAX_TIMESTAMP,
+            )
+            .unwrap(),
+        vec![Value::Int(9)]
+    );
+
+    // Publishing and re-reading yields the identical result.
+    let published = manager
+        .lookup_tag_index_mvcc(1, &index, &Value::string("name_3"), MAX_TIMESTAMP)
+        .unwrap();
+    assert_eq!(published, vec![Value::Int(3)]);
+
+    // Overwrite: change vid 5 from name_5 to name_50, both deltas stay
+    // pending. The old value must be tombstoned and the new value visible.
+    manager
+        .update_vertex_indexes_mvcc(
+            1,
+            &Value::Int(5),
+            "name_idx",
+            &[("name".to_string(), Value::string("name_50"))],
+            20,
+        )
+        .unwrap();
+    assert!(
+        manager
+            .lookup_tag_index_pending_aware_mvcc(
+                1,
+                &index,
+                &Value::string("name_5"),
+                MAX_TIMESTAMP,
+            )
+            .unwrap()
+            .is_empty(),
+        "old value must be tombstoned while pending"
+    );
+    assert_eq!(
+        manager
+            .lookup_tag_index_pending_aware_mvcc(
+                1,
+                &index,
+                &Value::string("name_50"),
+                MAX_TIMESTAMP,
+            )
+            .unwrap(),
+        vec![Value::Int(5)]
+    );
+    // The publish-first read agrees after flushing.
+    assert!(manager
+        .lookup_tag_index_mvcc(1, &index, &Value::string("name_5"), MAX_TIMESTAMP)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        manager
+            .lookup_tag_index_mvcc(1, &index, &Value::string("name_50"), MAX_TIMESTAMP)
+            .unwrap(),
+        vec![Value::Int(5)]
+    );
+
+    // Tombstone accounting reconciles pending overwrites: name_5's tombstone
+    // (added at ts 20) was replaced by a live entry at ts 30, so only the
+    // name_50 tombstone remains counted (forward + reverse → 2). Without
+    // reconciliation the counter would read 4.
+    assert_eq!(
+        manager.cached_tombstone_count(),
+        2,
+        "tombstone counter must reconcile pending overwrites"
     );
 }

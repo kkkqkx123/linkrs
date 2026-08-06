@@ -200,6 +200,15 @@ impl SessionManager {
             .await
     }
 
+    /// Execute a batch of auto-commit DML statements inside one server-side
+    /// auto-commit batch window (P4/P6). Returns one result per statement.
+    pub async fn execute_batch(&self, statements: &[String]) -> Result<Vec<QueryResult>> {
+        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+        self.client
+            .execute_query_batch(statements, session.session_id)
+            .await
+    }
+
     /// Check server/database health
     pub async fn health_check(&self) -> Result<bool> {
         self.client.health_check().await

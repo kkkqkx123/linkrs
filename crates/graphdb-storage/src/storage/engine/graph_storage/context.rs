@@ -9,6 +9,7 @@ use crate::core::metadata::{IndexManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
 use crate::core::UserStorage;
+use crate::core::{StorageError, StorageResult};
 use crate::storage::cold::ColdSnapshot;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
@@ -19,14 +20,13 @@ use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
+use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::vertex::{gc_manager::VertexGcManager, IdKey};
 use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
-use graphdb_transaction::transaction::undo_log::UndoLogManager;
-use graphdb_transaction::transaction::{
-    MutationResult, TransactionError, UndoLogEntry, VertexId,
-};
 use graphdb_transaction::core::types::EdgeIdentifier;
+use graphdb_transaction::transaction::undo_log::UndoLogManager;
+use graphdb_transaction::transaction::{MutationResult, TransactionError, UndoLogEntry, VertexId};
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
 type CoreComponents = (
@@ -353,6 +353,8 @@ struct GraphStorageRuntime {
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
     /// Wall-clock time of the last write per edge label, for cold-tier idle checks
     last_edge_write: Arc<Mutex<HashMap<LabelId, std::time::Instant>>>,
+    /// Last index-GC pass time, for throttling opportunistic GC (P5).
+    last_index_gc: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 struct WriteTimestampLease {
@@ -467,9 +469,7 @@ impl std::fmt::Debug for AutoCommitMutationRecorder {
     }
 }
 
-impl graphdb_transaction::transaction::TransactionMutationRecorder
-    for AutoCommitMutationRecorder
-{
+impl graphdb_transaction::transaction::TransactionMutationRecorder for AutoCommitMutationRecorder {
     fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
         if let Some(entry) = mutation.undo_entry {
             self.add_undo_log(entry)
@@ -494,6 +494,170 @@ impl graphdb_transaction::transaction::TransactionMutationRecorder
     fn record_table_modification(&self, _table_name: &str) {}
 }
 
+/// A shared auto-commit batch window (P4).
+///
+/// Acquires the auto-commit write gate and registers MVCC snapshots exactly
+/// once for a run of auto-commit statements, so each statement inside the
+/// window only allocates a fresh write timestamp, transaction id, and
+/// before-image undo log instead of re-acquiring the gate and re-registering
+/// every vertex/edge table's snapshots. Snapshot unregistration and gate
+/// release happen in [`finalize`](Self::finalize) (or on `Drop` as a
+/// backstop against abandoned windows).
+///
+/// Must be created from the pristine base context (no operation bound);
+/// see [`GraphStorageContext::begin_auto_commit_batch`].
+pub struct AutoCommitBatchWindow {
+    base_ctx: Arc<GraphStorageContext>,
+    /// Window-exclusive auto-commit write gate lease.
+    gate_lease: Arc<AutoCommitWriteLease>,
+    /// Write timestamp of the first statement; `None` until the first
+    /// `bind_statement` call, which also registers the shared snapshots.
+    first_ts: Mutex<Option<Timestamp>>,
+    vertex_snapshot_handles: Mutex<Vec<(LabelId, SnapshotHandle)>>,
+    edge_snapshot_registered: AtomicBool,
+    /// Number of statements bound in this window (observation).
+    statement_count: AtomicU64,
+    /// Number of snapshot-registration rounds performed (observation; must be
+    /// 1 for a correctly reused window).
+    snapshot_rounds: AtomicU64,
+}
+
+impl AutoCommitBatchWindow {
+    /// Bind one auto-commit statement inside this window.
+    ///
+    /// Allocates a fresh write timestamp (the first call also registers the
+    /// shared MVCC snapshots at that timestamp), transaction id, and undo log.
+    /// The returned context shares the window's snapshots and write gate and
+    /// must be finalized via `finalize_operation` per statement.
+    pub(crate) fn bind_statement(self: &Arc<Self>) -> StorageResult<GraphStorageContext> {
+        let base = &self.base_ctx;
+        let ts = {
+            let mut first = self.first_ts.lock();
+            match *first {
+                Some(_) => base
+                    .persistent
+                    .version_manager
+                    .try_next_write_timestamp()
+                    .map_err(|error| StorageError::db_error(error.to_string()))?,
+                None => {
+                    let ts = base
+                        .persistent
+                        .version_manager
+                        .try_next_write_timestamp()
+                        .map_err(|error| StorageError::db_error(error.to_string()))?;
+                    *first = Some(ts);
+                    let (vertex_handles, edge_registered) =
+                        base.register_auto_commit_snapshots(ts)?;
+                    self.vertex_snapshot_handles.lock().extend(vertex_handles);
+                    if edge_registered {
+                        self.edge_snapshot_registered.store(true, Ordering::SeqCst);
+                    }
+                    self.snapshot_rounds.fetch_add(1, Ordering::SeqCst);
+                    ts
+                }
+            }
+        };
+
+        let transaction_id = crate::core::types::TransactionId::new(
+            base.persistent
+                .next_auto_transaction_id
+                .fetch_add(1, Ordering::SeqCst),
+        );
+        let undo_log = Arc::new(Mutex::new(UndoLogManager::new()));
+        let context = StorageOperationContext {
+            transaction_id: Some(transaction_id),
+            read_timestamp: ts,
+            write_timestamp: Some(ts),
+            read_only: false,
+            auto_commit: true,
+            mutation_recorder: Some(Arc::new(AutoCommitMutationRecorder {
+                undo: undo_log.clone(),
+            })),
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
+        };
+
+        self.statement_count.fetch_add(1, Ordering::SeqCst);
+        let mut bound = (**base).clone();
+        bound.operation_context = Some(Arc::new(context));
+        bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
+            version_manager: base.persistent.version_manager.clone(),
+            timestamp: ts,
+            finalized: AtomicBool::new(false),
+        }));
+        bound.write_gate_lease = None;
+        bound.auto_commit_undo = Some(undo_log);
+        bound.auto_commit_window = Some(self.clone());
+        Ok(bound)
+    }
+
+    /// Finalize the batch window: unregister the shared MVCC snapshots and
+    /// release the write gate. Idempotent.
+    pub fn finalize(&self) -> StorageResult<()> {
+        self.unregister_snapshots();
+        self.gate_lease.release();
+        Ok(())
+    }
+
+    /// Number of statements bound in this window.
+    pub fn statement_count(&self) -> u64 {
+        self.statement_count.load(Ordering::SeqCst)
+    }
+
+    /// Number of snapshot-registration rounds performed (1 for a reused window).
+    pub fn snapshot_rounds(&self) -> u64 {
+        self.snapshot_rounds.load(Ordering::SeqCst)
+    }
+
+    /// Unregister all snapshots this window registered (idempotent).
+    fn unregister_snapshots(&self) {
+        let vertex_handles = std::mem::take(&mut *self.vertex_snapshot_handles.lock());
+        if !vertex_handles.is_empty() {
+            let tables = self
+                .base_ctx
+                .persistent
+                .data_store
+                .with_vertex_tables(|tables| {
+                    vertex_handles
+                        .iter()
+                        .filter_map(|(label_id, _)| {
+                            tables.get(label_id).map(|table| (*label_id, table.clone()))
+                        })
+                        .collect::<Vec<_>>()
+                });
+            for (label_id, vertex_table) in tables {
+                for (handle_label, handle) in &vertex_handles {
+                    if *handle_label == label_id {
+                        let _ = vertex_table.unregister_snapshot(*handle);
+                    }
+                }
+            }
+        }
+
+        if self.edge_snapshot_registered.swap(false, Ordering::SeqCst) {
+            let first_ts = *self.first_ts.lock();
+            if let Some(ts) = first_ts {
+                let edge_tables = self
+                    .base_ctx
+                    .persistent
+                    .data_store
+                    .with_edge_tables(|tables| tables.values().cloned().collect::<Vec<_>>());
+                for edge_table in edge_tables {
+                    edge_table.write().unregister_snapshot(ts);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for AutoCommitBatchWindow {
+    fn drop(&mut self) {
+        // Backstop for abandoned windows: unregister snapshots (idempotent);
+        // the gate lease releases the write gate on Drop.
+        self.unregister_snapshots();
+    }
+}
+
 impl GraphStorageRuntime {
     fn new() -> Self {
         Self {
@@ -504,6 +668,7 @@ impl GraphStorageRuntime {
             background_freeze_running: Arc::new(AtomicBool::new(false)),
             last_auto_compact: Arc::new(Mutex::new(None)),
             last_edge_write: Arc::new(Mutex::new(HashMap::new())),
+            last_index_gc: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -524,6 +689,7 @@ impl GraphStorageRuntime {
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
+            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -543,6 +709,7 @@ impl GraphStorageRuntime {
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
+            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -555,6 +722,7 @@ impl GraphStorageRuntime {
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
+            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -575,6 +743,32 @@ impl GraphStorageRuntime {
             .as_ref()
             .map(|g: &Arc<IndexGcManager>| g.is_running())
             .unwrap_or(false)
+    }
+
+    /// P5: run an opportunistic index-GC pass, throttled to at most once every
+    /// two seconds, so generation retirement/reclamation stays bounded even
+    /// when no background GC thread is running.
+    fn maybe_run_index_gc(&self) {
+        let Some(gc) = self.index_gc_manager.as_ref() else {
+            return;
+        };
+        {
+            let mut last = self.last_index_gc.lock();
+            if last
+                .as_ref()
+                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2))
+            {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let stats = gc.run_gc_pass();
+        if !stats.is_empty() {
+            log::debug!(
+                "Opportunistic index GC removed {} entries",
+                stats.total_removed()
+            );
+        }
     }
 
     fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
@@ -613,6 +807,12 @@ pub struct GraphStorageContext {
     /// finalize(false) to roll back partial writes (see
     /// [`AutoCommitMutationRecorder`]).
     auto_commit_undo: Option<Arc<Mutex<UndoLogManager>>>,
+    /// When `Some`, this context is bound inside an [`AutoCommitBatchWindow`]
+    /// (P4): MVCC snapshots and the write-gate lease are owned by the window
+    /// and shared across all statements of the batch. `finalize_operation`
+    /// therefore skips per-statement snapshot unregistration and never
+    /// releases the window's write gate.
+    auto_commit_window: Option<Arc<AutoCommitBatchWindow>>,
     /// Read-only cold snapshots indexed by edge label ID, newest last.
     /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
     cold_snapshots: Arc<RwLock<ColdSnapshotMap>>,
@@ -656,6 +856,7 @@ impl GraphStorageContext {
             write_timestamp_lease: None,
             write_gate_lease: None,
             auto_commit_undo: None,
+            auto_commit_window: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         })
     }

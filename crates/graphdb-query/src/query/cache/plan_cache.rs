@@ -762,7 +762,10 @@ impl QueryPlanCache {
             is_transaction: false,
         });
         self.cache.insert(key, cached_plan);
-        self.stats.memory.update(self.estimate_current_memory(), self.cache.entry_count() as usize);
+        self.stats.memory.update(
+            self.estimate_current_memory(),
+            self.cache.entry_count() as usize,
+        );
     }
 
     /// Estimate compute cost in milliseconds from an already-computed score.
@@ -925,6 +928,18 @@ impl QueryPlanCache {
     /// Obtain statistical information
     pub fn stats(&self) -> Arc<PlanCacheStats> {
         self.stats.clone()
+    }
+
+    /// Record a hit without a cache lookup, for the P6 Level 2 same-shape DML
+    /// memo that short-circuits before `get_with_context`. Keeps the hit rate
+    /// accounting consistent with the regular lookup path.
+    pub fn record_memo_hit(&self) {
+        self.stats.counters.record_hit();
+        if let Ok(ref sm_guard) = self.stats_manager.read() {
+            if let Some(ref sm) = **sm_guard {
+                sm.record_cache_hit(0, true);
+            }
+        }
     }
 
     /// Get statistics snapshot
@@ -1171,10 +1186,7 @@ mod tests {
 
     fn make_spec(ranges: &[(i64, i64)], layout_version: Option<u64>) -> PartitionSpec {
         PartitionSpec::try_new(
-            ranges
-                .iter()
-                .map(|(start, end)| *start..*end)
-                .collect(),
+            ranges.iter().map(|(start, end)| *start..*end).collect(),
             PartitionSource::VertexId {
                 tag: "Node".to_string(),
             },
@@ -1209,8 +1221,7 @@ mod tests {
         .expect("valid spec");
         let bumped_version = make_spec(&[(0, 100)], Some(2));
 
-        let key_base =
-            PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &base);
+        let key_base = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &base);
         assert_ne!(
             key_base,
             PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN n", &other_source),
@@ -1225,11 +1236,11 @@ mod tests {
 
     #[test]
     fn partitioned_plan_is_isolated_from_plain_text_lookup() {
-        use crate::query::executor::streaming::plan::types::{
-            CapabilitySet, FragmentGraph, FragmentId, OutputContract, PlanCompatibility,
-            PlanFingerprint, PipelineMode,
-        };
         use crate::query::executor::streaming::parameters::ParameterSchema;
+        use crate::query::executor::streaming::plan::types::{
+            CapabilitySet, FragmentGraph, FragmentId, OutputContract, PipelineMode,
+            PlanCompatibility, PlanFingerprint,
+        };
         use crate::query::executor::streaming::slot::SlotLayout;
         use std::collections::HashMap;
 
@@ -1250,7 +1261,10 @@ mod tests {
                 pipeline_mode: PipelineMode::Pipelined,
             },
             compatibility: PlanCompatibility {
-                fingerprint: PlanFingerprint { version: 1, hash: 0 },
+                fingerprint: PlanFingerprint {
+                    version: 1,
+                    hash: 0,
+                },
                 layout_version: None,
                 required_capabilities: CapabilitySet::EMPTY,
                 planning_config_hash: 0,

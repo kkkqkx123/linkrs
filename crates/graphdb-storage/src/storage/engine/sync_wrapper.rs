@@ -6,6 +6,7 @@
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use crate::storage::engine::graph_storage::AutoCommitBatchWindow;
 use crate::storage::macros::forward_methods;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
@@ -78,6 +79,34 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 }
 
+impl<S: StorageClient + crate::storage::AutoCommitBatchOps> crate::storage::AutoCommitBatchOps
+    for SyncWrapper<S>
+{
+    fn begin_auto_commit_batch(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_batch()
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        // Forward to the inner engine, preserving the wrapper's sync-manager
+        // configuration so fulltext/vector index synchronization still runs at
+        // commit time for each batch statement.
+        let inner = self.inner.bind_auto_commit_statement(window)?;
+        Ok(SyncWrapper {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: self.auto_commit_owner,
+        })
+    }
+
+    fn finalize_auto_commit_batch(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_batch(window)
+    }
+}
+
 impl<S: StorageClient> SyncWrapper<S> {
     /// Get the current transaction ID from storage context.
     fn get_current_txn_id(&self) -> Option<crate::core::types::TransactionId> {
@@ -85,7 +114,6 @@ impl<S: StorageClient> SyncWrapper<S> {
             .operation_context()
             .and_then(|ctx| ctx.transaction_id)
     }
-
     fn commit_transaction_fact(
         &self,
         transaction_id: crate::core::types::TransactionId,

@@ -360,3 +360,48 @@ fn test_property_table_offset_reuse() {
 }
 
 // ==================== MVCC Tests ====================
+
+/// P3: the O(1) `used_data_bytes` counter must match the sum of record
+/// payloads after a sequence of insert / update / delete / compact.
+#[test]
+fn test_used_memory_counter_tracks_records() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("name".to_string(), DataType::String, false)
+        .unwrap();
+    table
+        .add_property("age".to_string(), DataType::Int, true)
+        .unwrap();
+
+    let direct_sum = |t: &PropertyTable| -> usize {
+        t.records
+            .iter()
+            .flatten()
+            .map(|record| record.data.len())
+            .sum()
+    };
+
+    let o1 = table
+        .insert(&[("name".into(), Value::string("alice")), ("age".into(), Value::Int(30))], 1)
+        .unwrap();
+    assert_eq!(table.used_data_bytes, direct_sum(&table));
+
+    let o2 = table
+        .insert(&[("name".into(), Value::string("bob")), ("age".into(), Value::Int(25))], 2)
+        .unwrap();
+    assert_eq!(table.used_data_bytes, direct_sum(&table));
+
+    // In-place single property update.
+    table
+        .set_property_by_id(o1, PropertyId::new(1), Some(Value::Int(31)), 3)
+        .unwrap();
+    assert_eq!(table.used_data_bytes, direct_sum(&table));
+
+    // Physical delete.
+    assert!(table.delete(o2));
+    assert_eq!(table.used_data_bytes, direct_sum(&table));
+
+    // Compaction drops tombstones.
+    table.compact(&[o1].iter().cloned().collect());
+    assert_eq!(table.used_data_bytes, direct_sum(&table));
+}

@@ -291,6 +291,10 @@ pub struct PropertyTable {
     /// Property value index for fast edge lookup by property value.
     /// Maps (property_name → encoded_value → set of offsets).
     value_index: PropertyValueIndex,
+
+    /// O(1) sum of live record payload bytes, maintained incrementally on
+    /// insert/update/delete so `used_memory_size` does not scan all records.
+    used_data_bytes: usize,
 }
 
 impl PropertyTable {
@@ -304,6 +308,7 @@ impl PropertyTable {
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
+            used_data_bytes: 0,
         }
     }
 
@@ -317,6 +322,7 @@ impl PropertyTable {
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
+            used_data_bytes: 0,
         }
     }
 
@@ -559,6 +565,7 @@ impl PropertyTable {
         let record_data = self.serialize_row(values)?;
 
         let record = PropertyRecord::new(record_data.clone(), create_ts);
+        self.used_data_bytes += record.data.len();
 
         let offset = if let Some(free_idx) = self.free_list.pop() {
             let row_idx = (free_idx - 1) as usize;
@@ -805,6 +812,10 @@ impl PropertyTable {
         }
 
         let new_record_obj = PropertyRecord::new(new_record, ts);
+        if let Some(old) = &self.records[row_idx] {
+            self.used_data_bytes = self.used_data_bytes.saturating_sub(old.data.len());
+        }
+        self.used_data_bytes += new_record_obj.data.len();
         self.records[row_idx] = Some(new_record_obj);
 
         // Re-index with new values
@@ -842,6 +853,10 @@ impl PropertyTable {
 
         // Replace with new record (same position, new data + timestamp)
         let new_record_obj = PropertyRecord::new(new_data, ts);
+        if let Some(old) = &self.records[row_idx] {
+            self.used_data_bytes = self.used_data_bytes.saturating_sub(old.data.len());
+        }
+        self.used_data_bytes += new_record_obj.data.len();
         self.records[row_idx] = Some(new_record_obj);
 
         Ok(())
@@ -953,6 +968,9 @@ impl PropertyTable {
         }
 
         for (idx, offset) in indices_to_clear {
+            if let Some(record) = &self.records[idx] {
+                self.used_data_bytes = self.used_data_bytes.saturating_sub(record.data.len());
+            }
             self.records[idx] = None;
             self.free_list.push(offset);
         }
@@ -975,6 +993,9 @@ impl PropertyTable {
             self.value_index.remove_record(&props, offset);
         }
 
+        if let Some(record) = &self.records[row_idx] {
+            self.used_data_bytes = self.used_data_bytes.saturating_sub(record.data.len());
+        }
         self.records[row_idx] = None;
         self.free_list.push(offset);
         true
@@ -1195,6 +1216,7 @@ impl PropertyTable {
         let records_len = read_u32_le(data, &mut offset)? as usize;
         self.records.clear();
         self.row_count = 0;
+        self.used_data_bytes = 0;
 
         for _ in 0..records_len {
             if offset >= data.len() {
@@ -1219,6 +1241,7 @@ impl PropertyTable {
                 let record_data = data[offset..offset + data_len].to_vec();
                 offset += data_len;
 
+                self.used_data_bytes += record_data.len();
                 let record = PropertyRecord {
                     data: record_data,
                     create_ts,
@@ -1305,6 +1328,7 @@ impl PropertyTable {
         self.records = new_records;
         self.row_count = self.records.iter().filter(|r| r.is_some()).count();
         self.free_list.clear();
+        self.resync_used_data_bytes();
 
         // Rebuild tombstone manager with new offsets
         self.tombstones_manager = TieredTombstoneManager::new(10_000);
@@ -1322,15 +1346,23 @@ impl PropertyTable {
     }
 
     pub fn used_memory_size(&self) -> usize {
-        let mut total = 0usize;
-        for record in self.records.iter().flatten() {
-            total += record.data.len();
-        }
+        let mut total = self.used_data_bytes;
         total += self.records.len() * std::mem::size_of::<Option<PropertyRecord>>();
         total += std::mem::size_of::<Self>();
         total += self.value_index.entry_count()
             * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
         total
+    }
+
+    /// Recompute `used_data_bytes` from the current records (used after
+    /// compaction / rebuilds that replace the records array wholesale).
+    fn resync_used_data_bytes(&mut self) {
+        self.used_data_bytes = self
+            .records
+            .iter()
+            .flatten()
+            .map(|record| record.data.len())
+            .sum();
     }
 
     /// Calculate compaction statistics for the property table
@@ -1405,6 +1437,7 @@ impl PropertyTable {
         // Clear and rebuild arrays
         self.records = new_records;
         self.free_list.clear();
+        self.resync_used_data_bytes();
 
         // Rebuild tombstone manager with new offsets
         self.tombstones_manager = TieredTombstoneManager::new(10_000);

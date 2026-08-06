@@ -37,6 +37,32 @@ pub trait VertexIndexOps: Send + Sync {
         read_ts: Timestamp,
     ) -> Result<Vec<Value>, StorageError>;
 
+    /// Look up an index value without forcing pending deltas into a new
+    /// generation (P2). Pending (unpublished) entries are merged in-memory as
+    /// the newest overlay so the result is identical to
+    /// [`lookup_tag_index_mvcc`](Self::lookup_tag_index_mvcc) but without the
+    /// generation churn. Used by the unique-constraint check on the write path,
+    /// where a per-statement publish would defeat delta accumulation.
+    fn lookup_tag_index_pending_aware(
+        &self,
+        space_id: u64,
+        index: &Index,
+        value: &Value,
+    ) -> Result<Vec<Value>, StorageError> {
+        self.lookup_tag_index_pending_aware_mvcc(space_id, index, value, MAX_TIMESTAMP)
+    }
+
+    /// Pending-aware variant of [`lookup_tag_index_mvcc`](Self::lookup_tag_index_mvcc).
+    fn lookup_tag_index_pending_aware_mvcc(
+        &self,
+        space_id: u64,
+        index: &Index,
+        value: &Value,
+        read_ts: Timestamp,
+    ) -> Result<Vec<Value>, StorageError> {
+        self.lookup_tag_index_mvcc(space_id, index, value, read_ts)
+    }
+
     fn clear_tag_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError>;
 }
 

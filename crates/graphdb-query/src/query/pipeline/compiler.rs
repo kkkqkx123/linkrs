@@ -111,6 +111,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         bound: &BoundStatement,
         stmt: &Stmt,
         ast: &Arc<crate::query::parser::ast::stmt::Ast>,
+        dml_shape_cacheable: bool,
     ) -> DBResult<Arc<PhysicalPlan>> {
         let request = query_context.request_context();
         let space_name = query_context
@@ -124,6 +125,32 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
+        // Precomputed so the memo put-path below does not touch `request`
+        // after `query_context` is moved into `compile_from_bound`.
+        let dml_param_sig = if dml_shape_cacheable {
+            Some(Self::dml_param_signature(&request.parameters))
+        } else {
+            None
+        };
+
+        // P6 Level 2: a run of consecutive same-shape DML statements reuses
+        // the memoized physical plan, skipping parameter extraction and the
+        // plan-cache lookup. Keyed by (normalized text, schema version, param
+        // type signature) so DDL or a type change forces a miss.
+        if let Some(sig) = dml_param_sig {
+            if let Some(entry) = &*self.last_dml_plan.lock() {
+                if entry.normalized_text == query_text
+                    && entry.schema_version == schema_version
+                    && entry.param_sig == sig
+                {
+                    self.last_dml_plan_hits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.plan_cache.record_memo_hit();
+                    return Ok(entry.plan.clone());
+                }
+            }
+        }
+
         let mut param_positions = self.param_handler.extract_params(query_text);
         for position in &mut param_positions {
             let name = position
@@ -169,22 +196,35 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 schema_version,
             )
             .map_err(DBError::from)?;
+            if let Some(sig) = dml_param_sig {
+                *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
+                    normalized_text: query_text.to_string(),
+                    schema_version,
+                    param_sig: sig,
+                    plan: cached.plan.clone(),
+                });
+            }
             return Ok(cached.plan.clone());
         }
 
         let (plan, _) = self.compile_from_bound(query_context, bound, ast)?;
-        if super::prepared::is_read_only_cacheable(stmt) {
+        let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
+        if cacheable {
+            if let Some(sig) = dml_param_sig {
+                *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
+                    normalized_text: query_text.to_string(),
+                    schema_version,
+                    param_sig: sig,
+                    plan: plan.clone(),
+                });
+            }
             // Partitioned plans are layout-dependent: store them under their
             // partition fingerprint so a changed layout (ranges, source, or
             // layout version) yields a cache miss instead of reusing a stale
             // physical plan. Single-tree plans keep the plain-text key.
             if let Some(spec) = plan.partition_spec() {
-                self.plan_cache.put_with_partition(
-                    query_text,
-                    spec,
-                    plan.clone(),
-                    param_positions,
-                );
+                self.plan_cache
+                    .put_with_partition(query_text, spec, plan.clone(), param_positions);
             } else {
                 let dependent_tables = collect_dependent_tables(bound);
                 self.plan_cache.put_with_context(
@@ -196,7 +236,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         space_name,
                         schema_version,
                         index_version,
-                        is_dml: false,
+                        is_dml: dml_shape_cacheable,
                         is_transaction: false,
                         optimizer_version: planning_config.optimizer_version,
                         planning_config_hash: planning_config.config_hash,
@@ -228,6 +268,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None => {
                 hasher.write_u8(0);
             }
+        }
+        hasher.finish()
+    }
+
+    /// Type-only signature of the synthesized DML parameters (P6 Level 2).
+    ///
+    /// The P1 shape-normalization path injects exactly the `$__dml_N` values
+    /// into the request parameter map, so the signature can be computed by
+    /// hashing the data types of those entries — avoiding the regex-based
+    /// `extract_params` on the memo fast path.
+    fn dml_param_signature(params: &std::collections::HashMap<String, crate::core::Value>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut names: Vec<&String> = params
+            .keys()
+            .filter(|name| name.starts_with(super::dml_shape::DML_PARAM_PREFIX))
+            .collect();
+        names.sort_unstable();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for name in names {
+            name.hash(&mut hasher);
+            params
+                .get(name)
+                .expect("name comes from params keys")
+                .data_type()
+                .hash(&mut hasher);
         }
         hasher.finish()
     }

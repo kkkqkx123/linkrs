@@ -49,6 +49,12 @@ pub(crate) struct QueryMetadata {
     pub rows_scanned: u64,
 }
 
+/// Batch query response: one [`QueryResponse`] per input statement, in order.
+#[derive(Debug, Deserialize)]
+pub(crate) struct BatchQueryResponse {
+    pub results: Vec<QueryResponse>,
+}
+
 /// Create batch response
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateBatchResponse {

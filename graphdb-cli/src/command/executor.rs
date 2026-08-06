@@ -30,6 +30,19 @@ pub struct CommandExecutor {
 }
 
 impl CommandExecutor {
+    /// Upper bound on statements sent in a single batch request, bounding the
+    /// server-side write-gate hold time and the HTTP request body size.
+    const MAX_BATCH_STATEMENTS: usize = 10_000;
+
+    /// Whether a statement is a pure `INSERT` (vertex/edge) DML statement that
+    /// can be batched into a shared auto-commit window. The first whitespace
+    /// token must be `INSERT`.
+    fn is_insert_statement(content: &str) -> bool {
+        content
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("INSERT"))
+    }
     pub fn new(formatter: OutputFormatter) -> Self {
         Self {
             formatter,
@@ -524,13 +537,16 @@ impl CommandExecutor {
             self.transaction_active = true;
         }
 
-        for stmt in &statements {
+        let mut index = 0;
+        while index < statements.len() {
+            let stmt = &statements[index];
             if !self.conditional_stack.is_active()
                 && !matches!(
                     stmt.kind,
                     crate::command::script::StatementKind::MetaCommand
                 )
             {
+                index += 1;
                 continue;
             }
 
@@ -544,6 +560,95 @@ impl CommandExecutor {
             } else {
                 stmt.content.clone()
             };
+
+            // Batch consecutive pure INSERT statements (auto-commit DML load):
+            // they run inside a single server-side auto-commit batch window.
+            // Any interleaved meta command, non-INSERT statement, or the batch
+            // size cap breaks the run; the server falls back to per-statement
+            // execution inside an explicit transaction.
+            if Self::is_insert_statement(&content) {
+                let mut batch = vec![content];
+                let mut end = index + 1;
+                while end < statements.len() && batch.len() < Self::MAX_BATCH_STATEMENTS {
+                    let next = &statements[end];
+                    if !self.conditional_stack.is_active()
+                        && !matches!(
+                            next.kind,
+                            crate::command::script::StatementKind::MetaCommand
+                        )
+                    {
+                        break;
+                    }
+                    if !matches!(next.kind, crate::command::script::StatementKind::Query) {
+                        break;
+                    }
+                    let next_content = if !raw {
+                        let session = session_mgr.session();
+                        if let Some(s) = session {
+                            s.substitute_variables(&next.content)?
+                        } else {
+                            next.content.clone()
+                        }
+                    } else {
+                        next.content.clone()
+                    };
+                    if !Self::is_insert_statement(&next_content) {
+                        break;
+                    }
+                    batch.push(next_content);
+                    end += 1;
+                }
+
+                if self.tx_manager.is_failed() {
+                    let error = self
+                        .tx_manager
+                        .state()
+                        .error_message()
+                        .unwrap_or("Transaction is in failed state")
+                        .to_string();
+                    return Err(CliError::TransactionFailed(error));
+                }
+
+                let outcomes = session_mgr.execute_batch(&batch).await?;
+                let mut stop = false;
+                for (offset, result) in outcomes.iter().enumerate() {
+                    let batch_stmt = &statements[index + offset];
+                    self.tx_manager.record_query();
+                    if result.error.is_none() {
+                        let output = self.formatter.format_result(result);
+                        self.write_output(&output)?;
+                    } else {
+                        let error = result
+                            .error
+                            .as_ref()
+                            .map(|e| format!("{}: {}", e.code, e.message))
+                            .unwrap_or_else(|| "Unknown error".to_string());
+                        let line_info = if batch_stmt.start_line == batch_stmt.end_line {
+                            format!("line {}", batch_stmt.start_line)
+                        } else {
+                            format!("lines {}-{}", batch_stmt.start_line, batch_stmt.end_line)
+                        };
+                        self.write_output(
+                            &self
+                                .formatter
+                                .format_error(&format!("{}: {} (in {})", path, error, line_info)),
+                        )?;
+                        let on_error_stop = session_mgr
+                            .session()
+                            .map(|s| s.variable_store.get_bool("ON_ERROR_STOP"))
+                            .unwrap_or(false);
+                        if on_error_stop && !self.force_mode {
+                            stop = true;
+                            break;
+                        }
+                    }
+                }
+                index = end;
+                if stop {
+                    break;
+                }
+                continue;
+            }
 
             let command = crate::command::parser::parse_command(&content);
             match self.execute(command, session_mgr).await {
@@ -574,6 +679,7 @@ impl CommandExecutor {
                     }
                 }
             }
+            index += 1;
         }
 
         if self.single_transaction && self.transaction_active {

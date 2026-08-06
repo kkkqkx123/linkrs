@@ -226,6 +226,11 @@ impl TestDb {
         self.schema_manager.clone()
     }
 
+    /// Get a reference to the query API
+    pub fn query_api(&self) -> &QueryApi<GraphStorage> {
+        &self.query_api
+    }
+
     /// Execute a query using a persistent session context
     pub fn execute_query(&mut self, query: &str) -> CoreResult<QueryResult> {
         let trimmed = query.trim().to_uppercase();
@@ -238,9 +243,7 @@ impl TestDb {
             let txn_id = self
                 .transaction_manager
                 .begin_transaction(TransactionOptions::default())
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             self.current_transaction = Some(txn_id);
             return Ok(empty_query_result());
         }
@@ -252,9 +255,7 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .commit_transaction(txn_id)
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             self.current_transaction = None;
             return Ok(empty_query_result());
         }
@@ -266,9 +267,7 @@ impl TestDb {
             })?;
             self.transaction_manager
                 .abort_transaction(txn_id)
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             self.current_transaction = None;
             return Ok(empty_query_result());
         }
@@ -280,15 +279,11 @@ impl TestDb {
             let (ctx, statement_start) = self
                 .transaction_manager
                 .begin_statement(txn_id)
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             let execution = self
                 .transaction_manager
                 .create_execution(txn_id, false)
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             let txn_ctx = graphdb::api::core::types::QueryRequest {
                 space_id: self.current_space_id,
                 space_name: self.current_space_name.clone(),
@@ -296,12 +291,12 @@ impl TestDb {
                 transaction_id: Some(txn_id),
                 parameters: None,
             };
-            let result = self.query_api.execute_with_execution(query, txn_ctx, &execution);
+            let result = self
+                .query_api
+                .execute_with_execution(query, txn_ctx, &execution);
             self.transaction_manager
                 .finish_statement(&ctx, statement_start)
-                .map_err(|e| {
-                    graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string())
-                })?;
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             result
         } else {
             let ctx = graphdb::api::core::types::QueryRequest {
@@ -316,6 +311,37 @@ impl TestDb {
         let result = result?;
 
         // Track space switching from USE statements
+        self.track_space_from_result(&result);
+
+        Ok(result)
+    }
+
+    /// Execute a batch of auto-commit statements in one storage window (P6).
+    ///
+    /// Statements must be plain auto-commit statements (no BEGIN/COMMIT/ROLLBACK
+    /// /USE); each still commits and rolls back independently. The first failing
+    /// statement aborts the load (later statements were still executed by the
+    /// window but their results are discarded).
+    pub fn execute_batch(&mut self, statements: &[String]) -> CoreResult<Vec<QueryResult>> {
+        let ctx = graphdb::api::core::types::QueryRequest {
+            space_id: self.current_space_id,
+            space_name: self.current_space_name.clone(),
+            auto_commit: true,
+            transaction_id: None,
+            parameters: None,
+        };
+        let outcomes = self.query_api.execute_batch(statements, ctx);
+        let mut results = Vec::with_capacity(outcomes.len());
+        for outcome in outcomes {
+            let result = outcome?;
+            self.track_space_from_result(&result);
+            results.push(result);
+        }
+        Ok(results)
+    }
+
+    /// Apply space-switch state from a USE result.
+    fn track_space_from_result(&mut self, result: &QueryResult) {
         if result.columns.iter().any(|c| c == "space_name") {
             if let Some(row) = result.rows.first() {
                 if let Some(Value::String(name)) = row.values.get("space_name") {
@@ -326,8 +352,6 @@ impl TestDb {
                 }
             }
         }
-
-        Ok(result)
     }
 }
 
@@ -394,18 +418,23 @@ pub fn assert_query_err<T: std::fmt::Debug>(result: CoreResult<T>, context: &str
 /// Reads the file line-by-line.  Blank lines and comment lines (`--`)
 /// are statement separators.  Continuation lines (indented, or starting
 /// with `)`) are appended to the current statement.
+///
+/// Consecutive `INSERT` statements are executed as one batch window (P6) so
+/// the auto-commit write gate and MVCC snapshot registrations are shared
+/// across the run; everything else (BEGIN/COMMIT/ROLLBACK, USE, DDL, reads)
+/// runs statement-by-statement via `execute_query`.
 pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         graphdb::api::core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
     })?;
 
+    let mut statements: Vec<String> = Vec::new();
     let mut buffer = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("--") {
             if !buffer.is_empty() {
-                db.execute_query(&buffer)?;
-                buffer.clear();
+                statements.push(std::mem::take(&mut buffer));
             }
             continue;
         }
@@ -414,13 +443,30 @@ pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
             buffer.push_str(trimmed);
         } else {
             if !buffer.is_empty() {
-                db.execute_query(&buffer)?;
+                statements.push(std::mem::take(&mut buffer));
             }
             buffer = trimmed.to_string();
         }
     }
     if !buffer.is_empty() {
-        db.execute_query(&buffer)?;
+        statements.push(buffer);
+    }
+
+    let is_insert = |statement: &str| statement.trim().to_uppercase().starts_with("INSERT ");
+    let mut index = 0;
+    while index < statements.len() {
+        if is_insert(&statements[index]) {
+            let mut batch = vec![statements[index].clone()];
+            index += 1;
+            while index < statements.len() && is_insert(&statements[index]) {
+                batch.push(statements[index].clone());
+                index += 1;
+            }
+            db.execute_batch(&batch)?;
+        } else {
+            db.execute_query(&statements[index])?;
+            index += 1;
+        }
     }
 
     Ok(())

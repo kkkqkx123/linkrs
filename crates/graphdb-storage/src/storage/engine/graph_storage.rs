@@ -18,7 +18,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use context::GraphStorageContext;
+pub use context::{AutoCommitBatchWindow, GraphStorageContext};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +65,34 @@ impl GraphStorage {
     /// Return the MVCC manager used by this storage instance.
     pub fn version_manager(&self) -> Arc<crate::transaction::VersionManager> {
         self.ctx.version_manager().clone()
+    }
+
+    /// Open an auto-commit batch window (P4): acquire the auto-commit write
+    /// gate once and register MVCC snapshots once for a run of auto-commit
+    /// statements. Must be called on the pristine base storage.
+    pub fn begin_auto_commit_batch(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
+        self.ctx.begin_auto_commit_batch()
+    }
+
+    /// Bind one auto-commit statement inside `window`, reusing the window's
+    /// write-gate lease and MVCC snapshot registrations. Each bound storage
+    /// must be finalized (`finalize_operation`) per statement.
+    pub fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<context::AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        Ok(Self {
+            ctx: Arc::new(window.bind_statement()?),
+        })
+    }
+
+    /// Finalize an auto-commit batch window: unregister the window's MVCC
+    /// snapshots and release the write gate. Idempotent.
+    pub fn finalize_auto_commit_batch(
+        &self,
+        window: &context::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        window.finalize()
     }
 
     fn commit_auto_if_needed(&self) -> StorageResult<()> {
@@ -170,6 +198,39 @@ impl GraphStorage {
         let new_ctx = Arc::new((*self.ctx).clone().with_index_gc(config));
         self.ctx = new_ctx;
         self
+    }
+
+    /// P2: set the index delta-publish threshold (entries per generation).
+    ///
+    /// A threshold of `1` disables delta accumulation, restoring per-statement
+    /// generation publication (rollback path). The default is 512.
+    pub fn set_index_delta_publish_threshold(&self, threshold: usize) {
+        self.ctx
+            .index_data_manager()
+            .write()
+            .set_delta_publish_threshold(threshold);
+    }
+
+    /// P5: number of staged-WAL entries held for in-flight transactions.
+    /// Auto-commit statements commit/remove their staged entries on write;
+    /// an unbounded value indicates a lifecycle leak.
+    pub fn staged_wal_len(&self) -> usize {
+        self.ctx.staged_wal_len()
+    }
+
+    /// P5: total number of retired index generations awaiting reclamation.
+    pub fn retired_generation_count(&self) -> usize {
+        self.ctx
+            .index_data_manager()
+            .read()
+            .retired_generation_count()
+    }
+
+    /// The index data manager (tests and diagnostics).
+    pub(crate) fn index_data_manager(
+        &self,
+    ) -> &parking_lot::RwLock<crate::storage::index::IndexDataManagerImpl> {
+        self.ctx.index_data_manager()
     }
 
     pub fn with_vertex_gc(mut self, config: crate::storage::vertex::VertexGcConfig) -> Self {
@@ -517,6 +578,26 @@ impl GraphStorage {
             }
         };
         self.split_native_index(space, index_name, boundary)
+    }
+}
+
+impl crate::storage::AutoCommitBatchOps for GraphStorage {
+    fn begin_auto_commit_batch(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
+        self.ctx.begin_auto_commit_batch()
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<context::AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        GraphStorage::bind_auto_commit_statement(self, window)
+    }
+
+    fn finalize_auto_commit_batch(
+        &self,
+        window: &context::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        GraphStorage::finalize_auto_commit_batch(self, window)
     }
 }
 

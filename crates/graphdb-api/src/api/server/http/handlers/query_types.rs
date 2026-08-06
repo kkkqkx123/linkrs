@@ -12,6 +12,20 @@ pub struct QueryRequest {
     pub parameters: HashMap<String, String>,
 }
 
+/// Batch query request: multiple auto-commit DML statements executed inside a
+/// single shared auto-commit batch window (P4/P6).
+#[derive(Debug, Deserialize)]
+pub struct BatchQueryRequest {
+    pub session_id: i64,
+    pub statements: Vec<String>,
+}
+
+/// Batch query response: one [`QueryResponse`] per input statement, in order.
+#[derive(Debug, Serialize)]
+pub struct BatchQueryResponse {
+    pub results: Vec<QueryResponse>,
+}
+
 /// Query response (structured)
 #[derive(Debug, Serialize)]
 pub struct QueryResponse {

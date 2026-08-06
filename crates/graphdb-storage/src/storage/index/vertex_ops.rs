@@ -85,6 +85,25 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     }
                 }
             }
+            // P2: also account for entries still awaiting generation publication.
+            let pending_guard = self.pending_deltas.lock();
+            if let Some(pending) = pending_guard.get(&identity) {
+                let mut scan = crate::storage::index::index_data_manager::PendingExistingScan {
+                    existing_values: &mut existing_values,
+                    existing_encoded: &mut existing_encoded,
+                    existing_columns: &mut existing_columns,
+                    covering_populated: &mut covering_populated,
+                };
+                crate::storage::index::index_data_manager::merge_pending_existing_values(
+                    pending,
+                    &reverse_prefix.0,
+                    &reverse_end.0,
+                    write_ts,
+                    false,
+                    &mut scan,
+                );
+            }
+            drop(pending_guard);
 
             let values_to_remove: Vec<&Value> = existing_values
                 .iter()
@@ -181,7 +200,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
         };
 
         if !delta.is_empty() {
-            self.publish_delta_generation(identity, delta, write_ts)?;
+            self.accumulate_delta(identity, delta, write_ts)?;
         }
         Ok(())
     }
@@ -206,9 +225,54 @@ impl VertexIndexOps for IndexDataManagerImpl {
         value: &Value,
         read_ts: Timestamp,
     ) -> Result<Vec<Value>, StorageError> {
+        self.lookup_tag_index_internal(space_id, index, value, read_ts, false)
+    }
+
+    fn lookup_tag_index_pending_aware_mvcc(
+        &self,
+        space_id: u64,
+        index: &Index,
+        value: &Value,
+        read_ts: Timestamp,
+    ) -> Result<Vec<Value>, StorageError> {
+        self.lookup_tag_index_internal(space_id, index, value, read_ts, true)
+    }
+
+    fn clear_tag_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
+        let Some(index_id) = self.index_alias(space_id, index_name) else {
+            return Ok(());
+        };
+        self.clear_index(
+            index_id,
+            space_id,
+            index_name,
+            IndexType::TagIndex,
+            MAX_TIMESTAMP,
+        )
+    }
+}
+
+impl IndexDataManagerImpl {
+    /// Shared forward-chain lookup. When `merge_pending` is set, pending
+    /// (unpublished) deltas are treated as the newest overlay and merged
+    /// in-memory; otherwise any pending delta is published first so the
+    /// generation chain scan observes it.
+    fn lookup_tag_index_internal(
+        &self,
+        space_id: u64,
+        index: &Index,
+        value: &Value,
+        read_ts: Timestamp,
+        merge_pending: bool,
+    ) -> Result<Vec<Value>, StorageError> {
         let Some(index_id) = self.index_alias(space_id, &index.name) else {
             return Ok(Vec::new());
         };
+        let identity = IndexIdentity { space_id, index_id };
+        if !merge_pending {
+            // P2: make any pending (unpublished) writes visible to this read.
+            self.publish_pending_delta(identity)?;
+        }
         let runtime = self.runtime(space_id, index_id)?;
         let catalog = self
             .manifest_catalog(space_id, index_id)
@@ -221,6 +285,37 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let mut seen = std::collections::HashSet::new();
         let mut tombstoned = std::collections::HashSet::new();
         let mut results = Vec::new();
+
+        // P2: pending holds the newest writes. Scan it first so its per-entry
+        // state wins over older published generations, mirroring the
+        // newest-first semantics of the published generation chain.
+        if merge_pending {
+            let pending_guard = self.pending_deltas.lock();
+            if let Some(pending) = pending_guard.get(&identity) {
+                for (_, (forward, _)) in pending.per_shard.iter() {
+                    for (key, entry) in forward.range((
+                        std::ops::Bound::Included(prefix.0.clone()),
+                        std::ops::Bound::Excluded(end.0.clone()),
+                    )) {
+                        if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(key) {
+                            if entry.created_ts > read_ts {
+                                continue;
+                            }
+                            if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
+                                tombstoned.insert(vertex_id);
+                                continue;
+                            }
+                            if !seen.contains(&vertex_id) {
+                                seen.insert(vertex_id.clone());
+                                results.push(vertex_id);
+                            }
+                        }
+                    }
+                }
+            }
+            drop(pending_guard);
+        }
+
         for generation in &chain {
             for shard in manifest
                 .shards
@@ -249,18 +344,5 @@ impl VertexIndexOps for IndexDataManagerImpl {
             }
         }
         Ok(results)
-    }
-
-    fn clear_tag_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
-        let Some(index_id) = self.index_alias(space_id, index_name) else {
-            return Ok(());
-        };
-        self.clear_index(
-            index_id,
-            space_id,
-            index_name,
-            IndexType::TagIndex,
-            MAX_TIMESTAMP,
-        )
     }
 }

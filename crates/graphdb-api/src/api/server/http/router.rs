@@ -59,6 +59,7 @@ pub fn create_router<
         + StorageSnapshotOps
         + StorageSyncContextOps
         + StorageOperationContextOps
+        + crate::storage::AutoCommitBatchOps
         + UndoTarget
         + Clone
         + Send
@@ -80,6 +81,7 @@ pub fn create_router<
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))
         .route("/query/validate", post(query::validate))
+        .route("/query/batch", post(query::execute_batch))
         .route(
             "/transactions",
             post(transaction::begin).get(transaction::list_transactions),

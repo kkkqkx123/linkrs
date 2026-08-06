@@ -26,6 +26,8 @@ use std::sync::Arc;
 pub struct DefaultExpressionContext {
     /// Variable storage
     variables: HashMap<String, Value>,
+    /// Query parameter name → value map (resolves `Expression::Parameter`).
+    parameters: Option<Arc<HashMap<String, Value>>>,
     /// Optional graph storage for graph algorithm functions
     storage: Option<Arc<RwLock<dyn StorageReader>>>,
     /// Space name for graph storage access
@@ -37,6 +39,7 @@ impl DefaultExpressionContext {
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
+            parameters: None,
             storage: None,
             space: String::new(),
         }
@@ -46,9 +49,17 @@ impl DefaultExpressionContext {
     pub fn with_storage(storage: Arc<RwLock<dyn StorageReader>>, space: String) -> Self {
         Self {
             variables: HashMap::new(),
+            parameters: None,
             storage: Some(storage),
             space,
         }
+    }
+
+    /// Attach a parameter name → value map so `Expression::Parameter`
+    /// references resolve at evaluation time.
+    pub fn with_parameters(mut self, parameters: Arc<HashMap<String, Value>>) -> Self {
+        self.parameters = Some(parameters);
+        self
     }
 
     /// Add a variable
@@ -74,6 +85,7 @@ impl DefaultExpressionContext {
     pub fn from_execution_context(ctx: &crate::query::executor::base::ExecutionContext) -> Self {
         Self {
             variables: ctx.variables.read().clone(),
+            parameters: None,
             storage: None,
             space: String::new(),
         }
@@ -109,6 +121,12 @@ impl crate::query::executor::expression::evaluator::traits::ExpressionContext
 
     fn set_variable(&mut self, name: String, value: Value) {
         self.variables.insert(name, value);
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<Value> {
+        self.parameters
+            .as_ref()
+            .and_then(|params| params.get(name).cloned())
     }
 
     fn get_function(
