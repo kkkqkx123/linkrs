@@ -20,6 +20,14 @@ pub enum DurabilityLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TransactionIsolationLevel {
     /// Repeatable Read - all statements in the transaction see a snapshot as of the start of the transaction
+    ///
+    /// Note: this applies to explicit transactions driven through the
+    /// `TransactionManager`. Auto-commit DML statements run as single-statement
+    /// transactions that bypass the manager and are serialized by the storage
+    /// write gate; a failed auto-commit statement is rolled back via before-image
+    /// undo. Within a single auto-commit statement the read snapshot is stable,
+    /// but property updates are physically overwritten (no MVCC version chain),
+    /// so two statements racing on the same entity observe each other's writes.
     #[default]
     RepeatableRead,
     /// Read Committed - each statement sees the latest committed snapshot.

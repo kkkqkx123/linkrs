@@ -867,6 +867,54 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_commit_update_rolls_back_before_image_on_abort() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let vertex = Vertex::new(
+            VertexId::from_int64(101),
+            vec![crate::core::vertex_edge_path::Tag::new(
+                "Person".to_string(),
+                vec![
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::BigInt(30)),
+                ]
+                .into_iter()
+                .collect(),
+            )],
+        );
+        storage.insert_vertex("test_space", vertex).unwrap();
+
+        // A failed auto-commit statement must restore the before-image: the
+        // in-place property overwrite (age 30 -> 31) has no MVCC version, so
+        // aborting the write timestamp alone would leak the new value.
+        let mut bound = storage.bind_auto_commit_context().unwrap();
+        let updated = Vertex::new(
+            VertexId::from_int64(101),
+            vec![crate::core::vertex_edge_path::Tag::new(
+                "Person".to_string(),
+                vec![
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::BigInt(31)),
+                ]
+                .into_iter()
+                .collect(),
+            )],
+        );
+        bound.update_vertex("test_space", updated).unwrap();
+        bound.finalize_operation(false).unwrap();
+        drop(bound);
+
+        let v = storage
+            .get_vertex("test_space", &VertexId::from_int64(101))
+            .unwrap()
+            .unwrap();
+        assert_eq!(v.properties.get("age"), Some(&Value::BigInt(30)));
+        assert_eq!(v.properties.get("name"), Some(&Value::string("Alice")));
+    }
+
+    #[test]
     fn test_delete_vertex() {
         let mut storage = create_test_storage();
         setup_space(&mut storage);

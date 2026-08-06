@@ -60,11 +60,12 @@ pub struct VersionManagerConfig {
     /// The oldest timestamp that may be opened as a historical snapshot.
     /// Zero disables the retention check.
     pub retention_frontier: Timestamp,
-    /// Max number of consecutive pending timestamps tolerated before the
-    /// read frontier force-advances past the stall. Prevents a single
-    /// long-lived write transaction from blocking version GC indefinitely.
-    /// Zero disables force-advance (pure sequential advancement).
-    pub max_frontier_stall: u64,
+    /// Minimum age of a `Pending` write timestamp before
+    /// [`VersionManager::reap_expired_write_timestamps`] aborts it as stale.
+    ///
+    /// This replaces the former force-advance (`max_frontier_stall`) which was
+    /// unreachable and, if configured, could publish uncommitted writes.
+    pub write_reap_timeout: Duration,
 }
 
 impl Default for VersionManagerConfig {
@@ -73,7 +74,7 @@ impl Default for VersionManagerConfig {
             max_concurrent_reads: 1000,
             wait_timeout: Duration::from_secs(5),
             retention_frontier: 0,
-            max_frontier_stall: 10_000,
+            write_reap_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -93,8 +94,8 @@ impl VersionManagerConfig {
         self
     }
 
-    pub fn with_max_frontier_stall(mut self, max: u64) -> Self {
-        self.max_frontier_stall = max;
+    pub fn with_write_reap_timeout(mut self, timeout: Duration) -> Self {
+        self.write_reap_timeout = timeout;
         self
     }
 }
@@ -115,7 +116,7 @@ pub struct VersionManager {
 
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
-    write_states: Mutex<BTreeMap<Timestamp, WriteTimestampState>>,
+    write_states: Mutex<BTreeMap<Timestamp, (Instant, WriteTimestampState)>>,
     retention_frontier: AtomicU64,
 }
 
@@ -196,7 +197,7 @@ impl VersionManager {
             .map_err(|_| VersionManagerError::SnapshotTrackingFailed)?;
         self.write_states
             .lock()
-            .insert(ts, WriteTimestampState::Pending);
+            .insert(ts, (Instant::now(), WriteTimestampState::Pending));
         Ok(ts)
     }
 
@@ -352,7 +353,7 @@ impl VersionManager {
         }
         self.write_states
             .lock()
-            .insert(ts, WriteTimestampState::Pending);
+            .insert(ts, (Instant::now(), WriteTimestampState::Pending));
         self.write_pending.fetch_add(1, Ordering::SeqCst);
         drop(_guard);
         Ok(ts)
@@ -372,7 +373,7 @@ impl VersionManager {
 
     fn finish_write_timestamp(&self, ts: Timestamp, state: WriteTimestampState) {
         let mut states = self.write_states.lock();
-        if let Some(entry) = states.get_mut(&ts) {
+        if let Some((_, entry)) = states.get_mut(&ts) {
             if *entry == WriteTimestampState::Pending {
                 *entry = state;
                 let _ = self.snapshot_tracker.release_snapshot(ts);
@@ -380,33 +381,81 @@ impl VersionManager {
             }
         }
 
-        let max_stalled: u64 = self.config.max_frontier_stall;
+        self.advance_read_frontier(&mut states);
+        drop(states);
+        self.write_condvar.notify_all();
+    }
+
+    /// Advance the read frontier over terminal (Committed/Aborted) timestamps.
+    ///
+    /// The frontier never crosses a live `Pending` write: a pending timestamp
+    /// is an in-flight write whose data must not become visible to readers.
+    /// Crossing it would publish the transaction's partial writes (dirty read).
+    /// Long-lived pending writes are instead terminated by
+    /// [`VersionManager::reap_expired_write_timestamps`] (driven by the
+    /// transaction manager's periodic cleanup).
+    fn advance_read_frontier(
+        &self,
+        states: &mut BTreeMap<Timestamp, (Instant, WriteTimestampState)>,
+    ) {
         let mut frontier = self.read_ts.load(Ordering::SeqCst);
-        let mut stalled: u64 = 0;
         loop {
             let next = frontier.saturating_add(1);
-            match states.get(&next).copied() {
+            match states.get(&next).map(|(_, state)| *state) {
                 Some(WriteTimestampState::Committed | WriteTimestampState::Aborted) => {
                     frontier = next;
                     states.remove(&next);
-                    stalled = 0;
-                }
-                Some(WriteTimestampState::Pending) => {
-                    stalled += 1;
-                    if stalled >= max_stalled {
-                        frontier = next;
-                        states.remove(&next);
-                        stalled = 0;
-                    } else {
-                        break;
-                    }
                 }
                 _ => break,
             }
         }
         self.read_ts.store(frontier, Ordering::SeqCst);
+    }
+
+    /// Abort `Pending` write timestamps older than `write_reap_timeout`,
+    /// advancing the read frontier so version GC can proceed.
+    ///
+    /// This is a safety net for write timestamps whose owning path vanished
+    /// (orphaned write). Callers must pass the set of timestamps currently
+    /// owned by live write transactions so those are never reaped; reaping a
+    /// live transaction's timestamp would silently discard its writes.
+    ///
+    /// Returns the number of timestamps reaped.
+    pub fn reap_expired_write_timestamps(
+        &self,
+        timeout: Duration,
+        owned: &std::collections::HashSet<Timestamp>,
+    ) -> usize {
+        let now = Instant::now();
+        let mut states = self.write_states.lock();
+        let expired: Vec<Timestamp> = states
+            .iter()
+            .filter(|(ts, (acquired, state))| {
+                *state == WriteTimestampState::Pending
+                    && !owned.contains(ts)
+                    && now.duration_since(*acquired) > timeout
+            })
+            .map(|(ts, _)| *ts)
+            .collect();
+
+        let mut reaped = 0;
+        for ts in expired {
+            if let Some((_, entry)) = states.get_mut(&ts) {
+                if *entry == WriteTimestampState::Pending {
+                    *entry = WriteTimestampState::Aborted;
+                    let _ = self.snapshot_tracker.release_snapshot(ts);
+                    self.write_pending.fetch_sub(1, Ordering::SeqCst);
+                    reaped += 1;
+                }
+            }
+        }
+
+        if reaped > 0 {
+            self.advance_read_frontier(&mut states);
+        }
         drop(states);
         self.write_condvar.notify_all();
+        reaped
     }
 
     pub fn pending_count(&self) -> i32 {
@@ -431,6 +480,13 @@ impl VersionManager {
     /// Get the snapshot tracker for explicit snapshot management
     pub fn snapshot_tracker(&self) -> &SnapshotTracker {
         &self.snapshot_tracker
+    }
+
+    #[cfg(test)]
+    fn backdate_write_timestamp(&self, ts: Timestamp, elapsed: Duration) {
+        if let Some((acquired, _)) = self.write_states.lock().get_mut(&ts) {
+            *acquired = Instant::now() - elapsed;
+        }
     }
 }
 
@@ -721,5 +777,78 @@ mod tests {
 
         vm.release_read_timestamp_at(snapshot);
         assert_eq!(vm.get_safe_gc_timestamp(), 10);
+    }
+
+    #[test]
+    fn test_frontier_never_crosses_pending_write() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        let second = vm
+            .acquire_insert_timestamp()
+            .expect("second write timestamp");
+
+        // Committing out of order must not advance the frontier past the
+        // still-pending `first` write: crossing it would publish `first`'s
+        // partial writes to new readers (dirty read).
+        vm.commit_write_timestamp(second);
+        assert_eq!(vm.read_timestamp(), first - 1);
+        assert_eq!(vm.pending_count(), 1);
+
+        // Even repeated commit attempts must not skip the pending timestamp.
+        vm.commit_write_timestamp(second);
+        assert_eq!(vm.read_timestamp(), first - 1);
+
+        vm.commit_write_timestamp(first);
+        assert_eq!(vm.read_timestamp(), second);
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_orphaned_write_timestamp_is_reaped() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        let second = vm
+            .acquire_insert_timestamp()
+            .expect("second write timestamp");
+
+        // The owning transaction vanished without commit/abort: `first` stays
+        // Pending and pins the frontier.
+        vm.backdate_write_timestamp(first, Duration::from_secs(120));
+        assert_eq!(vm.read_timestamp(), first - 1);
+
+        let owned = std::collections::HashSet::new();
+        let reaped = vm.reap_expired_write_timestamps(Duration::from_secs(60), &owned);
+        assert_eq!(reaped, 1);
+        // `first` is aborted; `second` is still Pending so the frontier stops
+        // just before it.
+        assert_eq!(vm.read_timestamp(), second - 1);
+        assert_eq!(vm.pending_count(), 1);
+    }
+
+    #[test]
+    fn test_reaper_skips_owned_timestamp() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        vm.backdate_write_timestamp(first, Duration::from_secs(120));
+
+        // The timestamp is owned by a live transaction: it must not be reaped
+        // even though it is older than the reap timeout.
+        let owned = std::collections::HashSet::from([first]);
+        let reaped = vm.reap_expired_write_timestamps(Duration::from_secs(60), &owned);
+        assert_eq!(reaped, 0);
+        assert_eq!(vm.read_timestamp(), first - 1);
+        assert_eq!(vm.pending_count(), 1);
+
+        // Once the owner releases it (no longer owned), the same entry is reaped.
+        let reaped = vm.reap_expired_write_timestamps(Duration::from_secs(60), &HashSet::new());
+        assert_eq!(reaped, 1);
+        assert_eq!(vm.read_timestamp(), first);
+        assert_eq!(vm.pending_count(), 0);
     }
 }

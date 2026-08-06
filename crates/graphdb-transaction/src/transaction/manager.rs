@@ -1815,6 +1815,22 @@ impl TransactionManager {
 
     /// Cleanup expired transactions
     pub fn cleanup_expired_transactions(&self) {
+        // Safety net: reap write timestamps whose owning path vanished (orphaned
+        // write). Timestamps owned by live write transactions are excluded so a
+        // transaction still within its configured timeout is never reaped.
+        let owned: std::collections::HashSet<Timestamp> = self
+            .active_transactions
+            .iter()
+            .filter(|entry| !entry.value().read_only)
+            .map(|entry| entry.value().timestamp())
+            .collect();
+        let reaped = self
+            .version_manager
+            .reap_expired_write_timestamps(self.config.default_timeout, &owned);
+        if reaped > 0 {
+            log::warn!("Reaped {reaped} orphaned write timestamp(s) older than timeout");
+        }
+
         let expired: Vec<(TransactionId, bool)> = self
             .active_transactions
             .iter()

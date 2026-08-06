@@ -811,6 +811,26 @@ fn test_vertex_concurrent_snapshots_same_timestamp() {
 }
 
 #[test]
+fn test_min_active_snapshot_ts_incremental_out_of_order() {
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+
+    // Register out of order; the min must be tracked incrementally.
+    let snap_hi = table.register_snapshot(300).unwrap();
+    assert_eq!(table.min_active_snapshot_ts(), 300);
+    let snap_lo = table.register_snapshot(100).unwrap();
+    assert_eq!(table.min_active_snapshot_ts(), 100);
+
+    // Unregistering a non-min timestamp must not rescan or change the min.
+    table.unregister_snapshot(snap_hi).unwrap();
+    assert_eq!(table.min_active_snapshot_ts(), 100);
+
+    // Unregistering the current min recomputes it.
+    table.unregister_snapshot(snap_lo).unwrap();
+    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
+}
+
+#[test]
 fn test_vertex_gc_placeholder() {
     let schema = create_test_schema();
     let mut table = new_table(0, "person", schema);

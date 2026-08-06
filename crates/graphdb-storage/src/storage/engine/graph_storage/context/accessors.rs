@@ -57,10 +57,17 @@ impl GraphStorageContext {
         let mut bound = self.clone();
         bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = None;
+        bound.write_gate_lease = None;
         bound
     }
 
     pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
+        // Auto-commit DML is serialized through the write gate: these
+        // statements bypass the transaction manager and have no write-set
+        // conflict detection, so serializing them makes statement ordering
+        // deterministic and prevents silent lost updates (see
+        // `AutoCommitWriteGate`). Read-only statements never take this path.
+        let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
         let timestamp = self
             .persistent
             .version_manager
@@ -73,37 +80,53 @@ impl GraphStorageContext {
         );
 
         let mut bound = self.clone();
+        let undo_log = Arc::new(parking_lot::Mutex::new(
+            graphdb_transaction::transaction::UndoLogManager::new(),
+        ));
         let mut context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: timestamp,
             write_timestamp: Some(timestamp),
             read_only: false,
             auto_commit: true,
-            mutation_recorder: None,
+            // Record before-images so a failed statement (finalize(false)) can
+            // roll back partial writes (see `AutoCommitMutationRecorder`).
+            mutation_recorder: Some(Arc::new(super::AutoCommitMutationRecorder {
+                undo: undo_log.clone(),
+            })),
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
         };
 
-        // Register MVCC snapshots to prevent GC from cleaning data during the transaction
-        self.persistent
-            .data_store
-            .with_vertex_tables_mut(|vertex_tables| {
-                for (label_id, vertex_table) in vertex_tables.iter() {
-                    if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
-                        context
-                            .mvcc_vertex_snapshot_handles
-                            .push((*label_id, handle));
-                    }
-                }
-                Ok(())
-            })?;
+        // Register MVCC snapshots to prevent GC from cleaning data during the
+        // transaction. Scatter-gather: collect table references under a brief
+        // catalog READ lock (so concurrent transactions and DDL never block on
+        // the catalog write lock here), then register each table under its own
+        // per-table lock outside the catalog lock.
+        let vertex_tables: Vec<(LabelId, Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>)> =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|tables| {
+                    tables
+                        .iter()
+                        .map(|(label_id, table)| (*label_id, table.clone()))
+                        .collect()
+                });
+        for (label_id, vertex_table) in vertex_tables {
+            if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
+                context
+                    .mvcc_vertex_snapshot_handles
+                    .push((label_id, handle));
+            }
+        }
 
-        self.persistent
-            .data_store
-            .for_all_edge_partitions_mut(|_key, table| {
-                table.register_snapshot(timestamp);
-                Ok(())
-            })?;
+        let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
+            self.persistent
+                .data_store
+                .with_edge_tables(|tables| tables.values().cloned().collect());
+        for edge_table in edge_tables {
+            edge_table.write().register_snapshot(timestamp);
+        }
         context.mvcc_edge_snapshot_registered = true;
 
         bound.operation_context = Some(Arc::new(context));
@@ -112,6 +135,8 @@ impl GraphStorageContext {
             timestamp,
             finalized: std::sync::atomic::AtomicBool::new(false),
         }));
+        bound.write_gate_lease = Some(write_gate_lease);
+        bound.auto_commit_undo = Some(undo_log);
         Ok(bound)
     }
 
@@ -156,34 +181,57 @@ impl GraphStorageContext {
         let vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)> =
             operation.mvcc_vertex_snapshot_handles.clone();
 
-        // Unregister MVCC vertex snapshots
+        // Unregister MVCC vertex snapshots (scatter-gather, brief read lock).
         if !vertex_snapshot_handles.is_empty() {
-            self.persistent
-                .data_store
-                .with_vertex_tables_mut(|vertex_tables| {
-                    for (label_id, handle) in &vertex_snapshot_handles {
-                        if let Some(vertex_table) = vertex_tables.get(label_id) {
-                            let _ = vertex_table.unregister_snapshot(*handle);
-                        }
+            let tables: Vec<(LabelId, Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>)> =
+                self.persistent
+                    .data_store
+                    .with_vertex_tables(|vertex_tables| {
+                        vertex_snapshot_handles
+                            .iter()
+                            .filter_map(|(label_id, _)| {
+                                vertex_tables.get(label_id).map(|table| (*label_id, table.clone()))
+                            })
+                            .collect()
+                    });
+            for (label_id, vertex_table) in tables {
+                for (handle_label, handle) in &vertex_snapshot_handles {
+                    if *handle_label == label_id {
+                        let _ = vertex_table.unregister_snapshot(*handle);
                     }
-                    Ok(())
-                })?;
+                }
+            }
         }
 
         // Unregister MVCC edge snapshots
         if operation.mvcc_edge_snapshot_registered {
-            self.persistent
-                .data_store
-                .for_all_edge_partitions_mut(|_key, table| {
-                    table.unregister_snapshot(timestamp);
-                    Ok(())
-                })?;
+            let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
+                self.persistent
+                    .data_store
+                    .with_edge_tables(|tables| tables.values().cloned().collect());
+            for edge_table in edge_tables {
+                edge_table.write().unregister_snapshot(timestamp);
+            }
         }
 
         if committed {
             self.commit_write_timestamp(timestamp);
         } else {
+            // Roll back partial writes recorded during the statement before
+            // aborting the write timestamp. Without this, an in-place property
+            // overwrite from a failed statement would remain physically present
+            // while the timestamp is Aborted.
+            if let Some(undo) = &self.auto_commit_undo {
+                let mut log = undo.lock();
+                if let Err(error) = log.execute_undo(self, timestamp) {
+                    log::error!("Auto-commit rollback failed: {}", error);
+                }
+            }
             self.abort_write_timestamp(timestamp);
+        }
+        // Release the auto-commit write gate so the next DML statement can run.
+        if let Some(lease) = &self.write_gate_lease {
+            lease.release();
         }
         Ok(())
     }

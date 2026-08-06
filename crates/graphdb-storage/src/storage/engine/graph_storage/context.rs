@@ -22,6 +22,11 @@ use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager}
 use crate::storage::vertex::{gc_manager::VertexGcManager, IdKey};
 use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
+use graphdb_transaction::transaction::undo_log::UndoLogManager;
+use graphdb_transaction::transaction::{
+    MutationResult, TransactionError, UndoLogEntry, VertexId,
+};
+use graphdb_transaction::core::types::EdgeIdentifier;
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
 type CoreComponents = (
@@ -98,6 +103,8 @@ struct GraphStoragePersistent {
     layout: GraphStorageLayout,
     stats_manager: Option<Arc<StatsManager>>,
     next_auto_transaction_id: Arc<AtomicU64>,
+    /// Serializes auto-commit DML statements (see [`AutoCommitWriteGate`]).
+    auto_commit_write_gate: Arc<AutoCommitWriteGate>,
     staged_wal: Arc<
         dashmap::DashMap<
             crate::core::types::TransactionId,
@@ -201,6 +208,7 @@ impl GraphStoragePersistent {
             // durable outbox. Keep auto-generated IDs in the non-negative
             // i64 domain while leaving room below the high bit for callers.
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
+            auto_commit_write_gate: AutoCommitWriteGate::new(),
             staged_wal: Arc::new(dashmap::DashMap::new()),
         }
     }
@@ -293,6 +301,7 @@ impl GraphStoragePersistent {
             layout,
             stats_manager: None,
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
+            auto_commit_write_gate: AutoCommitWriteGate::new(),
             staged_wal: Arc::new(dashmap::DashMap::new()),
         })
     }
@@ -372,6 +381,117 @@ impl WriteTimestampLease {
             self.version_manager.abort_write_timestamp(self.timestamp);
         }
     }
+}
+
+/// Serializes auto-commit DML statements.
+///
+/// Auto-commit statements bypass the transaction manager, so they have no
+/// write-set conflict detection. Serializing them with this gate gives
+/// deterministic statement ordering: each auto-commit write observes every
+/// previously committed auto-commit write, eliminating silent lost updates
+/// (Last-Writer-Wins on read-modify-write). This mirrors the single-writer
+/// default of other embedded graph databases. Read-only statements never
+/// acquire the gate, so reads stay fully concurrent.
+///
+/// Implemented as a flag + condvar so the lease can be shared across clones
+/// of the bound context; the lease is released on finalize or Drop.
+struct AutoCommitWriteGate {
+    locked: AtomicBool,
+    mutex: Mutex<()>,
+    condvar: parking_lot::Condvar,
+}
+
+impl AutoCommitWriteGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            locked: AtomicBool::new(false),
+            mutex: Mutex::new(()),
+            condvar: parking_lot::Condvar::new(),
+        })
+    }
+
+    fn acquire(self: &Arc<Self>) -> Arc<AutoCommitWriteLease> {
+        let mut guard = self.mutex.lock();
+        while self.locked.swap(true, Ordering::Acquire) {
+            self.condvar.wait(&mut guard);
+        }
+        drop(guard);
+        Arc::new(AutoCommitWriteLease {
+            gate: self.clone(),
+            held: AtomicBool::new(true),
+        })
+    }
+
+    fn release(&self) {
+        self.locked.store(false, Ordering::Release);
+        self.condvar.notify_one();
+    }
+}
+
+struct AutoCommitWriteLease {
+    gate: Arc<AutoCommitWriteGate>,
+    held: AtomicBool,
+}
+
+impl AutoCommitWriteLease {
+    /// Release the gate immediately (idempotent; Drop is the backstop).
+    fn release(&self) {
+        if self.held.swap(false, Ordering::AcqRel) {
+            self.gate.release();
+        }
+    }
+}
+
+impl Drop for AutoCommitWriteLease {
+    fn drop(&mut self) {
+        if self.held.swap(false, Ordering::AcqRel) {
+            self.gate.release();
+        }
+    }
+}
+
+/// Collects before-image undo entries while an auto-commit statement executes.
+///
+/// Auto-commit statements have no MVCC version chain (property updates are
+/// in-place overwrites), so without undo a mid-statement failure would leave
+/// the overwritten value physically present while the write timestamp is
+/// marked Aborted. Recording undo entries lets `finalize_operation(false)`
+/// roll the partial writes back, restoring the before-images.
+struct AutoCommitMutationRecorder {
+    undo: Arc<Mutex<UndoLogManager>>,
+}
+
+impl std::fmt::Debug for AutoCommitMutationRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AutoCommitMutationRecorder").finish()
+    }
+}
+
+impl graphdb_transaction::transaction::TransactionMutationRecorder
+    for AutoCommitMutationRecorder
+{
+    fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        if let Some(entry) = mutation.undo_entry {
+            self.add_undo_log(entry)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record_vertex_write(&self, _vertex_id: VertexId) {}
+
+    fn record_vertex_delete(&self, _vertex_id: VertexId) {}
+
+    fn record_edge_write(&self, _edge: EdgeIdentifier) {}
+
+    fn add_undo_log(&self, entry: UndoLogEntry) -> Result<(), TransactionError> {
+        self.undo
+            .lock()
+            .add(entry)
+            .map_err(|e| TransactionError::internal(e.to_string()))
+    }
+
+    fn record_table_modification(&self, _table_name: &str) {}
 }
 
 impl GraphStorageRuntime {
@@ -486,6 +606,13 @@ pub struct GraphStorageContext {
     runtime: GraphStorageRuntime,
     operation_context: Option<Arc<StorageOperationContext>>,
     write_timestamp_lease: Option<Arc<WriteTimestampLease>>,
+    /// Held while an auto-commit DML statement executes (see
+    /// [`AutoCommitWriteGate`]); released on finalize or Drop.
+    write_gate_lease: Option<Arc<AutoCommitWriteLease>>,
+    /// Before-image undo log for the active auto-commit statement; applied on
+    /// finalize(false) to roll back partial writes (see
+    /// [`AutoCommitMutationRecorder`]).
+    auto_commit_undo: Option<Arc<Mutex<UndoLogManager>>>,
     /// Read-only cold snapshots indexed by edge label ID, newest last.
     /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
     cold_snapshots: Arc<RwLock<ColdSnapshotMap>>,
@@ -527,6 +654,8 @@ impl GraphStorageContext {
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
             write_timestamp_lease: None,
+            write_gate_lease: None,
+            auto_commit_undo: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -535,5 +664,53 @@ impl GraphStorageContext {
 impl Default for GraphStorageContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::thread;
+
+    #[test]
+    fn test_auto_commit_write_gate_mutual_exclusion() {
+        let gate = AutoCommitWriteGate::new();
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let gate = gate.clone();
+            let active = active.clone();
+            let max_active = max_active.clone();
+            handles.push(thread::spawn(move || {
+                let _lease = gate.acquire();
+                let cur = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                max_active.fetch_max(cur, AtomicOrdering::SeqCst);
+                thread::sleep(std::time::Duration::from_millis(5));
+                active.fetch_sub(1, AtomicOrdering::SeqCst);
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(
+            max_active.load(AtomicOrdering::SeqCst),
+            1,
+            "auto-commit write gate must never admit more than one writer"
+        );
+    }
+
+    #[test]
+    fn test_auto_commit_write_gate_release_is_idempotent() {
+        let gate = AutoCommitWriteGate::new();
+        let lease = gate.acquire();
+        lease.release();
+        // Releasing twice (release + Drop) must not panic or double-notify.
+        drop(lease);
+        // The gate must accept a new writer after release.
+        let next = gate.acquire();
+        drop(next);
     }
 }

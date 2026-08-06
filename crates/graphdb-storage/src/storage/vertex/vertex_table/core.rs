@@ -662,13 +662,12 @@ impl VertexTable {
     /// Returns a unique SnapshotHandle that must be used to unregister later.
     pub fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
         *self.mvcc.active_snapshots.entry(ts).or_insert(0) += 1;
-        self.mvcc.min_active_snapshot_ts = self
-            .mvcc
-            .active_snapshots
-            .keys()
-            .min()
-            .copied()
-            .unwrap_or(Timestamp::MAX);
+        // Incremental min maintenance: a new snapshot can only lower the
+        // minimum, so compare against the current value instead of rescanning
+        // the whole map (which made transaction begin O(active snapshots)).
+        if ts < self.mvcc.min_active_snapshot_ts {
+            self.mvcc.min_active_snapshot_ts = ts;
+        }
 
         self.mvcc.handle_counter += 1;
         Ok(SnapshotHandle::new(ts, self.mvcc.handle_counter))
@@ -683,17 +682,19 @@ impl VertexTable {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 self.mvcc.active_snapshots.remove(&handle.ts);
+                // Only rescan when the removed timestamp was the current
+                // minimum; otherwise the min is unchanged.
+                if handle.ts == self.mvcc.min_active_snapshot_ts {
+                    self.mvcc.min_active_snapshot_ts = self
+                        .mvcc
+                        .active_snapshots
+                        .keys()
+                        .min()
+                        .copied()
+                        .unwrap_or(Timestamp::MAX);
+                }
             }
         }
-
-        // Update min_active_snapshot_ts
-        self.mvcc.min_active_snapshot_ts = self
-            .mvcc
-            .active_snapshots
-            .keys()
-            .min()
-            .copied()
-            .unwrap_or(Timestamp::MAX);
 
         Ok(())
     }
