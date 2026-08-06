@@ -746,3 +746,47 @@ fn parallel_unanchored_two_hop_matches_serial() {
         "2-hop traversal must execute on at least 2 workers, got actual={actual}:\n{plan}"
     );
 }
+
+#[test]
+fn partitioned_equality_join_matches_serial_results() {
+    // Equality join between two tagged vertex scans (E1b). Results must be
+    // identical to the serial path whether the join partitions directly or
+    // falls back to the global gather-then-join path.
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage, 1);
+    let mut parallel = build_pipeline(&storage, 2);
+
+    // Node.value == Other.value holds for exactly the 1000 vertices where
+    // Other.vid is in [0, 1000) (Other.value = vid + 1000).
+    let q = "MATCH (a:Node),(b:Other) WHERE a.value = b.value RETURN count(*)";
+    let serial_rows = query_rows(&mut serial, q);
+    let parallel_rows = query_rows(&mut parallel, q);
+    assert_eq!(
+        serial_rows,
+        parallel_rows,
+        "partitioned equality join mismatch"
+    );
+    assert_eq!(
+        serial_rows,
+        vec![vec![Value::BigInt(1000)]],
+        "equality join must produce exactly 1000 matches, got {serial_rows:?}"
+    );
+
+    // When partitioning is active the plan must report real workers and no
+    // fallback reason (a silent serial fallback would hide regressions).
+    let output = query_rows(
+        &mut parallel,
+        "EXPLAIN ANALYZE MATCH (a:Node),(b:Other) WHERE a.value = b.value RETURN count(*)",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+    if plan.contains("Partitioning:") {
+        assert!(
+            !plan.contains("fallback_reason"),
+            "partitioned equality join must not report a fallback reason, got:\n{plan}"
+        );
+        assert!(
+            plan.contains("actual="),
+            "partitioned equality join must report actual workers, got:\n{plan}"
+        );
+    }
+}

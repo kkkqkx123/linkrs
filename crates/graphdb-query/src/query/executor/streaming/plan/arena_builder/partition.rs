@@ -20,11 +20,14 @@ use super::super::types::{
 };
 use super::assembler::{
     ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx,
-};use super::specs::{
-    build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec, build_limit_spec,
-    build_project_spec, build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
-    count_only_expand_below, is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
+use super::specs::{
+    build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec,
+    build_hash_inner_join_spec, build_inner_join_spec, build_limit_spec, build_project_spec,
+    build_sort_spec, build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
+    is_count_only_aggregate, COUNT_ONLY_COLUMN,
+};
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::ExecutionContext;
@@ -141,6 +144,84 @@ fn build_chain_group(
     //    partition's vertex-id range (or StorageScanEdges bound to a src-id
     //    range for edge scans), followed by the local Filter/Project pipeline
     //    and, for split aggregates, the PartialAggregate phase.
+    let partition_fids = build_partition_local_fragments(
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
+        chain,
+        scan,
+        spec,
+        exec_ctx,
+    )?;
+
+    // 2. Exchange fragment: Concatenate over all partition fragments.
+    let mut child_fid = ArenaPlanAssembler::push_exchange_op(
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
+        partition_fids,
+        spec.partition_count(),
+    )
+    .0;
+
+    // 3. Global operators above the exchange, scan-first order.
+    for (index, op) in chain.global.iter().enumerate() {
+        if index == 0 {
+            if let Some(agg) = chain.aggregate_split {
+                let (_, final_spec) = split_aggregate(agg);
+                child_fid = ArenaPlanAssembler::push_global_blocking_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    child_fid,
+                    agg.id(),
+                    final_spec,
+                    PhysicalProperties::single_blocking_with_budget(),
+                )?
+                .0;
+                continue;
+            }
+        }
+        child_fid = push_global_op(
+            operators,
+            fragments,
+            op_alloc,
+            frag_alloc,
+            child_fid,
+            op,
+        )?
+        .0;
+    }
+
+    let root_operator = fragments
+        .get(child_fid.0)
+        .map(|f| f.root_operator)
+        .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
+
+    Ok((child_fid, root_operator))
+}
+
+/// Build one partition-local scan chain fragment per configured range: the
+/// storage scan bound to that range plus the chain's local operators
+/// (Filter/Project/ExpandAll) and, for split aggregates, the PartialAggregate
+/// phase. Returns the fragment id per range in partition order.
+///
+/// Shared by the single-chain [`build_chain_group`] and the E1b co-partition
+/// direct join, which pairs the left/right partition fragments by index.
+#[allow(clippy::too_many_arguments)]
+fn build_partition_local_fragments(
+    operators: &mut Vec<PhysicalOperatorSpec>,
+    fragments: &mut Vec<FragmentSpec>,
+    op_alloc: &mut PhysicalOperatorIdAllocator,
+    frag_alloc: &mut ArenaFragmentAllocator,
+    chain: &PartitionedChain,
+    scan: &PlanNodeEnum,
+    spec: &crate::query::planning::plan::PartitionSpec,
+    exec_ctx: &ExecutionContext,
+) -> Result<Vec<FragmentId>, PlanBuildError> {
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
     for range in spec.ranges() {
         let mut scan_spec = build_source_spec(scan, exec_ctx)?;
@@ -228,54 +309,7 @@ fn build_chain_group(
         }
         partition_fids.push(fid);
     }
-
-    // 2. Exchange fragment: Concatenate over all partition fragments.
-    let mut child_fid = ArenaPlanAssembler::push_exchange_op(
-        operators,
-        fragments,
-        op_alloc,
-        frag_alloc,
-        partition_fids,
-        spec.partition_count(),
-    )
-    .0;
-
-    // 3. Global operators above the exchange, scan-first order.
-    for (index, op) in chain.global.iter().enumerate() {
-        if index == 0 {
-            if let Some(agg) = chain.aggregate_split {
-                let (_, final_spec) = split_aggregate(agg);
-                child_fid = ArenaPlanAssembler::push_global_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    child_fid,
-                    agg.id(),
-                    final_spec,
-                    PhysicalProperties::single_blocking_with_budget(),
-                )?
-                .0;
-                continue;
-            }
-        }
-        child_fid = push_global_op(
-            operators,
-            fragments,
-            op_alloc,
-            frag_alloc,
-            child_fid,
-            op,
-        )?
-        .0;
-    }
-
-    let root_operator = fragments
-        .get(child_fid.0)
-        .map(|f| f.root_operator)
-        .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
-
-    Ok((child_fid, root_operator))
+    Ok(partition_fids)
 }
 
 /// The binary operators over independent scan branches that E1a/E1b can partition.
@@ -314,21 +348,70 @@ fn split_independent_branches(
         PlanNodeEnum::InnerJoin(join) => {
             // E1b: allow equality join when the join key is a simple variable
             // reference (i.e. the vertex-id partition key).
-            let keys_are_simple = join.hash_keys().len() == 1
-                && join.probe_keys().len() == 1
-                && join.hash_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
-                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-                })
-                && join.probe_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
-                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-                });
-            if keys_are_simple {
+            if equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
+                Some((join.left_input(), join.right_input(), IndependentBranchOp::InnerJoin))
+            } else {
+                None
+            }
+        }
+        PlanNodeEnum::HashInnerJoin(join) => {
+            // E1b: real keyed-join queries lower to a HashInnerJoin node; it is
+            // partitioned the same way as the plain InnerJoin variant.
+            if equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
                 Some((join.left_input(), join.right_input(), IndependentBranchOp::InnerJoin))
             } else {
                 None
             }
         }
         _ => None,
+    }
+}
+
+/// Whether a join's hash/probe keys are each a single simple variable
+/// reference (the only key shape the partitioned join path supports).
+fn equality_join_keys_are_simple(
+    hash_keys: &[ContextualExpression],
+    probe_keys: &[ContextualExpression],
+) -> bool {
+    hash_keys.len() == 1
+        && probe_keys.len() == 1
+        && hash_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+            matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+        })
+        && probe_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+            matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+        })
+}
+
+/// Whether a join key references the vertex-id partition key (`vid`), the only
+/// key that is partition-local under vertex-id range partitioning.
+fn key_references_vid(expr: &ContextualExpression) -> bool {
+    expr.expression().map_or(false, |meta| {
+        matches!(
+            meta.inner(),
+            Expression::Variable(name) if name == "vid" || name.ends_with(".vid")
+        )
+    })
+}
+
+/// Whether every hash/probe key of the join references the vertex-id partition
+/// key. Co-partition direct join is only correct for such keys: two matching
+/// rows must land in the same vertex-id range partition.
+fn equality_join_keys_reference_vid(node: &PlanNodeEnum) -> bool {
+    match node {
+        PlanNodeEnum::InnerJoin(join) => {
+            !join.hash_keys().is_empty()
+                && join.hash_keys().iter().all(key_references_vid)
+                && !join.probe_keys().is_empty()
+                && join.probe_keys().iter().all(key_references_vid)
+        }
+        PlanNodeEnum::HashInnerJoin(join) => {
+            !join.hash_keys().is_empty()
+                && join.hash_keys().iter().all(key_references_vid)
+                && !join.probe_keys().is_empty()
+                && join.probe_keys().iter().all(key_references_vid)
+        }
+        _ => false,
     }
 }
 
@@ -366,6 +449,34 @@ fn build_partitioned_multi(
         return Ok(None);
     };
 
+    // E1b: carry the equality condition from the logical join keys. Dropping
+    // it would turn a partitioned equality join into an unconditional cross
+    // join (nested-loop join matches every left x right pair when the
+    // condition is None).
+    let join_spec: Option<JoinSpec> = match node {
+        PlanNodeEnum::InnerJoin(join) => Some(build_inner_join_spec(join)?),
+        PlanNodeEnum::HashInnerJoin(join) => Some(build_hash_inner_join_spec(join)?),
+        _ => None,
+    };
+
+    // E1b co-partition direct join: when both sides are simple scan chains
+    // (no global operators / aggregates) and the join key is the vertex-id
+    // partition key, pair the partition-local scan fragments and join them
+    // per-partition before the global exchange. Guards that fail fall back to
+    // the global join path below.
+    if let Some(join_spec) = join_spec.as_ref() {
+        if let Some(result) = build_co_partitioned_join(
+            node,
+            join_spec.clone(),
+            &left_chain,
+            &right_chain,
+            spec,
+            exec_ctx,
+        )? {
+            return Ok(Some(result));
+        }
+    }
+
     let mut operators = Vec::new();
     let mut fragments = Vec::new();
     let mut op_alloc = PhysicalOperatorIdAllocator::new();
@@ -398,9 +509,15 @@ fn build_partitioned_multi(
             IndependentBranchOp::Minus => SetSpec::Minus.into(),
             IndependentBranchOp::Intersect => SetSpec::Intersect.into(),
             IndependentBranchOp::CrossJoin => JoinSpec::CrossJoin.into(),
-            IndependentBranchOp::InnerJoin => JoinSpec::InnerJoin {
-                join_condition: None,
-            }.into(),
+            IndependentBranchOp::InnerJoin => join_spec
+                .ok_or_else(|| {
+                    PlanBuildError::unsupported(
+                        "PhysicalPlan",
+                        node.id(),
+                        "partitioned equality join is missing its join condition",
+                    )
+                })?
+                .into(),
         };
     let (root_fid, root_op) = ArenaPlanAssembler::push_binary_op(
         &mut FragmentCtx {
@@ -416,6 +533,107 @@ fn build_partitioned_multi(
     )?;
 
     Ok(Some((operators, fragments, root_fid, root_op)))
+}
+
+/// Build a co-partitioned direct join (E1b): N partition-local joins, one per
+/// vertex-id range, followed by a Concatenate exchange.
+///
+/// This is only correct when the join key is the vertex-id partition key:
+/// matching rows then carry the same vid and land in the same range partition,
+/// so the per-partition join emits exactly the global join result. Anything
+/// else (non-vid keys, branches with global operators or split aggregates)
+/// must use the global gather-then-join path instead.
+#[allow(clippy::too_many_arguments)]
+fn build_co_partitioned_join(
+    node: &PlanNodeEnum,
+    join_spec: JoinSpec,
+    left_chain: &PartitionedChain,
+    right_chain: &PartitionedChain,
+    spec: &crate::query::planning::plan::PartitionSpec,
+    exec_ctx: &ExecutionContext,
+) -> Result<
+    Option<(
+        Vec<PhysicalOperatorSpec>,
+        Vec<FragmentSpec>,
+        FragmentId,
+        PhysicalOperatorId,
+    )>,
+    PlanBuildError,
+> {
+    // Guards: the join key must be the vertex-id partition key and both
+    // branches must be partition-local scan chains (no global operators or
+    // split aggregates, which need a full gather before they can run).
+    if !equality_join_keys_reference_vid(node) {
+        return Ok(None);
+    }
+    if !left_chain.global.is_empty()
+        || !right_chain.global.is_empty()
+        || left_chain.aggregate_split.is_some()
+        || right_chain.aggregate_split.is_some()
+    {
+        return Ok(None);
+    }
+
+    let mut operators = Vec::new();
+    let mut fragments = Vec::new();
+    let mut op_alloc = PhysicalOperatorIdAllocator::new();
+    let mut frag_alloc = ArenaFragmentAllocator::new();
+
+    let left_frags = build_partition_local_fragments(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        left_chain,
+        left_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+    let right_frags = build_partition_local_fragments(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        right_chain,
+        right_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+
+    // One local join per range: left partition i joined with right partition i
+    // over the shared vertex-id range, so the exchange can run them in
+    // parallel on the worker pool.
+    let mut join_fids = Vec::with_capacity(spec.partition_count());
+    for index in 0..spec.partition_count() {
+        let (fid, _) = ArenaPlanAssembler::push_binary_op(
+            &mut FragmentCtx {
+                operators: &mut operators,
+                fragments: &mut fragments,
+                op_alloc: &mut op_alloc,
+            },
+            &mut frag_alloc,
+            left_frags[index],
+            right_frags[index],
+            node.id(),
+            join_spec.clone(),
+        )?;
+        join_fids.push(fid);
+    }
+
+    let (root_fid, _) = ArenaPlanAssembler::push_exchange_op(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        join_fids,
+        spec.partition_count(),
+    );
+    let root_operator = fragments
+        .get(root_fid.0)
+        .map(|f| f.root_operator)
+        .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
+
+    Ok(Some((operators, fragments, root_fid, root_operator)))
 }
 
 /// Push one global operator as a new fragment consuming the current child.
@@ -825,5 +1043,164 @@ mod tests {
         let plan = PhysicalPlanBuilder::build(&start, &mut ctx, &exec_ctx).expect("build");
         assert_eq!(plan.fragment_count(), 1);
         assert!(!ctx.parallel_fallback_reason.is_empty());
+    }
+
+    /// Build a keyed equality join plan node with the given hash/probe key
+    /// variable names over two tagged scans.
+    fn keyed_join(
+        hash_key_name: &str,
+        probe_key_name: &str,
+    ) -> PlanNodeEnum {
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let make_key = |name: &str| {
+            let expr = Expression::Variable(name.to_string());
+            let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
+            ContextualExpression::new(id, expr_ctx.clone())
+        };
+        let mut left_scan = ScanVerticesNode::new(1, "space");
+        left_scan.set_tag("person");
+        left_scan.set_col_names(vec!["a".to_string()]);
+        let mut right_scan = ScanVerticesNode::new(2, "space");
+        right_scan.set_tag("person");
+        right_scan.set_col_names(vec!["b".to_string()]);
+        PlanNodeEnum::InnerJoin(
+            InnerJoinNode::new(
+                PlanNodeEnum::ScanVertices(left_scan),
+                PlanNodeEnum::ScanVertices(right_scan),
+                vec![make_key(hash_key_name)],
+                vec![make_key(probe_key_name)],
+            )
+            .expect("join plan should build"),
+        )
+    }
+
+    #[test]
+    fn co_partitioned_equality_join_pairs_partition_fragments() {
+        // A vid-key equality join over two simple scan chains takes the
+        // co-partition direct-join path: one local join per vertex-id range,
+        // gathered through a single Concatenate exchange.
+        let node = keyed_join("a.vid", "b.vid");
+        let mut ctx = PhysicalPlanBuildContext::new();
+        ctx.partition_spec = Some(spec_with_two_ranges());
+        let exec_ctx = test_context();
+
+        let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+        assert!(
+            ctx.parallel_fallback_reason.is_empty(),
+            "vid-key join must not fall back, got: {}",
+            ctx.parallel_fallback_reason
+        );
+
+        // 2 left scans + 2 right scans + 2 local joins + 1 exchange.
+        assert_eq!(plan.fragment_count(), 7);
+        assert_eq!(
+            plan.fragments
+                .fragments()
+                .iter()
+                .filter(|f| matches!(
+                    f.kind,
+                    crate::query::executor::streaming::plan::types::FragmentKind::Exchange
+                ))
+                .count(),
+            1,
+            "co-partitioned join must gather through exactly one exchange"
+        );
+
+        // One local join per partition, each carrying the equality condition.
+        let mut join_count = 0;
+        for op in &plan.operators {
+            if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Join(
+                JoinSpec::InnerJoin { join_condition },
+            ) = &op.spec
+            {
+                join_count += 1;
+                assert!(
+                    join_condition.is_some(),
+                    "partitioned equality join must carry its key condition"
+                );
+            }
+        }
+        assert_eq!(join_count, 2, "one local join per partition");
+
+        // The exchange consumes both per-partition joins.
+        let exchange = plan
+            .operators
+            .iter()
+            .find(|op| {
+                matches!(
+                    op.spec,
+                    crate::query::executor::streaming::plan::types::OperatorKindSpec::Exchange(_)
+                )
+            })
+            .expect("exchange operator");
+        match &exchange.input_contract {
+            InputContract::PartitionedInputs { members, .. } => {
+                assert_eq!(members.len(), 2);
+                assert_eq!(members[0].partition_id, 0);
+                assert_eq!(members[1].partition_id, 1);
+            }
+            other => panic!("expected PartitionedInputs, got {:?}", other),
+        }
+
+        crate::query::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
+            &Arc::new(plan),
+        )
+        .expect("co-partitioned join plan should validate");
+    }
+
+    #[test]
+    fn non_vid_equality_join_falls_back_to_global_gather_join() {
+        // A join on a non-vid key is not partition-local: it must fall back to
+        // the global gather-then-join path while STILL carrying the equality
+        // condition (R1 regression: the condition must not be dropped).
+        let node = keyed_join("a.value", "b.value");
+        let mut ctx = PhysicalPlanBuildContext::new();
+        ctx.partition_spec = Some(spec_with_two_ranges());
+        let exec_ctx = test_context();
+
+        let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
+        assert!(
+            ctx.parallel_fallback_reason.is_empty(),
+            "non-vid equality join must still partition via the global path, got: {}",
+            ctx.parallel_fallback_reason
+        );
+
+        // Each branch is a full chain group (2 scans + 1 exchange each), then
+        // a single global join over both exchanges.
+        assert_eq!(plan.fragment_count(), 7);
+        assert_eq!(
+            plan.fragments
+                .fragments()
+                .iter()
+                .filter(|f| matches!(
+                    f.kind,
+                    crate::query::executor::streaming::plan::types::FragmentKind::Exchange
+                ))
+                .count(),
+            2,
+            "global join path gathers each branch separately"
+        );
+
+        let mut join_count = 0;
+        for op in &plan.operators {
+            if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Join(
+                JoinSpec::InnerJoin { join_condition },
+            ) = &op.spec
+            {
+                join_count += 1;
+                assert!(
+                    join_condition.is_some(),
+                    "global equality join must carry its key condition"
+                );
+            }
+        }
+        assert_eq!(join_count, 1, "exactly one global join fragment");
+
+        crate::query::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
+            &Arc::new(plan),
+        )
+        .expect("global-gather join plan should validate");
     }
 }

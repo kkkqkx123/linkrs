@@ -378,15 +378,16 @@ impl PartitioningPlanner {
                 // E1b: allow equality join when the join key is a simple variable
                 // reference (i.e. the vertex-id partition key).  Complex join keys
                 // (expressions, composite keys) are rejected for now.
-                let keys_are_simple = join.hash_keys().len() == 1
-                    && join.probe_keys().len() == 1
-                    && join.hash_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
-                        matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-                    })
-                    && join.probe_keys().first().and_then(|k| k.expression()).map_or(false, |m| {
-                        matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-                    });
-                if keys_are_simple {
+                if Self::equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
+                    Some((join.left_input(), join.right_input(), "equality join"))
+                } else {
+                    None
+                }
+            }
+            PlanNodeEnum::HashInnerJoin(join) => {
+                // E1b: real keyed-join queries lower to a HashInnerJoin node after
+                // cost-based rewrite; it is partitioned like the plain InnerJoin.
+                if Self::equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
                     Some((join.left_input(), join.right_input(), "equality join"))
                 } else {
                     None
@@ -394,6 +395,22 @@ impl PartitioningPlanner {
             }
             _ => None,
         }
+    }
+
+    /// Whether a join's hash/probe keys are each a single simple variable
+    /// reference (the only key shape the partitioned join path supports).
+    fn equality_join_keys_are_simple(
+        hash_keys: &[crate::core::types::expr::contextual::ContextualExpression],
+        probe_keys: &[crate::core::types::expr::contextual::ContextualExpression],
+    ) -> bool {
+        hash_keys.len() == 1
+            && probe_keys.len() == 1
+            && hash_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+                matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+            })
+            && probe_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+                matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+            })
     }
 
     /// Walk a linear chain that must end in a tagged vertex scan.
@@ -872,6 +889,81 @@ mod tests {
             .expect("equality join on vertex-id should partition");
         assert!(spec.partition_count() >= 2);
         assert!(decision.reason.contains("equality join"));
+    }
+
+    #[test]
+    fn hash_inner_join_with_variable_key_selects_partition_layout() {
+        use crate::core::types::expr::contextual::ContextualExpression;
+        use crate::core::types::expr::ExpressionMeta;
+        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+
+        // Real keyed-join queries lower to a HashInnerJoin node; the partition
+        // decision must treat it the same as the plain InnerJoin variant.
+        let stats = make_stats();
+        let mut left_scan = ScanVerticesNode::new(1, "space");
+        left_scan.set_tag("person");
+        let mut right_scan = ScanVerticesNode::new(2, "space");
+        right_scan.set_tag("person");
+
+        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let left_key_expr = crate::core::types::Expression::variable("a.vid");
+        let left_key_id = expr_ctx.register_expression(ExpressionMeta::new(left_key_expr));
+        let hash_key = ContextualExpression::new(left_key_id, expr_ctx.clone());
+
+        let right_key_expr = crate::core::types::Expression::variable("b.vid");
+        let right_key_id = expr_ctx.register_expression(ExpressionMeta::new(right_key_expr));
+        let probe_key = ContextualExpression::new(right_key_id, expr_ctx.clone());
+
+        let join = HashInnerJoinNode::new(
+            PlanNodeEnum::ScanVertices(left_scan),
+            PlanNodeEnum::ScanVertices(right_scan),
+            vec![hash_key],
+            vec![probe_key],
+        )
+        .expect("join plan should build");
+        let plan = PlanNodeEnum::HashInnerJoin(join);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("hash equality join on vertex-id should partition");
+        assert!(spec.partition_count() >= 2);
+        assert!(decision.reason.contains("equality join"));
+    }
+
+    #[test]
+    fn hash_inner_join_with_composite_key_is_rejected() {
+        use crate::core::types::expr::contextual::ContextualExpression;
+        use crate::core::types::expr::ExpressionMeta;
+        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+
+        let stats = make_stats();
+        let mut left_scan = ScanVerticesNode::new(1, "space");
+        left_scan.set_tag("person");
+        let mut right_scan = ScanVerticesNode::new(2, "space");
+        right_scan.set_tag("person");
+
+        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let make_key = |name: &str| {
+            let expr = crate::core::types::Expression::variable(name);
+            let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
+            ContextualExpression::new(id, expr_ctx.clone())
+        };
+        // Two keys per side: the partitioned path only accepts a single simple
+        // variable key and must fall back.
+        let join = HashInnerJoinNode::new(
+            PlanNodeEnum::ScanVertices(left_scan),
+            PlanNodeEnum::ScanVertices(right_scan),
+            vec![make_key("a.vid"), make_key("a.value")],
+            vec![make_key("b.vid"), make_key("b.value")],
+        )
+        .expect("join plan should build");
+        let plan = PlanNodeEnum::HashInnerJoin(join);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("not a union/cross-join"));
     }
 
     #[test]

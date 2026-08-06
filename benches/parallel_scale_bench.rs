@@ -29,6 +29,12 @@ const ITERATIONS: usize = 11;
 const Q1: &str = "MATCH (n:Node) WHERE n.value < 50000 RETURN count(n)";
 const Q2: &str = "MATCH (n:Node) RETURN n.group_id, count(*)";
 const Q3: &str = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)";
+// E1: multi-scan (independent tagged vertex scans, E1a) union.
+const E1: &str = "MATCH (a:Node) WHERE a.value < 50000 RETURN a.group_id \
+                  UNION ALL \
+                  MATCH (b:Node) WHERE b.value >= 50000 RETURN b.group_id";
+// E2: pure edge-table scan partitioned by src-id ranges (E2).
+const E2: &str = "LOOKUP ON EDGE Link YIELD Link.src";
 
 #[derive(Debug, Default, Clone)]
 struct ExplainMetrics {
@@ -328,6 +334,8 @@ fn main() {
         ("Q1 scan+filter+agg", Q1),
         ("Q2 scan+groupby", Q2),
         ("Q3 2-hop traversal", Q3),
+        ("E1 union multi-scan", E1),
+        ("E2 edge scan", E2),
     ] {
         println!("\n### {q_name}: {query}");
         println!(
