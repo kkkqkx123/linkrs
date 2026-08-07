@@ -3,16 +3,24 @@
 //! Manages the lifecycle of all transactions, providing operations such as
 //! transaction start, commit, and abort. Uses MVCC version management for
 //! snapshot isolation.
+//!
+//! This module is the orchestration facade: transaction lifecycle and
+//! statement handling live here, while checkpoint coordination
+//! ([`super::checkpoint`]), write-set certification ([`super::certify`]),
+//! recovery ([`super::recovery`]) and cleanup ([`super::cleaner`]) are
+//! delegated to dedicated modules.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::RwLock;
 
 use dashmap::DashMap;
 
+use super::certify::Certifier;
+use super::checkpoint::{CheckpointGate, CheckpointTransaction};
+use super::cleaner::TransactionCleaner;
 use super::context::TransactionContext;
 use super::error::TransactionError;
 use super::monitor::TransactionMonitor;
@@ -21,173 +29,14 @@ use super::participant::{
     TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
     TransactionMutationRecorder,
 };
+use super::recovery::RecoveryManager;
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
 use crate::core::stats::StatsManager;
-use crate::core::types::{CommitLsn, LabelId, Timestamp, VertexId};
+use crate::core::types::{CommitLsn, Timestamp};
 use crate::core::wal::types::Lsn;
 use crate::sync::SyncManager;
-
-/// Checkpoint coordination gate.
-///
-/// pauses new write transactions and waits for active writes to complete,
-/// then allows checkpoint to proceed. Modeled after Ladybug's checkpoint
-/// isolation where checkpoint blocks new writes and drains active ones.
-pub struct CheckpointGate {
-    /// When true, no new write transactions are allowed.
-    writing_paused: AtomicBool,
-    /// Number of active write transactions currently in-flight.
-    /// Used to determine when the gate has fully drained.
-    active_writes: AtomicU64,
-    /// Condvar for checkpoint thread to wait on until active_writes reaches 0.
-    condvar: Condvar,
-    /// Mutex protecting the condvar.
-    mutex: Mutex<()>,
-}
-
-impl CheckpointGate {
-    pub fn new() -> Self {
-        Self {
-            writing_paused: AtomicBool::new(false),
-            active_writes: AtomicU64::new(0),
-            condvar: Condvar::new(),
-            mutex: Mutex::new(()),
-        }
-    }
-
-    /// Attempt to acquire a write slot. Returns Err if writes are paused.
-    pub fn acquire_write(&self) -> Result<(), TransactionError> {
-        if self.writing_paused.load(Ordering::SeqCst) {
-            return Err(TransactionError::checkpoint_in_progress());
-        }
-        self.active_writes.fetch_add(1, Ordering::SeqCst);
-        // Re-check after incrementing: if paused between the two atomics, bail out.
-        if self.writing_paused.load(Ordering::SeqCst) {
-            self.active_writes.fetch_sub(1, Ordering::SeqCst);
-            return Err(TransactionError::checkpoint_in_progress());
-        }
-        Ok(())
-    }
-
-    /// Release a write slot (called when a write transaction commits or aborts).
-    pub fn release_write(&self) {
-        let prev = self.active_writes.fetch_sub(1, Ordering::SeqCst);
-        if prev == 1 {
-            // Last active write; wake up the checkpoint thread if waiting.
-            self.condvar.notify_all();
-        }
-    }
-
-    /// Pause new writes and wait for all active writes to complete.
-    /// Returns Err if the timeout elapses before all writes drain.
-    ///
-    /// On timeout, writes are automatically resumed to prevent deadlock.
-    pub fn pause_writes_and_drain(&self, timeout: Duration) -> Result<(), TransactionError> {
-        self.writing_paused.store(true, Ordering::SeqCst);
-
-        let mut guard = self.mutex.lock();
-        let start = std::time::Instant::now();
-        loop {
-            let active = self.active_writes.load(Ordering::SeqCst);
-            if active == 0 {
-                return Ok(());
-            }
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                self.writing_paused.store(false, Ordering::SeqCst);
-                return Err(TransactionError::checkpoint_timeout(active));
-            }
-            let remaining = timeout - elapsed;
-            let result = self.condvar.wait_for(&mut guard, remaining);
-            if result.timed_out() {
-                self.writing_paused.store(false, Ordering::SeqCst);
-                return Err(TransactionError::checkpoint_timeout(
-                    self.active_writes.load(Ordering::SeqCst),
-                ));
-            }
-        }
-    }
-
-    /// Resume accepting new write transactions after checkpoint completes.
-    pub fn resume_writes(&self) {
-        self.writing_paused.store(false, Ordering::SeqCst);
-    }
-
-    /// Whether writes are currently paused.
-    pub fn is_paused(&self) -> bool {
-        self.writing_paused.load(Ordering::SeqCst)
-    }
-
-    /// Current count of active writes.
-    pub fn active_write_count(&self) -> u64 {
-        self.active_writes.load(Ordering::SeqCst)
-    }
-}
-
-impl Default for CheckpointGate {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Checkpoint transaction handle.
-///
-/// Held while a checkpoint is in progress. Writes are paused for the lifetime
-/// of this handle (via [`CheckpointGate::pause_writes_and_drain`] at construction).
-/// Once the caller finishes the checkpoint work, they must either [`commit`]
-/// (writes a WAL `CheckpointMarker` record and resumes writes) or [`abort`]
-/// (resumes writes without logging the marker). Dropping the handle also
-/// resumes writes.
-///
-/// This mirrors Ladybug's `TRANSACTION_TYPE::CHECKPOINT` behavior: checkpoint
-/// is an exclusive operation that prevents new writes from starting and drains
-/// in-flight writes before proceeding.
-pub struct CheckpointTransaction<'a> {
-    manager: &'a TransactionManager,
-    gate: Arc<CheckpointGate>,
-    txn_id: TransactionId,
-    write_ts: Timestamp,
-    finished: bool,
-}
-
-impl CheckpointTransaction<'_> {
-    /// The write timestamp captured at checkpoint begin time.
-    ///
-    /// All data with `ts <= write_ts` is guaranteed to be visible at checkpoint.
-    pub fn write_timestamp(&self) -> Timestamp {
-        self.write_ts
-    }
-
-    /// Commit the checkpoint: resume writes.
-    ///
-    /// The caller is responsible for persisting checkpoint metadata (via the
-    /// `CheckpointManager`) before calling this method. After commit, writes
-    /// are resumed.
-    pub fn commit(mut self) -> Result<(), TransactionError> {
-        self.finished = true;
-        let result = self.manager.commit_transaction(self.txn_id);
-        self.gate.resume_writes();
-        result
-    }
-
-    /// Abort the checkpoint without writing a WAL marker. Writes are resumed.
-    pub fn abort(mut self) -> Result<(), TransactionError> {
-        self.finished = true;
-        let result = self.manager.abort_transaction(self.txn_id);
-        self.gate.resume_writes();
-        result
-    }
-}
-
-impl Drop for CheckpointTransaction<'_> {
-    fn drop(&mut self) {
-        if !self.finished {
-            let _ = self.manager.abort_transaction(self.txn_id);
-            self.gate.resume_writes();
-        }
-    }
-}
 
 /// Transaction Manager
 ///
@@ -216,91 +65,14 @@ pub struct TransactionManager {
     commit_sink: Option<Arc<dyn TransactionCommitSink>>,
     /// Checkpoint coordination gate
     checkpoint_gate: Arc<CheckpointGate>,
-    /// Sharded certification locks. Each shard serializes certification +
-    /// committed_write_sets push for a single transaction. Shard selection
-    /// is by `txn_id % CERT_SHARD_COUNT`, so non-conflicting transactions
-    /// can certify in parallel.
-    certification_shards: [Mutex<()>; CERT_SHARD_COUNT],
-    /// Committed write sets retained until no transaction can have started
-    /// before the corresponding commit timestamp.
-    committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
+    /// Write-set certifier for conflict detection and committed write-set APIs
+    certifier: Certifier,
     /// Transaction ID that currently holds the pessimistic write lock (0 = unlocked).
     write_exclusion_owner: AtomicU64,
-    /// Spatial index for O(1) vertex conflict lookup.
-    /// Maps each vertex ID to committed write timestamps + transaction IDs.
-    committed_vertex_writes: Mutex<ConflictMap<VertexId>>,
-    /// Spatial index for O(1) edge conflict lookup.
-    /// Key: (src_vid, dst_vid, edge_label).
-    committed_edge_writes: Mutex<ConflictMap<(VertexId, VertexId, LabelId)>>,
-    /// Spatial index for O(1) schema resource conflict lookup.
-    committed_schema_writes: Mutex<ConflictMap<String>>,
-    /// Spatial index for O(1) index resource conflict lookup.
-    committed_index_writes: Mutex<ConflictMap<String>>,
-    /// Transactions whose data is durable but whose post-commit finalization
-    /// (e.g. commit_sink.finalize_commit, undo-log cleanup) failed. Stored for
-    /// retry on the next startup_recovery() call or admin-triggered recovery.
-    pending_finalizations: Mutex<Vec<PendingFinalization>>,
-    /// SSI rw-dependency tracker for Serializable isolation.
-    ssi_tracker: SsiTracker,
-}
-
-/// Number of certification lock shards. Must be a power of two for efficient
-/// modulo via bitmask (though the compiler optimizes `% 64` anyway).
-const CERT_SHARD_COUNT: usize = 64;
-
-/// Maps a resource reference to its committed write timestamps + transaction IDs.
-type ConflictMap<V> = HashMap<V, Vec<(Timestamp, TransactionId)>>;
-
-/// A transaction whose WAL data is durable but whose post-commit state is
-/// incomplete (finalize_commit or undo-log cleanup failed).
-struct PendingFinalization {
-    txn_id: TransactionId,
-    write_timestamp: Timestamp,
-    commit_lsn: CommitLsn,
-}
-
-/// SSI (Serializable Snapshot Isolation) rw-dependency tracker.
-///
-/// Instead of scanning all committed write sets (O(N)), this tracker maintains
-/// per-resource read locks that enable O(1) dangerous-structure detection.
-struct SsiTracker {
-    /// Per-resource list of active readers: resource → Vec<(txn_id, start_ts)>
-    read_locks: parking_lot::RwLock<HashMap<ResourceId, Vec<(TransactionId, Timestamp)>>>,
-}
-
-impl SsiTracker {
-    fn new() -> Self {
-        Self {
-            read_locks: parking_lot::RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Register that `txn_id` read `resource` at `start_ts`.
-    fn register_read(&self, txn_id: TransactionId, resource: ResourceId, start_ts: Timestamp) {
-        self.read_locks
-            .write()
-            .entry(resource)
-            .or_default()
-            .push((txn_id, start_ts));
-    }
-
-    /// Remove all read locks held by `txn_id` (on commit or abort).
-    fn unregister_reads(&self, txn_id: TransactionId) {
-        let mut locks = self.read_locks.write();
-        locks.retain(|_, entries| {
-            entries.retain(|(id, _)| *id != txn_id);
-            !entries.is_empty()
-        });
-    }
-
-    /// Prune read locks older than `oldest_active_ts`.
-    fn prune(&self, oldest_active_ts: Timestamp) {
-        let mut locks = self.read_locks.write();
-        locks.retain(|_, entries| {
-            entries.retain(|(_, ts)| *ts > oldest_active_ts);
-            !entries.is_empty()
-        });
-    }
+    /// Recovery of transactions whose finalization failed after the WAL was durable.
+    recovery: RecoveryManager,
+    /// Cleanup of expired and idle transactions.
+    cleaner: TransactionCleaner,
 }
 
 impl TransactionManager {
@@ -310,6 +82,13 @@ impl TransactionManager {
         version_manager: Arc<VersionManager>,
     ) -> Self {
         let monitor = TransactionMonitor::new(Arc::clone(&stats));
+        let checkpoint_gate = Arc::new(CheckpointGate::new());
+        let cleaner = TransactionCleaner::new(
+            None,
+            Arc::clone(&version_manager),
+            Arc::clone(&checkpoint_gate),
+            Arc::clone(&stats),
+        );
         let manager = Self {
             version_manager,
             config,
@@ -322,16 +101,11 @@ impl TransactionManager {
             monitor,
             sync_manager: None,
             commit_sink: None,
-            checkpoint_gate: Arc::new(CheckpointGate::new()),
-            certification_shards: std::array::from_fn(|_| Mutex::new(())),
-            committed_write_sets: Mutex::new(Vec::new()),
+            checkpoint_gate,
+            certifier: Certifier::new(),
             write_exclusion_owner: AtomicU64::new(0),
-            committed_vertex_writes: Mutex::new(HashMap::new()),
-            committed_edge_writes: Mutex::new(HashMap::new()),
-            committed_schema_writes: Mutex::new(HashMap::new()),
-            committed_index_writes: Mutex::new(HashMap::new()),
-            pending_finalizations: Mutex::new(Vec::new()),
-            ssi_tracker: SsiTracker::new(),
+            recovery: RecoveryManager::new(),
+            cleaner,
         };
         let commit_stats = Arc::clone(&manager.stats);
         manager.register_commit_callback(Arc::new(move |event| match event {
@@ -432,7 +206,8 @@ impl TransactionManager {
 
     /// Attach a sync manager after construction.
     pub fn set_sync_manager(&mut self, sync_manager: Arc<SyncManager>) {
-        self.sync_manager = Some(sync_manager);
+        self.sync_manager = Some(sync_manager.clone());
+        self.cleaner.set_sync_manager(Some(sync_manager));
     }
 
     /// Attach a sync manager so transaction completion can clean up index buffers.
@@ -665,10 +440,6 @@ impl TransactionManager {
         Ok(txn_id)
     }
 
-    fn cert_shard(&self, txn_id: TransactionId) -> &Mutex<()> {
-        &self.certification_shards[txn_id.0 as usize % CERT_SHARD_COUNT]
-    }
-
     /// Check for write-set based conflicts with active transactions
     ///
     /// This method checks if a transaction's write set conflicts with any other
@@ -677,280 +448,17 @@ impl TransactionManager {
     ///
     /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
     pub fn check_write_set_conflict(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
-        let _certification_guard = self.cert_shard(txn_id).lock();
-        let ctx = self
-            .active_transactions
-            .get(&txn_id)
-            .ok_or_else(|| TransactionError::transaction_not_found(txn_id))?;
-
-        if ctx.read_only {
-            return Ok(());
-        }
-
-        // SingleWriter mode guarantees serialization via the exclusive write lock.
-        if ctx.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
-            ctx.mark_write_validated();
-            return Ok(());
-        }
-
-        let txn_write_set = ctx.get_write_set();
-        let txn_read_set = ctx.get_read_set();
-        let serializable = ctx.isolation_level == IsolationLevel::Serializable;
-        if txn_write_set.is_empty() && (!serializable || txn_read_set.is_empty()) {
-            return Ok(());
-        }
-
-        // SSI: register read locks for all entities in the read set.
-        // This enables O(1) dangerous-structure detection when other
-        // transactions write to these resources.
-        if serializable {
-            for vid in txn_read_set.vertices.iter() {
-                self.ssi_tracker.register_read(
-                    txn_id,
-                    ResourceId::Vertex(*vid),
-                    ctx.start_timestamp,
-                );
-            }
-            for edge in txn_read_set.edges.iter() {
-                self.ssi_tracker.register_read(
-                    txn_id,
-                    ResourceId::Edge(*edge),
-                    ctx.start_timestamp,
-                );
-            }
-            for resource in txn_read_set.schema_resources.iter() {
-                self.ssi_tracker.register_read(
-                    txn_id,
-                    ResourceId::Schema(resource.clone()),
-                    ctx.start_timestamp,
-                );
-            }
-        }
-
-        for entry in self.active_transactions.iter() {
-            let (other_id, other_ctx) = entry.pair();
-
-            if other_id == &txn_id {
-                continue;
-            }
-
-            if other_ctx.read_only {
-                continue;
-            }
-
-            if !other_ctx.is_write_validated() {
-                continue;
-            }
-
-            if ctx.has_write_conflict_with(other_ctx)
-                || (serializable && txn_read_set.has_conflict_with(&other_ctx.get_write_set()))
-            {
-                self.stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
-            }
-        }
-
-        let committed = self.committed_write_sets.lock();
-        // O(1) vertex conflict lookup via spatial index.
-        let vertex_idx = self.committed_vertex_writes.lock();
-        for vid in txn_write_set.vertices.iter() {
-            if let Some(entries) = vertex_idx.get(vid) {
-                if entries
-                    .iter()
-                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                {
-                    drop(vertex_idx);
-                    drop(committed);
-                    self.stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
-                }
-            }
-        }
-        drop(vertex_idx);
-
-        // O(1) edge conflict lookup via spatial index.
-        let edge_idx = self.committed_edge_writes.lock();
-        for edge in txn_write_set.edges.iter() {
-            let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
-            if let Some(entries) = edge_idx.get(&key) {
-                if entries
-                    .iter()
-                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                {
-                    drop(edge_idx);
-                    drop(committed);
-                    self.stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
-                }
-            }
-        }
-        drop(edge_idx);
-
-        // O(1) schema resource conflict lookup.
-        let schema_idx = self.committed_schema_writes.lock();
-        for resource in txn_write_set.schema_resources.iter() {
-            if let Some(entries) = schema_idx.get(resource) {
-                if entries
-                    .iter()
-                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                {
-                    drop(schema_idx);
-                    drop(committed);
-                    self.stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
-                }
-            }
-        }
-        drop(schema_idx);
-
-        // O(1) index resource conflict lookup.
-        let index_idx = self.committed_index_writes.lock();
-        for resource in txn_write_set.index_resources.iter() {
-            if let Some(entries) = index_idx.get(resource) {
-                if entries
-                    .iter()
-                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                {
-                    drop(index_idx);
-                    drop(committed);
-                    self.stats.record_txn_conflict();
-                    return Err(TransactionError::write_transaction_conflict());
-                }
-            }
-        }
-        drop(index_idx);
-
-        // The O(N) committed_write_sets scan below only handles Serializable
-        // read-range phantom and full-scan detection. Exact read-set entity
-        // conflicts are resolved via O(1) spatial indices below.
-        if serializable {
-            // O(1) read-set conflict lookup via committed write indices.
-            let vertex_idx = self.committed_vertex_writes.lock();
-            for vid in txn_read_set.vertices.iter() {
-                if let Some(entries) = vertex_idx.get(vid) {
-                    if entries
-                        .iter()
-                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                    {
-                        drop(vertex_idx);
-                        drop(committed);
-                        self.stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
-                    }
-                }
-            }
-            drop(vertex_idx);
-
-            let edge_idx = self.committed_edge_writes.lock();
-            for edge in txn_read_set.edges.iter() {
-                let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
-                if let Some(entries) = edge_idx.get(&key) {
-                    if entries
-                        .iter()
-                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                    {
-                        drop(edge_idx);
-                        drop(committed);
-                        self.stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
-                    }
-                }
-            }
-            drop(edge_idx);
-
-            let schema_idx = self.committed_schema_writes.lock();
-            for resource in txn_read_set.schema_resources.iter() {
-                if let Some(entries) = schema_idx.get(resource) {
-                    if entries
-                        .iter()
-                        .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
-                    {
-                        drop(schema_idx);
-                        drop(committed);
-                        self.stats.record_txn_conflict();
-                        return Err(TransactionError::write_transaction_conflict());
-                    }
-                }
-            }
-            drop(schema_idx);
-        }
-
-        // SSI (Serializable Snapshot Isolation) dangerous-structure detection.
-        //
-        // Instead of scanning all committed write sets (O(N)), we check for
-        // dangerous structures: T_current writes R, T_other read R, AND
-        // T_current read something T_other writes. This is O(W × K) where
-        // W = write set size and K = max readers per resource.
-        //
-        // We also check against committed write sets via spatial indices (O(1))
-        // for the reverse direction (read set vs committed writes).
-        if serializable {
-            let write_resources = txn_write_set.ssi_resources();
-            let read_resources = ctx.get_ssi_read_resources();
-
-            for resource in &write_resources {
-                // Check if any active transaction has read this resource
-                // (rw-dependency: T_other →rw T_current)
-                let ssi_locks = self.ssi_tracker.read_locks.read();
-                if let Some(readers) = ssi_locks.get(resource) {
-                    for &(reader_id, reader_start_ts) in readers {
-                        if reader_id == txn_id {
-                            continue;
-                        }
-                        if reader_start_ts >= ctx.start_timestamp {
-                            continue;
-                        }
-                        // Check if T_current also reads something T_other writes
-                        // (rw-dependency: T_current →rw T_other → potential cycle)
-                        if let Some(reader_ctx) = self.active_transactions.get(&reader_id) {
-                            if !reader_ctx.read_only
-                                && reader_ctx.is_write_validated()
-                                && read_resources
-                                    .iter()
-                                    .any(|r| reader_ctx.get_write_set().ssi_resources().contains(r))
-                            {
-                                drop(ssi_locks);
-                                drop(committed);
-                                self.stats.record_txn_conflict();
-                                return Err(TransactionError::serialization_failed(
-                                    "SSI dangerous structure detected: read-write cycle",
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        drop(committed);
-
-        ctx.mark_write_validated();
-        Ok(())
+        self.certifier
+            .check_write_set_conflict(txn_id, &self.active_transactions, &self.stats)
     }
 
     /// Prune committed write sets that are no longer needed by any active
     /// transaction. Entries with commit timestamps <= `oldest_active_ts`
     /// are safe to remove.
     fn prune_committed_write_sets(&self, oldest_active_ts: Timestamp) {
-        let mut committed = self.committed_write_sets.lock();
-        committed.retain(|(ts, _)| *ts > oldest_active_ts);
-
-        let retain_fn = |entries: &mut Vec<(Timestamp, TransactionId)>| {
-            entries.retain(|(commit_ts, _)| *commit_ts > oldest_active_ts);
-            !entries.is_empty()
-        };
-
-        let mut vertex_idx = self.committed_vertex_writes.lock();
-        vertex_idx.retain(|_, entries| retain_fn(entries));
-        let mut edge_idx = self.committed_edge_writes.lock();
-        edge_idx.retain(|_, entries| retain_fn(entries));
-        let mut schema_idx = self.committed_schema_writes.lock();
-        schema_idx.retain(|_, entries| retain_fn(entries));
-        let mut index_idx = self.committed_index_writes.lock();
-        index_idx.retain(|_, entries| retain_fn(entries));
-
-        // SSI: prune stale read locks.
-        self.ssi_tracker.prune(oldest_active_ts);
+        self.certifier.prune(oldest_active_ts);
     }
+
 
     /// Start a new transaction (legacy API for compatibility)
     pub fn begin_transaction(
@@ -1209,103 +717,28 @@ impl TransactionManager {
                 self.version_manager
                     .commit_write_timestamp(context.timestamp());
                 if !descriptor.write_set.is_empty() {
-                    // Re-acquire the cert shard lock to close the window between
-                    // certification and committed_write_sets publication.
-                    // Lock order: cert_shard → committed_write_sets → *
-                    let _cert_guard = self.cert_shard(context.id).lock();
-                    let mut committed = self.committed_write_sets.lock();
-
-                    // Final review: cross-shard certification race prevention.
-                    //
-                    // check_write_set_conflict() only serializes via cert_shard,
-                    // so two conflicting transactions in different shards can
-                    // both pass because each reads the other's
-                    // is_write_validated() == false and skips it.
-                    //
-                    // This re-check under cert_shard catches the race by
-                    // scanning all active (validated) transactions and all
-                    // committed entries since our start_timestamp.
-                    for entry in self.active_transactions.iter() {
-                        let (other_id, other_ctx) = entry.pair();
-                        if *other_id == context.id {
-                            continue;
+                    // Publish the committed write set into the conflict indices.
+                    // The certifier re-runs the final review under the
+                    // certification shard lock to close the cross-shard
+                    // certification race window.
+                    if let Err(conflict) = self.certifier.publish(
+                        context.id,
+                        descriptor.write_timestamp,
+                        context.start_timestamp,
+                        &descriptor.write_set,
+                        &self.active_transactions,
+                        &self.stats,
+                    ) {
+                        if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                            log::error!(
+                                "Final-review abort failed for txn={:?}: {}",
+                                context.id,
+                                abort_error
+                            );
+                            self.stats.increment_cleanup_failure();
                         }
-                        if other_ctx.read_only {
-                            continue;
-                        }
-                        if !other_ctx.is_write_validated() {
-                            continue;
-                        }
-                        if descriptor
-                            .write_set
-                            .has_conflict_with(&other_ctx.get_write_set())
-                        {
-                            drop(committed);
-                            drop(_cert_guard);
-                            self.stats.record_txn_conflict();
-                            if let Err(abort_error) = self.abort_transaction_internal(&context) {
-                                log::error!(
-                                    "Final-review abort failed for txn={:?}: {}",
-                                    context.id,
-                                    abort_error
-                                );
-                                self.stats.increment_cleanup_failure();
-                            }
-                            return Err(TransactionError::write_transaction_conflict());
-                        }
+                        return Err(conflict);
                     }
-                    for (commit_ts, ws) in committed.iter() {
-                        if *commit_ts <= context.start_timestamp {
-                            continue;
-                        }
-                        if descriptor.write_set.has_conflict_with(ws) {
-                            drop(committed);
-                            drop(_cert_guard);
-                            self.stats.record_txn_conflict();
-                            if let Err(abort_error) = self.abort_transaction_internal(&context) {
-                                log::error!(
-                                    "Final-review(committed) abort failed for txn={:?}: {}",
-                                    context.id,
-                                    abort_error
-                                );
-                                self.stats.increment_cleanup_failure();
-                            }
-                            return Err(TransactionError::write_transaction_conflict());
-                        }
-                    }
-
-                    committed.push((descriptor.write_timestamp, descriptor.write_set.clone()));
-                    let mut vertex_idx = self.committed_vertex_writes.lock();
-                    for vid in descriptor.write_set.vertices.iter() {
-                        vertex_idx
-                            .entry(*vid)
-                            .or_default()
-                            .push((descriptor.write_timestamp, context.id));
-                    }
-                    let mut edge_idx = self.committed_edge_writes.lock();
-                    for edge in descriptor.write_set.edges.iter() {
-                        edge_idx
-                            .entry((edge.src_vid, edge.dst_vid, edge.edge_label))
-                            .or_default()
-                            .push((descriptor.write_timestamp, context.id));
-                    }
-                    let mut schema_idx = self.committed_schema_writes.lock();
-                    for resource in descriptor.write_set.schema_resources.iter() {
-                        schema_idx
-                            .entry(resource.clone())
-                            .or_default()
-                            .push((descriptor.write_timestamp, context.id));
-                    }
-                    let mut index_idx = self.committed_index_writes.lock();
-                    for resource in descriptor.write_set.index_resources.iter() {
-                        index_idx
-                            .entry(resource.clone())
-                            .or_default()
-                            .push((descriptor.write_timestamp, context.id));
-                    }
-
-                    // SSI: unregister read locks and register write locks.
-                    self.ssi_tracker.unregister_reads(context.id);
                 }
                 let safe_ts = self.version_manager.get_safe_gc_timestamp();
                 self.prune_committed_write_sets(safe_ts);
@@ -1343,11 +776,7 @@ impl TransactionManager {
                         max_retries,
                         error
                     );
-                    self.pending_finalizations.lock().push(PendingFinalization {
-                        txn_id,
-                        write_timestamp: context.timestamp(),
-                        commit_lsn,
-                    });
+                    self.recovery.record(txn_id, context.timestamp(), commit_lsn);
                     self.active_transactions.remove(&txn_id);
                     let _ = context.transition_to(TransactionState::Aborting);
                     let _ = context.transition_to(TransactionState::Aborted);
@@ -1370,11 +799,7 @@ impl TransactionManager {
                 txn_id,
                 error
             );
-            self.pending_finalizations.lock().push(PendingFinalization {
-                txn_id,
-                write_timestamp: context.timestamp(),
-                commit_lsn,
-            });
+            self.recovery.record(txn_id, context.timestamp(), commit_lsn);
             self.active_transactions.remove(&txn_id);
             let _ = context.transition_to(TransactionState::Aborting);
             let _ = context.transition_to(TransactionState::Aborted);
@@ -1639,7 +1064,7 @@ impl TransactionManager {
             }
         }
         // SSI: unregister read locks on abort.
-        self.ssi_tracker.unregister_reads(context.id);
+        self.certifier.unregister_reads(context.id);
         self.active_transactions.remove(&context.id);
         if let Err(error) = context.clear_undo_logs() {
             log::warn!(
@@ -1753,34 +1178,7 @@ impl TransactionManager {
     ///
     /// Returns the number of recovered commits.
     pub fn startup_recovery(&self) -> Result<usize, TransactionError> {
-        let mut recovered = 0usize;
-
-        // 1. Re-drive pending finalizations that were queued due to prior
-        //    failures in the commit path.
-        let pending: Vec<PendingFinalization> = {
-            let mut queue = self.pending_finalizations.lock();
-            std::mem::take(&mut *queue)
-        };
-        for pf in &pending {
-            log::info!(
-                "Recovering pending finalization: txn={:?} write_ts={} lsn={:?}",
-                pf.txn_id,
-                pf.write_timestamp,
-                pf.commit_lsn,
-            );
-        }
-        recovered += pending.len();
-
-        // 2. Ask the commit sink to recover any unfinalized commits at the
-        //    storage layer (idempotent by design).
-        if let Some(ref sink) = self.commit_sink {
-            let n = sink
-                .recover_unfinalized_commits()
-                .map_err(|e| TransactionError::internal(format!("Recovery failed: {}", e)))?;
-            recovered += n;
-        }
-
-        Ok(recovered)
+        self.recovery.recover(self.commit_sink.as_deref())
     }
 
     /// Get statistics
@@ -1815,45 +1213,10 @@ impl TransactionManager {
 
     /// Cleanup expired transactions
     pub fn cleanup_expired_transactions(&self) {
-        // Safety net: reap write timestamps whose owning path vanished (orphaned
-        // write). Timestamps owned by live write transactions are excluded so a
-        // transaction still within its configured timeout is never reaped.
-        let owned: std::collections::HashSet<Timestamp> = self
-            .active_transactions
-            .iter()
-            .filter(|entry| !entry.value().read_only)
-            .map(|entry| entry.value().timestamp())
-            .collect();
-        let reaped = self
-            .version_manager
-            .reap_expired_write_timestamps(self.version_manager.write_reap_timeout(), &owned);
-        if reaped > 0 {
-            log::warn!("Reaped {reaped} orphaned write timestamp(s) older than timeout");
-        }
-
-        let expired: Vec<(TransactionId, bool)> = self
-            .active_transactions
-            .iter()
-            .filter(|entry| {
-                entry.value().state().can_execute()
-                    && (entry.value().is_expired() || entry.value().is_idle_timeout())
-            })
-            .map(|entry| (*entry.key(), entry.value().is_expired()))
-            .collect();
-
-        for (txn_id, timed_out) in expired {
-            if timed_out {
-                self.stats.record_timeout();
-            }
-            if let Err(error) = self.abort_transaction(txn_id) {
-                log::error!(
-                    "Transaction {} could not complete the cleanup protocol: {}",
-                    txn_id,
-                    error
-                );
-                self.stats.increment_cleanup_failure();
-            }
-        }
+        let _ = self.cleaner.cleanup_expired_transactions_with(
+            &self.active_transactions,
+            |txn_id| self.abort_transaction(txn_id),
+        );
     }
 
     /// Shutdown transaction manager
@@ -2061,13 +1424,12 @@ impl TransactionManager {
         self.active_transactions.insert(txn_id, context);
         self.stats.record_txn_begin();
 
-        Ok(CheckpointTransaction {
-            manager: self,
-            gate: Arc::clone(&self.checkpoint_gate),
+        Ok(CheckpointTransaction::new(
+            self,
+            Arc::clone(&self.checkpoint_gate),
             txn_id,
             write_ts,
-            finished: false,
-        })
+        ))
     }
 }
 
@@ -2570,211 +1932,4 @@ mod tests {
         assert_eq!(ctx.state(), TransactionState::Aborted);
     }
 
-    #[test]
-    fn checkpoint_gate_pauses_new_writes() {
-        let gate = CheckpointGate::new();
-
-        // Acquire a write slot.
-        assert!(gate.acquire_write().is_ok());
-        assert_eq!(gate.active_write_count(), 1);
-
-        // Pause and drain.
-        gate.writing_paused.store(true, Ordering::SeqCst);
-
-        // New writes should fail.
-        assert!(gate.acquire_write().is_err());
-
-        // Release the active write.
-        gate.release_write();
-
-        // Still paused, should fail.
-        assert!(gate.acquire_write().is_err());
-
-        // Resume.
-        gate.resume_writes();
-        assert!(!gate.is_paused());
-        assert!(gate.acquire_write().is_ok());
-        assert_eq!(gate.active_write_count(), 1);
-    }
-
-    #[test]
-    fn checkpoint_gate_drain_waits_for_active_writes() {
-        use std::thread;
-
-        let gate = Arc::new(CheckpointGate::new());
-        let gate_clone = Arc::clone(&gate);
-
-        // Start a write transaction.
-        gate.acquire_write().expect("acquire should succeed");
-
-        // Spawn a thread that will release after a short delay.
-        let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            gate_clone.release_write();
-        });
-
-        // Drain should wait until the write is released.
-        let result = gate.pause_writes_and_drain(Duration::from_secs(5));
-        assert!(result.is_ok());
-        assert_eq!(gate.active_write_count(), 0);
-
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn checkpoint_gate_drain_timeout() {
-        let gate = CheckpointGate::new();
-
-        // Acquire a write slot and never release.
-        gate.acquire_write().expect("acquire should succeed");
-
-        // Drain with short timeout should fail.
-        let result = gate.pause_writes_and_drain(Duration::from_millis(50));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn begin_insert_fails_when_checkpoint_paused() {
-        let manager = TransactionManager::new(TransactionManagerConfig::default());
-
-        // Pause writes via checkpoint.
-        manager
-            .checkpoint_gate()
-            .writing_paused
-            .store(true, Ordering::SeqCst);
-
-        // New insert should fail.
-        let result = manager.begin_insert_transaction(TransactionOptions::default());
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            TransactionErrorKind::CheckpointInProgress
-        );
-
-        // Read transactions should still work.
-        let read_result = manager.begin_read_transaction(TransactionOptions::default());
-        assert!(read_result.is_ok());
-
-        // Resume writes.
-        manager.end_checkpoint();
-        let insert_result = manager.begin_insert_transaction(TransactionOptions::default());
-        assert!(insert_result.is_ok());
-    }
-
-    #[test]
-    fn coordinated_checkpoint_drains_writes() {
-        use std::thread;
-
-        let manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
-        let manager_clone = Arc::clone(&manager);
-
-        // Start a write transaction.
-        let txn_id = manager
-            .begin_insert_transaction(TransactionOptions::default())
-            .expect("transaction should begin");
-
-        // Spawn a thread that commits the transaction after a delay.
-        let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            manager_clone
-                .commit_transaction(txn_id)
-                .expect("commit should succeed");
-        });
-
-        // Coordinated checkpoint should wait for the write to complete.
-        let result = manager.coordinated_checkpoint(Duration::from_secs(5), |_ts| {
-            Ok(crate::core::wal::types::Lsn::new(100))
-        });
-        assert!(result.is_ok());
-
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn checkpoint_transaction_drain_active_writes() {
-        let manager = TransactionManager::new(TransactionManagerConfig::default());
-        let write_txn = manager
-            .begin_insert_transaction(TransactionOptions::default())
-            .expect("write should begin");
-
-        let manager2 = Arc::new(manager);
-        let mgr_clone = Arc::clone(&manager2);
-
-        // Spawn a thread that tries to begin a checkpoint transaction.
-        // It should block until the write commits/times out.
-        let handle = std::thread::spawn(move || {
-            let checkpoint = mgr_clone
-                .begin_checkpoint_transaction(Duration::from_secs(5))
-                .expect("checkpoint should begin after drain");
-            assert!(checkpoint.write_timestamp() > 0);
-            checkpoint.commit().expect("checkpoint should commit");
-        });
-
-        // Give the checkpoint thread a moment to start draining.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        // Commit the active write so the checkpoint can proceed.
-        manager2
-            .commit_transaction(write_txn)
-            .expect("write should commit");
-
-        handle.join().unwrap();
-
-        // Verify writes are resumed after checkpoint commit.
-        let gate = manager2.checkpoint_gate();
-        assert!(!gate.is_paused());
-        assert_eq!(gate.active_write_count(), 0);
-    }
-
-    #[test]
-    fn checkpoint_transaction_abort_resumes_writes() {
-        let manager = TransactionManager::new(TransactionManagerConfig::default());
-
-        let checkpoint = manager
-            .begin_checkpoint_transaction(Duration::from_secs(5))
-            .expect("checkpoint should begin");
-        assert!(manager.checkpoint_gate().is_paused());
-
-        // Abort resumes writes.
-        checkpoint.abort().expect("checkpoint should abort");
-        assert!(!manager.checkpoint_gate().is_paused());
-    }
-
-    #[test]
-    fn checkpoint_transaction_is_monitored_and_emits_commit() {
-        let manager = TransactionManager::new(TransactionManagerConfig::default());
-        let commits = Arc::new(AtomicUsize::new(0));
-        let commit_count = Arc::clone(&commits);
-        manager.register_commit_callback(Arc::new(move |event| {
-            if let TransactionEvent::Committed { .. } = event {
-                commit_count.fetch_add(1, Ordering::SeqCst);
-            }
-        }));
-
-        let checkpoint = manager
-            .begin_checkpoint_transaction(Duration::from_secs(5))
-            .expect("checkpoint should begin");
-        let transactions = manager.list_transactions();
-        assert_eq!(transactions.len(), 1);
-        assert_eq!(transactions[0].txn_type, TransactionType::Checkpoint);
-
-        checkpoint.commit().expect("checkpoint should commit");
-        assert!(manager.list_transactions().is_empty());
-        assert_eq!(commits.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn checkpoint_transaction_drop_resumes_writes() {
-        let manager = TransactionManager::new(TransactionManagerConfig::default());
-
-        {
-            let checkpoint = manager
-                .begin_checkpoint_transaction(Duration::from_secs(5))
-                .expect("checkpoint should begin");
-            assert!(manager.checkpoint_gate().is_paused());
-            // Drop without commit — should resume writes.
-            drop(checkpoint);
-        }
-        assert!(!manager.checkpoint_gate().is_paused());
-    }
 }

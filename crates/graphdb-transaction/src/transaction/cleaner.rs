@@ -2,16 +2,18 @@
 //!
 //! Provides cleanup functionality for expired and stale transactions
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use super::manager::CheckpointGate;
+use super::checkpoint::CheckpointGate;
 use super::mvcc::VersionManager;
 use crate::sync::SyncManager;
 use crate::transaction::context::TransactionContext;
 use crate::transaction::error::TransactionError;
 use crate::transaction::types::{TransactionId, TransactionState, TransactionStats};
+use crate::core::types::Timestamp;
 
 /// Transaction Cleaner
 ///
@@ -39,6 +41,65 @@ impl TransactionCleaner {
             version_manager,
             checkpoint_gate,
             stats,
+        }
+    }
+
+    /// Update the sync manager after construction (e.g. when a manager is
+    /// assembled incrementally by its owner).
+    pub fn set_sync_manager(&mut self, sync_manager: Option<Arc<SyncManager>>) {
+        self.sync_manager = sync_manager;
+    }
+
+    /// Cleanup expired transactions, delegating the abort to the provided
+    /// callback.
+    ///
+    /// This is the manager-facing cleanup path. It reaps orphaned write
+    /// timestamps whose owning path vanished, then aborts every expired or
+    /// idle-timeout transaction through the callback so the caller keeps its
+    /// canonical abort semantics (full protocol, sink, events).
+    pub fn cleanup_expired_transactions_with<F>(
+        &self,
+        active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
+        mut abort: F,
+    ) where
+        F: FnMut(TransactionId) -> Result<(), TransactionError>,
+    {
+        // Safety net: reap write timestamps whose owning path vanished (orphaned
+        // write). Timestamps owned by live write transactions are excluded so a
+        // transaction still within its configured timeout is never reaped.
+        let owned: HashSet<Timestamp> = active_transactions
+            .iter()
+            .filter(|entry| !entry.value().read_only)
+            .map(|entry| entry.value().timestamp())
+            .collect();
+        let reaped = self
+            .version_manager
+            .reap_expired_write_timestamps(self.version_manager.write_reap_timeout(), &owned);
+        if reaped > 0 {
+            log::warn!("Reaped {reaped} orphaned write timestamp(s) older than timeout");
+        }
+
+        let expired: Vec<(TransactionId, bool)> = active_transactions
+            .iter()
+            .filter(|entry| {
+                entry.value().state().can_execute()
+                    && (entry.value().is_expired() || entry.value().is_idle_timeout())
+            })
+            .map(|entry| (*entry.key(), entry.value().is_expired()))
+            .collect();
+
+        for (txn_id, timed_out) in expired {
+            if timed_out {
+                self.stats.record_timeout();
+            }
+            if let Err(error) = abort(txn_id) {
+                log::error!(
+                    "Transaction {} could not complete the cleanup protocol: {}",
+                    txn_id,
+                    error
+                );
+                self.stats.increment_cleanup_failure();
+            }
         }
     }
 

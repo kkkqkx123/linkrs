@@ -22,6 +22,8 @@
 //! manager.commit_transaction(txn_id).unwrap();
 //! ```
 
+pub mod certify;
+pub mod checkpoint;
 pub mod cleaner;
 pub mod codec;
 pub mod conflict;
@@ -31,6 +33,7 @@ pub mod manager;
 pub mod monitor;
 pub mod mvcc;
 pub mod participant;
+pub mod recovery;
 pub mod rollback;
 pub mod snapshot_tracker;
 pub mod types;
@@ -49,13 +52,14 @@ pub use self::mvcc::{
     VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
 };
 pub use self::snapshot_tracker::SnapshotTracker;
+pub use checkpoint::{CheckpointGate, CheckpointTransaction};
 pub use cleaner::TransactionCleaner;
 pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
 pub use context::TransactionContext;
 pub use error::{
     RetryableTransactionError, TransactionError, TransactionErrorKind, TransactionResult,
 };
-pub use manager::{CheckpointGate, CheckpointTransaction, TransactionManager};
+pub use manager::TransactionManager;
 pub use monitor::TransactionMonitor;
 pub use participant::{
     TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
