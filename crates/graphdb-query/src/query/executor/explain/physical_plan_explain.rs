@@ -170,8 +170,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 ));
             } else if *emit_raw_ids {
                 pairs.push(crate::query::planning::plan::explain::Pair::new(
-                    "mode",
-                    "id_only",
+                    "mode", "id_only",
                 ));
             }
         }
@@ -179,7 +178,8 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         // Try to extract output column names from SourceSpec
         if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(src_spec) =
             &op_spec.spec
-        {            let col_names: Vec<String> = match src_spec {
+        {
+            let col_names: Vec<String> = match src_spec {
                 crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. }
                 | crate::query::executor::streaming::operators::spec::SourceSpec::StandaloneValues { col_names, .. }
                 => col_names.clone(),

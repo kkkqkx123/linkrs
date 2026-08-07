@@ -202,6 +202,9 @@ impl CompactionCoordinator {
             if !pairs.is_empty() {
                 new_columns.set(new_idx, &pairs)?;
             }
+            // Preserve MVCC metadata (current-version start timestamp and the
+            // before-image chain) so snapshot reads stay intact after remap.
+            new_columns.copy_row_state(old_idx, new_idx);
         }
 
         table.columns = new_columns;

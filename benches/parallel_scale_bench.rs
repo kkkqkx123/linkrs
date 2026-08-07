@@ -293,9 +293,8 @@ fn measure(
     }
     let mut last_metrics = ExplainMetrics::default();
     let table = format!("EXPLAIN ANALYZE {query}");
-    if let Ok(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
-    ) = pipeline.execute_query_with_space(&table, Some(space.clone()))
+    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+        pipeline.execute_query_with_space(&table, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {
             if let Some(Value::String(text)) = row.first() {
@@ -304,9 +303,8 @@ fn measure(
         }
     }
     let dot = format!("EXPLAIN ANALYZE FORMAT = DOT {query}");
-    if let Ok(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
-    ) = pipeline.execute_query_with_space(&dot, Some(space.clone()))
+    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+        pipeline.execute_query_with_space(&dot, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {
             if let Some(Value::String(text)) = row.first() {
@@ -342,14 +340,7 @@ fn main() {
         println!("\n### {q_name}: {query}");
         println!(
             "{:>7} | {:>6} | {:>7} | {:>8} | {:>7} | {:>8} | {:>7} | {:>7} | fallback / storage R",
-            "workers",
-            "actual",
-            "T(1)/T(n)",
-            "T(n) us",
-            "E(n)",
-            "work us",
-            "wall us",
-            "eta"
+            "workers", "actual", "T(1)/T(n)", "T(n) us", "E(n)", "work us", "wall us", "eta"
         );
         let mut medians: Vec<u64> = Vec::new();
         let mut metrics_list: Vec<ExplainMetrics> = Vec::new();

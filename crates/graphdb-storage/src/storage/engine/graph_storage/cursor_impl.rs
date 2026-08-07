@@ -788,7 +788,8 @@ fn scan_mutable(args: ScanArgs) {
         }
         if let Some(ref r) = *args.src_id_range {
             let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
-            let src_ext = resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
+            let src_ext =
+                resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, &src_vid, args.ts);
             let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
             if src_int < r.start || src_int >= r.end {
                 continue;
@@ -857,7 +858,8 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
         }
         if let Some(ref r) = *args.src_id_range {
             let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
-            let src_ext = resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, src_vid, args.ts);
+            let src_ext =
+                resolve_vertex_id(args.ctx, src_internal, args.td.tbl_src, src_vid, args.ts);
             let src_int = src_ext.parse::<i64>().unwrap_or(i64::MIN);
             if src_int < r.start || src_int >= r.end {
                 continue;

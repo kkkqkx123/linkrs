@@ -120,7 +120,10 @@ fn build_pipeline(
 }
 
 fn space_info(storage: &Arc<RwLock<GraphStorage>>) -> SpaceInfo {
-    let id = storage.read().get_space_id(SPACE).expect("resolve space id");
+    let id = storage
+        .read()
+        .get_space_id(SPACE)
+        .expect("resolve space id");
     let mut info = SpaceInfo::new(SPACE.to_string());
     info.space_id = id;
     info
@@ -133,9 +136,8 @@ fn run(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &S
 }
 
 fn explain(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &SpaceInfo) {
-    if let Ok(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
-    ) = pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
+    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+        pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {
             if let Some(Value::String(text)) = row.first() {
@@ -158,10 +160,7 @@ fn main() {
     println!("data ready");
     let space = space_info(&storage);
 
-    for (name, query, target_ms) in [
-        ("anchored 1-hop", Q1, 100),
-        ("unanchored 2-hop", Q2, 2000),
-    ] {
+    for (name, query, target_ms) in [("anchored 1-hop", Q1, 100), ("unanchored 2-hop", Q2, 2000)] {
         for workers in [1usize, 2, 4] {
             let mut pipeline = build_pipeline(&storage, workers);
             for _ in 0..2 {

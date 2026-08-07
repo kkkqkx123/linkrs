@@ -547,7 +547,7 @@ pub trait StorageSchemaContextOps: Send + Sync + std::fmt::Debug {
 }
 
 /// Immutable context bound to one storage operation scope.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StorageOperationContext {
     pub transaction_id: Option<TransactionId>,
     pub read_timestamp: Timestamp,
@@ -559,6 +559,12 @@ pub struct StorageOperationContext {
     pub mvcc_vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)>,
     /// Edge table snapshots tracked by timestamp only (no handles needed)
     pub mvcc_edge_snapshot_registered: bool,
+    /// Lazily registered vertex labels with their snapshot handles (for unregistration on finalize)
+    pub registered_vertex_labels: parking_lot::RwLock<std::collections::HashSet<LabelId>>,
+    /// Lazily registered edge partitions (for snapshot unregistration on finalize)
+    pub registered_edge_partitions: parking_lot::RwLock<
+        std::collections::HashSet<crate::storage::engine::data_store::EdgeTableKey>,
+    >,
 }
 
 impl PartialEq for StorageOperationContext {
@@ -572,6 +578,27 @@ impl PartialEq for StorageOperationContext {
 }
 
 impl Eq for StorageOperationContext {}
+
+impl Clone for StorageOperationContext {
+    fn clone(&self) -> Self {
+        Self {
+            transaction_id: self.transaction_id,
+            read_timestamp: self.read_timestamp,
+            write_timestamp: self.write_timestamp,
+            read_only: self.read_only,
+            auto_commit: self.auto_commit,
+            mutation_recorder: self.mutation_recorder.clone(),
+            mvcc_vertex_snapshot_handles: self.mvcc_vertex_snapshot_handles.clone(),
+            mvcc_edge_snapshot_registered: self.mvcc_edge_snapshot_registered,
+            registered_vertex_labels: parking_lot::RwLock::new(
+                self.registered_vertex_labels.read().clone(),
+            ),
+            registered_edge_partitions: parking_lot::RwLock::new(
+                self.registered_edge_partitions.read().clone(),
+            ),
+        }
+    }
+}
 
 impl StorageOperationContext {
     pub fn transaction(
@@ -588,6 +615,8 @@ impl StorageOperationContext {
             mutation_recorder: None,
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -607,6 +636,8 @@ impl StorageOperationContext {
             mutation_recorder: None,
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
     }
 
@@ -691,7 +722,7 @@ pub trait StorageRecoveryOps: Send + Sync + std::fmt::Debug {
 pub trait StorageGcOps: Send + Sync + std::fmt::Debug {
     fn is_index_gc_running(&self) -> bool;
 
-    fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>>;
+    fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle>;
 
     fn stop_index_gc(&self);
 }

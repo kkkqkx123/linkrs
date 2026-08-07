@@ -378,16 +378,33 @@ fn test_used_memory_counter_tracks_records() {
             .iter()
             .flatten()
             .map(|record| record.data.len())
-            .sum()
+            .sum::<usize>()
+            + t.chain_records
+                .iter()
+                .flatten()
+                .map(|entry| entry.data.len())
+                .sum::<usize>()
     };
 
     let o1 = table
-        .insert(&[("name".into(), Value::string("alice")), ("age".into(), Value::Int(30))], 1)
+        .insert(
+            &[
+                ("name".into(), Value::string("alice")),
+                ("age".into(), Value::Int(30)),
+            ],
+            1,
+        )
         .unwrap();
     assert_eq!(table.used_data_bytes, direct_sum(&table));
 
     let o2 = table
-        .insert(&[("name".into(), Value::string("bob")), ("age".into(), Value::Int(25))], 2)
+        .insert(
+            &[
+                ("name".into(), Value::string("bob")),
+                ("age".into(), Value::Int(25)),
+            ],
+            2,
+        )
         .unwrap();
     assert_eq!(table.used_data_bytes, direct_sum(&table));
 
@@ -404,4 +421,301 @@ fn test_used_memory_counter_tracks_records() {
     // Compaction drops tombstones.
     table.compact(&[o1].iter().cloned().collect());
     assert_eq!(table.used_data_bytes, direct_sum(&table));
+}
+
+// ==================== Version Chain Tests ====================
+
+/// RepeatableRead within a transaction: after an in-place property update,
+/// a snapshot read at `query_ts` between the update and the write returns the
+/// historical value, while reads at/after the write see the new value.
+#[test]
+fn test_version_chain_get_at_ts() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("weight".to_string(), DataType::Double, false)
+        .unwrap();
+
+    let offset = table
+        .insert(&[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+
+    // Snapshot before the insert sees nothing.
+    assert!(table.get(offset, Some(99)).is_none());
+
+    // In-place update at ts=200 supersedes version 1.0.
+    table
+        .set_property(offset, "weight", Some(Value::Double(2.0)), 200)
+        .unwrap();
+
+    // Historical snapshot: still 1.0.
+    let weight_before = table
+        .get(offset, Some(150))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    assert_eq!(weight_before, Some(Value::Double(1.0)));
+
+    // Current / at-update snapshot: 2.0.
+    let weight_at = table
+        .get(offset, Some(200))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    assert_eq!(weight_at, Some(Value::Double(2.0)));
+    let weight_after = table
+        .get(offset, None)
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    assert_eq!(weight_after, Some(Value::Double(2.0)));
+
+    // A second update at 300 keeps two before-images: reads at 150 and 250
+    // return 1.0 and 2.0 respectively.
+    table
+        .set_property(offset, "weight", Some(Value::Double(3.0)), 300)
+        .unwrap();
+    let v150 = table
+        .get(offset, Some(150))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    let v250 = table
+        .get(offset, Some(250))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    let v300 = table
+        .get(offset, Some(300))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    assert_eq!(v150, Some(Value::Double(1.0)));
+    assert_eq!(v250, Some(Value::Double(2.0)));
+    assert_eq!(v300, Some(Value::Double(3.0)));
+}
+
+/// Fixed-size fast path must version equally: snapshot reads resolve the
+/// history written through `set_property_fixed_size`.
+#[test]
+fn test_version_chain_fixed_size_at_ts() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("a".to_string(), DataType::Int, false)
+        .unwrap();
+    table
+        .add_property("b".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(
+            &[
+                ("a".to_string(), Value::Int(1)),
+                ("b".to_string(), Value::Int(2)),
+            ],
+            10,
+        )
+        .unwrap();
+
+    table
+        .set_property_by_id(offset, PropertyId::new(0), Some(Value::Int(11)), 20)
+        .unwrap();
+
+    let a_before = table
+        .get_fast(offset, Some(15))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "a")
+        .and_then(|(_, v)| v);
+    let a_current = table
+        .get_fast(offset, Some(20))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "a")
+        .and_then(|(_, v)| v);
+    assert_eq!(a_before, Some(Value::Int(1)));
+    assert_eq!(a_current, Some(Value::Int(11)));
+}
+
+/// `gc_versions` must drop only before-images invisible to the oldest active
+/// snapshot and upgrade the O(1) used_data_bytes counter accordingly.
+#[test]
+fn test_gc_versions_reclaims_obsolete_chain_entries() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+    table
+        .set_property(offset, "v", Some(Value::Int(3)), 300)
+        .unwrap();
+
+    assert!(table.get(offset, Some(150)).is_some());
+    let used_before = table.used_data_bytes;
+
+    // Oldest active snapshot at 250: the 1.0 entry (interval [100, 200)) is
+    // obsolete. Reads at/after 250 are consistent; reads below are not
+    // guaranteed and may fall through to the current version.
+    let removed = table.gc_versions(250);
+    assert_eq!(removed, 1);
+    assert!(table.used_data_bytes < used_before);
+    assert_eq!(
+        table.get(offset, Some(250)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(2))
+    );
+    assert_eq!(
+        table.get(offset, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(3))
+    );
+
+    // Oldest active snapshot at 350: no before-image survives.
+    let removed2 = table.gc_versions(350);
+    assert!(removed2 >= 1);
+}
+
+/// A `gc_versions` window that predates the oldest kept timestamp still leaves
+/// reads at the boundary consistent (the superseding version covers it).
+#[test]
+fn test_gc_versions_boundary_semantics() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+
+    // Oldest active snapshot == the entry's delete_ts (200): the before-image
+    // interval is [100, 200), so it is obsolete — reads at 200 are served by
+    // the current version and stay consistent.
+    let removed = table.gc_versions(200);
+    assert_eq!(removed, 1);
+
+    assert_eq!(
+        table.get(offset, Some(200)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(2))
+    );
+}
+
+/// Before-image chains survive a dump/load roundtrip so snapshot reads stay
+/// consistent after a cold restart.
+#[test]
+fn test_version_chain_survives_dump_load() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+    let chain_len_before = table.chain_records[prop_offset_to_index(offset).unwrap()].len();
+    assert_eq!(chain_len_before, 1);
+
+    let dumped = table.dump();
+    let mut restored = PropertyTable::new();
+    restored.load(&dumped).unwrap();
+
+    assert!(restored.get(offset, Some(150)).is_some());
+    assert_eq!(
+        restored.get(offset, Some(150)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(1))
+    );
+    assert_eq!(
+        restored.get(offset, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(2))
+    );
+    assert_eq!(
+        restored.chain_records[prop_offset_to_index(offset).unwrap()].len(),
+        1
+    );
+}
+
+/// Before-images must survive property-table compaction (row relocation)
+/// so snapshot reads at historical timestamps remain correct.
+#[test]
+fn test_version_chain_survives_compaction() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let keep = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+    let drop = table
+        .insert(&[("v".to_string(), Value::Int(9))], 100)
+        .unwrap();
+    table
+        .set_property(keep, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+
+    table.compact(&[keep].iter().cloned().collect());
+    assert!(table.get(keep, Some(150)).is_some());
+    assert!(table.get(drop, Some(150)).is_none());
+
+    assert_eq!(
+        table.get(keep, Some(150)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(1))
+    );
+    assert_eq!(
+        table.get(keep, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(2))
+    );
+
+    let mapping = table.compact_with_relocation(&[keep].iter().cloned().collect());
+    let new_keep = mapping.get(&keep).copied().unwrap();
+    assert_eq!(
+        table.get(new_keep, Some(150)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(1))
+    );
+    assert_eq!(
+        table.get(new_keep, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(2))
+    );
 }

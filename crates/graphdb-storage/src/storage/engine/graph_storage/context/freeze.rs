@@ -29,9 +29,9 @@ impl GraphStorageContext {
         true
     }
 
-    /// Schedule the background maintenance thread: automatic vertex
-    /// compaction (if ID holes exceed thresholds) followed by delta freeze.
-    /// No-op while a previous maintenance run is still in flight.
+    /// Schedule the background maintenance task on the shared thread pool:
+    /// automatic vertex compaction (if ID holes exceed thresholds) followed
+    /// by delta freeze. No-op while a previous maintenance run is in flight.
     pub(crate) fn schedule_background_maintenance(&self) {
         if self
             .runtime
@@ -44,7 +44,7 @@ impl GraphStorageContext {
         let context = self.clone();
         let running = self.runtime.background_freeze_running.clone();
         let timeout = self.persistent.config.resources.operation_timeout;
-        std::thread::spawn(move || {
+        self.runtime.thread_pool.spawn(move || {
             let started = std::time::Instant::now();
             if let Err(error) = context.trigger_background_maintenance() {
                 log::warn!("Background maintenance failed: {}", error);

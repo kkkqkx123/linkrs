@@ -114,9 +114,7 @@ fn main() {
         for seed in &seeds {
             let _ = storage.get_node_edges(SPACE, seed, graphdb::core::EdgeDirection::Out);
         }
-        per_vertex_us.push(
-            start.elapsed().as_micros() as u64 * 1_000 / seeds.len() as u64,
-        );
+        per_vertex_us.push(start.elapsed().as_micros() as u64 * 1_000 / seeds.len() as u64);
     }
     let ref_ns = median_us(&per_vertex_us);
 
@@ -140,13 +138,12 @@ fn main() {
     let mut deg_us = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let start = Instant::now();
-        let degrees = storage.out_degree_batch(
-            SPACE,
-            &seeds,
-            graphdb::core::EdgeDirection::Out,
-            &no_types,
+        let degrees =
+            storage.out_degree_batch(SPACE, &seeds, graphdb::core::EdgeDirection::Out, &no_types);
+        assert_eq!(
+            degrees.map(|d| d.iter().sum::<usize>()).unwrap_or(0),
+            seeds.len() * EDGES_PER_VERTEX as usize
         );
-        assert_eq!(degrees.map(|d| d.iter().sum::<usize>()).unwrap_or(0), seeds.len() * EDGES_PER_VERTEX as usize);
         deg_us.push(start.elapsed().as_micros() as u64 * 1_000 / seeds.len() as u64);
     }
     let deg_ns = median_us(&deg_us);

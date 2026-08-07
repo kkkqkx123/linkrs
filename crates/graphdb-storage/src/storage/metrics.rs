@@ -255,7 +255,7 @@ impl<S: StorageClient> StorageRecoveryOps for MetricsStorage<S> {
 impl<S: StorageClient> StorageGcOps for MetricsStorage<S> {
     forward_methods!(inner;
         fn is_index_gc_running(&self) -> bool;
-        fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>>;
+        fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle>;
     );
 
     forward_methods!(inner;

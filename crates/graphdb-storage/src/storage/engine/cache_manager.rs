@@ -134,6 +134,7 @@ impl CacheManager {
                 external_id,
                 properties,
                 cached_at_ts: ts,
+                generation: 0,
             };
             rc.insert_vertex(key, cached);
         }

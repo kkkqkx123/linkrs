@@ -348,6 +348,9 @@ struct GraphStorageRuntime {
     vertex_gc_manager: Option<Arc<VertexGcManager>>,
     background_freeze_manager: Option<Arc<BackgroundFreezeManager>>,
     deferred_wal_ops: DeferredWalOps,
+    /// Shared rayon-backed pool for background maintenance work (freeze,
+    /// vertex/index GC loops). See [`crate::storage::thread_pool`].
+    thread_pool: Arc<crate::storage::thread_pool::StorageThreadPool>,
     background_freeze_running: Arc<AtomicBool>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
@@ -461,6 +464,8 @@ impl Drop for AutoCommitWriteLease {
 /// roll the partial writes back, restoring the before-images.
 struct AutoCommitMutationRecorder {
     undo: Arc<Mutex<UndoLogManager>>,
+    /// Write set for conflict detection (tracks modified vertices and edges)
+    write_set: Arc<Mutex<graphdb_transaction::transaction::types::WriteSet>>,
 }
 
 impl std::fmt::Debug for AutoCommitMutationRecorder {
@@ -478,11 +483,17 @@ impl graphdb_transaction::transaction::TransactionMutationRecorder for AutoCommi
         }
     }
 
-    fn record_vertex_write(&self, _vertex_id: VertexId) {}
+    fn record_vertex_write(&self, vertex_id: VertexId) {
+        self.write_set.lock().record_vertex(vertex_id);
+    }
 
-    fn record_vertex_delete(&self, _vertex_id: VertexId) {}
+    fn record_vertex_delete(&self, vertex_id: VertexId) {
+        self.write_set.lock().record_vertex_delete(vertex_id);
+    }
 
-    fn record_edge_write(&self, _edge: EdgeIdentifier) {}
+    fn record_edge_write(&self, edge: EdgeIdentifier) {
+        self.write_set.lock().record_edge(edge);
+    }
 
     fn add_undo_log(&self, entry: UndoLogEntry) -> Result<(), TransactionError> {
         self.undo
@@ -572,9 +583,14 @@ impl AutoCommitBatchWindow {
             auto_commit: true,
             mutation_recorder: Some(Arc::new(AutoCommitMutationRecorder {
                 undo: undo_log.clone(),
+                write_set: Arc::new(parking_lot::Mutex::new(
+                    graphdb_transaction::transaction::types::WriteSet::new(),
+                )),
             })),
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         };
 
         self.statement_count.fetch_add(1, Ordering::SeqCst);
@@ -665,6 +681,12 @@ impl GraphStorageRuntime {
             vertex_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
+            thread_pool: Arc::new(
+                crate::storage::thread_pool::StorageThreadPool::new().unwrap_or_else(|e| {
+                    log::error!("Failed to build storage thread pool: {}", e);
+                    crate::storage::thread_pool::StorageThreadPool::default()
+                }),
+            ),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
             last_auto_compact: Arc::new(Mutex::new(None)),
             last_edge_write: Arc::new(Mutex::new(HashMap::new())),
@@ -679,13 +701,19 @@ impl GraphStorageRuntime {
         config: IndexGcConfig,
     ) -> Self {
         let index_data = index_data_manager.read().clone();
-        let gc_manager = IndexGcManager::new(index_data, version_manager.clone(), config);
+        let gc_manager = IndexGcManager::new(
+            index_data,
+            version_manager.clone(),
+            config,
+            self.thread_pool.clone(),
+        );
 
         Self {
             index_gc_manager: Some(Arc::new(gc_manager)),
             vertex_gc_manager: self.vertex_gc_manager.clone(),
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
+            thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
@@ -699,13 +727,19 @@ impl GraphStorageRuntime {
         version_manager: &Arc<VersionManager>,
         config: crate::storage::vertex::VertexGcConfig,
     ) -> Self {
-        let gc_manager = VertexGcManager::new(data_store.clone(), version_manager.clone(), config);
+        let gc_manager = VertexGcManager::new(
+            data_store.clone(),
+            version_manager.clone(),
+            config,
+            self.thread_pool.clone(),
+        );
 
         Self {
             index_gc_manager: self.index_gc_manager.clone(),
             vertex_gc_manager: Some(Arc::new(gc_manager)),
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
+            thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
@@ -719,6 +753,7 @@ impl GraphStorageRuntime {
             vertex_gc_manager: self.vertex_gc_manager.clone(),
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
+            thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_edge_write: self.last_edge_write.clone(),
@@ -726,7 +761,7 @@ impl GraphStorageRuntime {
         }
     }
 
-    fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.index_gc_manager
             .as_ref()
             .map(|gc: &Arc<IndexGcManager>| gc.start_background_gc())
@@ -771,7 +806,7 @@ impl GraphStorageRuntime {
         }
     }
 
-    fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    fn start_vertex_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.vertex_gc_manager
             .as_ref()
             .map(|gc: &Arc<VertexGcManager>| gc.start_background_gc())
@@ -859,6 +894,87 @@ impl GraphStorageContext {
             auto_commit_window: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// Lazily register a vertex label snapshot if not already registered.
+    /// Returns the snapshot handle if registration succeeded.
+    pub(crate) fn ensure_vertex_snapshot_registered(
+        &self,
+        label: LabelId,
+    ) -> Option<crate::storage::mvcc::SnapshotHandle> {
+        let operation = self.operation_context.as_ref()?;
+        if !operation.auto_commit {
+            return None;
+        }
+
+        // Check if already registered (using read lock)
+        {
+            let registered = operation.registered_vertex_labels.read();
+            if registered.contains(&label) {
+                return None;
+            }
+        }
+
+        // Register snapshot for this label
+        let timestamp = operation.write_timestamp?;
+        let vertex_tables = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| tables.get(&label).cloned())?;
+
+        let handle = vertex_tables.register_snapshot(timestamp).ok()?;
+
+        // Store the label in the registered set (using write lock)
+        {
+            let mut registered = operation.registered_vertex_labels.write();
+            registered.insert(label);
+        }
+
+        Some(handle)
+    }
+
+    /// Lazily register an edge partition snapshot if not already registered.
+    pub(crate) fn ensure_edge_snapshot_registered(
+        &self,
+        edge_key: crate::storage::engine::data_store::EdgeTableKey,
+    ) -> bool {
+        let operation = match self.operation_context.as_ref() {
+            Some(op) if op.auto_commit => op,
+            _ => return false,
+        };
+
+        // Check if already registered (using read lock)
+        {
+            let registered = operation.registered_edge_partitions.read();
+            if registered.contains(&edge_key) {
+                return true;
+            }
+        }
+
+        // Register snapshot for this edge partition
+        let timestamp = match operation.write_timestamp {
+            Some(ts) => ts,
+            None => return false,
+        };
+
+        let edge_tables = self
+            .persistent
+            .data_store
+            .with_edge_tables(|tables| tables.get(&edge_key).cloned());
+
+        if let Some(edge_table) = edge_tables {
+            edge_table.write().register_snapshot(timestamp);
+
+            // Store the edge key in the registered set (using write lock)
+            {
+                let mut registered = operation.registered_edge_partitions.write();
+                registered.insert(edge_key);
+            }
+
+            true
+        } else {
+            false
+        }
     }
 }
 

@@ -523,7 +523,9 @@ impl GraphDataStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_read_edge_label_index(&self) -> CatalogReadGuard<'_, HashMap<LabelId, Vec<EdgeTableKey>>> {
+    pub(crate) fn test_read_edge_label_index(
+        &self,
+    ) -> CatalogReadGuard<'_, HashMap<LabelId, Vec<EdgeTableKey>>> {
         self.read_edge_label_index()
     }
 

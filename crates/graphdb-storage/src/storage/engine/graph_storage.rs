@@ -1345,6 +1345,8 @@ impl StorageSchemaOps for GraphStorage {
             mutation_recorder: None,
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_tag_index(
@@ -1395,6 +1397,8 @@ impl StorageSchemaOps for GraphStorage {
             mutation_recorder: None,
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_edge_index(
@@ -1723,7 +1727,7 @@ impl StorageGcOps for GraphStorage {
         self.ctx.is_index_gc_running()
     }
 
-    fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.ctx.start_index_gc()
     }
 
@@ -1738,7 +1742,7 @@ impl GraphStorage {
         self.ctx.is_vertex_gc_running()
     }
 
-    pub fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    pub fn start_vertex_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.ctx.start_vertex_gc()
     }
 

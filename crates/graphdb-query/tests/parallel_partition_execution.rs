@@ -99,9 +99,10 @@ fn setup_storage() -> Arc<RwLock<GraphStorage>> {
         guard
             .create_tag(
                 SPACE,
-                &TagInfo::new(TAG2.to_string()).with_properties(vec![
-                    PropertyDef::new("value".to_string(), DataType::BigInt),
-                ]),
+                &TagInfo::new(TAG2.to_string()).with_properties(vec![PropertyDef::new(
+                    "value".to_string(),
+                    DataType::BigInt,
+                )]),
             )
             .expect("create tag 2");
         guard
@@ -289,7 +290,10 @@ fn partitioned_edge_scan_matches_serial_results() {
     let mut parallel_rows = query_rows(&mut parallel, q2);
     sorted(&mut serial_rows);
     sorted(&mut parallel_rows);
-    assert_eq!(serial_rows, parallel_rows, "E-Q2 (edge projection) mismatch");
+    assert_eq!(
+        serial_rows, parallel_rows,
+        "E-Q2 (edge projection) mismatch"
+    );
 }
 
 #[test]
@@ -347,7 +351,10 @@ fn anchored_hop_filter_is_pushed_below_expand() {
     // The anchor filter must appear below the ExpandAll in the physical plan:
     // the table lists operators scan-first, so a Filter between the anchor
     // scan and the expand indicates the predicate is evaluated pre-expansion.
-    let output = query_rows(&mut serial, "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)");
+    let output = query_rows(
+        &mut serial,
+        "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)",
+    );
     let plan = output[0][0].to_string().unwrap_or_default();
     assert!(
         plan.contains("ExpandAll"),
@@ -445,7 +452,11 @@ fn partitioned_anchored_traversal_matches_serial_results() {
     sorted(&mut serial_rows);
     sorted(&mut parallel_rows);
     assert_eq!(serial_rows, parallel_rows, "E4 grouped aggregate mismatch");
-    assert_eq!(serial_rows.len(), 101, "anchors 0..99 reach neighbors 1..101");
+    assert_eq!(
+        serial_rows.len(),
+        101,
+        "anchors 0..99 reach neighbors 1..101"
+    );
 
     // The traversing plan must actually run in parallel.
     let output = query_rows(
@@ -576,7 +587,10 @@ fn plan_cache_replans_on_partition_config_change() {
     assert_eq!(rows_4w, vec![vec![Value::BigInt(800)]]);
 
     // Both must produce identical results despite different partition layouts.
-    assert_eq!(rows_2w, rows_4w, "cache replan must produce identical results");
+    assert_eq!(
+        rows_2w, rows_4w,
+        "cache replan must produce identical results"
+    );
 
     // Verify the 4-worker plan actually uses more workers.
     let output = query_rows(
@@ -607,13 +621,33 @@ fn plan_cache_partition_fingerprint_changes_with_ranges() {
         tag: "Node".to_string(),
     };
     let spec_a = PartitionSpec::try_new(
-        vec![Range { start: 0, end: 500 }, Range { start: 500, end: 1000 }],
+        vec![
+            Range { start: 0, end: 500 },
+            Range {
+                start: 500,
+                end: 1000,
+            },
+        ],
         source.clone(),
         Some(42),
     )
     .unwrap();
     let spec_b = PartitionSpec::try_new(
-        vec![Range { start: 0, end: 250 }, Range { start: 250, end: 500 }, Range { start: 500, end: 750 }, Range { start: 750, end: 1000 }],
+        vec![
+            Range { start: 0, end: 250 },
+            Range {
+                start: 250,
+                end: 500,
+            },
+            Range {
+                start: 500,
+                end: 750,
+            },
+            Range {
+                start: 750,
+                end: 1000,
+            },
+        ],
         source.clone(),
         Some(42),
     )
@@ -621,11 +655,20 @@ fn plan_cache_partition_fingerprint_changes_with_ranges() {
 
     let key_a = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_a);
     let key_b = PlanCacheKey::from_query_with_partition("MATCH (n:Node) RETURN count(n)", &spec_b);
-    assert_ne!(key_a, key_b, "different ranges must produce different cache keys");
+    assert_ne!(
+        key_a, key_b,
+        "different ranges must produce different cache keys"
+    );
 
     // Same ranges and layout_version → same key.
     let spec_c = PartitionSpec::try_new(
-        vec![Range { start: 0, end: 500 }, Range { start: 500, end: 1000 }],
+        vec![
+            Range { start: 0, end: 500 },
+            Range {
+                start: 500,
+                end: 1000,
+            },
+        ],
         source.clone(),
         Some(42),
     )
@@ -647,11 +690,17 @@ fn two_hop_id_only_seeds_feed_next_hop() {
     let q = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
     let serial_rows = query_rows(&mut serial, q);
     let parallel_rows = query_rows(&mut parallel, q);
-    assert_eq!(serial_rows, parallel_rows, "A1.5 2-hop id_only chain mismatch");
+    assert_eq!(
+        serial_rows, parallel_rows,
+        "A1.5 2-hop id_only chain mismatch"
+    );
     assert_eq!(serial_rows, vec![vec![Value::BigInt(8000)]]);
 
     // The plan must annotate hop1 id_only and hop2 count_only.
-    let output = query_rows(&mut serial, "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)");
+    let output = query_rows(
+        &mut serial,
+        "EXPLAIN MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
+    );
     let plan = output[0][0].to_string().unwrap_or_default();
     let expand_pos = plan.find("ExpandAll").expect("expand");
     let info_after_first = &plan[expand_pos..];
@@ -673,8 +722,15 @@ fn referenced_source_keeps_full_vertex() {
     // each carrying the anchor's `value` (= its id).
     let storage = setup_storage();
     let mut serial = build_pipeline(&storage, 1);
-    let rows = query_rows(&mut serial, "MATCH (a:Node)-[:Link]->(b:Node) RETURN a.value");
-    assert_eq!(rows.len(), 4000, "1-hop with projected source must return 4000 rows");
+    let rows = query_rows(
+        &mut serial,
+        "MATCH (a:Node)-[:Link]->(b:Node) RETURN a.value",
+    );
+    assert_eq!(
+        rows.len(),
+        4000,
+        "1-hop with projected source must return 4000 rows"
+    );
     let mut values: Vec<i64> = rows
         .iter()
         .map(|r| match &r[0] {
@@ -685,7 +741,10 @@ fn referenced_source_keeps_full_vertex() {
     values.sort_unstable();
     let mut expected: Vec<i64> = (0..2000i64).flat_map(|i| [i, i]).collect();
     expected.sort_unstable();
-    assert_eq!(values, expected, "projected source values must match the anchors");
+    assert_eq!(
+        values, expected,
+        "projected source values must match the anchors"
+    );
 }
 
 #[test]
@@ -697,7 +756,8 @@ fn middle_var_referenced_blocks_id_only() {
 
     // b in {0..1999 with group_id < 10} = 1000 middles (group_id = id % 20),
     // each reached from 2 anchors and having 2 out edges -> 4000 paths.
-    let q = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) WHERE b.group_id < 10 RETURN count(c)";
+    let q =
+        "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) WHERE b.group_id < 10 RETURN count(c)";
     let rows = query_rows(&mut serial, q);
     assert_eq!(
         rows,
@@ -719,8 +779,7 @@ fn parallel_unanchored_two_hop_matches_serial() {
     let serial_rows = query_rows(&mut serial, q);
     let parallel_rows = query_rows(&mut parallel, q);
     assert_eq!(
-        serial_rows,
-        parallel_rows,
+        serial_rows, parallel_rows,
         "C1 2-hop parallel count mismatch"
     );
     assert_eq!(serial_rows, vec![vec![Value::BigInt(8000)]]);
@@ -762,8 +821,7 @@ fn partitioned_equality_join_matches_serial_results() {
     let serial_rows = query_rows(&mut serial, q);
     let parallel_rows = query_rows(&mut parallel, q);
     assert_eq!(
-        serial_rows,
-        parallel_rows,
+        serial_rows, parallel_rows,
         "partitioned equality join mismatch"
     );
     assert_eq!(

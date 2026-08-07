@@ -43,6 +43,10 @@ use crate::storage::naming::NameIndexer;
 use crate::storage::persistence::{read_header, read_u32_le, read_u64_le, section, write_header};
 use crate::storage::types::PropertyId;
 
+/// Current on-disk layout version. Development builds keep a single format;
+/// version numbers only start to accumulate after the first release.
+const PROPERTY_TABLE_VERSION: u8 = 3;
+
 pub use super::property_schema::{
     prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertyRecord,
     PropertySchema,
@@ -276,7 +280,16 @@ fn decode_varint(cursor: &mut Cursor<&[u8]>) -> StorageResult<u32> {
 pub struct PropertyTable {
     schema: Vec<PropertySchema>,
     name_indexer: NameIndexer,
-    records: Vec<Option<PropertyRecord>>, // row_index → PropertyRecord with timestamps
+    records: Vec<Option<PropertyRecord>>, // row_index → current (newest) PropertyRecord with timestamps
+    /// Before-image version chain per row, newest first.
+    ///
+    /// Each entry is an older version of the row's property data, superseded
+    /// by the current record. The version is visible on
+    /// `[create_ts, delete_ts)`, and its `delete_ts` equals the timestamp at
+    /// which the successor version took over. `get_at_ts` resolves snapshot
+    /// reads by scanning the current record first, then the chain; obsolete
+    /// entries are reclaimed by [`PropertyTable::gc_versions`].
+    chain_records: Vec<Vec<PropertyRecord>>,
     row_count: usize,
     free_list: Vec<u32>,
 
@@ -303,6 +316,7 @@ impl PropertyTable {
             schema: Vec::new(),
             name_indexer: NameIndexer::new(),
             records: Vec::new(),
+            chain_records: Vec::new(),
             row_count: 0,
             free_list: Vec::new(),
             tombstones_manager: TieredTombstoneManager::new(10_000),
@@ -317,6 +331,7 @@ impl PropertyTable {
             schema: Vec::new(),
             name_indexer: NameIndexer::with_capacity(capacity),
             records: Vec::with_capacity(capacity),
+            chain_records: Vec::with_capacity(capacity),
             row_count: 0,
             free_list: Vec::with_capacity(capacity / 10),
             tombstones_manager: TieredTombstoneManager::new(10_000),
@@ -557,6 +572,11 @@ impl PropertyTable {
         }
     }
 
+    /// Ensure `chain_records` has one entry per record row.
+    fn ensure_chain_len(&mut self) {
+        self.chain_records.resize(self.records.len(), Vec::new());
+    }
+
     pub fn insert(
         &mut self,
         values: &[(String, Value)],
@@ -570,11 +590,15 @@ impl PropertyTable {
         let offset = if let Some(free_idx) = self.free_list.pop() {
             let row_idx = (free_idx - 1) as usize;
             self.records[row_idx] = Some(record);
+            // A reused slot starts a fresh version chain: any surviving
+            // before-images were already invisible to every active snapshot.
+            self.chain_records[row_idx].clear();
             free_idx
         } else {
             let row_idx = self.records.len();
             let row_offset = prop_index_to_offset(row_idx);
             self.records.push(Some(record));
+            self.chain_records.push(Vec::new());
             self.row_count += 1;
             row_offset
         };
@@ -660,19 +684,65 @@ impl PropertyTable {
             return None;
         }
 
-        let record = self.records[row_idx].as_ref()?;
-
-        // Check visibility based on create_ts and delete_ts
-        let visible = match query_ts {
-            None => record.delete_ts.is_none(),   // Current version
-            Some(ts) => record.is_visible_at(ts), // Time-travel query
+        let record = match query_ts {
+            // Current version: only the newest live record is visible.
+            None => {
+                let rec = self.records[row_idx].as_ref()?;
+                if rec.delete_ts.is_some() {
+                    return None;
+                }
+                rec
+            }
+            // Time-travel query: newest record covering `query_ts` wins,
+            // otherwise fall back to the before-image version chain.
+            Some(ts) => {
+                if let Some(rec) = self.records[row_idx].as_ref() {
+                    if rec.is_visible_at(ts) {
+                        return self.deserialize_row(&rec.data).ok();
+                    }
+                }
+                let record = self
+                    .chain_records
+                    .get(row_idx)?
+                    .iter()
+                    .find(|record| record.is_visible_at(ts))?;
+                return self.deserialize_row(&record.data).ok();
+            }
         };
 
-        if !visible {
-            return None;
-        }
-
         self.deserialize_row(&record.data).ok()
+    }
+
+    /// Resolve the property row visible at `query_ts` (snapshot read).
+    ///
+    /// Cheap inspection that mirrors [`PropertyTable::get`]'s visibility
+    /// rules without paying for deserialization.
+    fn resolve_version(
+        &self,
+        row_idx: usize,
+        query_ts: Option<Timestamp>,
+    ) -> Option<&PropertyRecord> {
+        let record = match query_ts {
+            None => {
+                let rec = self.records[row_idx].as_ref()?;
+                if rec.delete_ts.is_some() {
+                    return None;
+                }
+                rec
+            }
+            Some(ts) => {
+                if let Some(rec) = self.records[row_idx].as_ref() {
+                    if rec.is_visible_at(ts) {
+                        return Some(rec);
+                    }
+                }
+                self.chain_records
+                    .get(row_idx)?
+                    .iter()
+                    .find(|record| record.is_visible_at(ts))?
+            }
+        };
+        Some(record)
     }
 
     /// Serialize a single value into a byte buffer at a given offset.
@@ -749,6 +819,37 @@ impl PropertyTable {
         Ok(())
     }
 
+    /// Supersede the current version of a row in favor of a newer one.
+    ///
+    /// Marks the current record as tombstoned at `ts` and pushes it into the
+    /// before-image chain (visible on `[create_ts, ts)`), mirroring the
+    /// vertex `Column::set_versioned` guard: a before-image is only useful
+    /// when the current version genuinely predates the write
+    /// (`create_ts < ts`). Same-timestamp re-writes (rollback / WAL redo that
+    /// reuses the transaction timestamp) and already-deleted rows produce no
+    /// observable intermediate state, so they skip the chain entry.
+    fn supersede_current(&mut self, row_idx: usize, offset: u32, ts: Timestamp) {
+        let should_version = self.records[row_idx]
+            .as_ref()
+            .is_some_and(|r| r.delete_ts.is_none() && r.create_ts < ts);
+
+        if let Some(record) = &mut self.records[row_idx] {
+            if record.delete_ts.is_none() {
+                record.delete_ts = Some(ts);
+                self.tombstones_manager.add_tombstone(offset, ts);
+            }
+        }
+
+        if should_version {
+            if let Some(record) = self.records[row_idx].as_ref() {
+                if self.chain_records.len() <= row_idx {
+                    self.chain_records.resize(row_idx + 1, Vec::new());
+                }
+                self.chain_records[row_idx].push(record.clone());
+            }
+        }
+    }
+
     pub fn set_property(
         &mut self,
         offset: u32,
@@ -803,18 +904,12 @@ impl PropertyTable {
 
         let new_record = self.serialize_row_with_nulls(&merged_values)?;
 
-        // MVCC: mark old as deleted and insert new
-        if let Some(record) = &mut self.records[row_idx] {
-            if record.delete_ts.is_none() {
-                record.delete_ts = Some(ts);
-                self.tombstones_manager.add_tombstone(offset, ts);
-            }
-        }
+        // MVCC: supersede the current version. The old row becomes a
+        // before-image (visible on `[create_ts, ts)`) and the new row takes
+        // over from `ts` onward, preserving historical snapshots.
+        self.supersede_current(row_idx, offset, ts);
 
         let new_record_obj = PropertyRecord::new(new_record, ts);
-        if let Some(old) = &self.records[row_idx] {
-            self.used_data_bytes = self.used_data_bytes.saturating_sub(old.data.len());
-        }
         self.used_data_bytes += new_record_obj.data.len();
         self.records[row_idx] = Some(new_record_obj);
 
@@ -843,19 +938,12 @@ impl PropertyTable {
         let mut new_data = record.data.clone();
         self.serialize_value_at_offset(&mut new_data, value.as_ref(), col_idx)?;
 
-        // MVCC: mark old as deleted
-        if let Some(record) = &mut self.records[row_idx] {
-            if record.delete_ts.is_none() {
-                record.delete_ts = Some(ts);
-                self.tombstones_manager.add_tombstone(offset, ts);
-            }
-        }
+        // MVCC: supersede the current version, keeping the prior row as a
+        // before-image for snapshot reads.
+        self.supersede_current(row_idx, offset, ts);
 
         // Replace with new record (same position, new data + timestamp)
         let new_record_obj = PropertyRecord::new(new_data, ts);
-        if let Some(old) = &self.records[row_idx] {
-            self.used_data_bytes = self.used_data_bytes.saturating_sub(old.data.len());
-        }
         self.used_data_bytes += new_record_obj.data.len();
         self.records[row_idx] = Some(new_record_obj);
 
@@ -926,6 +1014,30 @@ impl PropertyTable {
         }
     }
 
+    /// Garbage collect before-image chain entries no longer visible to any
+    /// active snapshot at `min_active_snapshot_ts`. Returns the number of
+    /// entries removed.
+    ///
+    /// An entry is obsolete when its whole visibility interval `[create_ts,
+    /// delete_ts)` precedes the oldest active snapshot, i.e. `delete_ts <=
+    /// min_active_snapshot_ts`. The current record is never reclaimed here
+    /// (it still owns the row); fully-deleted rows are reclaimed through
+    /// [`PropertyTable::gc_tombstones`].
+    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        let mut removed = 0usize;
+        let mut reclaimed_bytes = 0usize;
+        for chain in &mut self.chain_records {
+            let before_len = chain.len();
+            let before_bytes: usize = chain.iter().map(|e| e.data.len()).sum();
+            chain.retain(|entry| entry.delete_ts.is_none_or(|d| d > min_active_snapshot_ts));
+            let after_bytes: usize = chain.iter().map(|e| e.data.len()).sum();
+            removed += before_len - chain.len();
+            reclaimed_bytes += before_bytes - after_bytes;
+        }
+        self.used_data_bytes = self.used_data_bytes.saturating_sub(reclaimed_bytes);
+        removed
+    }
+
     /// Garbage collect tombstones older than min_active_snapshot_ts
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> u32 {
         // Incremental batch GC first, then a full GC pass to clean remaining.
@@ -971,6 +1083,13 @@ impl PropertyTable {
             if let Some(record) = &self.records[idx] {
                 self.used_data_bytes = self.used_data_bytes.saturating_sub(record.data.len());
             }
+            // The row's full version history (before-images included) is no
+            // longer visible to any active snapshot.
+            if let Some(chain) = self.chain_records.get_mut(idx) {
+                for entry in chain.drain(..) {
+                    self.used_data_bytes = self.used_data_bytes.saturating_sub(entry.data.len());
+                }
+            }
             self.records[idx] = None;
             self.free_list.push(offset);
         }
@@ -995,6 +1114,12 @@ impl PropertyTable {
 
         if let Some(record) = &self.records[row_idx] {
             self.used_data_bytes = self.used_data_bytes.saturating_sub(record.data.len());
+        }
+        // The row is removed wholesale; its version history dies with it.
+        if let Some(chain) = self.chain_records.get_mut(row_idx) {
+            for entry in chain.drain(..) {
+                self.used_data_bytes = self.used_data_bytes.saturating_sub(entry.data.len());
+            }
         }
         self.records[row_idx] = None;
         self.free_list.push(offset);
@@ -1061,8 +1186,8 @@ impl PropertyTable {
         let checksum_pos = result.len();
         result.extend_from_slice(&[0u8; 4]);
 
-        // Version 2: Added per-column encoding_type
-        result.push(2); // version
+        // Version marker (development uses a single on-disk layout).
+        result.push(PROPERTY_TABLE_VERSION);
 
         result.extend_from_slice(&(self.schema.len() as u32).to_le_bytes());
         for prop in &self.schema {
@@ -1095,6 +1220,23 @@ impl PropertyTable {
                 None => {
                     result.push(0); // marker: deleted
                 }
+            }
+        }
+
+        // Store per-row before-image version chains (newest first), matching
+        // the record encoding: marker / create_ts / delete_ts marker / data.
+        for chain in &self.chain_records {
+            result.extend_from_slice(&(chain.len() as u32).to_le_bytes());
+            for record in chain {
+                result.extend_from_slice(&record.create_ts.to_le_bytes());
+                if let Some(del_ts) = record.delete_ts {
+                    result.push(1); // marker: has delete_ts
+                    result.extend_from_slice(&del_ts.to_le_bytes());
+                } else {
+                    result.push(0); // marker: no delete_ts
+                }
+                result.extend_from_slice(&(record.data.len() as u32).to_le_bytes());
+                result.extend_from_slice(&record.data);
             }
         }
 
@@ -1154,19 +1296,17 @@ impl PropertyTable {
         let data = payload;
         let mut offset = 0usize;
 
-        // Read version (v1: no encoding, v2: per-column encoding_type)
-        let version = if offset < data.len() {
-            let v = data[offset];
-            offset += 1;
-            v
-        } else {
-            1 // Default to v1 if not specified
-        };
+        // Read and validate the version. Development builds keep a single
+        // on-disk layout; version bumps only start after a release.
+        let version = data.get(offset).copied().ok_or_else(|| {
+            StorageError::deserialize_error("PropertyTable data missing version byte")
+        })?;
+        offset += 1;
 
-        if version != 1 && version != 2 {
+        if version != PROPERTY_TABLE_VERSION {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported PropertyTable version: expected 1 or 2, got {}",
-                version
+                "Unsupported PropertyTable version: expected {}, got {}",
+                PROPERTY_TABLE_VERSION, version
             )));
         }
 
@@ -1194,13 +1334,8 @@ impl PropertyTable {
             let nullable = data[offset] == 1;
             offset += 1;
 
-            let encoding_type = if version >= 2 {
-                let et = EncodingType::from_u8(data[offset]);
-                offset += 1;
-                et
-            } else {
-                EncodingType::None
-            };
+            let encoding_type = EncodingType::from_u8(data[offset]);
+            offset += 1;
 
             let prop_schema = PropertySchema::new(name.clone(), prop_id, data_type)
                 .nullable(nullable)
@@ -1253,6 +1388,37 @@ impl PropertyTable {
                 self.records.push(None);
             }
         }
+
+        // Load before-image version chains, newest first.
+        self.chain_records.clear();
+        for _ in 0..self.records.len() {
+            let chain_len = read_u32_le(data, &mut offset)? as usize;
+            let mut chain = Vec::with_capacity(chain_len);
+            for _ in 0..chain_len {
+                let create_ts = read_u64_le(data, &mut offset)?;
+                let has_delete_ts = data[offset];
+                offset += 1;
+                let delete_ts = if has_delete_ts == 1 {
+                    let d = read_u64_le(data, &mut offset)?;
+                    Some(d)
+                } else {
+                    None
+                };
+                let data_len = read_u32_le(data, &mut offset)? as usize;
+                if offset + data_len > data.len() {
+                    return Err(StorageError::deserialize_error("unexpected end of data"));
+                }
+                let record_data = data[offset..offset + data_len].to_vec();
+                offset += data_len;
+                chain.push(PropertyRecord {
+                    data: record_data,
+                    create_ts,
+                    delete_ts,
+                });
+            }
+            self.chain_records.push(chain);
+        }
+        self.ensure_chain_len();
 
         // Load tiered tombstones for GC tracking
         let tombstones_len = read_u32_le(data, &mut offset)? as usize;
@@ -1311,6 +1477,7 @@ impl PropertyTable {
 
     pub fn compact(&mut self, valid_offsets: &HashSet<u32>) {
         let mut new_records = Vec::new();
+        let mut new_chains: Vec<Vec<PropertyRecord>> = Vec::new();
         let mut offset_mapping = std::collections::HashMap::new();
 
         for (old_idx, record_opt) in self.records.iter().enumerate() {
@@ -1322,10 +1489,12 @@ impl PropertyTable {
                 } else {
                     new_records.push(None);
                 }
+                new_chains.push(self.chain_records.get(old_idx).cloned().unwrap_or_default());
             }
         }
 
         self.records = new_records;
+        self.chain_records = new_chains;
         self.row_count = self.records.iter().filter(|r| r.is_some()).count();
         self.free_list.clear();
         self.resync_used_data_bytes();
@@ -1348,6 +1517,11 @@ impl PropertyTable {
     pub fn used_memory_size(&self) -> usize {
         let mut total = self.used_data_bytes;
         total += self.records.len() * std::mem::size_of::<Option<PropertyRecord>>();
+        // Version chain overhead: entry slots plus a small header per entry.
+        total += self.chain_records.capacity() * std::mem::size_of::<Vec<PropertyRecord>>();
+        for chain in &self.chain_records {
+            total += chain.capacity() * std::mem::size_of::<PropertyRecord>();
+        }
         total += std::mem::size_of::<Self>();
         total += self.value_index.entry_count()
             * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
@@ -1356,13 +1530,21 @@ impl PropertyTable {
 
     /// Recompute `used_data_bytes` from the current records (used after
     /// compaction / rebuilds that replace the records array wholesale).
+    ///
+    /// Includes retained before-image chains, which are live memory too.
     fn resync_used_data_bytes(&mut self) {
         self.used_data_bytes = self
             .records
             .iter()
             .flatten()
             .map(|record| record.data.len())
-            .sum();
+            .sum::<usize>()
+            + self
+                .chain_records
+                .iter()
+                .flatten()
+                .map(|entry| entry.data.len())
+                .sum::<usize>();
     }
 
     /// Calculate compaction statistics for the property table
@@ -1415,6 +1597,7 @@ impl PropertyTable {
     /// callers that need to update their references.
     pub fn compact_with_relocation(&mut self, valid_offsets: &HashSet<u32>) -> HashMap<u32, u32> {
         let mut new_records = Vec::new();
+        let mut new_chains: Vec<Vec<PropertyRecord>> = Vec::new();
         let mut offset_mapping = HashMap::new();
 
         // Collect live records and build mapping based on valid_offsets
@@ -1428,6 +1611,7 @@ impl PropertyTable {
                 } else {
                     new_records.push(None);
                 }
+                new_chains.push(self.chain_records.get(old_idx).cloned().unwrap_or_default());
             }
         }
 
@@ -1436,6 +1620,7 @@ impl PropertyTable {
 
         // Clear and rebuild arrays
         self.records = new_records;
+        self.chain_records = new_chains;
         self.free_list.clear();
         self.resync_used_data_bytes();
 
@@ -1547,17 +1732,7 @@ impl PropertyTable {
             return None;
         }
 
-        let record = self.records[row_idx].as_ref()?;
-
-        // Check visibility based on create_ts and delete_ts
-        let visible = match query_ts {
-            None => record.delete_ts.is_none(),
-            Some(ts) => record.is_visible_at(ts),
-        };
-
-        if !visible {
-            return None;
-        }
+        let record = self.resolve_version(row_idx, query_ts)?;
 
         let record_data = &record.data;
 

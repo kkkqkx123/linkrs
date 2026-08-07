@@ -40,12 +40,21 @@ pub struct CachedVertex {
     pub external_id: String,
     pub properties: Vec<(String, Value)>,
     pub cached_at_ts: Timestamp,
+    /// Cache-internal invalidation generation of the owning label, assigned
+    /// by `RecordCache` on insert. Not meaningful to storage consumers.
+    pub generation: u32,
 }
 
 /// Cached ID index value.
 #[derive(Debug, Clone, Copy)]
 pub struct IdIndexCacheValue {
     pub internal_id: u32,
+    /// Snapshot timestamp of the cached mapping, used for exact-snapshot
+    /// cache hits.
+    pub cached_at_ts: Timestamp,
+    /// Cache-internal invalidation generation of the owning label, assigned
+    /// by `RecordCache` on insert.
+    pub generation: u32,
 }
 
 impl CachedVertex {

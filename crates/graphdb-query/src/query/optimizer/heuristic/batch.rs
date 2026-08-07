@@ -65,7 +65,11 @@ impl NodeRewriter for BatchNodeRewriter<'_> {
                         if let Some(new_node) = result.first_new_node() {
                             current_node = new_node.clone();
                             *self.applied.borrow_mut() += 1;
-                            *self.hits.borrow_mut().entry(rule.name().to_string()).or_insert(0) += 1;
+                            *self
+                                .hits
+                                .borrow_mut()
+                                .entry(rule.name().to_string())
+                                .or_insert(0) += 1;
                             changed = true;
                         }
                     }

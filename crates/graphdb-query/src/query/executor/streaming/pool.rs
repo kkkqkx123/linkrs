@@ -377,11 +377,7 @@ impl PartitionHandle {
         }
         match self.receivers[partition_id].recv() {
             Ok(PartitionMessage::Chunk(buffered)) => {
-                release_queue_metrics(
-                    &self.buffered_chunks,
-                    &self.buffered_bytes,
-                    buffered.bytes,
-                );
+                release_queue_metrics(&self.buffered_chunks, &self.buffered_bytes, buffered.bytes);
                 Ok(Some(buffered.chunk))
             }
             Ok(PartitionMessage::Finished) => Ok(None),

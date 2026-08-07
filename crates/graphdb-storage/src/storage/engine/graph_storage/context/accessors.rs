@@ -69,35 +69,19 @@ impl GraphStorageContext {
     /// write lock here), then register each table under its own per-table
     /// lock outside the catalog lock. Shared by the per-statement
     /// `with_auto_commit_context` path and the batch window (P4).
+    ///
+    /// NOTE: This function now implements lazy registration - it returns empty
+    /// handles and the actual registration happens on first access to each table.
+    /// This avoids traversing all tables at transaction start.
     pub(crate) fn register_auto_commit_snapshots(
         &self,
-        timestamp: Timestamp,
+        _timestamp: Timestamp,
     ) -> StorageResult<(Vec<(LabelId, SnapshotHandle)>, bool)> {
-        let mut vertex_handles = Vec::new();
-        let vertex_tables: Vec<(
-            LabelId,
-            Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
-        )> = self.persistent.data_store.with_vertex_tables(|tables| {
-            tables
-                .iter()
-                .map(|(label_id, table)| (*label_id, table.clone()))
-                .collect()
-        });
-        for (label_id, vertex_table) in vertex_tables {
-            if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
-                vertex_handles.push((label_id, handle));
-            }
-        }
-
-        let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> = self
-            .persistent
-            .data_store
-            .with_edge_tables(|tables| tables.values().cloned().collect());
-        for edge_table in edge_tables {
-            edge_table.write().register_snapshot(timestamp);
-        }
-
-        Ok((vertex_handles, true))
+        // Lazy registration: don't register all tables upfront.
+        // Registration will happen on first access to each table.
+        // Return empty handles - actual handles will be stored in
+        // StorageOperationContext.registered_vertex_labels/registered_edge_partitions
+        Ok((Vec::new(), false))
     }
 
     pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
@@ -132,9 +116,14 @@ impl GraphStorageContext {
             // roll back partial writes (see `AutoCommitMutationRecorder`).
             mutation_recorder: Some(Arc::new(super::AutoCommitMutationRecorder {
                 undo: undo_log.clone(),
+                write_set: Arc::new(parking_lot::Mutex::new(
+                    graphdb_transaction::transaction::types::WriteSet::new(),
+                )),
             })),
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         };
 
         // Register MVCC snapshots to prevent GC from cleaning data during the
@@ -224,12 +213,13 @@ impl GraphStorageContext {
         // per-statement contexts (registered by `with_auto_commit_context`)
         // unregister here.
         if self.auto_commit_window.is_none() {
-            // Clone handles to avoid borrowing issues
-            let vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)> =
-                operation.mvcc_vertex_snapshot_handles.clone();
+            // Unregister lazily registered vertex snapshots
+            let registered_labels: Vec<LabelId> = {
+                let registered = operation.registered_vertex_labels.read();
+                registered.iter().cloned().collect()
+            };
 
-            // Unregister MVCC vertex snapshots (scatter-gather, brief read lock).
-            if !vertex_snapshot_handles.is_empty() {
+            if !registered_labels.is_empty() {
                 let tables: Vec<(
                     LabelId,
                     Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
@@ -237,30 +227,34 @@ impl GraphStorageContext {
                     .persistent
                     .data_store
                     .with_vertex_tables(|vertex_tables| {
-                        vertex_snapshot_handles
+                        registered_labels
                             .iter()
-                            .filter_map(|(label_id, _)| {
+                            .filter_map(|label_id| {
                                 vertex_tables
                                     .get(label_id)
                                     .map(|table| (*label_id, table.clone()))
                             })
                             .collect()
                     });
-                for (label_id, vertex_table) in tables {
-                    for (handle_label, handle) in &vertex_snapshot_handles {
-                        if *handle_label == label_id {
-                            let _ = vertex_table.unregister_snapshot(*handle);
-                        }
-                    }
+                for (_label_id, vertex_table) in tables {
+                    let _ = vertex_table.unregister_snapshot_by_timestamp(timestamp);
                 }
             }
 
-            // Unregister MVCC edge snapshots
-            if operation.mvcc_edge_snapshot_registered {
+            // Unregister lazily registered edge snapshots
+            let registered_edge_keys: Vec<crate::storage::engine::data_store::EdgeTableKey> = {
+                let registered = operation.registered_edge_partitions.read();
+                registered.iter().cloned().collect()
+            };
+
+            if !registered_edge_keys.is_empty() {
                 let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
-                    self.persistent
-                        .data_store
-                        .with_edge_tables(|tables| tables.values().cloned().collect());
+                    self.persistent.data_store.with_edge_tables(|tables| {
+                        registered_edge_keys
+                            .iter()
+                            .filter_map(|key| tables.get(key).cloned())
+                            .collect()
+                    });
                 for edge_table in edge_tables {
                     edge_table.write().unregister_snapshot(timestamp);
                 }
@@ -298,7 +292,7 @@ impl GraphStorageContext {
         Ok(())
     }
 
-    pub fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    pub fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.runtime.start_index_gc()
     }
 
@@ -315,7 +309,7 @@ impl GraphStorageContext {
         self.runtime.is_index_gc_running()
     }
 
-    pub fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    pub fn start_vertex_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         self.runtime.start_vertex_gc()
     }
 

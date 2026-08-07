@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::stats::CacheStats;
@@ -10,14 +11,18 @@ use super::types::*;
 
 /// Record cache for vertex data and ID index mappings.
 ///
-/// Backed by two BufferPool instances with CLOCK-based eviction.
+/// Backed by two sharded BufferPool instances with CLOCK-based eviction.
+/// Keys carry no snapshot timestamp: cached entries keep the timestamp they
+/// were loaded at, and a hit is only served for the exact snapshot. Per-label
+/// invalidation generations let stale entries be marked invalid in O(1).
 /// Capacity can be adjusted at runtime via `set_capacity`.
 pub struct RecordCache {
-    vertex_pool: Arc<BufferPool<(VertexCacheKey, Timestamp), CachedVertex>>,
-    id_index_pool: Arc<BufferPool<(IdIndexCacheKey, Timestamp), IdIndexCacheValue>>,
+    vertex_pool: Arc<BufferPool<VertexCacheKey, CachedVertex>>,
+    id_index_pool: Arc<BufferPool<IdIndexCacheKey, IdIndexCacheValue>>,
     config: RecordCacheConfig,
     vertex_stats: Arc<CacheStats>,
     id_index_stats: Arc<CacheStats>,
+    label_generations: parking_lot::RwLock<HashMap<u32, u32>>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +83,22 @@ impl RecordCache {
             config,
             vertex_stats,
             id_index_stats,
+            label_generations: parking_lot::RwLock::new(HashMap::new()),
         }
+    }
+
+    fn label_generation(&self, label_id: u32) -> u32 {
+        self.label_generations
+            .read()
+            .get(&label_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn bump_label_generation(&self, label_id: u32) {
+        let mut generations = self.label_generations.write();
+        let entry = generations.entry(label_id).or_insert(0);
+        *entry = entry.wrapping_add(1);
     }
 
     /// Wire up MemoryAccounting for automatic memory tracking during eviction.
@@ -106,16 +126,16 @@ impl RecordCache {
         external_id: &str,
         query_ts: Timestamp,
     ) -> Option<u32> {
-        let key = (
-            IdIndexCacheKey::new(label_id, external_id.to_string()),
-            query_ts,
-        );
+        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
         match self.id_index_pool.get(&key) {
-            Some(cached) => {
+            Some(cached)
+                if cached.item.cached_at_ts == query_ts
+                    && cached.item.generation == self.label_generation(label_id) =>
+            {
                 self.id_index_stats.record_hit();
                 Some(cached.item.internal_id)
             }
-            None => {
+            _ => {
                 self.id_index_stats.record_miss();
                 None
             }
@@ -129,30 +149,35 @@ impl RecordCache {
         internal_id: u32,
         ts: Timestamp,
     ) {
-        let key = (IdIndexCacheKey::new(label_id, external_id.to_string()), ts);
-        self.id_index_pool.insert(
-            key,
-            IdIndexCacheValue { internal_id },
-            std::mem::size_of::<IdIndexCacheValue>(),
-        );
+        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
+        let value = IdIndexCacheValue {
+            internal_id,
+            cached_at_ts: ts,
+            generation: self.label_generation(label_id),
+        };
+        self.id_index_pool
+            .insert(key, value, std::mem::size_of::<IdIndexCacheValue>());
         self.id_index_stats.record_insertion();
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
         self.id_index_pool
-            .retain(|(k, _ts), _| k.label_id != label_id || k.external_id != external_id);
+            .retain(|k, _| k.label_id != label_id || k.external_id != external_id);
         self.id_index_stats.record_invalidation();
     }
 
     // ==================== Vertex Operations ====================
 
     pub fn get_vertex(&self, key: &VertexCacheKey, query_ts: Timestamp) -> Option<CachedVertex> {
-        match self.vertex_pool.get(&(*key, query_ts)) {
-            Some(cached) => {
+        match self.vertex_pool.get(key) {
+            Some(cached)
+                if cached.item.cached_at_ts == query_ts
+                    && cached.item.generation == self.label_generation(key.label_id) =>
+            {
                 self.vertex_stats.record_hit();
-                Some(cached.item)
+                Some(cached.item.clone())
             }
-            None => {
+            _ => {
                 self.vertex_stats.record_miss();
                 None
             }
@@ -160,33 +185,34 @@ impl RecordCache {
     }
 
     pub fn insert_vertex(&self, key: VertexCacheKey, vertex: CachedVertex) {
-        let ts = vertex.cached_at_ts;
+        let mut vertex = vertex;
+        vertex.generation = self.label_generation(key.label_id);
         let size = vertex.estimated_size() as usize;
-        self.vertex_pool.insert((key, ts), vertex, size);
+        self.vertex_pool.insert(key, vertex, size);
         self.vertex_stats.record_insertion();
     }
 
     pub fn remove_vertex(&self, key: &VertexCacheKey) {
-        self.vertex_pool.retain(|(vk, _ts), _| {
-            vk.label_id != key.label_id || vk.internal_id != key.internal_id
-        });
+        self.vertex_pool
+            .retain(|vk, _| vk.label_id != key.label_id || vk.internal_id != key.internal_id);
         self.vertex_stats.record_invalidation();
     }
 
     // ==================== Invalidation ====================
 
     /// Invalidate all vertex entries for a given label.
-    /// Scans all entries, O(n) complexity.
+    /// O(1): bumps the label generation; stale entries are rejected on read
+    /// and reclaimed lazily by capacity eviction.
     pub fn invalidate_vertices_by_label(&self, label_id: u32) {
-        self.vertex_pool
-            .retain(|(vk, _ts), _| vk.label_id != label_id);
+        self.bump_label_generation(label_id);
         self.vertex_stats.record_invalidation();
     }
 
     /// Invalidate all ID index entries for a given label.
+    /// O(1): bumps the label generation; stale entries are rejected on read
+    /// and reclaimed lazily by capacity eviction.
     pub fn invalidate_id_indexes_by_label(&self, label_id: u32) {
-        self.id_index_pool
-            .retain(|(k, _ts), _| k.label_id != label_id);
+        self.bump_label_generation(label_id);
         self.id_index_stats.record_invalidation();
     }
 
@@ -194,6 +220,7 @@ impl RecordCache {
         // BufferPool doesn't support clear, use retain with false predicate
         self.vertex_pool.retain(|_, _| false);
         self.id_index_pool.retain(|_, _| false);
+        self.label_generations.write().clear();
         self.vertex_stats.record_invalidation();
         self.id_index_stats.record_invalidation();
     }

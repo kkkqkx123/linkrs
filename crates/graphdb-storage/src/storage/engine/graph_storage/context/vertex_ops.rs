@@ -16,6 +16,10 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
+
+        // Lazily register snapshot for this vertex label if needed
+        self.ensure_vertex_snapshot_registered(label);
+
         let internal_id = self
             .persistent
             .data_store
@@ -309,6 +313,9 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
+
+        // Lazily register snapshot for this vertex label if needed
+        self.ensure_vertex_snapshot_registered(label);
 
         if let Some(cached) =
             self.persistent

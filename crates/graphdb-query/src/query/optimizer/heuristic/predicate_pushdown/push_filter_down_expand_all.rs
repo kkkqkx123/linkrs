@@ -258,8 +258,8 @@ mod tests {
     }
 
     fn anchor_filter_expr(var: &str, property: &str) -> crate::core::types::ContextualExpression {
-        use crate::core::types::operators::BinaryOperator;
         use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::operators::BinaryOperator;
         use crate::core::Value;
         use std::sync::Arc;
 
@@ -276,7 +276,10 @@ mod tests {
         crate::core::types::ContextualExpression::new(id, ctx)
     }
 
-    fn filter_above(condition: crate::core::types::ContextualExpression, input: PlanNodeEnum) -> PlanNodeEnum {
+    fn filter_above(
+        condition: crate::core::types::ContextualExpression,
+        input: PlanNodeEnum,
+    ) -> PlanNodeEnum {
         use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
         PlanNodeEnum::Filter(FilterNode::new(input, condition).expect("filter node"))
     }
@@ -286,11 +289,17 @@ mod tests {
         let mut expand_all = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
         expand_all.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
         expand_all.add_input(anchor_scan("a"));
-        let filter = filter_above(anchor_filter_expr("a", "value"), PlanNodeEnum::ExpandAll(expand_all));
+        let filter = filter_above(
+            anchor_filter_expr("a", "value"),
+            PlanNodeEnum::ExpandAll(expand_all),
+        );
 
         let rule = PushFilterDownExpandAllRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &filter)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &filter,
+            )
             .expect("rewrite");
         let result = result.expect("some result");
 
@@ -313,11 +322,17 @@ mod tests {
         expand_all.set_col_names(vec!["a".to_string(), "edge".to_string(), "b".to_string()]);
         expand_all.add_input(anchor_scan("a"));
         // Filter on the neighbor variable `b` must stay on the expand.
-        let filter = filter_above(anchor_filter_expr("b", "value"), PlanNodeEnum::ExpandAll(expand_all));
+        let filter = filter_above(
+            anchor_filter_expr("b", "value"),
+            PlanNodeEnum::ExpandAll(expand_all),
+        );
 
         let rule = PushFilterDownExpandAllRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &filter)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &filter,
+            )
             .expect("rewrite");
         let result = result.expect("some result");
         let new_node = result.new_nodes.first().expect("node");

@@ -674,7 +674,9 @@ fn internal_to_external_vertex_id(
 ) -> VertexId {
     if label != 0 {
         ctx.get_external_id_by_internal_id(label, internal)
-            .unwrap_or_else(|| vid_from_str(&external_id_string(ctx, label, internal, fallback, ts)))
+            .unwrap_or_else(|| {
+                vid_from_str(&external_id_string(ctx, label, internal, fallback, ts))
+            })
     } else {
         vid_from_str(&external_id_string(ctx, 0, internal, fallback, ts))
     }
@@ -954,7 +956,8 @@ fn append_cold_neighbors(
     for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
         match direction {
             EdgeDirection::Out => {
-                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) else {
+                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts)
+                else {
                     continue;
                 };
                 for nbr in snapshot.get_out_edges(src_internal) {
@@ -976,7 +979,8 @@ fn append_cold_neighbors(
                 }
             }
             EdgeDirection::In => {
-                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) else {
+                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts)
+                else {
                     continue;
                 };
                 for nbr in snapshot.get_in_edges(dst_internal) {
@@ -1127,7 +1131,8 @@ fn count_cold_neighbors(
     for snapshot in snapshots.iter().filter(|s| ts >= s.snapshot_ts()) {
         match direction {
             EdgeDirection::Out => {
-                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts) else {
+                let Some(src_internal) = vertex_id_to_internal(ctx, src_label_id, src_id, ts)
+                else {
                     continue;
                 };
                 for nbr in snapshot.get_out_edges(src_internal) {
@@ -1139,7 +1144,8 @@ fn count_cold_neighbors(
                 }
             }
             EdgeDirection::In => {
-                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts) else {
+                let Some(dst_internal) = vertex_id_to_internal(ctx, dst_label_id, src_id, ts)
+                else {
                     continue;
                 };
                 for nbr in snapshot.get_in_edges(dst_internal) {

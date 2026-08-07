@@ -72,6 +72,9 @@ impl GraphStorageContext {
 
         let key = EdgeTableKey::new(actual_src_label, actual_dst_label, params.edge_label);
         let template_key = EdgeTableKey::new(0, 0, params.edge_label);
+
+        // Lazily register snapshot for this edge partition if needed
+        self.ensure_edge_snapshot_registered(key);
         let stats_manager = self.persistent.stats_manager.clone();
         let freeze_requested = self.persistent.data_store.with_edge_partition_mut(
             key,
@@ -349,7 +352,6 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
-
 
         let (src_internal, actual_src) =
             self.persistent

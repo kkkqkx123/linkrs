@@ -11,7 +11,7 @@ use crate::storage::index::shard_runtime::IndexBarrierRegistry;
 use crate::transaction::wal::writer::WalWriter;
 use crate::transaction::wal::TransactionWalEntry;
 use crate::transaction::wal::{LocalWalWriter, Lsn, WalConfig};
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use postcard::to_allocvec;
 use serde::Serialize;
 use std::path::Path;
@@ -23,7 +23,7 @@ use std::sync::Arc;
 /// This manager ensures LSN consistency by delegating all LSN operations
 /// to the underlying LocalWalWriter, avoiding the dual LSN tracking issue.
 pub struct WalManager {
-    local_writer: Option<Arc<RwLock<LocalWalWriter>>>,
+    local_writer: Option<Arc<Mutex<LocalWalWriter>>>,
     barrier_registry: Option<IndexBarrierRegistry>,
     config: WalConfig,
     sync_count: AtomicU64,
@@ -70,7 +70,7 @@ impl WalManager {
                 StorageError::wal_error(format!("Failed to enable group commit: {:?}", e))
             })?;
         }
-        self.local_writer = Some(Arc::new(RwLock::new(writer)));
+        self.local_writer = Some(Arc::new(Mutex::new(writer)));
         Ok(())
     }
 
@@ -90,7 +90,7 @@ impl WalManager {
 
     pub fn current_lsn(&self) -> Lsn {
         if let Some(ref writer) = self.local_writer {
-            writer.read().current_lsn()
+            writer.lock().current_lsn()
         } else {
             Lsn::ZERO
         }
@@ -99,7 +99,7 @@ impl WalManager {
     /// Return the latest WAL position confirmed durable by the writer.
     pub fn durable_lsn(&self) -> Lsn {
         if let Some(ref writer) = self.local_writer {
-            writer.read().durable_lsn()
+            writer.lock().durable_lsn()
         } else {
             Lsn::ZERO
         }
@@ -117,7 +117,7 @@ impl WalManager {
     pub fn sync(&self) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
             let result = writer
-                .write()
+                .lock()
                 .sync()
                 .map_err(|e| StorageError::wal_error(format!("Failed to sync WAL: {:?}", e)));
             match result {
@@ -150,7 +150,7 @@ impl WalManager {
         })?;
 
         writer
-            .write()
+            .lock()
             .append_entry(op_type, timestamp, &payload)
             .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {}", e)))?;
 
@@ -169,7 +169,7 @@ impl WalManager {
             ));
         };
         writer
-            .write()
+            .lock()
             .append_entry(op_type, timestamp, payload)
             .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {}", e)))
     }
@@ -186,20 +186,50 @@ impl WalManager {
                 "WAL writer is not initialized".to_string(),
             ));
         };
-        writer
-            .write()
-            .append_transaction_batch_with_durability(transaction_id, entries, intents, durability)
-            .map_err(|error| {
-                StorageError::wal_error(format!(
-                    "Failed to append committed WAL transaction: {}",
-                    error
-                ))
-            })
+
+        // Append the commit batch under the writer lock, then release it
+        // before waiting for durability. For Sync durability this lets
+        // concurrent commits batch into a single fsync through the
+        // group-commit coordinator instead of serializing one fsync per
+        // transaction at the writer lock.
+        let lsn = {
+            let mut guard = writer.lock();
+            guard
+                .append_transaction_batch_no_wait(transaction_id, entries, intents)
+                .map_err(|error| {
+                    StorageError::wal_error(format!(
+                        "Failed to append committed WAL transaction: {}",
+                        error
+                    ))
+                })?
+        };
+
+        if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
+            let coordinator = writer.lock().group_commit_coordinator().cloned();
+            if let Some(coordinator) = coordinator {
+                coordinator.record_appended(lsn.get());
+                coordinator.append_and_wait(lsn.get()).map_err(|error| {
+                    StorageError::wal_error(format!(
+                        "Failed to await durable WAL transaction: {}",
+                        error
+                    ))
+                })?;
+            } else {
+                writer.lock().wait_for_durable(lsn.get()).map_err(|error| {
+                    StorageError::wal_error(format!(
+                        "Failed to sync committed WAL transaction: {}",
+                        error
+                    ))
+                })?;
+            }
+        }
+
+        Ok(lsn)
     }
 
     pub fn set_checkpoint_seq(&self, seq: u64) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
-            writer.write().set_checkpoint_seq(seq).map_err(|e| {
+            writer.lock().set_checkpoint_seq(seq).map_err(|e| {
                 StorageError::wal_error(format!("Failed to update checkpoint seq: {:?}", e))
             })?;
         }
@@ -208,7 +238,7 @@ impl WalManager {
 
     pub fn set_current_lsn(&self, lsn: Lsn) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
-            writer.write().set_current_lsn(lsn);
+            writer.lock().set_current_lsn(lsn);
         }
         Ok(())
     }
@@ -216,7 +246,7 @@ impl WalManager {
     /// Restore the logical WAL baseline covered by a durable checkpoint.
     pub fn set_recovery_baseline_lsn(&self, lsn: Lsn) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
-            writer.write().set_recovery_baseline_lsn(lsn).map_err(|e| {
+            writer.lock().set_recovery_baseline_lsn(lsn).map_err(|e| {
                 StorageError::wal_error(format!("Failed to restore WAL recovery baseline: {:?}", e))
             })?;
         }
@@ -228,7 +258,7 @@ impl WalManager {
             .truncation_barrier_lsn()
             .map_or(lsn, |barrier| lsn.min(barrier));
         if let Some(ref writer) = self.local_writer {
-            writer.write().truncate(truncation_lsn).map_err(|e| {
+            writer.lock().truncate(truncation_lsn).map_err(|e| {
                 StorageError::wal_error(format!(
                     "Failed to truncate WAL at {} (requested {}): {:?}",
                     truncation_lsn, lsn, e
@@ -280,6 +310,7 @@ mod tests {
 
     #[test]
     fn truncation_barrier_uses_the_oldest_published_index() {
+        use parking_lot::RwLock;
         let mut manager = WalManager::new();
         let registry = Arc::new(RwLock::new(std::collections::HashMap::from([
             ((1, 1), CommitLsn::new(80)),

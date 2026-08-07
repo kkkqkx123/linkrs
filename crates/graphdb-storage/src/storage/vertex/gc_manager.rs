@@ -6,11 +6,11 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::core::types::Timestamp;
 use crate::storage::engine::data_store::GraphDataStore;
+use crate::storage::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use crate::transaction::VersionManager;
 
 /// GC manager configuration
@@ -59,6 +59,7 @@ pub struct VertexGcManager {
     data_store: Arc<GraphDataStore>,
     version_manager: Arc<VersionManager>,
     config: VertexGcConfig,
+    pool: Arc<StorageThreadPool>,
     running: Arc<AtomicBool>,
     stats: AtomicU64,
     total_removed: AtomicU64,
@@ -69,11 +70,13 @@ impl VertexGcManager {
         data_store: Arc<GraphDataStore>,
         version_manager: Arc<VersionManager>,
         config: VertexGcConfig,
+        pool: Arc<StorageThreadPool>,
     ) -> Self {
         Self {
             data_store,
             version_manager,
             config,
+            pool,
             running: Arc::new(AtomicBool::new(false)),
             stats: AtomicU64::new(0),
             total_removed: AtomicU64::new(0),
@@ -125,21 +128,20 @@ impl VertexGcManager {
         total_removed
     }
 
-    /// Start background GC thread
+    /// Start the background GC task on the shared thread pool.
     ///
-    /// Returns a JoinHandle for the background thread.
-    /// The thread will run until `stop()` is called.
-    pub fn start_background_gc(&self) -> JoinHandle<()> {
-        let running = self.running.clone();
-        let config = self.config.clone();
+    /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
+    /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
+    pub fn start_background_gc(&self) -> BackgroundTaskHandle {
         let manager = self.clone();
+        let running = self.running.clone();
+        let interval = Duration::from_millis(self.config.interval_ms);
+        let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        running.store(true, Ordering::Release);
+        self.pool
+            .spawn_periodic(running, interval, min_interval, move || {
+                tracing::info!("Vertex GC background task started");
 
-        thread::spawn(move || {
-            tracing::info!("Vertex GC background thread started");
-
-            while running.load(Ordering::Acquire) {
                 let start = std::time::Instant::now();
 
                 let removed = manager.run_gc_pass();
@@ -149,16 +151,8 @@ impl VertexGcManager {
 
                 manager.stats.fetch_add(1, Ordering::Release);
 
-                let elapsed = start.elapsed();
-                let sleep_duration = Duration::from_millis(config.interval_ms)
-                    .saturating_sub(elapsed)
-                    .max(Duration::from_millis(config.min_interval_between_gc_ms));
-
-                thread::sleep(sleep_duration);
-            }
-
-            tracing::info!("Vertex GC background thread stopped");
-        })
+                let _elapsed = start.elapsed();
+            })
     }
 
     /// Stop the background GC thread
@@ -188,6 +182,7 @@ impl Clone for VertexGcManager {
             data_store: self.data_store.clone(),
             version_manager: self.version_manager.clone(),
             config: self.config.clone(),
+            pool: self.pool.clone(),
             running: self.running.clone(),
             stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
             total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
@@ -219,7 +214,8 @@ mod tests {
     fn test_gc_manager_creation() {
         let data_store = Arc::new(GraphDataStore::new());
         let version_manager = Arc::new(VersionManager::new());
-        let gc = VertexGcManager::new(data_store, version_manager, VertexGcConfig::default());
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let gc = VertexGcManager::new(data_store, version_manager, VertexGcConfig::default(), pool);
         assert!(!gc.is_running());
         assert_eq!(gc.total_removed(), 0);
     }

@@ -110,10 +110,8 @@ pub(super) fn handle_all(
         return Err(QueryError::execution("ExpandAll not opened".to_string()));
     }
 
-    let use_fast_path = step_limit == 1
-        && filter_expr.is_none()
-        && src_vids.is_empty()
-        && !ctx.is_recursive;
+    let use_fast_path =
+        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && !ctx.is_recursive;
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(mut chunk) = input.advance()? {

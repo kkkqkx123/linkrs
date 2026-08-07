@@ -170,13 +170,15 @@ impl VertexTable {
             }
 
             let _ = self.timestamps.revert_remove(internal_id, ts);
-            self.columns.set(internal_id as usize, &converted)?;
+            self.columns
+                .set_versioned(internal_id as usize, &converted, ts)?;
             return Ok(internal_id);
         }
 
         let internal_id = self.id_indexer.insert(key)?;
         self.timestamps.insert(internal_id, ts);
-        self.columns.set(internal_id as usize, &converted)?;
+        self.columns
+            .set_versioned(internal_id as usize, &converted, ts)?;
 
         Ok(internal_id)
     }
@@ -220,8 +222,10 @@ impl VertexTable {
 
         let row_indices: Vec<usize> = positions.iter().map(|&(_, id)| id as usize).collect();
         let props = match projection {
-            Some(names) => self.columns.get_projected_batch(&row_indices, names),
-            None => self.columns.get_batch(&row_indices),
+            Some(names) => self
+                .columns
+                .get_projected_batch_at_ts(&row_indices, names, ts),
+            None => self.columns.get_batch_at_ts(&row_indices, ts),
         };
 
         for ((pos, id), prop_row) in positions.into_iter().zip(props) {
@@ -273,7 +277,7 @@ impl VertexTable {
     pub fn get_projected_columns(
         &self,
         internal_ids: &[u32],
-        _ts: Timestamp,
+        ts: Timestamp,
         names: &[String],
     ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
         if !self.is_open {
@@ -291,7 +295,8 @@ impl VertexTable {
                 .collect();
         }
         let row_indices: Vec<usize> = internal_ids.iter().map(|&id| id as usize).collect();
-        self.columns.get_projected_columns(&row_indices, names)
+        self.columns
+            .get_projected_columns_at_ts(&row_indices, names, ts)
     }
 
     pub fn get_projected_by_internal_id(
@@ -310,8 +315,11 @@ impl VertexTable {
 
         let external_id = self.id_indexer.get_key(internal_id)?;
         let props = projection.map_or_else(
-            || self.columns.get(internal_id as usize),
-            |names| self.columns.get_projected(internal_id as usize, names),
+            || self.columns.get_at_ts(internal_id as usize, ts),
+            |names| {
+                self.columns
+                    .get_projected_at_ts(internal_id as usize, names, ts)
+            },
         );
         let properties: Vec<(String, Value)> = props
             .into_iter()
@@ -358,8 +366,12 @@ impl VertexTable {
             value.clone()
         };
 
-        self.columns
-            .set_property(internal_id as usize, col_name, Some(&converted_value))
+        self.columns.set_property_versioned(
+            internal_id as usize,
+            col_name,
+            Some(&converted_value),
+            ts,
+        )
     }
 
     pub fn update_property_by_id(
@@ -392,7 +404,7 @@ impl VertexTable {
             .columns
             .get_column_by_id_mut(col_id)
             .ok_or_else(|| StorageError::column_not_found(format!("col_id={}", col_id)))?;
-        col.set(internal_id as usize, Some(&converted_value))
+        col.set_versioned(internal_id as usize, Some(&converted_value), ts)
     }
 
     pub fn delete(&mut self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
@@ -652,8 +664,6 @@ impl VertexTable {
         total
     }
 
-
-
     // ==================== MVCC Methods ====================
 
     /// Register a new snapshot at the given timestamp
@@ -699,6 +709,30 @@ impl VertexTable {
         Ok(())
     }
 
+    /// Unregister all snapshots with the given timestamp.
+    /// Used by lazy registration cleanup on transaction finalize.
+    pub fn unregister_snapshot_by_timestamp(&mut self, ts: Timestamp) -> StorageResult<()> {
+        if let Some(count) = self.mvcc.active_snapshots.get_mut(&ts) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.mvcc.active_snapshots.remove(&ts);
+                // Only rescan when the removed timestamp was the current
+                // minimum; otherwise the min is unchanged.
+                if ts == self.mvcc.min_active_snapshot_ts {
+                    self.mvcc.min_active_snapshot_ts = self
+                        .mvcc
+                        .active_snapshots
+                        .keys()
+                        .min()
+                        .copied()
+                        .unwrap_or(Timestamp::MAX);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the count of currently active snapshots
     pub fn active_snapshot_count(&self) -> usize {
         self.mvcc.active_snapshots.len()
@@ -711,18 +745,20 @@ impl VertexTable {
 
     /// Perform garbage collection on version data older than min_ts
     ///
-    /// This is a placeholder implementation for VertexTable.
-    /// In practice, garbage collection would remove old timestamp entries
-    /// from the timestamps structure that are older than min_ts and no longer
-    /// needed by any active snapshot.
+    /// Reclaims deleted vertices (from the id indexer / timestamps) and drops
+    /// property version-chain entries that no active snapshot can observe.
     ///
     /// Returns the number of version entries cleaned up.
     pub fn gc(&mut self, min_ts: Timestamp) -> StorageResult<usize> {
+        // Property version-chain GC runs every pass regardless of deleted
+        // vertices so before-images of overwritten properties are reclaimed.
+        let version_removed = self.columns.gc_versions(min_ts);
+
         // Collect all vertices deleted before min_ts
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(min_ts).collect();
 
         if deleted_ids.is_empty() {
-            return Ok(0);
+            return Ok(version_removed);
         }
 
         let count = deleted_ids.len();

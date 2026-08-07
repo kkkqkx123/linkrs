@@ -112,13 +112,12 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 // P2: also account for entries still awaiting generation publication.
                 let pending_guard = self.pending_deltas.lock();
                 if let Some(pending) = pending_guard.get(&identity) {
-                    let mut scan =
-                        crate::storage::index::index_data_manager::PendingExistingScan {
-                            existing_values: &mut existing_values,
-                            existing_encoded: &mut existing_encoded,
-                            existing_columns: &mut existing_columns,
-                            covering_populated: &mut covering_populated,
-                        };
+                    let mut scan = crate::storage::index::index_data_manager::PendingExistingScan {
+                        existing_values: &mut existing_values,
+                        existing_encoded: &mut existing_encoded,
+                        existing_columns: &mut existing_columns,
+                        covering_populated: &mut covering_populated,
+                    };
                     crate::storage::index::index_data_manager::merge_pending_existing_values(
                         pending,
                         &reverse_prefix.0,

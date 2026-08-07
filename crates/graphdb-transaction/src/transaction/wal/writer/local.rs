@@ -652,6 +652,30 @@ impl LocalWalWriter {
             return Err(WalError::Closed);
         }
 
+        let new_lsn = self.write_batch_entries(entries)?;
+
+        if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
+            if let Some(ref coordinator) = self.group_commit {
+                coordinator.record_appended(new_lsn);
+                coordinator.append_and_wait(new_lsn)?;
+            } else {
+                let file = self.file.as_mut().ok_or(WalError::Closed)?;
+                file.sync_data()?;
+            }
+            self.last_synced_lsn.store(new_lsn, Ordering::SeqCst);
+        }
+
+        Ok(())
+    }
+
+    /// Write a batch of entries to the WAL file and return the new LSN without
+    /// waiting for durability.
+    ///
+    /// The caller is responsible for arranging durability (e.g. via
+    /// [`wait_for_durable`](WalWriter::wait_for_durable) or the group-commit
+    /// coordinator) **outside** any writer lock, so concurrent commits can
+    /// share a single fsync.
+    fn write_batch_entries(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<u64> {
         let mut total_len = 0;
         let mut compressed_entries = Vec::with_capacity(entries.len());
 
@@ -699,17 +723,7 @@ impl LocalWalWriter {
         let new_lsn = self.current_lsn.load(Ordering::SeqCst) + total_len as u64;
         self.current_lsn.store(new_lsn, Ordering::SeqCst);
 
-        if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
-            if let Some(ref coordinator) = self.group_commit {
-                coordinator.record_appended(new_lsn);
-                coordinator.append_and_wait(new_lsn)?;
-            } else {
-                file.sync_data()?;
-            }
-            self.last_synced_lsn.store(new_lsn, Ordering::SeqCst);
-        }
-
-        Ok(())
+        Ok(new_lsn)
     }
 
     pub fn append_transaction_batch(
@@ -729,10 +743,52 @@ impl LocalWalWriter {
     pub fn append_transaction_batch_with_durability(
         &mut self,
         transaction_id: crate::core::types::TransactionId,
-        mut entries: Vec<crate::transaction::wal::TransactionWalEntry>,
+        entries: Vec<crate::transaction::wal::TransactionWalEntry>,
         intents: &[crate::core::wal::OutboxIntent],
         durability: crate::core::types::DurabilityLevel,
     ) -> WalResult<crate::core::types::CommitLsn> {
+        let entries = self.build_transaction_entries(transaction_id, entries, intents)?;
+        let entry_refs = entries
+            .iter()
+            .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
+            .collect::<Vec<_>>();
+        self.append_batch_with_durability(&entry_refs, durability)?;
+        Ok(crate::core::types::CommitLsn::new(
+            self.current_lsn().as_u64(),
+        ))
+    }
+
+    /// Append a committed transaction to the WAL **without** waiting for
+    /// durability, returning the commit LSN.
+    ///
+    /// The caller must arrange durability after releasing any writer lock
+    /// (e.g. via the group-commit coordinator) so concurrent commits batch
+    /// into a single fsync.
+    pub fn append_transaction_batch_no_wait(
+        &mut self,
+        transaction_id: crate::core::types::TransactionId,
+        entries: Vec<crate::transaction::wal::TransactionWalEntry>,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> WalResult<crate::core::types::CommitLsn> {
+        let entries = self.build_transaction_entries(transaction_id, entries, intents)?;
+        let entry_refs = entries
+            .iter()
+            .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
+            .collect::<Vec<_>>();
+        self.write_batch_entries(&entry_refs)?;
+        Ok(crate::core::types::CommitLsn::new(
+            self.current_lsn().as_u64(),
+        ))
+    }
+
+    /// Build the full entry list for a committed transaction (intent records
+    /// plus the commit record).
+    fn build_transaction_entries(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        mut entries: Vec<crate::transaction::wal::TransactionWalEntry>,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> WalResult<Vec<crate::transaction::wal::TransactionWalEntry>> {
         self.check_poisoned()?;
         for (expected, intent) in intents.iter().enumerate() {
             intent.validate().map_err(WalError::InvalidOperation)?;
@@ -767,14 +823,7 @@ impl LocalWalWriter {
             timestamp: 0,
             payload: postcard::to_allocvec(&commit)?,
         });
-        let entry_refs = entries
-            .iter()
-            .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
-            .collect::<Vec<_>>();
-        self.append_batch_with_durability(&entry_refs, durability)?;
-        Ok(crate::core::types::CommitLsn::new(
-            self.current_lsn().as_u64(),
-        ))
+        Ok(entries)
     }
 
     /// Decompress payload (public helper)

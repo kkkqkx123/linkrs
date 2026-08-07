@@ -166,12 +166,8 @@ pub(super) fn expand_single_step(
     if emit_raw_ids {
         // Raw-id path: one batched storage read for the whole chunk, no
         // `Value::Vertex(Box)` / `Value::Edge(Box)` allocation.
-        let neighbors = reader.neighbor_dst_ids_batch(
-            space_name,
-            &seed_vids,
-            direction,
-            edge_types,
-        )?;
+        let neighbors =
+            reader.neighbor_dst_ids_batch(space_name, &seed_vids, direction, edge_types)?;
         for (dst_ids, seed_row) in neighbors.iter().zip(seed_rows.iter()) {
             for dst in dst_ids {
                 buf.push_row(

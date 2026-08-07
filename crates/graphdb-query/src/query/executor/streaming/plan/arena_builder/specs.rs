@@ -14,7 +14,9 @@ use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    PlanNode, SingleInputNode,
+};
 
 fn fulltext_query_to_string(
     expr: &crate::query::parser::ast::fulltext::FulltextQueryExpr,
@@ -413,10 +415,12 @@ pub(super) fn is_count_only_aggregate(
 ) -> bool {
     agg.group_keys().is_empty()
         && !agg.aggregation_functions().is_empty()
-        && agg
-            .aggregation_functions()
-            .iter()
-            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count(_)))
+        && agg.aggregation_functions().iter().all(|f| {
+            matches!(
+                f,
+                crate::core::types::operators::AggregateFunction::Count(_)
+            )
+        })
 }
 
 pub(super) fn build_project_spec(
@@ -556,8 +560,8 @@ pub(super) fn build_aggregate_spec(
         .iter()
         .map(|key| Expression::Variable(key.clone()))
         .collect();
-    let count_only = is_count_only_aggregate(node)
-        && count_only_expand_below(node.input()).is_some();
+    let count_only =
+        is_count_only_aggregate(node) && count_only_expand_below(node.input()).is_some();
     let agg_functions = node.aggregation_functions();
     let aggregate_functions: Vec<(AggregateFunction, Expression)> = agg_functions
         .iter()

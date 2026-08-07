@@ -27,10 +27,10 @@ use crate::query::planning::plan::core::nodes::graph_operations::graph_operation
     ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
     RollUpApplyNode, UnionNode, UnwindNode,
 };
-use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
 };
+use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 use crate::query::planning::plan::core::nodes::join::join_node::{
     CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode,
     LeftJoinNode, RightJoinNode, SemiJoinNode,

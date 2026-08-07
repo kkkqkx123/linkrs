@@ -8,6 +8,7 @@
 //! - `VariableWidthColumn`: For variable-length types (String)
 //! - `Column`: Public wrapper that selects the appropriate variant at construction time
 
+use crate::core::types::Timestamp;
 use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 
@@ -542,23 +543,34 @@ fn ensure_bitmap_len(bitmap: &mut BitVec<u8, Lsb0>, min_len: usize) {
     }
 }
 
-/// Decode `rows` of `column` into a typed [`ColumnValues`] array.
-///
-/// BigInt/Double/Int columns are decoded into dense typed vectors plus a
-/// validity bitmap; any unexpected value type degrades the whole column to
-/// `General`.  All other types decode per-row into `General`.
-fn decode_column_values(column: &Column, rows: &[usize]) -> crate::storage::cursor::ColumnValues {
+/// Rough heap footprint of a `Value`'s payload (used for MVCC memory
+/// accounting of retained version chains). Non-string payloads are counted
+/// by the fixed `Value`/`VersionEntry` sizes.
+fn value_payload_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(s) => s.len(),
+        _ => 0,
+    }
+}
+
+/// Timestamp-aware variant of [`decode_column_values`]: decodes each row's
+/// value as visible at `query_ts` through the MVCC version chain.
+fn decode_column_values_at_ts(
+    column: &Column,
+    rows: &[usize],
+    query_ts: Timestamp,
+) -> crate::storage::cursor::ColumnValues {
     match &column.data_type {
         DataType::BigInt => {
             let mut values = Vec::with_capacity(rows.len());
             let mut valid = vec![0u8; rows.len()];
             for (i, &row) in rows.iter().enumerate() {
-                match column.get(row) {
+                match column.get_at_ts(row, query_ts) {
                     Some(Value::BigInt(v)) => {
                         values.push(v);
                         valid[i] = 1;
                     }
-                    Some(_) => return general_column(column, rows),
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
                     None => values.push(0),
                 }
             }
@@ -568,12 +580,12 @@ fn decode_column_values(column: &Column, rows: &[usize]) -> crate::storage::curs
             let mut values = Vec::with_capacity(rows.len());
             let mut valid = vec![0u8; rows.len()];
             for (i, &row) in rows.iter().enumerate() {
-                match column.get(row) {
+                match column.get_at_ts(row, query_ts) {
                     Some(Value::Double(v)) => {
                         values.push(v);
                         valid[i] = 1;
                     }
-                    Some(_) => return general_column(column, rows),
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
                     None => values.push(0.0),
                 }
             }
@@ -583,23 +595,31 @@ fn decode_column_values(column: &Column, rows: &[usize]) -> crate::storage::curs
             let mut values = Vec::with_capacity(rows.len());
             let mut valid = vec![0u8; rows.len()];
             for (i, &row) in rows.iter().enumerate() {
-                match column.get(row) {
+                match column.get_at_ts(row, query_ts) {
                     Some(Value::Int(v)) => {
                         values.push(v);
                         valid[i] = 1;
                     }
-                    Some(_) => return general_column(column, rows),
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
                     None => values.push(0),
                 }
             }
             crate::storage::cursor::ColumnValues::I32 { values, valid }
         }
-        _ => general_column(column, rows),
+        _ => general_column_at_ts(column, rows, query_ts),
     }
 }
 
-fn general_column(column: &Column, rows: &[usize]) -> crate::storage::cursor::ColumnValues {
-    crate::storage::cursor::ColumnValues::General(rows.iter().map(|&r| column.get(r)).collect())
+fn general_column_at_ts(
+    column: &Column,
+    rows: &[usize],
+    query_ts: Timestamp,
+) -> crate::storage::cursor::ColumnValues {
+    crate::storage::cursor::ColumnValues::General(
+        rows.iter()
+            .map(|&r| column.get_at_ts(r, query_ts))
+            .collect(),
+    )
 }
 
 fn write_fixed_value(
@@ -823,6 +843,21 @@ enum ColumnInner {
     Variable(VariableWidthColumn),
 }
 
+/// One before-image of a row's value, valid on `[start_ts, end_ts)`.
+///
+/// The version chain per row stores the newest entry first. The current value
+/// lives in the column storage and is valid from `row_start_ts` onward; each
+/// write pushes the previous current value here with its lifetime.
+#[derive(Debug, Clone)]
+pub struct VersionEntry {
+    /// First timestamp at which this version is visible.
+    pub start_ts: Timestamp,
+    /// One past the last timestamp at which this version is visible.
+    pub end_ts: Timestamp,
+    /// The before-image value; `None` denotes a null (missing) value.
+    pub value: Option<Value>,
+}
+
 /// Column storage that automatically selects fixed-width or variable-width
 /// layout based on the `DataType` at construction time.
 ///
@@ -832,6 +867,14 @@ enum ColumnInner {
 /// |---|---|
 /// | Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, Uuid | `FixedWidthColumn` |
 /// | String | `VariableWidthColumn` |
+///
+/// # MVCC
+///
+/// Property updates are versioned through [`Column::set_versioned`] /
+/// [`Column::get_at_ts`]: each row keeps a chain of before-images
+/// (`row_start_ts` + `version_chains`), so a snapshot read at a historical
+/// timestamp returns the value visible then instead of the current one.
+/// Old versions are reclaimed by [`Column::gc_versions`].
 #[derive(Debug, Clone)]
 pub struct Column {
     pub name: String,
@@ -841,6 +884,11 @@ pub struct Column {
     inner: ColumnInner,
     encoding: ColumnEncoding,
     stats: Option<ColumnStats>,
+    /// Timestamp at which each row's current value became visible (0 means
+    /// "current from the beginning", used for loaded/legacy rows).
+    row_start_ts: Vec<Timestamp>,
+    /// Per-row version chains (before-images), newest first.
+    version_chains: Vec<Vec<VersionEntry>>,
 }
 
 impl Column {
@@ -859,6 +907,8 @@ impl Column {
             inner,
             encoding: ColumnEncoding::None,
             stats: None,
+            row_start_ts: Vec::new(),
+            version_chains: Vec::new(),
         }
     }
 
@@ -876,11 +926,19 @@ impl Column {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Core read / write
-    // -----------------------------------------------------------------------
+    /// Ensure the MVCC metadata vectors are at least `n` rows long.
+    /// New (never-written) rows default to start_ts 0, i.e. their loaded or
+    /// not-yet-written value is treated as current.
+    fn ensure_row_meta(&mut self, n: usize) {
+        if self.row_start_ts.len() < n {
+            self.row_start_ts.resize(n, 0);
+            self.version_chains.resize(n, Vec::new());
+        }
+    }
 
-    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+    /// Write `value` into the column, handling the encoded and raw paths.
+    /// Does not touch the MVCC metadata.
+    fn write_value(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
         if self.encoding.is_encoded() {
             if self.encoding.set(row_idx, value).is_ok() {
                 if row_idx >= self.len() {
@@ -912,6 +970,95 @@ impl Column {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Core read / write
+    // -----------------------------------------------------------------------
+
+    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        // Plain set treats the value as "current from the beginning": it
+        // resets the row's MVCC metadata (no historical version recorded).
+        self.ensure_row_meta(row_idx + 1);
+        self.row_start_ts[row_idx] = 0;
+        self.version_chains[row_idx].clear();
+        self.write_value(row_idx, value)
+    }
+
+    /// Versioned write: records the current value as a before-image valid on
+    /// `[row_start_ts, ts)`, then stores `value` as the current value valid
+    /// from `ts` onward. Rows written for the first time get no before-image.
+    pub fn set_versioned(
+        &mut self,
+        row_idx: usize,
+        value: Option<&Value>,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.ensure_row_meta(row_idx + 1);
+        // Only record a before-image when the current value genuinely predates
+        // this write (guards against zero-length ranges from rollback writes
+        // that reuse the transaction's original timestamp).
+        if row_idx < self.len() && self.row_start_ts[row_idx] < ts {
+            let current = self.get(row_idx);
+            if current.is_some() || self.is_null(row_idx) {
+                self.version_chains[row_idx].push(VersionEntry {
+                    start_ts: self.row_start_ts[row_idx],
+                    end_ts: ts,
+                    value: current,
+                });
+            }
+        }
+        self.write_value(row_idx, value)?;
+        self.row_start_ts[row_idx] = ts;
+        Ok(())
+    }
+
+    /// Read the value visible at `query_ts` for a row.
+    ///
+    /// Returns the current value when it was written at or before `query_ts`;
+    /// otherwise searches the version chain for the before-image covering
+    /// `query_ts`. A `None` return means the value is null at `query_ts`.
+    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
+        let start_ts = self.row_start_ts.get(row_idx).copied().unwrap_or(0);
+        if start_ts <= query_ts {
+            return if self.encoding.is_encoded() {
+                self.encoding.get(row_idx)
+            } else {
+                self.inner().get(row_idx)
+            };
+        }
+        if let Some(chain) = self.version_chains.get(row_idx) {
+            for entry in chain {
+                if entry.start_ts <= query_ts && entry.end_ts > query_ts {
+                    return entry.value.clone();
+                }
+            }
+        }
+        None
+    }
+
+    /// Garbage-collect version-chain entries no longer visible to any active
+    /// snapshot at `min_active_snapshot_ts`. Returns the number of entries
+    /// removed.
+    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        let mut removed = 0;
+        for chain in &mut self.version_chains {
+            let before = chain.len();
+            chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
+            removed += before - chain.len();
+        }
+        removed
+    }
+
+    /// Snapshot the MVCC metadata of `from` into `to` (used by table
+    /// compaction to preserve version history when rows are remapped).
+    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
+        if from >= self.len() {
+            return;
+        }
+        self.ensure_row_meta(to + 1);
+        self.row_start_ts[to] = self.row_start_ts[from];
+        self.version_chains[to] = self.version_chains[from].clone();
+    }
+
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         if self.encoding.is_encoded() {
             return self.encoding.get(row_idx);
@@ -940,7 +1087,26 @@ impl Column {
     }
 
     pub fn memory_usage(&self) -> usize {
-        self.inner().memory_usage() + self.encoding.memory_usage()
+        let version_bytes = self
+            .version_chains
+            .iter()
+            .map(|chain| {
+                chain.len() * std::mem::size_of::<VersionEntry>()
+                    + chain
+                        .iter()
+                        .map(|entry| {
+                            // Approximate heap payload for the retained Value.
+                            entry
+                                .value
+                                .as_ref()
+                                .map(|v| value_payload_bytes(v))
+                                .unwrap_or(0)
+                        })
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+            + self.row_start_ts.len() * std::mem::size_of::<Timestamp>();
+        self.inner().memory_usage() + self.encoding.memory_usage() + version_bytes
     }
 
     pub fn memory_size(&self) -> usize {
@@ -956,16 +1122,23 @@ impl Column {
     pub fn clear(&mut self) {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
+        self.row_start_ts.clear();
+        self.version_chains.clear();
     }
 
     /// Pre-allocate capacity for `additional` more rows in the underlying
     /// storage buffers (used by batch inserts).
     pub fn reserve(&mut self, additional: usize) {
         self.inner_mut().reserve(additional);
+        self.row_start_ts.reserve(additional);
+        self.version_chains.reserve(additional);
     }
 
     pub fn resize(&mut self, new_count: usize) {
         self.inner_mut().resize(new_count);
+        self.ensure_row_meta(new_count);
+        self.row_start_ts.resize(new_count, 0);
+        self.version_chains.resize(new_count, Vec::new());
     }
 
     pub fn load_data_from_raw(
@@ -977,6 +1150,9 @@ impl Column {
     ) {
         self.inner_mut()
             .load_data_from_raw(data, offsets, null_bitmap_raw, bitmap_bit_len);
+        // MVCC metadata is intentionally left untouched: a freshly-loaded
+        // column starts with empty metadata (rows read as "current"), and
+        // in-memory decode paths must preserve existing version chains.
     }
 
     pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
@@ -1382,78 +1558,108 @@ impl ColumnStore {
             .collect()
     }
 
-    /// Read only the requested columns for one row.
-    ///
-    /// Unlike `get`, this does not touch or decode unrequested columns.
-    pub fn get_projected(
+    // -----------------------------------------------------------------------
+    // MVCC (versioned) read / write
+    // -----------------------------------------------------------------------
+
+    /// Versioned write of multiple properties for one row at `ts`.
+    pub fn set_versioned(
+        &mut self,
+        row_idx: usize,
+        values: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        for (name, value) in values {
+            if let Some(col) = self.get_column_mut(name) {
+                col.set_versioned(row_idx, Some(value), ts)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Versioned write of a single property for one row at `ts`.
+    pub fn set_property_versioned(
+        &mut self,
+        row_idx: usize,
+        col_name: &str,
+        value: Option<&Value>,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let col = self
+            .get_column_mut(col_name)
+            .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
+        col.set_versioned(row_idx, value, ts)
+    }
+
+    /// Read all columns for one row as visible at `query_ts`.
+    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Vec<(String, Option<Value>)> {
+        self.columns
+            .iter()
+            .map(|col| (col.name.clone(), col.get_at_ts(row_idx, query_ts)))
+            .collect()
+    }
+
+    /// Read only the requested columns for one row as visible at `query_ts`.
+    pub fn get_projected_at_ts(
         &self,
         row_idx: usize,
         projection: &[String],
+        query_ts: Timestamp,
     ) -> Vec<(String, Option<Value>)> {
         projection
             .iter()
             .filter_map(|name| {
                 self.get_column(name)
-                    .map(|column| (name.clone(), column.get(row_idx)))
+                    .map(|column| (name.clone(), column.get_at_ts(row_idx, query_ts)))
             })
             .collect()
     }
 
-    /// Batch read of all columns for multiple rows.
-    ///
-    /// Column references are resolved once per batch and each column is
-    /// decoded continuously for all requested rows (column-at-a-time),
-    /// which is cache-friendlier than the row-at-a-time `get` path.
-    /// The result is aligned with the input row order.
-    pub fn get_batch(&self, rows: &[usize]) -> Vec<Vec<(String, Option<Value>)>> {
+    /// Batch read of all columns for multiple rows at `query_ts`.
+    pub fn get_batch_at_ts(
+        &self,
+        rows: &[usize],
+        query_ts: Timestamp,
+    ) -> Vec<Vec<(String, Option<Value>)>> {
         let mut out = vec![Vec::with_capacity(self.columns.len()); rows.len()];
         for col in &self.columns {
             for (ri, &row) in rows.iter().enumerate() {
-                out[ri].push((col.name.clone(), col.get(row)));
+                out[ri].push((col.name.clone(), col.get_at_ts(row, query_ts)));
             }
         }
         out
     }
 
-    /// Batch variant of [`get_projected`]: decodes only the requested
-    /// columns for multiple rows, resolving column references once per batch
-    /// and decoding column-at-a-time.
-    ///
-    /// The result is aligned with the input row order; unrequested columns
-    /// are never touched.
-    pub fn get_projected_batch(
+    /// Batch variant of [`get_projected_at_ts`].
+    pub fn get_projected_batch_at_ts(
         &self,
         rows: &[usize],
         projection: &[String],
+        query_ts: Timestamp,
     ) -> Vec<Vec<(String, Option<Value>)>> {
         let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
         for name in projection {
             if let Some(column) = self.get_column(name) {
                 for (ri, &row) in rows.iter().enumerate() {
-                    out[ri].push((name.clone(), column.get(row)));
+                    out[ri].push((name.clone(), column.get_at_ts(row, query_ts)));
                 }
             }
         }
         out
     }
 
-    /// Column-major batch decode (A1 column-block path).
-    ///
-    /// Decodes the requested columns for `rows` column-at-a-time into typed
-    /// [`ColumnValues`] arrays.  When `names` is empty every column of the
-    /// store is decoded.  The output carries one `(name, values)` entry per
-    /// requested column in `names` order (all columns order when `names` is
-    /// empty); columns that do not exist yield an all-null column.
-    pub fn get_projected_columns(
+    /// Column-major batch decode at `query_ts` (A1 column-block path).
+    pub fn get_projected_columns_at_ts(
         &self,
         rows: &[usize],
         names: &[String],
+        query_ts: Timestamp,
     ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
         if names.is_empty() {
             self.columns
                 .iter()
                 .map(|column| {
-                    let values = decode_column_values(column, rows);
+                    let values = decode_column_values_at_ts(column, rows, query_ts);
                     (column.name.clone(), values)
                 })
                 .collect()
@@ -1462,7 +1668,7 @@ impl ColumnStore {
                 .iter()
                 .map(|name| {
                     let values = match self.get_column(name) {
-                        Some(column) => decode_column_values(column, rows),
+                        Some(column) => decode_column_values_at_ts(column, rows, query_ts),
                         None => {
                             crate::storage::cursor::ColumnValues::General(vec![None; rows.len()])
                         }
@@ -1473,16 +1679,23 @@ impl ColumnStore {
         }
     }
 
-    pub fn set_property(
-        &mut self,
-        row_idx: usize,
-        col_name: &str,
-        value: Option<&Value>,
-    ) -> StorageResult<()> {
-        let col = self
-            .get_column_mut(col_name)
-            .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
-        col.set(row_idx, value)
+    /// Garbage-collect version chains across all columns, returning the total
+    /// number of before-images removed.
+    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        let mut removed = 0;
+        for col in &mut self.columns {
+            removed += col.gc_versions(min_active_snapshot_ts);
+        }
+        removed
+    }
+
+    /// Copy the MVCC row state (current version timestamp + version chain)
+    /// from `from` to `to`, used by table compaction to preserve version
+    /// history when rows are remapped.
+    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
+        for col in &mut self.columns {
+            col.copy_row_state(from, to);
+        }
     }
 
     pub fn remove_column(&mut self, name: &str) -> StorageResult<()> {
@@ -1709,7 +1922,7 @@ mod tests {
             .unwrap();
 
         // Full batch read, aligned with input order.
-        let all = store.get_batch(&[1, 0, 2]);
+        let all = store.get_batch_at_ts(&[1, 0, 2], 100);
         assert_eq!(all.len(), 3);
         assert_eq!(
             all[0].iter().find(|(n, _)| n == "name").unwrap().1,
@@ -1719,7 +1932,7 @@ mod tests {
         assert_eq!(all[2][1], ("age".to_string(), None));
 
         // Projected batch read only touches the requested columns.
-        let projected = store.get_projected_batch(&[0, 1], &["age".to_string()]);
+        let projected = store.get_projected_batch_at_ts(&[0, 1], &["age".to_string()], 100);
         assert_eq!(projected.len(), 2);
         assert_eq!(
             projected[0],
@@ -1985,10 +2198,7 @@ mod tests {
         col.set(4, Some(&Value::string("d"))).unwrap();
         assert_eq!(col.null_count(), 3);
 
-        let expected = col
-            .null_bitmap()
-            .map(|b| b.count_ones())
-            .unwrap_or(0);
+        let expected = col.null_bitmap().map(|b| b.count_ones()).unwrap_or(0);
         assert_eq!(col.null_count(), expected);
 
         col.clear();
@@ -2193,5 +2403,65 @@ mod tests {
         assert_eq!(col.get(1), Some(Value::Float(-1.5)));
         assert_eq!(col.get(2), Some(Value::Float(f32::MAX)));
         assert_eq!(col.get(3), Some(Value::Float(f32::MIN)));
+    }
+
+    #[test]
+    fn test_versioned_writes_keep_before_images() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+
+        // Insert at ts=10, then two updates at increasing timestamps.
+        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
+
+        // Current value is the latest.
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+        // Snapshot reads resolve the visible version per timestamp.
+        assert_eq!(col.get_at_ts(0, 30), Some(Value::Int(3)));
+        assert_eq!(col.get_at_ts(0, 29), Some(Value::Int(2)));
+        assert_eq!(col.get_at_ts(0, 20), Some(Value::Int(2)));
+        assert_eq!(col.get_at_ts(0, 19), Some(Value::Int(1)));
+        assert_eq!(col.get_at_ts(0, 10), Some(Value::Int(1)));
+        // Before the row existed the value is null.
+        assert_eq!(col.get_at_ts(0, 9), None);
+
+        // GC removes versions older than the minimum active snapshot.
+        let removed = col.gc_versions(21);
+        assert!(removed >= 1, "old versions should be reclaimed");
+        assert_eq!(
+            col.get_at_ts(0, 29),
+            Some(Value::Int(2)),
+            "still-visible version survives"
+        );
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_versioned_null_and_string_types() {
+        let mut col = Column::new("name".to_string(), 0, DataType::String, true);
+
+        col.set_versioned(0, Some(&Value::string("alice")), 10)
+            .unwrap();
+        col.set_versioned(0, None, 20).unwrap();
+        col.set_versioned(0, Some(&Value::string("bob")), 30)
+            .unwrap();
+
+        assert_eq!(col.get_at_ts(0, 10), Some(Value::string("alice")));
+        assert_eq!(col.get_at_ts(0, 20), None, "null before-image");
+        assert_eq!(col.get_at_ts(0, 30), Some(Value::string("bob")));
+        assert_eq!(col.get_at_ts(0, 25), None);
+    }
+
+    #[test]
+    fn test_versioned_write_at_or_before_start_is_noop_range() {
+        let mut col = Column::new("v".to_string(), 0, DataType::BigInt, true);
+        col.set_versioned(0, Some(&Value::BigInt(7)), 100).unwrap();
+        // Rollback-style write reusing the same timestamp must not create a
+        // zero-length version range.
+        col.set_versioned(0, Some(&Value::BigInt(9)), 100).unwrap();
+        assert_eq!(col.get_at_ts(0, 100), Some(Value::BigInt(9)));
+        assert_eq!(col.get_at_ts(0, 101), Some(Value::BigInt(9)));
+        // The before-image at 100 was already superseded at the same ts.
+        assert_eq!(col.get_at_ts(0, 99), None);
     }
 }

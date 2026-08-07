@@ -1,7 +1,7 @@
 //! Pool of recycled row/column buffers for DataChunk construction.
 
-use crate::core::Value;
 use super::typed::{TypedColumn, TypedKind};
+use crate::core::Value;
 
 const ROW_POOL_MAX_SIZE: usize = 8;
 

@@ -1,7 +1,6 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::core::types::Timestamp;
@@ -12,8 +11,18 @@ use crate::storage::schema::ChangeDetails;
 use crate::storage::types::StoragePropertyDef;
 use crate::storage::vertex::{IdKey, VertexRecord};
 
-const DEFAULT_NUM_SHARDS: usize = 8;
 const MAX_SHARDS: usize = 16;
+
+/// Adapt the default shard count to the available CPU parallelism, clamped to
+/// `MAX_SHARDS` and rounded down to a power of two (required by the shard-ID
+/// bit encoding). Fallback to 1 if the platform cannot report parallelism.
+fn default_num_shards() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_SHARDS)
+        .next_power_of_two()
+}
 
 // Internal ID layout: `internal_id = (segment << K) | slot`.
 // A shard's i-th segment is `shard + i * num_shards`, so segments are
@@ -46,28 +55,9 @@ fn decode_id(global_id: u32, num_shards: usize) -> (usize, u32) {
     (shard, local_id)
 }
 
-struct Shard {
-    table: Mutex<VertexTable>,
-    /// Next local id to allocate in this shard (dense 0..n, never reused).
-    /// Only modified while holding `table`'s lock.
-    local_counter: AtomicU32,
-    /// Segment currently being filled: `shard + (local_counter >> K) * num_shards`.
-    /// Only modified while holding `table`'s lock.
-    current_segment: AtomicU32,
-}
-
 pub struct ShardedVertexTable {
-    shards: Vec<Shard>,
+    shards: Vec<RwLock<VertexTable>>,
     num_shards: usize,
-    /// Global segment allocator, advanced once per segment exhaustion.
-    ///
-    /// Segments are issued in round-robin order (segment `c` belongs to
-    /// shard `c % num_shards`), but out-of-order claims can consume another
-    /// shard's residue class, so the counter cannot be the source of truth
-    /// for segment values. The segment a shard actually fills is always
-    /// derived deterministically (`shard + ordinal * num_shards`), which is
-    /// exactly what the round-robin order yields when claims stay in sync.
-    segment_allocator: AtomicU32,
     label: crate::core::types::LabelId,
     label_name: String,
 }
@@ -78,7 +68,7 @@ impl ShardedVertexTable {
         label_name: String,
         schema: crate::storage::vertex::VertexSchema,
     ) -> Self {
-        Self::with_config(label, label_name, schema, DEFAULT_NUM_SHARDS)
+        Self::with_config(label, label_name, schema, default_num_shards())
     }
 
     pub fn with_config(
@@ -90,21 +80,16 @@ impl ShardedVertexTable {
         let num_shards = num_shards.clamp(1, MAX_SHARDS).next_power_of_two();
         let mut shards = Vec::with_capacity(num_shards);
         for _ in 0..num_shards {
-            shards.push(Shard {
-                table: Mutex::new(VertexTable::with_config(
-                    label,
-                    label_name.clone(),
-                    schema.clone(),
-                    VertexTableConfig::default(),
-                )),
-                local_counter: AtomicU32::new(0),
-                current_segment: AtomicU32::new(0),
-            });
+            shards.push(RwLock::new(VertexTable::with_config(
+                label,
+                label_name.clone(),
+                schema.clone(),
+                VertexTableConfig::default(),
+            )));
         }
         Self {
             shards,
             num_shards,
-            segment_allocator: AtomicU32::new(0),
             label,
             label_name,
         }
@@ -123,9 +108,9 @@ impl ShardedVertexTable {
     #[cfg(test)]
     pub(crate) fn verify_invariants(&self) -> crate::core::StorageResult<()> {
         use crate::core::error::storage::StorageErrorKind;
-        
+
         for shard in &self.shards {
-            let table = shard.table.lock();
+            let table = shard.read();
             let id_count = table.id_indexer.len();
 
             for (key, idx) in table.id_indexer.iter() {
@@ -164,28 +149,9 @@ impl ShardedVertexTable {
         Ok(())
     }
 
-    /// Segment that covers `local_id` in shard `idx`.
-    fn segment_of(&self, idx: usize, local_id: u32) -> u32 {
-        idx as u32 + (local_id >> SEGMENT_SLOTS_BITS) * self.num_shards as u32
-    }
-
-    /// Advance the global segment allocator by one.
-    fn claim_segment(&self) {
-        self.segment_allocator.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Record an allocation of `local_id` in shard `idx` and encode it as a
-    /// global id. Updates the per-shard counter/segment and claims a fresh
-    /// segment from the global allocator when the current one is exhausted.
-    fn record_allocation(&self, idx: usize, shard: &Shard, local_id: u32) -> u32 {
-        let prev_counter = shard.local_counter.load(Ordering::Relaxed);
-        let new_counter = prev_counter.max(local_id + 1);
-        let new_segment = self.segment_of(idx, new_counter);
-        if new_segment != shard.current_segment.load(Ordering::Relaxed) {
-            self.claim_segment();
-        }
-        shard.local_counter.store(new_counter, Ordering::Relaxed);
-        shard.current_segment.store(new_segment, Ordering::Relaxed);
+    /// global id.
+    fn record_allocation(&self, idx: usize, local_id: u32) -> u32 {
         encode_id(idx, local_id, self.num_shards)
     }
 
@@ -206,10 +172,9 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_str(external_id);
-        let shard = &self.shards[idx];
-        let mut table = shard.table.lock();
+        let mut table = self.shards[idx].write();
         let local_id = table.insert(external_id, properties, ts)?;
-        Ok(self.record_allocation(idx, shard, local_id))
+        Ok(self.record_allocation(idx, local_id))
     }
 
     pub fn insert_by_i64(
@@ -219,21 +184,20 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_i64(external_id);
-        let shard = &self.shards[idx];
-        let mut table = shard.table.lock();
+        let mut table = self.shards[idx].write();
         let local_id = table.insert_by_i64(external_id, properties, ts)?;
-        Ok(self.record_allocation(idx, shard, local_id))
+        Ok(self.record_allocation(idx, local_id))
     }
 
     pub fn delete(&self, external_id: &str, ts: Timestamp) -> StorageResult<()> {
         let idx = self.shard_index_by_str(external_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.delete(external_id, ts)
     }
 
     pub fn delete_by_i64(&self, external_id: i64, ts: Timestamp) -> StorageResult<()> {
         let idx = self.shard_index_by_i64(external_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.delete_by_i64(external_id, ts)
     }
 
@@ -245,7 +209,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> StorageResult<()> {
         let (idx, local_id) = self.decode_id(global_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.update_property(local_id, col_name, value, ts)
     }
 
@@ -253,28 +217,34 @@ impl ShardedVertexTable {
 
     pub fn get_by_internal_id(&self, global_id: u32, ts: Timestamp) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         table.get_by_internal_id(local_id, ts)
     }
 
     pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
         let idx = self.shard_index_by_str(external_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         let local_id = table.get_internal_id(external_id, ts)?;
         Some(self.encode_id(idx, local_id))
     }
 
     pub fn get_internal_id_by_i64(&self, external_id: i64, ts: Timestamp) -> Option<u32> {
         let idx = self.shard_index_by_i64(external_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         let local_id = table.get_internal_id_by_i64(external_id, ts)?;
         Some(self.encode_id(idx, local_id))
     }
 
+    /// Total allocated vertex slots across all shards.
+    ///
+    /// This is an approximate live count: shards are read without a global
+    /// lock, so concurrent inserts/deletes may be observed inconsistently
+    /// across shards. Use it for sizing and statistics, not for exact
+    /// accounting.
     pub fn total_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {
-            total += shard.table.lock().total_count();
+            total += shard.read().total_count();
         }
         total
     }
@@ -290,7 +260,7 @@ impl ShardedVertexTable {
         let mut live = 0;
         let mut allocated = 0;
         for shard in &self.shards {
-            let (l, a) = shard.table.lock().id_hole_stats(ts);
+            let (l, a) = shard.read().id_hole_stats(ts);
             live += l;
             allocated += a;
         }
@@ -300,7 +270,7 @@ impl ShardedVertexTable {
     pub fn scan(&self, ts: Timestamp) -> Vec<VertexRecord> {
         let mut all = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
-            let table = shard.table.lock();
+            let table = shard.read();
             for mut record in table.scan(ts) {
                 record.internal_id = self.encode_id(shard_idx, record.internal_id);
                 all.push(record);
@@ -316,7 +286,7 @@ impl ShardedVertexTable {
     pub fn live_ids(&self) -> Vec<u32> {
         let mut ids = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
-            let table = shard.table.lock();
+            let table = shard.read();
             ids.extend(
                 table
                     .live_ids()
@@ -350,7 +320,7 @@ impl ShardedVertexTable {
                 continue;
             }
             let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].table.lock();
+            let table = self.shards[shard_idx].read();
             let records = table.get_projected_batch(&locals, ts, projection);
             for ((out_idx, _), record) in group.into_iter().zip(records) {
                 out[out_idx] = record.map(|mut rec| {
@@ -365,16 +335,25 @@ impl ShardedVertexTable {
     // ==================== MVCC ====================
 
     pub fn register_snapshot(&self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        let handle = self.shards[0].table.lock().register_snapshot(ts)?;
+        let handle = self.shards[0].write().register_snapshot(ts)?;
         for shard in &self.shards[1..] {
-            shard.table.lock().register_snapshot(ts)?;
+            shard.write().register_snapshot(ts)?;
         }
         Ok(handle)
     }
 
     pub fn unregister_snapshot(&self, handle: SnapshotHandle) -> StorageResult<()> {
         for shard in &self.shards {
-            shard.table.lock().unregister_snapshot(handle)?;
+            shard.write().unregister_snapshot(handle)?;
+        }
+        Ok(())
+    }
+
+    /// Unregister all snapshots with the given timestamp.
+    /// Used by lazy registration cleanup on transaction finalize.
+    pub fn unregister_snapshot_by_timestamp(&self, ts: Timestamp) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.write().unregister_snapshot_by_timestamp(ts)?;
         }
         Ok(())
     }
@@ -382,7 +361,7 @@ impl ShardedVertexTable {
     pub fn gc(&self, min_ts: Timestamp) -> StorageResult<usize> {
         let mut total = 0;
         for shard in &self.shards {
-            total += shard.table.lock().gc(min_ts)?;
+            total += shard.write().gc(min_ts)?;
         }
         Ok(total)
     }
@@ -392,12 +371,12 @@ impl ShardedVertexTable {
     pub fn schema(&self) -> crate::storage::vertex::VertexSchema {
         // Shard 0 is the schema authority: every shard holds the same schema
         // and all schema mutations are applied to each shard in order.
-        self.shards[0].table.lock().schema().clone()
+        self.shards[0].read().schema().clone()
     }
 
     pub fn apply_schema(&self, schema: crate::storage::vertex::VertexSchema) {
         for shard in &self.shards {
-            shard.table.lock().set_schema(schema.clone());
+            shard.write().set_schema(schema.clone());
         }
     }
 
@@ -412,7 +391,7 @@ impl ShardedVertexTable {
     pub fn memory_size(&self) -> usize {
         let mut total = std::mem::size_of::<Self>();
         for shard in &self.shards {
-            total += shard.table.lock().memory_size();
+            total += shard.read().memory_size();
         }
         total
     }
@@ -430,33 +409,33 @@ impl ShardedVertexTable {
         projection: Option<&[String]>,
     ) -> Option<VertexRecord> {
         let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         table.get_projected_by_internal_id(local_id, ts, projection)
     }
 
     pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
         let idx = self.shard_index_by_str(external_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         let local_id = table.get_internal_id_raw(external_id)?;
         Some(self.encode_id(idx, local_id))
     }
 
     pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
         let idx = self.shard_index_by_i64(external_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         let local_id = table.get_internal_id_by_i64_raw(external_id)?;
         Some(self.encode_id(idx, local_id))
     }
 
     pub fn get_external_id(&self, global_id: u32, ts: Timestamp) -> Option<IdKey> {
         let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         table.get_external_id(local_id, ts)
     }
 
     pub fn get_external_id_raw(&self, global_id: u32) -> Option<IdKey> {
         let (idx, local_id) = self.decode_id(global_id);
-        let table = self.shards[idx].table.lock();
+        let table = self.shards[idx].read();
         table.get_external_id_raw(local_id)
     }
 
@@ -464,13 +443,13 @@ impl ShardedVertexTable {
 
     pub fn delete_by_internal_id(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
         let (idx, local_id) = self.decode_id(global_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.delete_by_internal_id(local_id, ts)
     }
 
     pub fn revert_delete(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
         let (idx, local_id) = self.decode_id(global_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.revert_delete(local_id, ts)
     }
 
@@ -482,7 +461,7 @@ impl ShardedVertexTable {
         ts: Timestamp,
     ) -> StorageResult<()> {
         let (idx, local_id) = self.decode_id(global_id);
-        let mut table = self.shards[idx].table.lock();
+        let mut table = self.shards[idx].write();
         table.update_property_by_id(local_id, col_id, value, ts)
     }
 
@@ -496,7 +475,7 @@ impl ShardedVertexTable {
         let mut total = 0;
         for (idx, ids) in by_shard.iter().enumerate() {
             if !ids.is_empty() {
-                total += self.shards[idx].table.lock().batch_delete(ids, ts)?;
+                total += self.shards[idx].write().batch_delete(ids, ts)?;
             }
         }
         Ok(total)
@@ -510,7 +489,7 @@ impl ShardedVertexTable {
         let mut total = 0;
         for (idx, ids) in by_shard.iter().enumerate() {
             if !ids.is_empty() {
-                total += self.shards[idx].table.lock().batch_delete_i64(ids, ts)?;
+                total += self.shards[idx].write().batch_delete_i64(ids, ts)?;
             }
         }
         Ok(total)
@@ -518,7 +497,7 @@ impl ShardedVertexTable {
 
     pub fn reserve_id_capacity(&self, additional: usize) {
         for shard in &self.shards {
-            shard.table.lock().reserve_id_capacity(additional);
+            shard.write().reserve_id_capacity(additional);
         }
     }
 
@@ -541,7 +520,7 @@ impl ShardedVertexTable {
                 continue;
             }
             let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].table.lock();
+            let table = self.shards[shard_idx].read();
             let resolved = table.resolve_valid_ids(&locals, ts);
             for ((out_idx, _), vid) in group.into_iter().zip(resolved) {
                 out[out_idx] = vid;
@@ -560,7 +539,7 @@ impl ShardedVertexTable {
         names: &[String],
     ) -> Vec<(String, crate::storage::cursor::ColumnValues)> {
         let resolved_names: Vec<String> = if names.is_empty() {
-            let table = self.shards[0].table.lock();
+            let table = self.shards[0].read();
             table
                 .schema()
                 .properties
@@ -571,7 +550,7 @@ impl ShardedVertexTable {
             names.to_vec()
         };
         let types: Vec<Option<crate::core::types::DataType>> = {
-            let table = self.shards[0].table.lock();
+            let table = self.shards[0].read();
             resolved_names
                 .iter()
                 .map(|n| table.data_type_of(n))
@@ -599,7 +578,7 @@ impl ShardedVertexTable {
                 continue;
             }
             let locals: Vec<u32> = group.iter().map(|&(_, local)| local).collect();
-            let table = self.shards[shard_idx].table.lock();
+            let table = self.shards[shard_idx].read();
             let decoded = table.get_projected_columns(&locals, ts, &resolved_names);
             for (name, column) in decoded {
                 if let Some((_, target)) = merged.iter_mut().find(|(n, _)| n == &name) {
@@ -624,7 +603,7 @@ impl ShardedVertexTable {
     pub fn active_snapshot_count(&self) -> usize {
         let mut total = 0;
         for shard in &self.shards {
-            total += shard.table.lock().active_snapshot_count();
+            total += shard.read().active_snapshot_count();
         }
         total
     }
@@ -632,7 +611,7 @@ impl ShardedVertexTable {
     pub fn used_memory_size(&self) -> usize {
         let mut total = std::mem::size_of::<Self>();
         for shard in &self.shards {
-            total += shard.table.lock().used_memory_size();
+            total += shard.read().used_memory_size();
         }
         total
     }
@@ -641,21 +620,21 @@ impl ShardedVertexTable {
 
     pub fn add_property(&self, prop: StoragePropertyDef) -> StorageResult<()> {
         for shard in &self.shards {
-            shard.table.lock().add_property(prop.clone())?;
+            shard.write().add_property(prop.clone())?;
         }
         Ok(())
     }
 
     pub fn remove_property(&self, prop_name: &str) -> StorageResult<()> {
         for shard in &self.shards {
-            shard.table.lock().remove_property(prop_name)?;
+            shard.write().remove_property(prop_name)?;
         }
         Ok(())
     }
 
     pub fn rename_property(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
         for shard in &self.shards {
-            shard.table.lock().rename_property(old_name, new_name)?;
+            shard.write().rename_property(old_name, new_name)?;
         }
         Ok(())
     }
@@ -663,8 +642,7 @@ impl ShardedVertexTable {
     pub fn rebuild_schema_change_from_redo(&self, details: ChangeDetails) -> StorageResult<()> {
         for shard in &self.shards {
             shard
-                .table
-                .lock()
+                .write()
                 .rebuild_schema_change_from_redo(details.clone())?;
         }
         Ok(())
@@ -677,9 +655,6 @@ impl ShardedVertexTable {
     /// Returns the removed external keys and the old-to-new *global* internal
     /// ID mapping (shard-local rows translated into encoded global IDs), which
     /// callers must propagate to edge CSR rows before dependent queries.
-    ///
-    /// Shard allocation counters are refreshed so the next allocation resumes
-    /// from the compacted density instead of the pre-compaction high-water mark.
     pub fn compact_with_ts_collect_mapping(
         &self,
         ts: Timestamp,
@@ -687,7 +662,7 @@ impl ShardedVertexTable {
         let mut all_removed = Vec::new();
         let mut all_mapping = std::collections::HashMap::new();
         for (idx, shard) in self.shards.iter().enumerate() {
-            let mut table = shard.table.lock();
+            let mut table = shard.write();
             let (removed, local_mapping) = table.compact_with_ts_collect_mapping(ts)?;
             for (old_local, new_local) in local_mapping {
                 all_mapping.insert(
@@ -696,11 +671,6 @@ impl ShardedVertexTable {
                 );
             }
             all_removed.extend(removed);
-            let next_local = table.next_local_id();
-            shard.local_counter.store(next_local, Ordering::Relaxed);
-            shard
-                .current_segment
-                .store(self.segment_of(idx, next_local), Ordering::Relaxed);
         }
         Ok((all_removed, all_mapping))
     }
@@ -710,7 +680,7 @@ impl ShardedVertexTable {
     pub fn version_history_ref(
         &self,
     ) -> std::sync::Arc<std::sync::Mutex<crate::storage::schema::LabelVersionHistory>> {
-        self.shards[0].table.lock().version_history_ref()
+        self.shards[0].read().version_history_ref()
     }
 
     // ==================== Persistence ====================
@@ -725,7 +695,7 @@ impl ShardedVertexTable {
         fs::create_dir_all(path)?;
         for (i, shard) in self.shards.iter().enumerate() {
             let shard_dir = path.join(format!("shard_{}", i));
-            shard.table.lock().flush(&shard_dir, compression)?;
+            shard.write().flush(&shard_dir, compression)?;
         }
         Ok(())
     }
@@ -735,24 +705,10 @@ impl ShardedVertexTable {
         for (i, shard) in self.shards.iter().enumerate() {
             let shard_dir = path.join(format!("shard_{}", i));
             if shard_dir.exists() {
-                let mut table = shard.table.lock();
+                let mut table = shard.write();
                 table.load(&shard_dir)?;
-                let next_local = table.next_local_id();
-                shard.local_counter.store(next_local, Ordering::Relaxed);
-                shard
-                    .current_segment
-                    .store(self.segment_of(i, next_local), Ordering::Relaxed);
             }
         }
-        let max_segment = self
-            .shards
-            .iter()
-            .enumerate()
-            .map(|(i, shard)| self.segment_of(i, shard.local_counter.load(Ordering::Relaxed)))
-            .max()
-            .unwrap_or(0);
-        self.segment_allocator
-            .store(max_segment + 1, Ordering::Relaxed);
         Ok(())
     }
 }

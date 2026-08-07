@@ -402,23 +402,23 @@ impl TimeTravelEdgeStore {
         self.base_get_edge(segments, sparse_index, src, dst, ts)
     }
 
-    fn edge_record_from_nbr(&self, src: u32, nbr: Nbr) -> EdgeRecord {
+    fn edge_record_from_nbr(&self, src: u32, nbr: Nbr, query_ts: Timestamp) -> EdgeRecord {
         let (dst_vid, rank) = Self::decode_edge_endpoint(nbr.neighbor);
         EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
             dst_vid,
             rank,
-            properties: self.properties_for_offset(nbr.prop_offset),
+            properties: self.properties_for_offset(nbr.prop_offset, query_ts),
         }
     }
 
-    fn properties_for_offset(&self, prop_offset: u32) -> Vec<(String, Value)> {
+    fn properties_for_offset(&self, prop_offset: u32, query_ts: Timestamp) -> Vec<(String, Value)> {
         if prop_offset == 0 {
             return Vec::new();
         }
 
         self.properties
-            .get(prop_offset, None)
+            .get(prop_offset, Some(query_ts))
             .map(|props| {
                 props
                     .into_iter()
@@ -680,7 +680,7 @@ impl TimeTravelEdgeStore {
             dst_key,
             ts,
         )?;
-        let properties = self.properties_for_offset(nbr.prop_offset);
+        let properties = self.properties_for_offset(nbr.prop_offset, ts);
 
         Some(EdgeRecord {
             src_vid: VertexId::from_int64(src as i64),
@@ -709,8 +709,8 @@ impl TimeTravelEdgeStore {
                 // Try fast path first, fall back to regular get if not fixed-size
                 let properties = self
                     .properties
-                    .get_fast(nbr.prop_offset, None)
-                    .or_else(|| self.properties.get(nbr.prop_offset, None))
+                    .get_fast(nbr.prop_offset, Some(ts))
+                    .or_else(|| self.properties.get(nbr.prop_offset, Some(ts)))
                     .map(|props| {
                         props
                             .into_iter()
@@ -765,8 +765,8 @@ impl TimeTravelEdgeStore {
                 // Try fast path first, fall back to regular get if not fixed-size
                 let properties = self
                     .properties
-                    .get_fast(nbr.prop_offset, None)
-                    .or_else(|| self.properties.get(nbr.prop_offset, None))
+                    .get_fast(nbr.prop_offset, Some(ts))
+                    .or_else(|| self.properties.get(nbr.prop_offset, Some(ts)))
                     .map(|props| {
                         props
                             .into_iter()
@@ -1462,8 +1462,11 @@ impl<'a> EdgeTableScanIterator<'a> {
 
         for (src_vid, nbr) in table.out_csr.iter(ts) {
             if !table.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                records
-                    .push(table.edge_record_from_nbr(src_vid.as_int64().unwrap_or(0) as u32, nbr));
+                records.push(table.edge_record_from_nbr(
+                    src_vid.as_int64().unwrap_or(0) as u32,
+                    nbr,
+                    ts,
+                ));
 
                 if let Some(max) = max_records {
                     if records.len() >= max {
@@ -1492,6 +1495,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                                 edge.prop_offset,
                                 edge.timestamp,
                             ),
+                            ts,
                         ));
 
                         if let Some(max) = max_records {

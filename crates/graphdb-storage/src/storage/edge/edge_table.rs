@@ -841,7 +841,9 @@ impl core::TimeTravelEdgeStore {
         let mut version_bytes = [0u8; 4];
         meta_cursor.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
-        if version != 2 {
+        // Development builds keep a single on-disk layout; version numbers
+        // only start to accumulate after the first release.
+        if version != persistence::EDGE_META_VERSION {
             return Err(StorageError::deserialize_error(format!(
                 "unsupported edge meta version: {}",
                 version

@@ -156,9 +156,9 @@ fn source_unreferenced(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> b
     let Some(src_var) = expand.col_names().first() else {
         return false;
     };
-    ancestors.iter().all(|anc| {
-        known_reference_ancestor(anc) && !node_references_var(anc, src_var)
-    })
+    ancestors
+        .iter()
+        .all(|anc| known_reference_ancestor(anc) && !node_references_var(anc, src_var))
 }
 
 /// Whether `anc` is a node type whose variable references the annotation pass
@@ -265,11 +265,15 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
                     .iter()
                     .any(|func| aggregate_field(func).as_deref() == Some(var))
         }
-        PlanNodeEnum::InnerJoin(join) => join_references_var(join.hash_keys(), join.probe_keys(), var),
+        PlanNodeEnum::InnerJoin(join) => {
+            join_references_var(join.hash_keys(), join.probe_keys(), var)
+        }
         PlanNodeEnum::HashInnerJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
         }
-        PlanNodeEnum::LeftJoin(join) => join_references_var(join.hash_keys(), join.probe_keys(), var),
+        PlanNodeEnum::LeftJoin(join) => {
+            join_references_var(join.hash_keys(), join.probe_keys(), var)
+        }
         PlanNodeEnum::HashLeftJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
         }
@@ -279,7 +283,9 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
         PlanNodeEnum::FullOuterJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
         }
-        PlanNodeEnum::SemiJoin(join) => join_references_var(join.hash_keys(), join.probe_keys(), var),
+        PlanNodeEnum::SemiJoin(join) => {
+            join_references_var(join.hash_keys(), join.probe_keys(), var)
+        }
         PlanNodeEnum::ExpandAll(expand) => expand
             .filter()
             .and_then(|f| f.get_expression())
@@ -338,10 +344,12 @@ fn aggregate_field(func: &crate::core::types::operators::AggregateFunction) -> O
 fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
     agg.group_keys().is_empty()
         && !agg.aggregation_functions().is_empty()
-        && agg
-            .aggregation_functions()
-            .iter()
-            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count(_)))
+        && agg.aggregation_functions().iter().all(|f| {
+            matches!(
+                f,
+                crate::core::types::operators::AggregateFunction::Count(_)
+            )
+        })
 }
 
 /// Apply the flag decisions to the matching `ExpandAll` nodes in place.
@@ -513,15 +521,12 @@ mod tests {
             alias: dst.to_string(),
             is_matched: false,
         };
-        PlanNodeEnum::Project(
-            ProjectNode::new(input, vec![col]).expect("project should build"),
-        )
+        PlanNodeEnum::Project(ProjectNode::new(input, vec![col]).expect("project should build"))
     }
 
     fn count_agg(input: PlanNodeEnum) -> PlanNodeEnum {
-        let agg =
-            AggregateNode::new(input, vec![], vec![AggregateFunction::Count(None)])
-                .expect("aggregate should build");
+        let agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count(None)])
+            .expect("aggregate should build");
         PlanNodeEnum::Aggregate(agg)
     }
 
@@ -536,9 +541,12 @@ mod tests {
     }
 
     fn count_field_agg(input: PlanNodeEnum, field: &str) -> PlanNodeEnum {
-        let agg =
-            AggregateNode::new(input, vec![], vec![AggregateFunction::Count(Some(field.to_string()))])
-                .expect("aggregate should build");
+        let agg = AggregateNode::new(
+            input,
+            vec![],
+            vec![AggregateFunction::Count(Some(field.to_string()))],
+        )
+        .expect("aggregate should build");
         PlanNodeEnum::Aggregate(agg)
     }
 
@@ -558,7 +566,11 @@ mod tests {
     fn two_hop_count_chain_is_annotated() {
         // MATCH (a:Node)-[:Link]->(b)-[:Link]->(c) RETURN count(c)
         let chain = count_agg(project_pass_dst(
-            hop("Link", ["b", "e2", "c"], hop("Link", ["a", "e1", "b"], anchor_scan("a"))),
+            hop(
+                "Link",
+                ["b", "e2", "c"],
+                hop("Link", ["a", "e1", "b"], anchor_scan("a")),
+            ),
             "c",
         ));
         let (annotated, changed) = annotate_expand_all(&chain);
@@ -574,7 +586,10 @@ mod tests {
             "hop1 source (a) is unreferenced, so its source column may be lightweight"
         );
         assert!(hop_c.count_only(), "hop2 (c) must be count_only");
-        assert!(!hop_c.id_only(), "hop2 (c) dst is referenced by the aggregate");
+        assert!(
+            !hop_c.id_only(),
+            "hop2 (c) dst is referenced by the aggregate"
+        );
     }
 
     #[test]
@@ -622,7 +637,11 @@ mod tests {
     fn projected_dst_blocks_id_only_and_count_only() {
         // MATCH (a)-[:R]->(b)-[:R]->(c) RETURN c  -> hop2 dst is projected out.
         let chain = project_pass_dst(
-            hop("Link", ["b", "e2", "c"], hop("Link", ["a", "e1", "b"], anchor_scan("a"))),
+            hop(
+                "Link",
+                ["b", "e2", "c"],
+                hop("Link", ["a", "e1", "b"], anchor_scan("a")),
+            ),
             "c",
         );
         let (annotated, _) = annotate_expand_all(&chain);
@@ -632,7 +651,10 @@ mod tests {
             hop_by_dst(&hops, "b").lightweight_source(),
             "hop1 source (a) is unreferenced"
         );
-        assert!(!hop_by_dst(&hops, "c").id_only(), "hop2 dst is the final projection");
+        assert!(
+            !hop_by_dst(&hops, "c").id_only(),
+            "hop2 dst is the final projection"
+        );
         assert!(
             !hop_by_dst(&hops, "c").count_only(),
             "no count-only aggregate above hop2"
@@ -645,10 +667,7 @@ mod tests {
         // consumed by the aggregate, so id_only must not be applied (it would
         // nullify the edge column and turn count(f) into 0).
         let chain = count_field_agg(
-            project_pass_var(
-                hop("Link", ["a", "f", "b"], anchor_scan("a")),
-                "f",
-            ),
+            project_pass_var(hop("Link", ["a", "f", "b"], anchor_scan("a")), "f"),
             "f",
         );
         let (annotated, _) = annotate_expand_all(&chain);

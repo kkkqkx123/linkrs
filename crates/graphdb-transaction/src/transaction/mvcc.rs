@@ -154,8 +154,8 @@ impl VersionManager {
         // `write_ts` is the last allocated timestamp. Keeping the baseline at
         // the recovered timestamp makes the next allocation checked and
         // contiguous, including at the u64 boundary.
-        self.write_ts.store(ts, Ordering::SeqCst);
-        self.read_ts.store(ts, Ordering::SeqCst);
+        self.write_ts.store(ts, Ordering::Release);
+        self.read_ts.store(ts, Ordering::Release);
         self.write_states.lock().clear();
     }
 
@@ -163,25 +163,25 @@ impl VersionManager {
     /// The frontier only moves forward.
     pub fn set_retention_frontier(&self, timestamp: Timestamp) {
         self.retention_frontier
-            .fetch_max(timestamp, Ordering::SeqCst);
+            .fetch_max(timestamp, Ordering::AcqRel);
     }
 
     pub fn retention_frontier(&self) -> Timestamp {
-        self.retention_frontier.load(Ordering::SeqCst)
+        self.retention_frontier.load(Ordering::Acquire)
     }
 
     pub fn clear(&self) {
         // Preserve write_ts so that subsequent writes and checkpoints
         // use timestamps >= the compact timestamp, ensuring persisted
         // data remains visible after reload.
-        self.read_ts.store(0, Ordering::SeqCst);
-        self.read_pending.store(0, Ordering::SeqCst);
-        self.write_pending.store(0, Ordering::SeqCst);
+        self.read_ts.store(0, Ordering::Release);
+        self.read_pending.store(0, Ordering::Relaxed);
+        self.write_pending.store(0, Ordering::Relaxed);
         self.write_states.lock().clear();
     }
 
     pub fn write_timestamp(&self) -> Timestamp {
-        self.write_ts.load(Ordering::SeqCst)
+        self.write_ts.load(Ordering::Acquire)
     }
 
     /// Allocate the next write timestamp.
@@ -191,7 +191,7 @@ impl VersionManager {
 
     pub fn try_next_write_timestamp(&self) -> VersionManagerResult<Timestamp> {
         let ts = self.reserve_timestamp()?;
-        self.write_pending.fetch_add(1, Ordering::SeqCst);
+        self.write_pending.fetch_add(1, Ordering::Relaxed);
         self.snapshot_tracker
             .add_snapshot(ts)
             .map_err(|_| VersionManagerError::SnapshotTrackingFailed)?;
@@ -202,14 +202,14 @@ impl VersionManager {
     }
 
     fn reserve_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        let mut current = self.write_ts.load(Ordering::SeqCst);
+        let mut current = self.write_ts.load(Ordering::Acquire);
         loop {
             let next = current
                 .checked_add(1)
                 .ok_or(VersionManagerError::TimestampExhausted)?;
             match self
                 .write_ts
-                .compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst)
+                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
             {
                 Ok(_) => return Ok(next),
                 Err(observed) => current = observed,
@@ -218,13 +218,13 @@ impl VersionManager {
     }
 
     pub fn read_timestamp(&self) -> Timestamp {
-        self.read_ts.load(Ordering::SeqCst)
+        self.read_ts.load(Ordering::Acquire)
     }
 
     pub fn acquire_read_timestamp(&self) -> VersionManagerResult<Timestamp> {
         let mut guard = self.read_lock.lock();
         loop {
-            let pr = self.read_pending.load(Ordering::SeqCst);
+            let pr = self.read_pending.load(Ordering::Relaxed);
             if pr >= 0 {
                 if pr >= self.config.max_concurrent_reads as i32 {
                     log::warn!(
@@ -236,12 +236,12 @@ impl VersionManager {
                     self.read_condvar.wait(&mut guard);
                     continue;
                 }
-                self.read_pending.fetch_add(1, Ordering::SeqCst);
-                let ts = self.read_ts.load(Ordering::SeqCst);
+                self.read_pending.fetch_add(1, Ordering::Relaxed);
+                let ts = self.read_ts.load(Ordering::Acquire);
                 drop(guard);
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to track read snapshot {}: {}", ts, e);
-                    self.read_pending.fetch_sub(1, Ordering::SeqCst);
+                    self.read_pending.fetch_sub(1, Ordering::Relaxed);
                     self.read_condvar.notify_all();
                     return Err(VersionManagerError::SnapshotTrackingFailed);
                 }
@@ -255,7 +255,7 @@ impl VersionManager {
         let start = Instant::now();
         let mut guard = self.read_lock.lock();
         loop {
-            let pr = self.read_pending.load(Ordering::SeqCst);
+            let pr = self.read_pending.load(Ordering::Relaxed);
             if pr >= 0 {
                 if pr >= self.config.max_concurrent_reads as i32 {
                     log::warn!(
@@ -274,12 +274,12 @@ impl VersionManager {
                     }
                     continue;
                 }
-                self.read_pending.fetch_add(1, Ordering::SeqCst);
-                let ts = self.read_ts.load(Ordering::SeqCst);
+                self.read_pending.fetch_add(1, Ordering::Relaxed);
+                let ts = self.read_ts.load(Ordering::Acquire);
                 drop(guard);
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to track read snapshot {}: {}", ts, e);
-                    self.read_pending.fetch_sub(1, Ordering::SeqCst);
+                    self.read_pending.fetch_sub(1, Ordering::Relaxed);
                     return None;
                 }
                 return Some(ts);
@@ -314,14 +314,14 @@ impl VersionManager {
             });
         }
         let guard = self.read_lock.lock();
-        let pending = self.read_pending.load(Ordering::SeqCst);
+        let pending = self.read_pending.load(Ordering::Relaxed);
         if pending < 0 || pending >= self.config.max_concurrent_reads as i32 {
             drop(guard);
             return Err(VersionManagerError::TooManyTransactions);
         }
-        self.read_pending.fetch_add(1, Ordering::SeqCst);
+        self.read_pending.fetch_add(1, Ordering::Relaxed);
         if self.snapshot_tracker.add_snapshot(timestamp).is_err() {
-            self.read_pending.fetch_sub(1, Ordering::SeqCst);
+            self.read_pending.fetch_sub(1, Ordering::Relaxed);
             self.read_condvar.notify_all();
             drop(guard);
             return Err(VersionManagerError::SnapshotTrackingFailed);
@@ -331,7 +331,7 @@ impl VersionManager {
     }
 
     pub fn release_read_timestamp(&self) {
-        let ts = self.read_ts.load(Ordering::SeqCst);
+        let ts = self.read_ts.load(Ordering::Acquire);
         self.release_read_timestamp_at(ts);
     }
 
@@ -340,7 +340,7 @@ impl VersionManager {
             log::error!("Failed to release snapshot {}: {}", ts, e);
             // Continue anyway - we still need to decrement read_pending
         }
-        self.read_pending.fetch_sub(1, Ordering::SeqCst);
+        self.read_pending.fetch_sub(1, Ordering::Relaxed);
         self.read_condvar.notify_all();
     }
 
@@ -354,7 +354,7 @@ impl VersionManager {
         self.write_states
             .lock()
             .insert(ts, (Instant::now(), WriteTimestampState::Pending));
-        self.write_pending.fetch_add(1, Ordering::SeqCst);
+        self.write_pending.fetch_add(1, Ordering::Relaxed);
         drop(_guard);
         Ok(ts)
     }
@@ -377,7 +377,7 @@ impl VersionManager {
             if *entry == WriteTimestampState::Pending {
                 *entry = state;
                 let _ = self.snapshot_tracker.release_snapshot(ts);
-                self.write_pending.fetch_sub(1, Ordering::SeqCst);
+                self.write_pending.fetch_sub(1, Ordering::Relaxed);
             }
         }
 
@@ -398,7 +398,7 @@ impl VersionManager {
         &self,
         states: &mut BTreeMap<Timestamp, (Instant, WriteTimestampState)>,
     ) {
-        let mut frontier = self.read_ts.load(Ordering::SeqCst);
+        let mut frontier = self.read_ts.load(Ordering::Acquire);
         loop {
             let next = frontier.saturating_add(1);
             match states.get(&next).map(|(_, state)| *state) {
@@ -409,7 +409,7 @@ impl VersionManager {
                 _ => break,
             }
         }
-        self.read_ts.store(frontier, Ordering::SeqCst);
+        self.read_ts.store(frontier, Ordering::Release);
     }
 
     /// Abort `Pending` write timestamps older than `write_reap_timeout`,
@@ -444,7 +444,7 @@ impl VersionManager {
                 if *entry == WriteTimestampState::Pending {
                     *entry = WriteTimestampState::Aborted;
                     let _ = self.snapshot_tracker.release_snapshot(ts);
-                    self.write_pending.fetch_sub(1, Ordering::SeqCst);
+                    self.write_pending.fetch_sub(1, Ordering::Relaxed);
                     reaped += 1;
                 }
             }
@@ -459,7 +459,7 @@ impl VersionManager {
     }
 
     pub fn pending_count(&self) -> i32 {
-        self.read_pending.load(Ordering::SeqCst) + self.write_pending.load(Ordering::SeqCst)
+        self.read_pending.load(Ordering::Relaxed) + self.write_pending.load(Ordering::Relaxed)
     }
 
     pub fn get_safe_gc_timestamp(&self) -> Timestamp {

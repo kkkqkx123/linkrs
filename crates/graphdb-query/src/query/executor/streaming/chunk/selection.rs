@@ -1,7 +1,7 @@
 //! Selection vectors, index-based take, and slice operations
 
-use crate::query::executor::streaming::chunk::core::DataChunk;
 use super::typed::gather_typed_column;
+use crate::query::executor::streaming::chunk::core::DataChunk;
 
 impl DataChunk {
     // ── Selection vectors ──

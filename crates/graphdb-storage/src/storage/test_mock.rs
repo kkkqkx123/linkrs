@@ -311,6 +311,8 @@ impl StorageOperationContextOps for MockStorage {
             mutation_recorder: None,
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }))
     }
 
@@ -529,7 +531,7 @@ impl StorageGcOps for MockStorage {
         false
     }
 
-    fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+    fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {
         None
     }
 

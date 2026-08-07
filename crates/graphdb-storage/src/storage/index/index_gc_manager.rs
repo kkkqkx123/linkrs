@@ -39,10 +39,10 @@
 //! ```
 
 use crate::core::types::Timestamp;
+use crate::storage::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use crate::transaction::VersionManager;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::storage::index::traits::IndexGcOps;
@@ -129,6 +129,7 @@ pub struct IndexGcManager {
     index_manager: IndexDataManagerImpl,
     version_manager: Arc<VersionManager>,
     config: IndexGcConfig,
+    pool: Arc<StorageThreadPool>,
     last_gc_ts: AtomicU64,
     running: Arc<AtomicBool>,
     stats: AtomicU64,
@@ -141,11 +142,13 @@ impl IndexGcManager {
         index_manager: IndexDataManagerImpl,
         version_manager: Arc<VersionManager>,
         config: IndexGcConfig,
+        pool: Arc<StorageThreadPool>,
     ) -> Self {
         Self {
             index_manager,
             version_manager,
             config,
+            pool,
             last_gc_ts: AtomicU64::new(0),
             running: Arc::new(AtomicBool::new(false)),
             stats: AtomicU64::new(0),
@@ -285,21 +288,20 @@ impl IndexGcManager {
         compacted
     }
 
-    /// Start background GC thread
+    /// Start the background GC task on the shared thread pool.
     ///
-    /// Returns a JoinHandle for the background thread.
-    /// The thread will run until `stop()` is called.
-    pub fn start_background_gc(&self) -> JoinHandle<()> {
-        let running = self.running.clone();
-        let config = self.config.clone();
+    /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
+    /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
+    pub fn start_background_gc(&self) -> BackgroundTaskHandle {
         let manager = self.clone();
+        let running = self.running.clone();
+        let interval = Duration::from_millis(self.config.interval_ms);
+        let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        running.store(true, Ordering::Release);
+        self.pool
+            .spawn_periodic(running, interval, min_interval, move || {
+                tracing::info!("Index GC background task started");
 
-        thread::spawn(move || {
-            tracing::info!("Index GC background thread started");
-
-            while running.load(Ordering::Acquire) {
                 let start = std::time::Instant::now();
 
                 if manager.needs_aggressive_gc() {
@@ -319,16 +321,8 @@ impl IndexGcManager {
 
                 manager.stats.fetch_add(1, Ordering::Release);
 
-                let elapsed = start.elapsed();
-                let sleep_duration = Duration::from_millis(config.interval_ms)
-                    .saturating_sub(elapsed)
-                    .max(Duration::from_millis(config.min_interval_between_gc_ms));
-
-                thread::sleep(sleep_duration);
-            }
-
-            tracing::info!("Index GC background thread stopped");
-        })
+                let _elapsed = start.elapsed();
+            })
     }
 
     /// Stop the background GC thread
@@ -348,6 +342,7 @@ impl Clone for IndexGcManager {
             index_manager: self.index_manager.clone(),
             version_manager: self.version_manager.clone(),
             config: self.config.clone(),
+            pool: self.pool.clone(),
             last_gc_ts: AtomicU64::new(self.last_gc_ts.load(Ordering::Acquire)),
             running: self.running.clone(),
             stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
@@ -361,6 +356,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::storage::index::*;
+    use crate::storage::thread_pool::StorageThreadPool;
     use crate::transaction::VersionManager;
 
     #[test]
@@ -386,8 +382,13 @@ mod tests {
     fn test_gc_manager_creation() {
         let version_manager = Arc::new(VersionManager::new());
         let index_manager = IndexDataManagerImpl::new();
-        let gc_manager =
-            IndexGcManager::new(index_manager, version_manager, IndexGcConfig::default());
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let gc_manager = IndexGcManager::new(
+            index_manager,
+            version_manager,
+            IndexGcConfig::default(),
+            pool,
+        );
 
         assert!(!gc_manager.is_running());
         assert_eq!(gc_manager.tombstone_count(), 0);
@@ -397,8 +398,13 @@ mod tests {
     fn test_gc_pass_empty() {
         let version_manager = Arc::new(VersionManager::new());
         let index_manager = IndexDataManagerImpl::new();
-        let gc_manager =
-            IndexGcManager::new(index_manager, version_manager, IndexGcConfig::default());
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let gc_manager = IndexGcManager::new(
+            index_manager,
+            version_manager,
+            IndexGcConfig::default(),
+            pool,
+        );
 
         let stats = gc_manager.run_gc_pass();
         assert!(stats.is_empty());

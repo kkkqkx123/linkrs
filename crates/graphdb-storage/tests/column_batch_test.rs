@@ -8,8 +8,8 @@ use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, StorageError, Value, Vertex};
 use graphdb_storage::storage::{
-    open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate,
-    StorageSchemaOps, StorageWriter, VertexColumnBatch,
+    open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate, StorageSchemaOps,
+    StorageWriter, VertexColumnBatch,
 };
 use parking_lot::RwLock;
 

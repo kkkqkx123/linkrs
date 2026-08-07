@@ -2,8 +2,8 @@
 
 use crate::core::DataSet;
 use crate::core::{
-    types::DataType,
     types::storage_ids::{EdgeId, VertexId},
+    types::DataType,
     value::{
         date_time::{DateTimeValue, DateValue, TimeValue},
         decimal128::Decimal128Value,

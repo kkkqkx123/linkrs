@@ -409,7 +409,11 @@ fn test_read_streaming_plan_cache_hit() {
         .execute_stream_query(query)
         .expect("first streaming read should succeed");
     let first_rows = first.collect().expect("collect first").rows;
-    assert_eq!(first_rows.len(), 1, "first streaming read should return one row");
+    assert_eq!(
+        first_rows.len(),
+        1,
+        "first streaming read should return one row"
+    );
 
     // Second identical streaming read must reuse the cached plan.
     let second = db

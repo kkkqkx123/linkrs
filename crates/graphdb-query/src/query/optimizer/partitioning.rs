@@ -164,7 +164,9 @@ impl PartitioningPlanner {
                         tag, desired
                     ),
                 },
-                Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
+                Err(error) => {
+                    Self::fallback(format!("invalid configured partition layout: {error}"))
+                }
             }
         } else if scans.is_empty() {
             self.decide_edge_scan(root, statistics, &range)
@@ -234,7 +236,9 @@ impl PartitioningPlanner {
         let desired = self.desired_partition_count(rows);
         let ranges = split_range(range, desired);
         let representative = left_tag.to_string();
-        let source = PartitionSource::VertexId { tag: representative };
+        let source = PartitionSource::VertexId {
+            tag: representative,
+        };
         let layout_version = self.layout_signature(&source);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => PartitioningDecision {
@@ -298,7 +302,9 @@ impl PartitioningPlanner {
             ));
         };
         let Some(tag) = scan.tag() else {
-            return Some(Self::fallback("anchor vertex scan has no tag statistics key"));
+            return Some(Self::fallback(
+                "anchor vertex scan has no tag statistics key",
+            ));
         };
         let rows = statistics.vertex_count(tag);
         if rows == 0 {
@@ -366,14 +372,14 @@ impl PartitioningPlanner {
         node: &PlanNodeEnum,
     ) -> Option<(&PlanNodeEnum, &PlanNodeEnum, &'static str)> {
         match node {
-            PlanNodeEnum::Union(union) => {
-                Some((union.input(), union.union_input(), "union"))
-            }
+            PlanNodeEnum::Union(union) => Some((union.input(), union.union_input(), "union")),
             PlanNodeEnum::Minus(minus) => Some((minus.input(), minus.minus_input(), "minus")),
             PlanNodeEnum::Intersect(intersect) => {
                 Some((intersect.input(), intersect.intersect_input(), "intersect"))
             }
-            PlanNodeEnum::CrossJoin(join) => Some((join.left_input(), join.right_input(), "cross join")),
+            PlanNodeEnum::CrossJoin(join) => {
+                Some((join.left_input(), join.right_input(), "cross join"))
+            }
             PlanNodeEnum::InnerJoin(join) => {
                 // E1b: allow equality join when the join key is a simple variable
                 // reference (i.e. the vertex-id partition key).  Complex join keys
@@ -405,19 +411,22 @@ impl PartitioningPlanner {
     ) -> bool {
         hash_keys.len() == 1
             && probe_keys.len() == 1
-            && hash_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
-                matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-            })
-            && probe_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
-                matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-            })
+            && hash_keys
+                .first()
+                .and_then(|k| k.expression())
+                .is_some_and(|m| {
+                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                })
+            && probe_keys
+                .first()
+                .and_then(|k| k.expression())
+                .is_some_and(|m| {
+                    matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
+                })
     }
 
     /// Walk a linear chain that must end in a tagged vertex scan.
-    fn collect_vertex_chain<'a>(
-        node: &'a PlanNodeEnum,
-        chain: &mut Vec<&'a PlanNodeEnum>,
-    ) -> bool {
+    fn collect_vertex_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) -> bool {
         chain.push(node);
         match node {
             PlanNodeEnum::ScanVertices(_) => true,
@@ -513,10 +522,7 @@ impl PartitioningPlanner {
     /// Walk a linear chain from `node` down to its terminal scan. Supports the
     /// same unary operators as the physical partition builder; anything else
     /// (joins, Expand, vertex lookups, set ops) returns `false`.
-    fn collect_chain<'a>(
-        node: &'a PlanNodeEnum,
-        chain: &mut Vec<&'a PlanNodeEnum>,
-    ) -> bool {
+    fn collect_chain<'a>(node: &'a PlanNodeEnum, chain: &mut Vec<&'a PlanNodeEnum>) -> bool {
         chain.push(node);
         match node {
             PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_) => true,
@@ -697,9 +703,21 @@ mod tests {
             .partition_spec
             .map(|spec| spec.layout_version().unwrap());
         let base = base_sig.expect("layout signature");
-        assert_eq!(base_again.expect("layout signature"), base, "signature is deterministic");
-        assert_ne!(base, reranged_sig.expect("layout signature"), "vertex-id range change must alter the signature");
-        assert_ne!(base, resized_sig.expect("layout signature"), "worker count change must alter the signature");
+        assert_eq!(
+            base_again.expect("layout signature"),
+            base,
+            "signature is deterministic"
+        );
+        assert_ne!(
+            base,
+            reranged_sig.expect("layout signature"),
+            "vertex-id range change must alter the signature"
+        );
+        assert_ne!(
+            base,
+            resized_sig.expect("layout signature"),
+            "worker count change must alter the signature"
+        );
     }
 
     #[test]
@@ -968,8 +986,8 @@ mod tests {
 
     #[test]
     fn edge_scan_selects_partition_layout() {
-        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
         use crate::query::optimizer::stats::EdgeTypeStatistics;
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
 
         let stats = StatisticsManager::new();
         let mut edge = EdgeTypeStatistics::new("follows".to_string());
@@ -993,10 +1011,10 @@ mod tests {
     #[test]
     fn edge_scan_with_traversal_above_rejected() {
         use crate::core::EdgeDirection;
+        use crate::query::optimizer::stats::EdgeTypeStatistics;
         use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
         use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandNode;
-        use crate::query::optimizer::stats::EdgeTypeStatistics;
 
         let stats = StatisticsManager::new();
         let mut edge = EdgeTypeStatistics::new("follows".to_string());

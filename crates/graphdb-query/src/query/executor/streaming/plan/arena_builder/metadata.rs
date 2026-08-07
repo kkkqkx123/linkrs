@@ -154,9 +154,7 @@ pub(super) fn populate_input_contracts(
                         .first()
                         .and_then(|expr| {
                             if let crate::core::types::expr::Expression::Variable(name) = expr {
-                                inputs.first().and_then(|input| {
-                                    input.layout.slot_id(name)
-                                })
+                                inputs.first().and_then(|input| input.layout.slot_id(name))
                             } else {
                                 None
                             }

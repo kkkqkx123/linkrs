@@ -119,12 +119,7 @@ fn edge_src_ranges_are_complete_and_disjoint() {
     let p2 = drain(&storage, Some(1000..1500));
     let p3 = drain(&storage, Some(1500..2000));
 
-    let mut combined: Vec<Edge> = p0
-        .into_iter()
-        .chain(p1)
-        .chain(p2)
-        .chain(p3)
-        .collect();
+    let mut combined: Vec<Edge> = p0.into_iter().chain(p1).chain(p2).chain(p3).collect();
     combined.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
     let mut expected = total;
     expected.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));

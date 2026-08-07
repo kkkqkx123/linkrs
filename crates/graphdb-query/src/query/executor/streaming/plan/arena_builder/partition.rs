@@ -24,8 +24,8 @@ use super::assembler::{
 use super::specs::{
     build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec,
     build_hash_inner_join_spec, build_inner_join_spec, build_limit_spec, build_project_spec,
-    build_sort_spec, build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
-    is_count_only_aggregate, COUNT_ONLY_COLUMN,
+    build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
+    count_only_expand_below, is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
@@ -148,14 +148,7 @@ fn build_chain_group(
     //    range for edge scans), followed by the local Filter/Project pipeline
     //    and, for split aggregates, the PartialAggregate phase.
     let partition_fids = build_partition_local_fragments(
-        operators,
-        fragments,
-        op_alloc,
-        frag_alloc,
-        chain,
-        scan,
-        spec,
-        exec_ctx,
+        operators, fragments, op_alloc, frag_alloc, chain, scan, spec, exec_ctx,
     )?;
 
     // 2. Exchange fragment: Concatenate over all partition fragments.
@@ -188,15 +181,7 @@ fn build_chain_group(
                 continue;
             }
         }
-        child_fid = push_global_op(
-            operators,
-            fragments,
-            op_alloc,
-            frag_alloc,
-            child_fid,
-            op,
-        )?
-        .0;
+        child_fid = push_global_op(operators, fragments, op_alloc, frag_alloc, child_fid, op)?.0;
     }
 
     let root_operator = fragments
@@ -281,7 +266,8 @@ fn build_partition_local_fragments(
                     // A1.4: drive count_only from the node annotation so only
                     // the chain-tail expand skips row materialization; middle
                     // hops keep emitting raw destination ids for the next hop.
-                    let spec = build_expand_all_spec_with_flags(expand, exec_ctx, expand.count_only())?;
+                    let spec =
+                        build_expand_all_spec_with_flags(expand, exec_ctx, expand.count_only())?;
                     fid = ArenaPlanAssembler::push_graph_op(
                         operators,
                         fragments,
@@ -341,18 +327,30 @@ fn split_independent_branches(
             };
             Some((union.input(), union.union_input(), op))
         }
-        PlanNodeEnum::Minus(minus) => Some((minus.input(), minus.minus_input(), IndependentBranchOp::Minus)),
-        PlanNodeEnum::Intersect(intersect) => {
-            Some((intersect.input(), intersect.intersect_input(), IndependentBranchOp::Intersect))
-        }
-        PlanNodeEnum::CrossJoin(join) => {
-            Some((join.left_input(), join.right_input(), IndependentBranchOp::CrossJoin))
-        }
+        PlanNodeEnum::Minus(minus) => Some((
+            minus.input(),
+            minus.minus_input(),
+            IndependentBranchOp::Minus,
+        )),
+        PlanNodeEnum::Intersect(intersect) => Some((
+            intersect.input(),
+            intersect.intersect_input(),
+            IndependentBranchOp::Intersect,
+        )),
+        PlanNodeEnum::CrossJoin(join) => Some((
+            join.left_input(),
+            join.right_input(),
+            IndependentBranchOp::CrossJoin,
+        )),
         PlanNodeEnum::InnerJoin(join) => {
             // E1b: allow equality join when the join key is a simple variable
             // reference (i.e. the vertex-id partition key).
             if equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
-                Some((join.left_input(), join.right_input(), IndependentBranchOp::InnerJoin))
+                Some((
+                    join.left_input(),
+                    join.right_input(),
+                    IndependentBranchOp::InnerJoin,
+                ))
             } else {
                 None
             }
@@ -361,7 +359,11 @@ fn split_independent_branches(
             // E1b: real keyed-join queries lower to a HashInnerJoin node; it is
             // partitioned the same way as the plain InnerJoin variant.
             if equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
-                Some((join.left_input(), join.right_input(), IndependentBranchOp::InnerJoin))
+                Some((
+                    join.left_input(),
+                    join.right_input(),
+                    IndependentBranchOp::InnerJoin,
+                ))
             } else {
                 None
             }
@@ -378,12 +380,14 @@ fn equality_join_keys_are_simple(
 ) -> bool {
     hash_keys.len() == 1
         && probe_keys.len() == 1
-        && hash_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
-            matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-        })
-        && probe_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
-            matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
-        })
+        && hash_keys
+            .first()
+            .and_then(|k| k.expression())
+            .is_some_and(|m| matches!(m.inner(), crate::core::types::expr::Expression::Variable(_)))
+        && probe_keys
+            .first()
+            .and_then(|k| k.expression())
+            .is_some_and(|m| matches!(m.inner(), crate::core::types::expr::Expression::Variable(_)))
 }
 
 /// Whether a join key references the vertex-id partition key (`vid`), the only
@@ -515,21 +519,21 @@ fn build_partitioned_multi(
     )?;
 
     let binary_spec: BinaryOperatorSpec = match op {
-            IndependentBranchOp::Union => SetSpec::Union.into(),
-            IndependentBranchOp::UnionAll => SetSpec::UnionAll.into(),
-            IndependentBranchOp::Minus => SetSpec::Minus.into(),
-            IndependentBranchOp::Intersect => SetSpec::Intersect.into(),
-            IndependentBranchOp::CrossJoin => JoinSpec::CrossJoin.into(),
-            IndependentBranchOp::InnerJoin => join_spec
-                .ok_or_else(|| {
-                    PlanBuildError::unsupported(
-                        "PhysicalPlan",
-                        node.id(),
-                        "partitioned equality join is missing its join condition",
-                    )
-                })?
-                .into(),
-        };
+        IndependentBranchOp::Union => SetSpec::Union.into(),
+        IndependentBranchOp::UnionAll => SetSpec::UnionAll.into(),
+        IndependentBranchOp::Minus => SetSpec::Minus.into(),
+        IndependentBranchOp::Intersect => SetSpec::Intersect.into(),
+        IndependentBranchOp::CrossJoin => JoinSpec::CrossJoin.into(),
+        IndependentBranchOp::InnerJoin => join_spec
+            .ok_or_else(|| {
+                PlanBuildError::unsupported(
+                    "PhysicalPlan",
+                    node.id(),
+                    "partitioned equality join is missing its join condition",
+                )
+            })?
+            .into(),
+    };
     let (root_fid, root_op) = ArenaPlanAssembler::push_binary_op(
         &mut FragmentCtx {
             operators: &mut operators,
@@ -656,10 +660,7 @@ fn build_hash_exchange_join(
 ) -> PartitionBuildResult {
     // Guards: join keys must be simple variables, and both branches must be
     // partition-local scan chains (no global operators or split aggregates).
-    if !equality_join_keys_are_simple(
-        hash_keys_of(node),
-        probe_keys_of(node),
-    ) {
+    if !equality_join_keys_are_simple(hash_keys_of(node), probe_keys_of(node)) {
         return Ok(None);
     }
     if equality_join_keys_reference_vid(node) {
@@ -940,9 +941,7 @@ fn decompose(node: &PlanNodeEnum) -> Option<PartitionedChain<'_>> {
         let op = chain[i - 1];
         if matches!(
             op,
-            PlanNodeEnum::Filter(_)
-                | PlanNodeEnum::Project(_)
-                | PlanNodeEnum::ExpandAll(_)
+            PlanNodeEnum::Filter(_) | PlanNodeEnum::Project(_) | PlanNodeEnum::ExpandAll(_)
         ) {
             local.push(op);
             i -= 1;
@@ -1011,8 +1010,8 @@ fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
         .iter()
         .map(|key| Expression::Variable(key.clone()))
         .collect();
-    let count_only = is_count_only_aggregate(node)
-        && count_only_expand_below(node.input()).is_some();
+    let count_only =
+        is_count_only_aggregate(node) && count_only_expand_below(node.input()).is_some();
     let aggregate_functions: Vec<AggregateFunction> = node
         .aggregation_functions()
         .iter()
@@ -1216,10 +1215,7 @@ mod tests {
 
     /// Build a keyed equality join plan node with the given hash/probe key
     /// variable names over two tagged scans.
-    fn keyed_join(
-        hash_key_name: &str,
-        probe_key_name: &str,
-    ) -> PlanNodeEnum {
+    fn keyed_join(hash_key_name: &str, probe_key_name: &str) -> PlanNodeEnum {
         use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());

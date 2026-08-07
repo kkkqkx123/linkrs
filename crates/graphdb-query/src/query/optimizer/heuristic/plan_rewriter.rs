@@ -45,7 +45,8 @@ pub trait NodeRewriter {
 ///
 /// Use static distribution of enumeration-based storage rules to avoid the overhead associated with dynamic distribution.
 #[derive(Debug)]
-pub struct PlanRewriter {    /// List of registered rules (static distribution)
+pub struct PlanRewriter {
+    /// List of registered rules (static distribution)
     rules: Vec<RewriteRuleEnum>,
     /// The maximum number of iterations, to prevent an infinite loop.
     /// Uses `AtomicUsize` for interior mutability so `optimize` can sync the

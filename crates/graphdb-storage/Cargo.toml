@@ -28,7 +28,6 @@ bumpalo.workspace = true
 postcard.workspace = true
 bitvec.workspace = true
 dec.workspace = true
-crossbeam-utils.workspace = true
 rayon.workspace = true
 rand.workspace = true
 tracing.workspace = true

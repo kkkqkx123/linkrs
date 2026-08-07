@@ -793,7 +793,7 @@ impl Default for WalConfig {
             max_parallel_recovery_threads: 4,
             circular_buffer: false,
             circular_buffer_size: 16 * 1024 * 1024,
-            group_commit_enabled: false,
+            group_commit_enabled: true,
         }
     }
 }

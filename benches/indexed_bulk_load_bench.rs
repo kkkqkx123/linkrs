@@ -1,6 +1,4 @@
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use graphdb_storage::core::types::{
     Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, TagInfo, VertexId,
 };
@@ -42,7 +40,11 @@ fn indexed_storage() -> GraphStorage {
             name: format!("idx_node_{field_name}"),
             space_id: 1,
             schema_name: "Node".to_string(),
-            fields: vec![IndexField::new(field_name.to_string(), Value::string(""), false)],
+            fields: vec![IndexField::new(
+                field_name.to_string(),
+                Value::string(""),
+                false,
+            )],
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,
@@ -64,7 +66,10 @@ fn build_vertex(id: i64) -> Vertex {
             [
                 ("name".to_string(), Value::string(format!("node_{id}"))),
                 ("age".to_string(), Value::Int(id as i32)),
-                ("city".to_string(), Value::string(format!("city_{}", id % 1000))),
+                (
+                    "city".to_string(),
+                    Value::string(format!("city_{}", id % 1000)),
+                ),
             ]
             .into_iter()
             .collect(),

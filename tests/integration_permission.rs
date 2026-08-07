@@ -719,7 +719,7 @@ fn test_password_authenticator_login_attempts_limit() {
     assert!(result1
         .unwrap_err()
         .to_string()
-        .contains("还剩 2 次尝试机会"));
+        .contains("2 attempts remaining"));
 
     // Second failure
     let result2 = auth.authenticate("user", "wrong");
@@ -727,7 +727,7 @@ fn test_password_authenticator_login_attempts_limit() {
     assert!(result2
         .unwrap_err()
         .to_string()
-        .contains("还剩 1 次尝试机会"));
+        .contains("1 attempts remaining"));
 
     // Third failure
     let result3 = auth.authenticate("user", "wrong");
@@ -735,7 +735,7 @@ fn test_password_authenticator_login_attempts_limit() {
     assert!(result3
         .unwrap_err()
         .to_string()
-        .contains("已达到最大尝试次数"));
+        .contains("Maximum attempts exceeded"));
 }
 
 // ==================== ClientSession 角色管理测试 ====================

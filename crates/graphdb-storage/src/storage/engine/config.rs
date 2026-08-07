@@ -11,7 +11,15 @@ use crate::storage::compression::CompressionType;
 /// Default number of vertex table shards (hash partitions). Higher shard
 /// counts increase write concurrency but widen the internal ID space under
 /// imbalanced hash distribution (max ID <= num_shards * live_vertices).
-pub const DEFAULT_VERTEX_TABLE_SHARDS: usize = 8;
+/// The default adapts to the available CPU parallelism, clamped within
+/// [1, 16] and rounded up to a power of two (required by shard-ID encoding).
+pub fn default_vertex_table_shards() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 16)
+        .next_power_of_two()
+}
 
 /// Configuration for flush operations
 #[derive(Debug, Clone)]
@@ -528,7 +536,7 @@ impl Default for PropertyGraphConfig {
             freeze: FreezeConfig::default(),
             merge_config: MergeConfig::default(),
             auto_compact: AutoCompactConfig::default(),
-            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
         }
     }
@@ -556,7 +564,7 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             auto_compact: AutoCompactConfig::default(),
-            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
         }
     }
@@ -580,7 +588,7 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             auto_compact: AutoCompactConfig::default(),
-            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
         }
     }
@@ -608,7 +616,7 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             auto_compact: AutoCompactConfig::default(),
-            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
         }
     }
@@ -648,7 +656,7 @@ impl PropertyGraphConfig {
                 ..Default::default()
             },
             auto_compact: AutoCompactConfig::default(),
-            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
+            vertex_table_shards: default_vertex_table_shards(),
             cold_tier: ColdTierConfig::default(),
         }
     }

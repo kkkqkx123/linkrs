@@ -249,7 +249,7 @@ impl SnapshotManager {
             let index: SnapshotMetadataIndex = serde_json::from_str(&content).map_err(|e| {
                 StorageError::deserialize_error(format!("Invalid metadata index: {}", e))
             })?;
-            if index.version != 0 && index.version != SNAPSHOT_FORMAT_VERSION {
+            if index.version != SNAPSHOT_FORMAT_VERSION {
                 return Err(StorageError::deserialize_error(format!(
                     "Unsupported snapshot metadata version {}",
                     index.version

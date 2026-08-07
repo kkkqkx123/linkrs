@@ -863,3 +863,101 @@ fn test_vertex_mvcc_table_ops() {
     let gc_count = table.gc(200).unwrap();
     assert_eq!(gc_count, 0);
 }
+
+#[test]
+fn test_repeatable_read_property_updates() {
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+
+    table
+        .insert(
+            "v1",
+            &[
+                ("name".to_string(), Value::string("Alice")),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
+        .unwrap();
+
+    // T1 opens a snapshot at ts=100.
+    let snap = table.register_snapshot(100).unwrap();
+
+    // T2 updates the property at a later timestamp.
+    table
+        .update_property(0, "age", &Value::Int(31), 200)
+        .unwrap();
+    table
+        .update_property(0, "name", &Value::string("Alice-renamed"), 200)
+        .unwrap();
+
+    // T1 re-reads at its snapshot timestamp: it must still see the old values
+    // (RepeatableRead), not the values written by T2.
+    let t1_read = table.get_by_internal_id(0, 100).unwrap();
+    let props: std::collections::HashMap<String, Value> = t1_read.properties.into_iter().collect();
+    assert_eq!(props.get("age"), Some(&Value::Int(30)));
+    assert_eq!(props.get("name"), Some(&Value::string("Alice")));
+
+    // A newer reader at ts=200 sees the new values.
+    let t2_read = table.get_by_internal_id(0, 200).unwrap();
+    let props: std::collections::HashMap<String, Value> = t2_read.properties.into_iter().collect();
+    assert_eq!(props.get("age"), Some(&Value::Int(31)));
+    assert_eq!(props.get("name"), Some(&Value::string("Alice-renamed")));
+
+    table.unregister_snapshot(snap).unwrap();
+}
+
+#[test]
+fn test_property_version_gc_does_not_break_visible_snapshots() {
+    let schema = create_test_schema();
+    let mut table = new_table(0, "person", schema);
+
+    table
+        .insert(
+            "v1",
+            &[
+                ("name".to_string(), Value::string("Alice")),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
+        .unwrap();
+    table
+        .update_property(0, "age", &Value::Int(31), 200)
+        .unwrap();
+    table
+        .update_property(0, "age", &Value::Int(32), 300)
+        .unwrap();
+
+    // Active snapshot at 200 keeps versions [.., 300) alive.
+    let snap = table.register_snapshot(200).unwrap();
+    let removed = table.gc(150).unwrap();
+    // Version chain entries with end_ts <= 150 are reclaimed; the entries
+    // covering ts=200.. must survive.
+    assert_eq!(
+        removed, 0,
+        "no versions may be reclaimed while a snapshot is active below them"
+    );
+    let props_at_200: std::collections::HashMap<String, Value> = table
+        .get_by_internal_id(0, 200)
+        .unwrap()
+        .properties
+        .into_iter()
+        .collect();
+    assert_eq!(props_at_200.get("age"), Some(&Value::Int(31)));
+    table.unregister_snapshot(snap).unwrap();
+
+    // With no active snapshots, gc at 250 reclaims everything older.
+    let removed = table.gc(250).unwrap();
+    assert!(
+        removed >= 1,
+        "old versions should be reclaimed after snapshots drop"
+    );
+    let props_at_300: std::collections::HashMap<String, Value> = table
+        .get_by_internal_id(0, 300)
+        .unwrap()
+        .properties
+        .into_iter()
+        .collect();
+    assert_eq!(props_at_300.get("age"), Some(&Value::Int(32)));
+}

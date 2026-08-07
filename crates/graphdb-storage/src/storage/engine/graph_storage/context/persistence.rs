@@ -2,6 +2,7 @@ use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::LabelId;
 use crate::core::StorageResult;
 use crate::storage::engine::data_store::EdgeTableKey;
+use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -59,43 +60,52 @@ impl GraphStorageContext {
         // locks outside the catalog lock. Previously the whole flush (disk IO,
         // compression, serialization) ran inside the catalog WRITE lock,
         // freezing every transaction begin and DDL for the entire database.
-        let vertex_tables: Vec<(LabelId, Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>)> =
-            self.persistent
-                .data_store
-                .with_vertex_tables(|tables| {
-                    tables
-                        .iter()
-                        .map(|(label_id, table)| (*label_id, table.clone()))
-                        .collect()
-                });
-        for (label_id, table) in vertex_tables {
-            let table_dir = vertex_dir.join(format!("label_{}", label_id));
-            table.flush(&table_dir, compression)?;
-        }
+        let vertex_tables: Vec<(
+            LabelId,
+            Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
+        )> = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .iter()
+                .map(|(label_id, table)| (*label_id, table.clone()))
+                .collect()
+        });
+        self.runtime.thread_pool.install(|| -> StorageResult<()> {
+            vertex_tables.par_iter().try_for_each(|(label_id, table)| {
+                let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                table.flush(&table_dir, compression)
+            })?;
+            Ok(())
+        })?;
 
         let edge_dir = data_dir.join("edges");
         fs::create_dir_all(&edge_dir)?;
 
         {
             let ts = self.get_read_timestamp();
-            let edge_tables: Vec<(EdgeTableKey, Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>)> =
-                self.persistent
-                    .data_store
-                    .with_edge_tables(|tables| {
-                        tables
-                            .iter()
-                            .map(|(key, arc)| (*key, arc.clone()))
-                            .collect()
-                    });
-            for (key, edge_table) in edge_tables {
-                let table_dir = edge_dir.join(format!(
-                    "{}_{}_{}",
-                    key.src_label, key.dst_label, key.edge_label
-                ));
-                let mut table = edge_table.write();
-                table.maybe_compact_for_flush(ts, 2.0);
-                table.flush(&table_dir, compression)?;
-            }
+            let edge_tables: Vec<(
+                EdgeTableKey,
+                Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>,
+            )> = self.persistent.data_store.with_edge_tables(|tables| {
+                tables
+                    .iter()
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+            self.runtime.thread_pool.install(|| -> StorageResult<()> {
+                edge_tables
+                    .par_iter()
+                    .try_for_each(|(key, edge_table)| -> StorageResult<()> {
+                        let table_dir = edge_dir.join(format!(
+                            "{}_{}_{}",
+                            key.src_label, key.dst_label, key.edge_label
+                        ));
+                        let mut table = edge_table.write();
+                        table.maybe_compact_for_flush(ts, 2.0);
+                        table.flush(&table_dir, compression)?;
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
         }
 
         let index_dir = data_dir.join("indexes");

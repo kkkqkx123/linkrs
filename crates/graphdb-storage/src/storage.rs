@@ -20,6 +20,7 @@ pub(crate) mod macros;
 pub(crate) mod mvcc;
 pub(crate) mod naming;
 pub(crate) mod schema;
+pub(crate) mod thread_pool;
 
 mod batch_ops;
 mod metrics;

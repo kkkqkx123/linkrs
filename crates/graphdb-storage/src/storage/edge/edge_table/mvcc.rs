@@ -197,14 +197,23 @@ impl MVCCManager {
     ///
     /// This increments the reference count for the snapshot timestamp.
     /// Must be called when a new snapshot is created.
+    /// Uses incremental min maintenance to avoid O(n) scans.
     pub fn register_active_snapshot(&mut self, ts: Timestamp) {
         *self.active_snapshots.entry(ts).or_insert(0) += 1;
+        // Incremental min maintenance: a new snapshot can only lower the
+        // minimum, so compare against the current value instead of rescanning
+        // the whole map.
+        if ts < self.min_active_snapshot_ts {
+            self.min_active_snapshot_ts = ts;
+        }
     }
 
     /// Unregister an active snapshot at the given timestamp.
     ///
     /// This decrements the reference count. When count reaches 0,
     /// the timestamp is removed and tombstone GC is automatically triggered.
+    /// Uses incremental min maintenance: only rescans when the removed
+    /// timestamp was the current minimum.
     pub fn unregister_active_snapshot(&mut self, ts: Timestamp) -> usize {
         let mut should_gc = false;
         let new_count = if let Some(count) = self.active_snapshots.get_mut(&ts) {
@@ -223,13 +232,17 @@ impl MVCCManager {
         };
 
         if should_gc {
-            let new_min_ts = self
-                .active_snapshots
-                .keys()
-                .copied()
-                .min()
-                .unwrap_or(Timestamp::MAX);
-            self.gc_tombstones_batch(new_min_ts, DEFAULT_TOMBSTONE_GC_BATCH);
+            // Only rescan when the removed timestamp was the current minimum;
+            // otherwise the min is unchanged.
+            if ts == self.min_active_snapshot_ts {
+                self.min_active_snapshot_ts = self
+                    .active_snapshots
+                    .keys()
+                    .copied()
+                    .min()
+                    .unwrap_or(Timestamp::MAX);
+            }
+            self.gc_tombstones_batch(self.min_active_snapshot_ts, DEFAULT_TOMBSTONE_GC_BATCH);
         }
 
         new_count
@@ -269,12 +282,9 @@ impl MVCCManager {
     ///
     /// This is the earliest timestamp at which any snapshot is currently active.
     /// All tombstones with delete_ts < this value can be safely garbage collected.
+    /// Uses the cached value for O(1) access.
     pub fn get_min_active_snapshot_ts(&self) -> Timestamp {
-        self.active_snapshots
-            .keys()
-            .copied()
-            .min()
-            .unwrap_or(Timestamp::MAX)
+        self.min_active_snapshot_ts
     }
 
     /// Get number of active snapshots (for testing and debugging)

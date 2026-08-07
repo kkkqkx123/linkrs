@@ -205,66 +205,58 @@ fn compare_typed_batches(
 ) -> Option<TypedBatch> {
     use BinaryOperator::*;
     let batch = match (left, right) {
-        (TypedBatch::I64(l), TypedBatch::I64(r)) => {
-            TypedBatch::Bool(match op {
-                Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
-                NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
-                LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
-                LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
-                GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
-                GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
-                _ => return None,
-            })
-        }
-        (TypedBatch::F64(l), TypedBatch::F64(r)) => {
-            TypedBatch::Bool(match op {
-                Equal => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Equal)
-                    .collect(),
-                NotEqual => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Equal)
-                    .collect(),
-                LessThan => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Less)
-                    .collect(),
-                LessThanOrEqual => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Greater)
-                    .collect(),
-                GreaterThan => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Greater)
-                    .collect(),
-                GreaterThanOrEqual => l
-                    .iter()
-                    .zip(r)
-                    .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Less)
-                    .collect(),
-                _ => return None,
-            })
-        }
-        (TypedBatch::I32(l), TypedBatch::I32(r)) => {
-            TypedBatch::Bool(match op {
-                Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
-                NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
-                LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
-                LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
-                GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
-                GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
-                _ => return None,
-            })
-        }
-        (TypedBatch::Bool(l), TypedBatch::Bool(r))
-            if matches!(op, Equal | NotEqual) =>
-        {
+        (TypedBatch::I64(l), TypedBatch::I64(r)) => TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
+            LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        }),
+        (TypedBatch::F64(l), TypedBatch::F64(r)) => TypedBatch::Bool(match op {
+            Equal => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Equal)
+                .collect(),
+            NotEqual => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Equal)
+                .collect(),
+            LessThan => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Less)
+                .collect(),
+            LessThanOrEqual => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Greater)
+                .collect(),
+            GreaterThan => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) == Ordering::Greater)
+                .collect(),
+            GreaterThanOrEqual => l
+                .iter()
+                .zip(r)
+                .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Less)
+                .collect(),
+            _ => return None,
+        }),
+        (TypedBatch::I32(l), TypedBatch::I32(r)) => TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
+            LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        }),
+        (TypedBatch::Bool(l), TypedBatch::Bool(r)) if matches!(op, Equal | NotEqual) => {
             TypedBatch::Bool(match op {
                 Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
                 NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),

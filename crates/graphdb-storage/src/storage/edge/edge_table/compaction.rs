@@ -178,6 +178,12 @@ impl TimeTravelEdgeStore {
                 // No compaction needed, but could record stats if needed
             }
         }
+
+        // Reclaim before-image version chains that predate the oldest active
+        // snapshot (part of the Edge version-chain lifecycle; snapshot reads
+        // at or after `min_active_snapshot_ts` remain consistent).
+        self.properties
+            .gc_versions(self.mvcc.get_min_active_snapshot_ts());
     }
 
     /// Get deletion statistics for all frozen segments.

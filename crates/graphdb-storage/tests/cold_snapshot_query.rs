@@ -236,14 +236,20 @@ fn cold_snapshot_batch_accessors_match_get_node_edges() {
         .collect();
     assert_eq!(got, want, "cold + hot neighbor batch mismatch");
 
-    let degrees = storage.out_degree_batch("test_space", &seeds, direction, &[]).unwrap();
+    let degrees = storage
+        .out_degree_batch("test_space", &seeds, direction, &[])
+        .unwrap();
     let want_degrees: Vec<usize> = seeds
         .iter()
-        .map(|s| storage.get_node_edges("test_space", s, direction).unwrap().len())
+        .map(|s| {
+            storage
+                .get_node_edges("test_space", s, direction)
+                .unwrap()
+                .len()
+        })
         .collect();
     assert_eq!(degrees, want_degrees, "cold + hot degree batch mismatch");
 }
-
 
 #[test]
 fn cold_snapshot_scan_edges_by_type() {

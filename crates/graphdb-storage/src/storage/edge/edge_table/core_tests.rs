@@ -109,6 +109,61 @@ fn test_update_edge_property() {
     assert_eq!(edge.properties.len(), 1);
 }
 
+/// RepeatableRead over edge properties: an in-place property update at a
+/// later timestamp must not leak into snapshot reads before it.
+#[test]
+fn test_update_edge_property_time_travel() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+        .unwrap();
+
+    // Update at a strictly later timestamp to produce a real before-image.
+    assert!(table
+        .update_edge_property(0, 1, 0, "weight", &Value::Double(2.0), 200)
+        .unwrap());
+
+    // Snapshot read before the update sees the old value.
+    let old = table.get_edge(0, 1, 0, 150).unwrap();
+    let old_weight = old
+        .properties
+        .iter()
+        .find(|(n, _)| n == "weight")
+        .map(|(_, v)| v.clone());
+    assert_eq!(old_weight, Some(Value::Double(1.0)));
+
+    // Read at / after the update sees the new value.
+    let new_at = table.get_edge(0, 1, 0, 200).unwrap();
+    let new_at_weight = new_at
+        .properties
+        .iter()
+        .find(|(n, _)| n == "weight")
+        .map(|(_, v)| v.clone());
+    assert_eq!(new_at_weight, Some(Value::Double(2.0)));
+
+    let new_now = table.get_edge(0, 1, 0, 300).unwrap();
+    let new_now_weight = new_now
+        .properties
+        .iter()
+        .find(|(n, _)| n == "weight")
+        .map(|(_, v)| v.clone());
+    assert_eq!(new_now_weight, Some(Value::Double(2.0)));
+
+    // out_edges at the snapshot timestamp is also version-consistent.
+    let out_old = table.out_edges(0, 150);
+    assert_eq!(out_old.len(), 1);
+    assert_eq!(
+        out_old[0]
+            .properties
+            .iter()
+            .find(|(n, _)| n == "weight")
+            .map(|(_, v)| v.clone()),
+        Some(Value::Double(1.0))
+    );
+}
+
 #[test]
 fn test_self_loop_edge() {
     let schema = create_test_schema();

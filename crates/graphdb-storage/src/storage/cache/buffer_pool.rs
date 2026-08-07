@@ -1,14 +1,18 @@
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory};
 use parking_lot::Mutex;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::error::Error;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type LoaderFn<K, T> = Arc<dyn Fn(K) -> Option<(T, usize)> + Send + Sync>;
 type WriterFn<K, T> = Arc<dyn Fn(K, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
+/// Pending dirty entries collected under a shard lock and written back after
+/// the lock is released.
+type WritebackList<K, T> = Vec<(K, Arc<CachedItem<T>>)>;
 
 #[derive(Clone)]
 pub(crate) struct CachedItem<T: Clone + Send + Sync> {
@@ -46,6 +50,18 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
     }
 }
 
+/// Number of shard maps, rounded up to a power of two (required by the
+/// shard-selection mask). Adapted to CPU parallelism and bounded.
+const MAX_POOL_SHARDS: usize = 16;
+
+fn default_pool_shards() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_POOL_SHARDS)
+        .next_power_of_two()
+}
+
 #[derive(Clone)]
 pub(crate) struct BufferPool<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> {
     inner: Arc<BufferPoolInner<K, T>>,
@@ -53,26 +69,26 @@ pub(crate) struct BufferPool<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send
 
 struct BufferPoolInner<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> {
     capacity: AtomicU64,
-    items: Mutex<HashMap<K, CachedItem<T>>>,
-    clock_hand: Mutex<usize>,
-    cached_ids: Mutex<Vec<K>>,
+    shards: Vec<Mutex<HashMap<K, Arc<CachedItem<T>>>>>,
     loader: Mutex<Option<LoaderFn<K, T>>>,
     writer: Mutex<Option<WriterFn<K, T>>>,
     memory_accounting: Mutex<Option<Arc<MemoryAccounting>>>,
     /// Total weighted size of the cached items. Maintained incrementally so
-    /// `current_usage` is O(1) instead of scanning the whole map on every
-    /// insert (which made batch inserts quadratic in cache size).
+    /// `current_usage` is O(1) instead of scanning all shards on every insert.
     usage: AtomicU64,
 }
 
 impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T> {
     pub(crate) fn new(capacity_bytes: u64) -> Self {
+        let num_shards = default_pool_shards();
+        let mut shards = Vec::with_capacity(num_shards);
+        for _ in 0..num_shards {
+            shards.push(Mutex::new(HashMap::new()));
+        }
         Self {
             inner: Arc::new(BufferPoolInner {
                 capacity: AtomicU64::new(capacity_bytes),
-                items: Mutex::new(HashMap::new()),
-                clock_hand: Mutex::new(0),
-                cached_ids: Mutex::new(Vec::new()),
+                shards,
                 loader: Mutex::new(None),
                 writer: Mutex::new(None),
                 memory_accounting: Mutex::new(None),
@@ -81,13 +97,21 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         }
     }
 
-    pub(crate) fn capacity(&self) -> u64 {
-        self.inner.capacity.load(Ordering::Acquire)
+    fn shard_for(&self, key: &K) -> usize {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        (hasher.finish() as usize) & (self.inner.shards.len() - 1)
     }
 
-    pub(crate) fn get(&self, key: &K) -> Option<CachedItem<T>> {
-        let items = self.inner.items.lock();
-        items.get(key).cloned()
+    pub(crate) fn capacity(&self) -> u64 {
+        self.inner.capacity.load(Ordering::Relaxed)
+    }
+
+    /// Look up a cached item, touching only the shard that owns `key`.
+    /// Concurrent hits on different keys proceed in parallel.
+    pub(crate) fn get(&self, key: &K) -> Option<Arc<CachedItem<T>>> {
+        let shard = self.inner.shards[self.shard_for(key)].lock();
+        shard.get(key).cloned()
     }
 
     pub(crate) fn set_loader<F>(&self, loader: F)
@@ -108,7 +132,7 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         *self.inner.writer.lock() = Some(Arc::new(writer));
     }
 
-    pub(crate) fn get_or_load(&self, key: &K) -> Option<CachedItem<T>> {
+    pub(crate) fn get_or_load(&self, key: &K) -> Option<Arc<CachedItem<T>>> {
         if let Some(item) = self.get(key) {
             return Some(item);
         }
@@ -118,49 +142,74 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
         self.get(key)
     }
 
+    /// Insert or replace the cached entry for `key`.
+    ///
+    /// The capacity check runs while holding the owning shard lock. If the
+    /// shard has nothing evictable, an intervening global eviction (fixed
+    /// shard order, holding at most one lock at a time) makes room before the
+    /// insert. Dirty evictees are written back after all locks are released so
+    /// I/O never happens under a shard lock.
     pub(crate) fn insert(&self, key: K, item: T, size: usize) {
+        let idx = self.shard_for(&key);
         let size_u64 = size as u64;
-        let usage = self.current_usage();
+        let mut writebacks: WritebackList<K, T> = WritebackList::new();
 
-        if usage.saturating_add(size_u64) > self.inner.capacity.load(Ordering::Acquire) {
-            let excess =
-                usage.saturating_add(size_u64) - self.inner.capacity.load(Ordering::Acquire);
-            self.evict(excess + 1);
-        }
-
-        let cached = CachedItem::new(item, size);
-        let mut items = self.inner.items.lock();
-        let is_new = match items.insert(key.clone(), cached) {
-            None => {
-                self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
-                true
-            }
-            Some(previous) => {
-                // Overwrite: adjust usage by the size delta so the counter
-                // stays exact even when the same key is cached at a different
-                // size.
-                let previous_size = previous.size as u64;
-                if previous_size != size_u64 {
-                    self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
-                    self.inner.usage.fetch_sub(previous_size, Ordering::Relaxed);
+        {
+            let mut shard = self.inner.shards[idx].lock();
+            let capacity = self.inner.capacity.load(Ordering::Relaxed);
+            let needed = self
+                .inner
+                .usage
+                .load(Ordering::Relaxed)
+                .saturating_add(size_u64);
+            let mut need_global_evict = false;
+            if needed > capacity {
+                let (evicted, wb) = self.evict_locked(&mut shard, needed - capacity + 1);
+                writebacks.extend(wb);
+                if evicted == 0 {
+                    // Nothing evictable in the owning shard: make room globally.
+                    need_global_evict = true;
                 }
-                false
             }
-        };
-        let mut ids = self.inner.cached_ids.lock();
-        if is_new {
-            ids.push(key);
-        }
-        drop(ids);
-        drop(items);
+            if need_global_evict {
+                drop(shard);
+                let cap = self.inner.capacity.load(Ordering::Relaxed);
+                let usage = self.inner.usage.load(Ordering::Relaxed);
+                if usage.saturating_add(size_u64) > cap {
+                    writebacks
+                        .extend(self.evict_all_collect(usage.saturating_add(size_u64) - cap + 1));
+                }
+                shard = self.inner.shards[idx].lock();
+            }
 
+            let cached = Arc::new(CachedItem::new(item, size));
+            match shard.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert(cached);
+                    self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+                }
+                Entry::Occupied(mut entry) => {
+                    let previous = entry.insert(cached);
+                    let previous_size = previous.size as u64;
+                    if previous_size != size_u64 {
+                        self.inner.usage.fetch_add(size_u64, Ordering::Relaxed);
+                        self.inner.usage.fetch_sub(previous_size, Ordering::Relaxed);
+                    }
+                    if previous.dirty.load(Ordering::Acquire) {
+                        writebacks.push((entry.key().clone(), previous));
+                    }
+                }
+            }
+        }
+
+        self.flush_writebacks(writebacks);
         if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
             accounting.report_usage(MemoryCategory::Cache, self.current_usage());
         }
     }
 
     pub(crate) fn set_capacity(&self, new_capacity: u64) {
-        self.inner.capacity.store(new_capacity, Ordering::Release);
+        self.inner.capacity.store(new_capacity, Ordering::Relaxed);
         let usage = self.current_usage();
         if usage > new_capacity {
             self.evict(usage - new_capacity);
@@ -168,89 +217,115 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
     }
 
     pub(crate) fn current_usage(&self) -> u64 {
-        self.inner.usage.load(Ordering::Acquire)
+        self.inner.usage.load(Ordering::Relaxed)
     }
 
+    /// Evict at least `target_bytes` across shards in fixed order, touching
+    /// at most one shard lock at a time. Write-backs run after all locks are
+    /// released.
     pub(crate) fn evict(&self, target_bytes: u64) -> u64 {
-        let mut items = self.inner.items.lock();
-        let mut ids = self.inner.cached_ids.lock();
-
-        if items.is_empty() {
+        if target_bytes == 0 {
             return 0;
         }
-
         let mut evicted = 0u64;
-        let mut attempts = 0u64;
-        let max_attempts = ids.len() as u64 * 2;
-
-        if ids.is_empty() {
-            ids.extend(items.keys().cloned());
-        }
-
-        let mut hand = self.inner.clock_hand.lock().wrapping_rem(ids.len().max(1));
-
-        while evicted < target_bytes && attempts < max_attempts {
-            if ids.is_empty() {
+        let mut writebacks = Vec::new();
+        for shard_mutex in &self.inner.shards {
+            if evicted >= target_bytes {
                 break;
             }
-            if hand >= ids.len() {
-                hand = 0;
-            }
-            let id = ids[hand].clone();
-            if let Some(cached) = items.get(&id) {
-                if cached.is_pinned() {
-                    hand = (hand + 1) % ids.len().max(1);
-                    attempts += 1;
-                    continue;
-                }
-                let flag = cached.clock_flag.load(Ordering::Acquire);
-                if flag {
-                    cached.clock_flag.store(false, Ordering::Release);
-                    hand = (hand + 1) % ids.len().max(1);
-                    attempts += 1;
-                    continue;
-                }
-                let item = items.remove(&id);
-                if let Some(item) = item {
-                    if item.dirty.load(Ordering::Acquire) {
-                        if let Some(writer) = self.inner.writer.lock().as_ref() {
-                            if let Err(e) = writer(id.clone(), &item.item) {
-                                tracing::warn!("Failed to write back key during eviction: {e}");
-                            }
-                        }
-                    }
-                    let item_size = item.size as u64;
-                    self.inner.usage.fetch_sub(item_size, Ordering::Relaxed);
-                    evicted += item_size;
-                    if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
-                        accounting.release_category(MemoryCategory::Cache, item_size);
-                    }
-                    ids.retain(|i| *i != id);
-                    if ids.is_empty() {
-                        break;
-                    }
-                }
-                if ids.is_empty() {
-                    break;
-                }
-                hand %= ids.len().max(1);
-            } else {
-                ids.retain(|i| items.contains_key(i));
-                if ids.is_empty() {
-                    break;
-                }
-                hand %= ids.len().max(1);
-            }
-            attempts += 1;
+            let mut shard = shard_mutex.lock();
+            let (e, wb) = self.evict_locked(&mut shard, target_bytes - evicted);
+            evicted += e;
+            writebacks.extend(wb);
         }
-
-        *self.inner.clock_hand.lock() = hand;
+        self.flush_writebacks(writebacks);
         evicted
     }
 
+    fn evict_all_collect(&self, target_bytes: u64) -> WritebackList<K, T> {
+        let mut evicted = 0u64;
+        let mut writebacks = Vec::new();
+        for shard_mutex in &self.inner.shards {
+            if evicted >= target_bytes {
+                break;
+            }
+            let mut shard = shard_mutex.lock();
+            let (e, wb) = self.evict_locked(&mut shard, target_bytes - evicted);
+            evicted += e;
+            writebacks.extend(wb);
+        }
+        writebacks
+    }
+
+    /// Evict entries within one shard map by iterating it (O(m) per pass)
+    /// with a CLOCK second-chance pass.
+    fn evict_locked(
+        &self,
+        shard: &mut HashMap<K, Arc<CachedItem<T>>>,
+        target_bytes: u64,
+    ) -> (u64, WritebackList<K, T>) {
+        let mut evicted = 0u64;
+        let mut writebacks = Vec::new();
+        if shard.is_empty() || target_bytes == 0 {
+            return (evicted, writebacks);
+        }
+        for pass in 0..2u8 {
+            if evicted >= target_bytes {
+                break;
+            }
+            let keys: Vec<K> = shard.keys().cloned().collect();
+            for id in keys {
+                if evicted >= target_bytes {
+                    break;
+                }
+                let victim = {
+                    let cached = match shard.get(&id) {
+                        Some(cached) => cached,
+                        None => continue,
+                    };
+                    if cached.is_pinned() {
+                        continue;
+                    }
+                    if pass == 0 && cached.clock_flag.load(Ordering::Acquire) {
+                        cached.clock_flag.store(false, Ordering::Release);
+                        continue;
+                    }
+                    Some((id, cached.clone()))
+                };
+                if let Some((victim_id, cached)) = victim {
+                    shard.remove(&victim_id);
+                    let item_size = cached.size as u64;
+                    self.inner.usage.fetch_sub(item_size, Ordering::Relaxed);
+                    if let Some(ref accounting) = *self.inner.memory_accounting.lock() {
+                        accounting.release_category(MemoryCategory::Cache, item_size);
+                    }
+                    writebacks.push((victim_id, cached));
+                    evicted += item_size;
+                }
+            }
+        }
+        (evicted, writebacks)
+    }
+
+    fn flush_writebacks(&self, writebacks: WritebackList<K, T>) {
+        if writebacks.is_empty() {
+            return;
+        }
+        let writer = self.inner.writer.lock().clone();
+        let Some(writer) = writer else {
+            return;
+        };
+        for (id, cached) in writebacks {
+            if cached.dirty.load(Ordering::Acquire) {
+                if let Err(e) = writer(id, &cached.item) {
+                    tracing::warn!("Failed to write back key during eviction: {e}");
+                }
+            }
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
-        let items = self.inner.items.lock();
-        items.len()
+        self.inner.shards.iter().map(|m| m.lock().len()).sum()
     }
 
     /// Remove all entries satisfying a predicate.
@@ -259,22 +334,22 @@ impl<K: Hash + Eq + Clone + Send + Sync, T: Clone + Send + Sync> BufferPool<K, T
     where
         F: FnMut(&K, &T) -> bool,
     {
-        let mut items = self.inner.items.lock();
-        let before = items.len();
+        let mut removed = 0usize;
         let mut removed_bytes = 0u64;
-        items.retain(|k, v| {
-            if f(k, &v.item) {
-                true
-            } else {
-                removed_bytes += v.size as u64;
-                false
-            }
-        });
-        let removed = before - items.len();
+        for shard_mutex in &self.inner.shards {
+            let mut shard = shard_mutex.lock();
+            shard.retain(|k, v| {
+                if f(k, &v.item) {
+                    true
+                } else {
+                    removed_bytes += v.size as u64;
+                    removed += 1;
+                    false
+                }
+            });
+        }
         if removed > 0 {
             self.inner.usage.fetch_sub(removed_bytes, Ordering::Relaxed);
-            let mut ids = self.inner.cached_ids.lock();
-            ids.retain(|i| items.contains_key(i));
         }
         removed
     }
@@ -406,9 +481,16 @@ mod tests {
         // Eviction under capacity pressure decrements the counter.
         let evicted = pool.evict(200);
         assert!(evicted >= 200);
+        let expected: u64 = {
+            let mut sum = 0u64;
+            for shard in &pool.inner.shards {
+                sum += shard.lock().values().map(|c| c.size as u64).sum::<u64>();
+            }
+            sum
+        };
         assert_eq!(
             pool.current_usage(),
-            pool.len() as u64 * 8 + 8,
+            expected,
             "usage must equal the sum of remaining item sizes"
         );
 
@@ -416,9 +498,36 @@ mod tests {
         let removed = pool.retain(|&k, _| k % 2 == 0);
         assert!(removed > 0);
         let expected: u64 = {
-            let items = pool.inner.items.lock();
-            items.values().map(|c| c.size as u64).sum()
+            let mut sum = 0u64;
+            for shard in &pool.inner.shards {
+                sum += shard.lock().values().map(|c| c.size as u64).sum::<u64>();
+            }
+            sum
         };
         assert_eq!(pool.current_usage(), expected);
+    }
+
+    #[test]
+    fn dirty_items_write_back_without_holding_locks() {
+        use std::sync::atomic::AtomicUsize;
+        let pool = BufferPool::<u32, String>::new(300);
+        let written = Arc::new(AtomicUsize::new(0));
+        let written_clone = written.clone();
+        pool.set_writer(move |_k: u32, v: &String| {
+            assert_eq!(v, "hello");
+            written_clone.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        pool.insert(1, "hello".to_string(), 100);
+        if let Some(item) = pool.get(&1) {
+            item.dirty.store(true, Ordering::Release);
+        }
+        pool.insert(2, "world".to_string(), 100);
+        pool.insert(3, "again".to_string(), 100);
+        pool.insert(4, "force".to_string(), 100);
+        assert!(
+            written.load(Ordering::SeqCst) >= 1,
+            "dirty item written back"
+        );
     }
 }

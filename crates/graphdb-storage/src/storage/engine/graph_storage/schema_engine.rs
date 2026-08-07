@@ -155,31 +155,30 @@ pub fn create_edge_type_with_id(
         oe_strategy,
         ie_strategy,
     } = params;
-    ctx.data_store()
-        .register_edge_type(
-            name.to_string(),
-            Some(label_id),
-            src_label,
-            dst_label,
-            |label_id| {
-                let schema = EdgeSchema {
-                    label_id,
-                    label_name: user_name.to_string(),
-                    src_label,
-                    dst_label,
-                    properties,
-                    oe_strategy,
-                    ie_strategy,
-                    schema_version: 1,
-                };
-                schema.validate_on_creation()?;
-                let mut table = EdgeStore::new(schema)?;
-                if let Some(stats) = ctx.stats_manager() {
-                    table.set_stats_manager(stats.clone());
-                }
-                Ok(table)
-            },
-        )
+    ctx.data_store().register_edge_type(
+        name.to_string(),
+        Some(label_id),
+        src_label,
+        dst_label,
+        |label_id| {
+            let schema = EdgeSchema {
+                label_id,
+                label_name: user_name.to_string(),
+                src_label,
+                dst_label,
+                properties,
+                oe_strategy,
+                ie_strategy,
+                schema_version: 1,
+            };
+            schema.validate_on_creation()?;
+            let mut table = EdgeStore::new(schema)?;
+            if let Some(stats) = ctx.stats_manager() {
+                table.set_stats_manager(stats.clone());
+            }
+            Ok(table)
+        },
+    )
 }
 
 pub fn drop_vertex_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<()> {
