@@ -462,6 +462,12 @@ impl VersionManager {
         self.read_pending.load(Ordering::Relaxed) + self.write_pending.load(Ordering::Relaxed)
     }
 
+    /// Timeout after which a `Pending` write timestamp is reaped by
+    /// [`VersionManager::reap_expired_write_timestamps`] as stale.
+    pub fn write_reap_timeout(&self) -> Duration {
+        self.config.write_reap_timeout
+    }
+
     pub fn get_safe_gc_timestamp(&self) -> Timestamp {
         let active = self.snapshot_tracker.min_active_snapshot();
         let retention = self.retention_frontier();

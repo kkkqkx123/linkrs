@@ -1826,7 +1826,7 @@ impl TransactionManager {
             .collect();
         let reaped = self
             .version_manager
-            .reap_expired_write_timestamps(self.config.default_timeout, &owned);
+            .reap_expired_write_timestamps(self.version_manager.write_reap_timeout(), &owned);
         if reaped > 0 {
             log::warn!("Reaped {reaped} orphaned write timestamp(s) older than timeout");
         }

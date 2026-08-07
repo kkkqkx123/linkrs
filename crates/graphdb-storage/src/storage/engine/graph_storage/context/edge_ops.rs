@@ -203,6 +203,9 @@ impl GraphStorageContext {
             },
         )?;
 
+        // Lazily register snapshot for this edge partition if needed
+        self.ensure_edge_snapshot_registered(key);
+
         self.persistent.data_store.with_edge_tables(|edge_tables| {
             edge_tables.get(&key).and_then(|arc| {
                 arc.read()
@@ -276,6 +279,9 @@ impl GraphStorageContext {
             return Ok(false);
         };
 
+        // Lazily register snapshot for this edge partition if needed
+        self.ensure_edge_snapshot_registered(key);
+
         let deleted =
             self.persistent
                 .data_store
@@ -324,6 +330,17 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
+        // Lazily register snapshots for every matching edge partition.
+        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label && key.src_label == actual_src)
+                .collect::<Vec<_>>()
+        }) {
+            self.ensure_edge_snapshot_registered(key);
+        }
+
         let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut records = Vec::new();
             for table in edge_tables
@@ -368,6 +385,17 @@ impl GraphStorageContext {
                     Some((src_internal, actual_src))
                 })?;
 
+        // Lazily register snapshots for every matching edge partition.
+        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label && key.src_label == actual_src)
+                .collect::<Vec<_>>()
+        }) {
+            self.ensure_edge_snapshot_registered(key);
+        }
+
         let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut nbrs = Vec::new();
             for table in edge_tables
@@ -408,6 +436,17 @@ impl GraphStorageContext {
                     };
                     Some((dst_internal, actual_dst))
                 })?;
+
+        // Lazily register snapshots for every matching edge partition.
+        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label && key.dst_label == actual_dst)
+                .collect::<Vec<_>>()
+        }) {
+            self.ensure_edge_snapshot_registered(key);
+        }
 
         let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut records = Vec::new();
@@ -452,6 +491,17 @@ impl GraphStorageContext {
                     };
                     Some((dst_internal, actual_dst))
                 })?;
+
+        // Lazily register snapshots for every matching edge partition.
+        for key in self.persistent.data_store.with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label && key.dst_label == actual_dst)
+                .collect::<Vec<_>>()
+        }) {
+            self.ensure_edge_snapshot_registered(key);
+        }
 
         let nbrs = self.persistent.data_store.with_edge_tables(|edge_tables| {
             let mut nbrs = Vec::new();

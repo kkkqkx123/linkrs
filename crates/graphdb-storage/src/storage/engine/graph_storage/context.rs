@@ -26,7 +26,9 @@ use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 use graphdb_transaction::core::types::EdgeIdentifier;
 use graphdb_transaction::transaction::undo_log::UndoLogManager;
-use graphdb_transaction::transaction::{MutationResult, TransactionError, UndoLogEntry, VertexId};
+use graphdb_transaction::transaction::{
+    MutationEntityKey, MutationResult, TransactionError, UndoLogEntry, VertexId,
+};
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
 type CoreComponents = (
@@ -455,13 +457,14 @@ impl Drop for AutoCommitWriteLease {
     }
 }
 
-/// Collects before-image undo entries while an auto-commit statement executes.
+/// Collects before-image undo entries and write-set entity keys while an
+/// auto-commit statement executes.
 ///
-/// Auto-commit statements have no MVCC version chain (property updates are
-/// in-place overwrites), so without undo a mid-statement failure would leave
-/// the overwritten value physically present while the write timestamp is
-/// marked Aborted. Recording undo entries lets `finalize_operation(false)`
-/// roll the partial writes back, restoring the before-images.
+/// Property writes build MVCC version chains (see `set_versioned`), so
+/// committed statements leave a version history; undo recorded here lets
+/// `finalize_operation(false)` roll back the partial writes of a failed
+/// statement, restoring the before-images. The write set additionally gives
+/// auto-commit statements a conflict signal against concurrent writers.
 struct AutoCommitMutationRecorder {
     undo: Arc<Mutex<UndoLogManager>>,
     /// Write set for conflict detection (tracks modified vertices and edges)
@@ -476,6 +479,12 @@ impl std::fmt::Debug for AutoCommitMutationRecorder {
 
 impl graphdb_transaction::transaction::TransactionMutationRecorder for AutoCommitMutationRecorder {
     fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        for entity_key in mutation.entity_keys {
+            match entity_key {
+                MutationEntityKey::Vertex(vertex_id) => self.record_vertex_write(vertex_id),
+                MutationEntityKey::Edge(edge) => self.record_edge_write(edge),
+            }
+        }
         if let Some(entry) = mutation.undo_entry {
             self.add_undo_log(entry)
         } else {
@@ -990,6 +999,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::thread;
 
+    use graphdb_transaction::transaction::TransactionMutationRecorder;
+
     #[test]
     fn test_auto_commit_write_gate_mutual_exclusion() {
         let gate = AutoCommitWriteGate::new();
@@ -1029,5 +1040,39 @@ mod tests {
         // The gate must accept a new writer after release.
         let next = gate.acquire();
         drop(next);
+    }
+
+    #[test]
+    fn test_auto_commit_recorder_forwards_entity_keys_to_write_set() {
+        let recorder = AutoCommitMutationRecorder {
+            undo: Arc::new(Mutex::new(UndoLogManager::new())),
+            write_set: Arc::new(Mutex::new(
+                graphdb_transaction::transaction::types::WriteSet::new(),
+            )),
+        };
+
+        let vertex_id = VertexId::from_int64(42);
+        let edge = EdgeIdentifier {
+            src_label: 3,
+            src_vid: VertexId::from_int64(1),
+            dst_label: 4,
+            dst_vid: VertexId::from_int64(2),
+            edge_label: 5,
+            rank: 0,
+        };
+
+        recorder
+            .record_mutation(MutationResult {
+                entity_keys: vec![
+                    MutationEntityKey::Vertex(vertex_id),
+                    MutationEntityKey::Edge(edge),
+                ],
+                ..MutationResult::default()
+            })
+            .unwrap();
+
+        let write_set = recorder.write_set.lock();
+        assert!(write_set.vertices.contains(&vertex_id));
+        assert!(write_set.edges.contains(&edge));
     }
 }
