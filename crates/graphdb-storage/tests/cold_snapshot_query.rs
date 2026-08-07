@@ -220,7 +220,7 @@ fn cold_snapshot_batch_accessors_match_get_node_edges() {
         row.sort();
         row.dedup();
     }
-    let mut want: Vec<Vec<VertexId>> = seeds
+    let want: Vec<Vec<VertexId>> = seeds
         .iter()
         .map(|s| {
             let mut dsts: Vec<_> = storage

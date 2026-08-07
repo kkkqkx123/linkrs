@@ -10,11 +10,9 @@ use crate::core::vertex_edge_path::Tag;
 #[cfg(feature = "fulltext-search")]
 use crate::core::DataType;
 use crate::core::Edge;
-use crate::storage::{
-    GraphStorage, MockStorage, StoragePersistenceOps, StorageReader, StorageWriter,
-};
+use crate::storage::{MockStorage, StorageWriter};
 #[cfg(feature = "fulltext-search")]
-use crate::storage::{StorageCommitOps, StorageOperationContextOps, StorageSchemaOps};
+use crate::storage::{GraphStorage, StorageCommitOps, StorageOperationContextOps, StorageSchemaOps};
 use crate::sync::SyncManager;
 
 #[test]

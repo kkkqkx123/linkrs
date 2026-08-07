@@ -1072,7 +1072,7 @@ mod tests {
             drop(bound);
         }
 
-        let manager = storage.index_data_manager();
+        let manager = storage.ctx.index_data_manager();
 
         // Before any read flushes the pending deltas, a duplicate name from a
         // later window statement must be rejected via the pending-aware unique
@@ -1599,7 +1599,7 @@ mod tests {
                 let batch = storage
                     .neighbor_dst_ids_batch("test_space", &seeds, direction, &edge_types)
                     .unwrap();
-                let mut actual: Vec<Vec<VertexId>> = batch
+                let actual: Vec<Vec<VertexId>> = batch
                     .into_iter()
                     .map(|mut dsts| {
                         dsts.sort();

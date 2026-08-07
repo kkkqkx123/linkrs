@@ -12,9 +12,8 @@ use crate::storage::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTa
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
 
 pub const COLD_SNAPSHOT_MAGIC: [u8; 4] = *b"LKCS";
-/// v3: dict-encoded CSR adjacency (30-50% smaller for repeated endpoints),
-/// zstd-compressed property section, and an out-row presence bitmap.
-pub const COLD_SNAPSHOT_VERSION: u32 = 3;
+/// Current on-disk format version.
+pub const COLD_SNAPSHOT_VERSION: u32 = 1;
 const HEADER_SIZE: usize = 36;
 
 /// A scanned edge record from a ColdSnapshot.
@@ -249,10 +248,10 @@ impl ColdPropertyIndex {
 /// Contains CSR adjacency data (out/in), columnar property storage,
 /// snapshot metadata, edge schema, and an optional ordered property index.
 ///
-/// v3 file format:
+/// File format:
 /// ```text
 /// [4]  Magic "LKCS"
-/// [4]  Version (u32 LE, 3)
+/// [4]  Version (u32 LE, 1)
 /// [8]  Snapshot timestamp (u64 LE)
 /// [8]  Edge count (u64 LE)
 /// [4]  Label ID (u32 LE)
@@ -522,7 +521,7 @@ impl ColdSnapshot {
         Self::create(&exported, path)
     }
 
-    /// Serialize the current in-memory state to `path` (v3 `.lkcs` format)
+    /// Serialize the current in-memory state to `path` (`.lkcs` format)
     /// and return a copy bound to that path.
     pub(crate) fn export_to_path<P: AsRef<Path>>(&self, path: P) -> StorageResult<Self> {
         let buf = encode_snapshot(
@@ -1593,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cold_snapshot_v3_presence_bitmap() {
+    fn test_cold_snapshot_presence_bitmap() {
         let mut table = make_table();
         for src in [0u32, 5, 100] {
             table
@@ -1626,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cold_snapshot_v3_dict_encoding_smaller() {
+    fn test_cold_snapshot_dict_encoding_smaller() {
         // 100 sources x 5 destinations = 500 edges over 6 distinct endpoints:
         // dict encoding (24 B/edge + tiny dict) beats raw (37 B/edge).
         let mut table = make_table();
@@ -1666,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cold_snapshot_v3_zstd_property_section() {
+    fn test_cold_snapshot_zstd_property_section() {
         // Large string-heavy property payloads must compress.
         let schema = EdgeSchema {
             label_id: 0,
