@@ -6,9 +6,7 @@
 
 use crate::core::types::EdgeDirection;
 use crate::core::Value;
-use crate::query::parser::ast::{
-    EdgePattern, MergeStmt, NodePattern, PathElement, Pattern,
-};
+use crate::query::parser::ast::{EdgePattern, MergeStmt, NodePattern, PathElement, Pattern};
 
 use super::render_contextual;
 

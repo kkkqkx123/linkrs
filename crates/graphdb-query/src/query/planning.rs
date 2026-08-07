@@ -26,6 +26,9 @@ pub mod vector_planner;
 pub mod scan_predicate;
 pub mod statements;
 
+// DML shape normalization for plan-cache reuse.
+pub mod dml_shape;
+
 // Re-export the main types.
 pub use connector::SegmentsConnector;
 pub use plan::execution_plan::{ExecutionPlan, SubPlan};

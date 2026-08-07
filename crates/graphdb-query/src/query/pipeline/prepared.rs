@@ -119,18 +119,27 @@ pub fn is_analyze(stmt: &Stmt) -> bool {
 
 pub fn requires_auto_commit(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Insert(..)
-        | Stmt::Update(..)
-        | Stmt::Delete(..)
-        | Stmt::Set(..)
-        | Stmt::Remove(..)
-        | Stmt::Merge(..) => true,
         Stmt::Pipe(pipe) => requires_auto_commit(&pipe.left) || requires_auto_commit(&pipe.right),
         Stmt::SetOperation(set_op) => {
             requires_auto_commit(&set_op.left) || requires_auto_commit(&set_op.right)
         }
-        _ => false,
+        _ => is_direct_dml(stmt),
     }
+}
+
+/// Whether the statement is one of the direct DML forms eligible for shape
+/// normalization. Shared with the shape-cache candidate check in
+/// [`prepare_request`] so the set of write statements stays in one place.
+fn is_direct_dml(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Insert(_)
+            | Stmt::Delete(_)
+            | Stmt::Update(_)
+            | Stmt::Merge(_)
+            | Stmt::Set(_)
+            | Stmt::Remove(_)
+    )
 }
 
 pub fn is_transaction(stmt: &Stmt) -> bool {
@@ -224,35 +233,52 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // P1: shape-normalize DML statements so structurally identical
         // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
         // literal values as parameters at execution time.
-        let (effective_query, effective_rctx, dml_shape_cacheable) =
-            if self.dml_shape_cache_enabled
-                && super::shape::is_shape_cache_candidate(parser_result.ast.stmt())
-                && !rctx.parameters.iter().any(|(name, _)| {
-                    name.starts_with(super::shape::DML_PARAM_PREFIX)
-                })
+        let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled
+            && is_direct_dml(parser_result.ast.stmt())
+            && !rctx.parameters.iter().any(|(name, _)| {
+                name.starts_with(crate::query::planning::dml_shape::DML_PARAM_PREFIX)
+            }) {
+            if let Some(shape) =
+                crate::query::planning::dml_shape::normalize_shape(parser_result.ast.stmt())
             {
-                if let Some(shape) = super::shape::normalize_shape(parser_result.ast.stmt()) {
-                    let normalized = self.parse_into_context(&shape.normalized_text)?;
-                    let mut updated = (*rctx).clone();
-                    updated.query = shape.normalized_text.clone();
-                    for (index, value) in shape.values.iter().enumerate() {
-                        updated
-                            .parameters
-                            .insert(format!("{}{}", super::shape::DML_PARAM_PREFIX, index), value.clone());
+                // The canonical template must re-parse faithfully. A failure here
+                // means the renderer emitted text that is not round-trippable; fall
+                // back to the non-cached path instead of failing the statement.
+                match self.parse_into_context(&shape.normalized_text) {
+                    Ok(normalized) => {
+                        let mut updated = (*rctx).clone();
+                        updated.query = shape.normalized_text.clone();
+                        for (index, value) in shape.values.iter().enumerate() {
+                            updated.parameters.insert(
+                                format!(
+                                    "{}{}",
+                                    crate::query::planning::dml_shape::DML_PARAM_PREFIX,
+                                    index
+                                ),
+                                value.clone(),
+                            );
+                        }
+                        parser_result = normalized;
+                        (shape.normalized_text, Arc::new(updated), true)
                     }
-                    parser_result = normalized;
-                    (shape.normalized_text, Arc::new(updated), true)
-                } else {
-                    (query_text.to_string(), rctx, false)
+                    Err(_) => {
+                        log::warn!(
+                            "DML shape template failed to re-parse, falling back to non-cached path: {}",
+                            shape.normalized_text
+                        );
+                        (query_text.to_string(), rctx, false)
+                    }
                 }
             } else {
                 (query_text.to_string(), rctx, false)
-            };
+            }
+        } else {
+            (query_text.to_string(), rctx, false)
+        };
 
         let needs_write = requires_write_storage(parser_result.ast.stmt());
-        let auto_commit_needs_binding = needs_write
-            && effective_rctx.operation_storage.is_none()
-            && effective_rctx.auto_commit;
+        let auto_commit_needs_binding =
+            needs_write && effective_rctx.operation_storage.is_none() && effective_rctx.auto_commit;
 
         let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
@@ -501,29 +527,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let result = self.execute_prepared_materialized(request)?;
             return Ok(StreamingQueryResult::from_execution_result(result));
         }
-        let physical_plan = if request.dml_shape_cacheable {
-            self.compile_or_get_cached(
-                &request.query_text,
-                request.query_context.clone(),
-                request.bound_statement.as_ref().unwrap(),
-                &request.stmt,
-                &request.ast,
-                true,
-            )?
-        } else if let Some(ref bound) = request.bound_statement {
-            let (plan, _) =
-                self.compile_from_bound(request.query_context.clone(), bound, &request.ast)?;
-            plan
-        } else {
-            self.compile_or_get_cached(
-                &request.query_text,
-                request.query_context.clone(),
-                request.bound_statement.as_ref().unwrap(),
-                &request.stmt,
-                &request.ast,
-                false,
-            )?
-        };
+        let physical_plan = self.compile_or_get_cached(
+            &request.query_text,
+            request.query_context.clone(),
+            request.bound_statement.as_ref().ok_or_else(|| {
+                DBError::from(QueryError::execution("No bound statement".to_string()))
+            })?,
+            &request.stmt,
+            &request.ast,
+            request.dml_shape_cacheable,
+        )?;
         let scope = transaction_id
             .map(|id| TransactionScope::explicit(id, true))
             .unwrap_or_else(|| request.transaction_scope.clone());
@@ -746,5 +759,50 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 index_version,
             );
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::parser::Parser;
+
+    fn parse(query: &str) -> Stmt {
+        let mut parser = Parser::new(query);
+        let result = parser
+            .parse()
+            .unwrap_or_else(|e| panic!("parse failed for {query:?}: {e}"));
+        assert!(!parser.has_errors(), "parse errors for {query:?}");
+        result.ast.stmt().clone()
+    }
+
+    #[test]
+    fn all_direct_dml_forms_are_detected() {
+        let cases = [
+            "INSERT VERTEX person(name) VALUES \"p1\": (\"a\")",
+            "DELETE VERTEX \"v1\"",
+            "UPDATE VERTEX \"v1\" SET name = \"x\"",
+            "MERGE (n:person {name: \"a\"})",
+            "SET name = \"x\"",
+            "REMOVE v.name",
+        ];
+        for query in cases {
+            let stmt = parse(query);
+            assert!(is_direct_dml(&stmt), "direct DML: {query}");
+        }
+    }
+
+    #[test]
+    fn non_direct_dml_forms_are_rejected() {
+        let cases = [
+            "MATCH (n:person) RETURN n",
+            "CREATE TAG IF NOT EXISTS Person(name: STRING, age: INT)",
+            "BEGIN",
+            "EXPLAIN MATCH (n) RETURN n",
+        ];
+        for query in cases {
+            let stmt = parse(query);
+            assert!(!is_direct_dml(&stmt), "not direct DML: {query}");
+        }
     }
 }

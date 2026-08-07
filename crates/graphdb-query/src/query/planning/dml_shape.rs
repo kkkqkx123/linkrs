@@ -11,10 +11,17 @@
 //! statements) together with the ordered literal values used for
 //! execution-time binding.
 //!
-//! Scope: write statements only (INSERT / DELETE / UPDATE / MERGE / SET /
-//! REMOVE). Read queries are deliberately excluded: their plans depend on
-//! constant values (constant folding, index selection) and users already
-//! have explicit `$param` binding for parameterized read reuse.
+//! Scope: the direct write statements (INSERT / DELETE / UPDATE / MERGE /
+//! SET / REMOVE) — see `crate::query::pipeline::prepared::is_direct_dml`
+//! for the authoritative set.
+//! Read queries are deliberately excluded: their plans depend on constant
+//! values (constant folding, index selection) and users already have
+//! explicit `$param` binding for parameterized read reuse.
+//!
+//! Semantic note: after normalization the bound DML plan sees only `$__dml_N`
+//! parameters, not the literal values. DML plans do not rely on constant
+//! values for constant folding or index selection, so parameterization does
+//! not degrade plan quality — the same rationale that excludes read queries.
 
 use crate::core::types::expr::{ContextualExpression, Expression};
 use crate::core::Value;
@@ -63,19 +70,6 @@ pub fn normalize_shape(stmt: &Stmt) -> Option<DmlShape> {
     })
 }
 
-/// Whether a statement is a candidate for DML shape normalization.
-pub fn is_shape_cache_candidate(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::Insert(_)
-            | Stmt::Delete(_)
-            | Stmt::Update(_)
-            | Stmt::Merge(_)
-            | Stmt::Set(_)
-            | Stmt::Remove(_)
-    )
-}
-
 /// Render an expression position, replacing every literal leaf with a
 /// `$__dml_N` placeholder and recording the value.
 ///
@@ -117,9 +111,20 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
             Some(())
         }
         Expression::Binary { left, op, right } => {
-            if matches!(op, crate::core::types::operators::BinaryOperator::In
-                | crate::core::types::operators::BinaryOperator::NotIn)
-            {
+            // `IN`/`NOT IN` and the subscript/attribute/JSONB operators cannot
+            // be re-rendered as `(left OP right)` text; exclude them so the
+            // statement falls back instead of producing a broken template.
+            if matches!(
+                op,
+                crate::core::types::operators::BinaryOperator::In
+                    | crate::core::types::operators::BinaryOperator::NotIn
+                    | crate::core::types::operators::BinaryOperator::Subscript
+                    | crate::core::types::operators::BinaryOperator::Attribute
+                    | crate::core::types::operators::BinaryOperator::JsonGet
+                    | crate::core::types::operators::BinaryOperator::JsonGetText
+                    | crate::core::types::operators::BinaryOperator::JsonPathGet
+                    | crate::core::types::operators::BinaryOperator::JsonPathGetText
+            ) {
                 return None;
             }
             out.push('(');
@@ -186,7 +191,10 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
             out.push_str(property);
             Some(())
         }
-        Expression::EdgeProperty { edge_name, property } => {
+        Expression::EdgeProperty {
+            edge_name,
+            property,
+        } => {
             out.push_str(edge_name);
             out.push('.');
             out.push_str(property);
@@ -218,8 +226,8 @@ fn push_param(out: &mut String, values: &mut Vec<Value>, value: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::parser::Parser;
     use crate::query::parser::ast::{InsertTarget, UpdateTarget};
+    use crate::query::parser::Parser;
 
     fn parse(query: &str) -> Stmt {
         let mut parser = Parser::new(query);
@@ -285,7 +293,8 @@ mod tests {
 
     #[test]
     fn normalizes_if_not_exists_and_multi_row() {
-        let query = "INSERT VERTEX IF NOT EXISTS person(name) VALUES \"p1\": (\"A\"), \"p2\": (\"B\")";
+        let query =
+            "INSERT VERTEX IF NOT EXISTS person(name) VALUES \"p1\": (\"A\"), \"p2\": (\"B\")";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
@@ -316,7 +325,6 @@ mod tests {
     #[test]
     fn skip_non_dml() {
         let stmt = parse("MATCH (n:person) RETURN n");
-        assert!(!is_shape_cache_candidate(&stmt));
         assert!(normalize_shape(&stmt).is_none());
     }
 
@@ -411,7 +419,10 @@ mod tests {
         let query = "DELETE TAG * FROM \"v1\" WITH EDGE";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
-        assert_eq!(shape.normalized_text, "DELETE TAG * FROM $__dml_0 WITH EDGE");
+        assert_eq!(
+            shape.normalized_text,
+            "DELETE TAG * FROM $__dml_0 WITH EDGE"
+        );
     }
 
     #[test]
@@ -441,10 +452,7 @@ mod tests {
         let query = "SET name = \"x\", age = 30";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
-        assert_eq!(
-            shape.normalized_text,
-            "SET name = $__dml_0, age = $__dml_1"
-        );
+        assert_eq!(shape.normalized_text, "SET name = $__dml_0, age = $__dml_1");
     }
 
     #[test]
@@ -455,18 +463,26 @@ mod tests {
     }
 
     #[test]
-    fn all_dml_statements_are_candidates() {
+    fn skips_non_roundtrippable_binary_operators() {
+        use crate::core::types::operators::BinaryOperator;
         let cases = [
-            "INSERT VERTEX person(name) VALUES \"p1\": (\"a\")",
-            "DELETE VERTEX \"v1\"",
-            "UPDATE VERTEX \"v1\" SET name = \"x\"",
-            "MERGE (n:person {name: \"a\"})",
-            "SET name = \"x\"",
-            "REMOVE v.name",
+            BinaryOperator::In,
+            BinaryOperator::NotIn,
+            BinaryOperator::Subscript,
+            BinaryOperator::Attribute,
+            BinaryOperator::JsonGet,
+            BinaryOperator::JsonGetText,
+            BinaryOperator::JsonPathGet,
+            BinaryOperator::JsonPathGetText,
         ];
-        for query in cases {
-            let stmt = parse(query);
-            assert!(is_shape_cache_candidate(&stmt), "candidate: {query}");
+        for op in cases {
+            let expr = Expression::binary(Expression::variable("a"), op, Expression::variable("b"));
+            let mut out = String::new();
+            let mut values = Vec::new();
+            assert!(
+                render_expr(&mut out, &mut values, &expr).is_none(),
+                "op {op:?} should be excluded"
+            );
         }
     }
 }

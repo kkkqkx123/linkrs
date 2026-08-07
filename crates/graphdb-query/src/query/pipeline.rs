@@ -2,7 +2,6 @@
 
 mod compiler;
 mod diagnostics;
-pub(crate) mod shape;
 mod execution;
 mod frontend;
 mod prepared;

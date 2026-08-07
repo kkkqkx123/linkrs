@@ -389,6 +389,45 @@ fn test_dml_shape_cache_edge_roundtrip() {
     assert_eq!(result.rows.len(), 3, "all three edges loaded");
 }
 
+#[test]
+fn test_read_streaming_plan_cache_hit() {
+    let mut db = create_test_db();
+    setup_test_space(
+        &mut db,
+        "stream_cache_space",
+        &["CREATE TAG person(name: STRING)"],
+        &[],
+    )
+    .expect("setup space");
+    db.execute_query("INSERT VERTEX person(name) VALUES \"p1\": (\"Alice\")")
+        .expect("insert should succeed");
+
+    let query = "MATCH (p:person) WHERE id(p) == \"p1\" RETURN p.name";
+
+    // First streaming execution compiles and stores the plan.
+    let first = db
+        .execute_stream_query(query)
+        .expect("first streaming read should succeed");
+    let first_rows = first.collect().expect("collect first").rows;
+    assert_eq!(first_rows.len(), 1, "first streaming read should return one row");
+
+    // Second identical streaming read must reuse the cached plan.
+    let second = db
+        .execute_stream_query(query)
+        .expect("second streaming read should succeed");
+    let second_rows = second.collect().expect("collect second").rows;
+    assert_eq!(
+        second_rows, first_rows,
+        "identical streaming reads should produce the same rows"
+    );
+
+    let hit_rate = db.query_api().plan_cache_hit_rate();
+    assert!(
+        hit_rate > 0.0,
+        "expected streaming read plan-cache hit, hit rate was {hit_rate}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // e2e_vector – 1000 product_vector entries
 // ---------------------------------------------------------------------------

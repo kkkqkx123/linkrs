@@ -9,6 +9,7 @@ use graphdb::api::core::CoreResult;
 use graphdb::core::metadata::SchemaManager;
 use graphdb::core::StatsManager;
 use graphdb::core::Value;
+use graphdb::query::executor::streaming::StreamingQueryResult;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps};
 use graphdb::sync::SyncManager;
 use graphdb::transaction::{
@@ -314,6 +315,21 @@ impl TestDb {
         self.track_space_from_result(&result);
 
         Ok(result)
+    }
+
+    /// Execute a read query through the streaming path, returning a streaming handle.
+    ///
+    /// Routes through `QueryApi::execute_stream` so the streaming plan-cache
+    /// path is exercised (as opposed to `execute_query`, which materializes).
+    pub fn execute_stream_query(&mut self, query: &str) -> CoreResult<StreamingQueryResult> {
+        let ctx = graphdb::api::core::types::QueryRequest {
+            space_id: self.current_space_id,
+            space_name: self.current_space_name.clone(),
+            auto_commit: true,
+            transaction_id: None,
+            parameters: None,
+        };
+        self.query_api.execute_stream(query, ctx)
     }
 
     /// Execute a batch of auto-commit statements in one storage window (P6).

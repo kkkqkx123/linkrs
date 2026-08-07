@@ -282,7 +282,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         use std::hash::{Hash, Hasher};
         let mut names: Vec<&String> = params
             .keys()
-            .filter(|name| name.starts_with(super::shape::DML_PARAM_PREFIX))
+            .filter(|name| name.starts_with(crate::query::planning::dml_shape::DML_PARAM_PREFIX))
             .collect();
         names.sort_unstable();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
