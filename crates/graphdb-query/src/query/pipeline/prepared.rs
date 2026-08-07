@@ -226,16 +226,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // literal values as parameters at execution time.
         let (effective_query, effective_rctx, dml_shape_cacheable) =
             if self.dml_shape_cache_enabled
-                && super::dml_shape::is_dml_shape_candidate(parser_result.ast.stmt())
+                && super::shape::is_shape_cache_candidate(parser_result.ast.stmt())
+                && !rctx.parameters.iter().any(|(name, _)| {
+                    name.starts_with(super::shape::DML_PARAM_PREFIX)
+                })
             {
-                if let Some(shape) = super::dml_shape::normalize_dml(parser_result.ast.stmt()) {
+                if let Some(shape) = super::shape::normalize_shape(parser_result.ast.stmt()) {
                     let normalized = self.parse_into_context(&shape.normalized_text)?;
                     let mut updated = (*rctx).clone();
                     updated.query = shape.normalized_text.clone();
                     for (index, value) in shape.values.iter().enumerate() {
                         updated
                             .parameters
-                            .insert(format!("{}{}", super::dml_shape::DML_PARAM_PREFIX, index), value.clone());
+                            .insert(format!("{}{}", super::shape::DML_PARAM_PREFIX, index), value.clone());
                     }
                     parser_result = normalized;
                     (shape.normalized_text, Arc::new(updated), true)

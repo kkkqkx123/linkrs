@@ -768,16 +768,17 @@ impl DmlParser {
 
         let pattern = TraversalParser::new().parse_pattern(ctx)?;
 
-        let on_create = if ctx.match_token(TokenKind::On) && ctx.match_token(TokenKind::Create) {
-            Some(ClauseParser::new().parse_set_clause(ctx)?)
+        // Consume the shared `ON` token once, then branch on CREATE vs MATCH.
+        let (on_create, on_match) = if ctx.match_token(TokenKind::On) {
+            if ctx.match_token(TokenKind::Create) {
+                (Some(Self::parse_merge_set_clause(ctx)?), None)
+            } else if ctx.match_token(TokenKind::Match) {
+                (None, Some(Self::parse_merge_set_clause(ctx)?))
+            } else {
+                (None, None)
+            }
         } else {
-            None
-        };
-
-        let on_match = if ctx.match_token(TokenKind::On) && ctx.match_token(TokenKind::Match) {
-            Some(ClauseParser::new().parse_set_clause(ctx)?)
-        } else {
-            None
+            (None, None)
         };
 
         Ok(Stmt::Merge(MergeStmt {
@@ -786,6 +787,21 @@ impl DmlParser {
             on_create,
             on_match,
         }))
+    }
+
+    /// Parse the SET clause following ON CREATE / ON MATCH in a MERGE statement.
+    ///
+    /// Consumes the optional `SET` keyword before delegating to the clause
+    /// parser, matching how `parse_update_after_token` handles SET clauses.
+    fn parse_merge_set_clause(ctx: &mut ParseContext) -> Result<SetClause, ParseError> {
+        if ctx.match_token(TokenKind::Set) {
+            ClauseParser::new().parse_set_clause(ctx)
+        } else {
+            Ok(SetClause {
+                span: ctx.current_span(),
+                assignments: Vec::new(),
+            })
+        }
     }
 
     /// Parse the expression
