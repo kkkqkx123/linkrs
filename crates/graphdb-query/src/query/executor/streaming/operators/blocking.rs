@@ -750,13 +750,13 @@ impl BlockingOperator {
                                                 "Spill manager not available".to_string(),
                                             )
                                         })?;
-                                        let group_key = eval_group_key(&row, &state.col_names);
+                                        let group_key = eval_group_key(row, &state.col_names);
                                         let p =
                                         crate::query::executor::streaming::spill::hash_row_partition(
                                             &group_key,
                                             spiller.num_partitions(),
                                         ) as usize;
-                                        let partial_row = partial_row_of(&row, &state.col_names);
+                                        let partial_row = partial_row_of(row, &state.col_names);
                                         spiller.insert_row_to_partition(
                                             &partial_row,
                                             p,
@@ -764,7 +764,7 @@ impl BlockingOperator {
                                         )?;
                                         continue;
                                     }
-                                    let group_key = eval_group_key(&row, &state.col_names);
+                                    let group_key = eval_group_key(row, &state.col_names);
                                     if !state.group_map.contains_key(&group_key) {
                                         if let Err(e) = memory_tracker.try_reserve(
                                             MemoryBudget::estimate_row_memory(&group_key)
@@ -805,7 +805,7 @@ impl BlockingOperator {
                                             num_partitions,
                                         ) as usize;
                                                 let partial_row =
-                                                    partial_row_of(&row, &state.col_names);
+                                                    partial_row_of(row, &state.col_names);
                                                 spiller.insert_row_to_partition(
                                                     &partial_row,
                                                     p,

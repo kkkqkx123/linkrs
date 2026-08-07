@@ -54,6 +54,7 @@ fn test_log_config_serialization() {
             },
             storage: graphdb::config::StorageConfig::default(),
             optimizer: graphdb::config::OptimizerConfig::default(),
+            parallel: graphdb::config::ParallelConfig::default(),
             monitoring: graphdb::config::MonitoringConfig::default(),
             query_resource: graphdb::config::QueryResourceConfig::default(),
         },

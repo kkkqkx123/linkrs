@@ -21,6 +21,16 @@ pub(crate) struct FragmentCtx<'a> {
     pub(crate) op_alloc: &'a mut PhysicalOperatorIdAllocator,
 }
 
+/// Parameters for creating a hash-repartition exchange fragment.
+#[allow(dead_code)]
+pub(crate) struct HashExchangeParams {
+    pub(crate) partition_fids: Vec<FragmentId>,
+    pub(crate) partition_count: usize,
+    pub(crate) hash_expressions: Vec<crate::core::types::expr::Expression>,
+    pub(crate) input_layout: Option<SlotLayout>,
+    pub(crate) output_layout: Option<SlotLayout>,
+}
+
 impl ArenaPlanAssembler {
     pub(crate) fn push_source_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
@@ -160,16 +170,13 @@ impl ArenaPlanAssembler {
     ///
     /// Used by E1b for co-partition joins where the join key differs from
     /// the partition key, requiring a shuffle to align partitions.
+    #[allow(dead_code)]
     pub(crate) fn push_hash_exchange_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,
         op_alloc: &mut PhysicalOperatorIdAllocator,
         frag_alloc: &mut ArenaFragmentAllocator,
-        partition_fids: Vec<FragmentId>,
-        partition_count: usize,
-        hash_expressions: Vec<crate::core::types::expr::Expression>,
-        input_layout: Option<SlotLayout>,
-        output_layout: Option<SlotLayout>,
+        params: HashExchangeParams,
     ) -> (FragmentId, PhysicalOperatorId) {
         let op_id = op_alloc.allocate();
         let fid = frag_alloc.allocate();
@@ -177,10 +184,10 @@ impl ArenaPlanAssembler {
             operator_id: op_id,
             logical_node_id: None,
             spec: OperatorKindSpec::Exchange(ExchangeSpec::RepartitionHash {
-                num_partitions: partition_count,
-                hash_expressions,
-                input_layout,
-                output_layout,
+                num_partitions: params.partition_count,
+                hash_expressions: params.hash_expressions,
+                input_layout: params.input_layout,
+                output_layout: params.output_layout,
             }),
             input_contract: InputContract::NoInput,
             input_layout: None,
@@ -195,7 +202,7 @@ impl ArenaPlanAssembler {
             kind: FragmentKind::Exchange,
             operators: vec![op_id],
             root_operator: op_id,
-            inputs: partition_fids,
+            inputs: params.partition_fids,
             output: None,
             exchange_layout: None,
         });

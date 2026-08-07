@@ -293,25 +293,27 @@ fn measure(
     }
     let mut last_metrics = ExplainMetrics::default();
     let table = format!("EXPLAIN ANALYZE {query}");
-    if let Ok(result) = pipeline.execute_query_with_space(&table, Some(space.clone())) {
-        if let graphdb::query::executor::base::ExecutionResult::DataSet { data, .. } = result {
-            if let Some(row) = data.rows.first() {
-                if let Some(Value::String(text)) = row.first() {
-                    last_metrics = parse_explain_table_header(text);
-                }
+    if let Ok(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
+    ) = pipeline.execute_query_with_space(&table, Some(space.clone()))
+    {
+        if let Some(row) = data.rows.first() {
+            if let Some(Value::String(text)) = row.first() {
+                last_metrics = parse_explain_table_header(text);
             }
         }
     }
     let dot = format!("EXPLAIN ANALYZE FORMAT = DOT {query}");
-    if let Ok(result) = pipeline.execute_query_with_space(&dot, Some(space.clone())) {
-        if let graphdb::query::executor::base::ExecutionResult::DataSet { data, .. } = result {
-            if let Some(row) = data.rows.first() {
-                if let Some(Value::String(text)) = row.first() {
-                    let dot_metrics = parse_explain_dot(text);
-                    last_metrics.storage_read_us = dot_metrics.storage_read_us;
-                    last_metrics.total_operator_us = dot_metrics.total_operator_us;
-                    last_metrics.root_total_us = dot_metrics.root_total_us;
-                }
+    if let Ok(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
+    ) = pipeline.execute_query_with_space(&dot, Some(space.clone()))
+    {
+        if let Some(row) = data.rows.first() {
+            if let Some(Value::String(text)) = row.first() {
+                let dot_metrics = parse_explain_dot(text);
+                last_metrics.storage_read_us = dot_metrics.storage_read_us;
+                last_metrics.total_operator_us = dot_metrics.total_operator_us;
+                last_metrics.root_total_us = dot_metrics.root_total_us;
             }
         }
     }
@@ -339,7 +341,7 @@ fn main() {
     ] {
         println!("\n### {q_name}: {query}");
         println!(
-            "{:>7} | {:>6} | {:>7} | {:>8} | {:>7} | {:>8} | {:>7} | {:>7} | {}",
+            "{:>7} | {:>6} | {:>7} | {:>8} | {:>7} | {:>8} | {:>7} | {:>7} | fallback / storage R",
             "workers",
             "actual",
             "T(1)/T(n)",
@@ -347,8 +349,7 @@ fn main() {
             "E(n)",
             "work us",
             "wall us",
-            "eta",
-            "fallback / storage R"
+            "eta"
         );
         let mut medians: Vec<u64> = Vec::new();
         let mut metrics_list: Vec<ExplainMetrics> = Vec::new();

@@ -19,7 +19,7 @@ use super::super::types::{
     FragmentId, FragmentSpec, PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec,
 };
 use super::assembler::{
-    ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx,
+    ArenaFragmentAllocator, ArenaPlanAssembler, BinaryOperatorSpec, FragmentCtx, HashExchangeParams,
 };
 use super::specs::{
     build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec,
@@ -38,6 +38,17 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
 };
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::PartitionSource;
+
+/// A partitioned physical plan: operators, fragments, root fragment, root operator.
+type PartitionedPlan = (
+    Vec<PhysicalOperatorSpec>,
+    Vec<FragmentSpec>,
+    FragmentId,
+    PhysicalOperatorId,
+);
+
+/// Result of building a partitioned plan.
+type PartitionBuildResult = Result<Option<PartitionedPlan>, PlanBuildError>;
 
 /// Result of decomposing the logical root into a partitionable chain.
 struct PartitionedChain<'a> {
@@ -64,15 +75,7 @@ pub(super) fn build_partitioned(
     node: &PlanNodeEnum,
     spec: &crate::query::planning::plan::PartitionSpec,
     exec_ctx: &ExecutionContext,
-) -> Result<
-    Option<(
-        Vec<PhysicalOperatorSpec>,
-        Vec<FragmentSpec>,
-        FragmentId,
-        PhysicalOperatorId,
-    )>,
-    PlanBuildError,
-> {
+) -> PartitionBuildResult {
     // Multi-branch: a set op or cross join over two independent scan chains,
     // each partitioned with the shared ranges and gathered before the global
     // binary operator.
@@ -375,10 +378,10 @@ fn equality_join_keys_are_simple(
 ) -> bool {
     hash_keys.len() == 1
         && probe_keys.len() == 1
-        && hash_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+        && hash_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
             matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
         })
-        && probe_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+        && probe_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
             matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
         })
 }
@@ -386,7 +389,7 @@ fn equality_join_keys_are_simple(
 /// Whether a join key references the vertex-id partition key (`vid`), the only
 /// key that is partition-local under vertex-id range partitioning.
 fn key_references_vid(expr: &ContextualExpression) -> bool {
-    expr.expression().map_or(false, |meta| {
+    expr.expression().is_some_and(|meta| {
         matches!(
             meta.inner(),
             Expression::Variable(name) if name == "vid" || name.ends_with(".vid")
@@ -421,15 +424,7 @@ fn build_partitioned_multi(
     node: &PlanNodeEnum,
     spec: &crate::query::planning::plan::PartitionSpec,
     exec_ctx: &ExecutionContext,
-) -> Result<
-    Option<(
-        Vec<PhysicalOperatorSpec>,
-        Vec<FragmentSpec>,
-        FragmentId,
-        PhysicalOperatorId,
-    )>,
-    PlanBuildError,
-> {
+) -> PartitionBuildResult {
     let Some((left, right, op)) = split_independent_branches(node) else {
         return Ok(None);
     };
@@ -466,6 +461,22 @@ fn build_partitioned_multi(
     // the global join path below.
     if let Some(join_spec) = join_spec.as_ref() {
         if let Some(result) = build_co_partitioned_join(
+            node,
+            join_spec.clone(),
+            &left_chain,
+            &right_chain,
+            spec,
+            exec_ctx,
+        )? {
+            return Ok(Some(result));
+        }
+    }
+
+    // E1b hash exchange join: when join keys are simple variables but NOT the
+    // vertex-id partition key, shuffle both sides by join key so matching rows
+    // land in the same partition, then run partition-local joins.
+    if let Some(join_spec) = join_spec.as_ref() {
+        if let Some(result) = build_hash_exchange_join(
             node,
             join_spec.clone(),
             &left_chain,
@@ -551,15 +562,7 @@ fn build_co_partitioned_join(
     right_chain: &PartitionedChain,
     spec: &crate::query::planning::plan::PartitionSpec,
     exec_ctx: &ExecutionContext,
-) -> Result<
-    Option<(
-        Vec<PhysicalOperatorSpec>,
-        Vec<FragmentSpec>,
-        FragmentId,
-        PhysicalOperatorId,
-    )>,
-    PlanBuildError,
-> {
+) -> PartitionBuildResult {
     // Guards: the join key must be the vertex-id partition key and both
     // branches must be partition-local scan chains (no global operators or
     // split aggregates, which need a full gather before they can run).
@@ -634,6 +637,172 @@ fn build_co_partitioned_join(
         .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
 
     Ok(Some((operators, fragments, root_fid, root_operator)))
+}
+
+/// Build a hash-exchange join (E1b): shuffle both sides by join key, then
+/// N partition-local joins, followed by a Concatenate exchange.
+///
+/// This path is used when the join key is a simple variable reference but
+/// NOT the vertex-id partition key. The hash exchange redistributes rows
+/// by the join key so that matching rows land in the same partition,
+/// enabling per-partition joins.
+fn build_hash_exchange_join(
+    node: &PlanNodeEnum,
+    join_spec: JoinSpec,
+    left_chain: &PartitionedChain,
+    right_chain: &PartitionedChain,
+    spec: &crate::query::planning::plan::PartitionSpec,
+    exec_ctx: &ExecutionContext,
+) -> PartitionBuildResult {
+    // Guards: join keys must be simple variables, and both branches must be
+    // partition-local scan chains (no global operators or split aggregates).
+    if !equality_join_keys_are_simple(
+        hash_keys_of(node),
+        probe_keys_of(node),
+    ) {
+        return Ok(None);
+    }
+    if equality_join_keys_reference_vid(node) {
+        return Ok(None);
+    }
+    if !left_chain.global.is_empty()
+        || !right_chain.global.is_empty()
+        || left_chain.aggregate_split.is_some()
+        || right_chain.aggregate_split.is_some()
+    {
+        return Ok(None);
+    }
+
+    let mut operators = Vec::new();
+    let mut fragments = Vec::new();
+    let mut op_alloc = PhysicalOperatorIdAllocator::new();
+    let mut frag_alloc = ArenaFragmentAllocator::new();
+
+    // Build partition-local fragments for both sides.
+    let left_frags = build_partition_local_fragments(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        left_chain,
+        left_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+    let right_frags = build_partition_local_fragments(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        right_chain,
+        right_chain.scan,
+        spec,
+        exec_ctx,
+    )?;
+
+    // Extract hash expressions from join keys.
+    let hash_exprs = extract_join_key_expressions(node);
+    if hash_exprs.is_empty() {
+        return Ok(None);
+    }
+
+    // Create hash exchange operators for both sides to shuffle by join key.
+    let (left_hash_fid, _) = ArenaPlanAssembler::push_hash_exchange_op(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        HashExchangeParams {
+            partition_fids: left_frags,
+            partition_count: spec.partition_count(),
+            hash_expressions: hash_exprs.clone(),
+            input_layout: None,
+            output_layout: None,
+        },
+    );
+    let (right_hash_fid, _) = ArenaPlanAssembler::push_hash_exchange_op(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        HashExchangeParams {
+            partition_fids: right_frags,
+            partition_count: spec.partition_count(),
+            hash_expressions: hash_exprs,
+            input_layout: None,
+            output_layout: None,
+        },
+    );
+
+    // Create N partition-local joins. Each join receives one partition from
+    // each hash exchange output.
+    let mut join_fids = Vec::with_capacity(spec.partition_count());
+    for _ in 0..spec.partition_count() {
+        let (fid, _) = ArenaPlanAssembler::push_binary_op(
+            &mut FragmentCtx {
+                operators: &mut operators,
+                fragments: &mut fragments,
+                op_alloc: &mut op_alloc,
+            },
+            &mut frag_alloc,
+            left_hash_fid,
+            right_hash_fid,
+            node.id(),
+            join_spec.clone(),
+        )?;
+        join_fids.push(fid);
+    }
+
+    // Gather partition-local join results.
+    let (root_fid, _) = ArenaPlanAssembler::push_exchange_op(
+        &mut operators,
+        &mut fragments,
+        &mut op_alloc,
+        &mut frag_alloc,
+        join_fids,
+        spec.partition_count(),
+    );
+    let root_operator = fragments
+        .get(root_fid.0)
+        .map(|f| f.root_operator)
+        .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "root fragment missing"))?;
+
+    Ok(Some((operators, fragments, root_fid, root_operator)))
+}
+
+/// Extract hash key expressions from a join node.
+fn hash_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
+    match node {
+        PlanNodeEnum::InnerJoin(join) => join.hash_keys(),
+        PlanNodeEnum::HashInnerJoin(join) => join.hash_keys(),
+        _ => &[],
+    }
+}
+
+/// Extract probe key expressions from a join node.
+fn probe_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
+    match node {
+        PlanNodeEnum::InnerJoin(join) => join.probe_keys(),
+        PlanNodeEnum::HashInnerJoin(join) => join.probe_keys(),
+        _ => &[],
+    }
+}
+
+/// Extract the hash key expressions as plain `Expression` values from a join node.
+fn extract_join_key_expressions(node: &PlanNodeEnum) -> Vec<Expression> {
+    match node {
+        PlanNodeEnum::InnerJoin(join) => join
+            .hash_keys()
+            .iter()
+            .filter_map(|k| k.get_expression())
+            .collect(),
+        PlanNodeEnum::HashInnerJoin(join) => join
+            .hash_keys()
+            .iter()
+            .filter_map(|k| k.get_expression())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Push one global operator as a new fragment consuming the current child.
@@ -1152,9 +1321,9 @@ mod tests {
 
     #[test]
     fn non_vid_equality_join_falls_back_to_global_gather_join() {
-        // A join on a non-vid key is not partition-local: it must fall back to
-        // the global gather-then-join path while STILL carrying the equality
-        // condition (R1 regression: the condition must not be dropped).
+        // A join on a non-vid key uses the hash exchange path: both sides are
+        // shuffled by join key, then partition-local joins run in parallel,
+        // followed by a Concatenate exchange.
         let node = keyed_join("a.value", "b.value");
         let mut ctx = PhysicalPlanBuildContext::new();
         ctx.partition_spec = Some(spec_with_two_ranges());
@@ -1163,13 +1332,13 @@ mod tests {
         let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
         assert!(
             ctx.parallel_fallback_reason.is_empty(),
-            "non-vid equality join must still partition via the global path, got: {}",
+            "non-vid equality join must use hash exchange path, got: {}",
             ctx.parallel_fallback_reason
         );
 
-        // Each branch is a full chain group (2 scans + 1 exchange each), then
-        // a single global join over both exchanges.
-        assert_eq!(plan.fragment_count(), 7);
+        // Hash exchange path: 2 left frags + 1 left hash exchange +
+        // 2 right frags + 1 right hash exchange + 2 local joins + 1 gather = 9
+        assert_eq!(plan.fragment_count(), 9);
         assert_eq!(
             plan.fragments
                 .fragments()
@@ -1179,8 +1348,8 @@ mod tests {
                     crate::query::executor::streaming::plan::types::FragmentKind::Exchange
                 ))
                 .count(),
-            2,
-            "global join path gathers each branch separately"
+            3,
+            "hash exchange path: 2 hash exchanges + 1 final gather"
         );
 
         let mut join_count = 0;
@@ -1192,15 +1361,15 @@ mod tests {
                 join_count += 1;
                 assert!(
                     join_condition.is_some(),
-                    "global equality join must carry its key condition"
+                    "partition-local equality join must carry its key condition"
                 );
             }
         }
-        assert_eq!(join_count, 1, "exactly one global join fragment");
+        assert_eq!(join_count, 2, "two partition-local join fragments");
 
         crate::query::executor::streaming::plan::validator::PhysicalPlanValidator::validate(
             &Arc::new(plan),
         )
-        .expect("global-gather join plan should validate");
+        .expect("hash-exchange join plan should validate");
     }
 }

@@ -133,14 +133,13 @@ fn run(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &S
 }
 
 fn explain(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &SpaceInfo) {
-    if let Ok(result) =
-        pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
+    if let Ok(
+        graphdb::query::executor::base::ExecutionResult::DataSet { data, .. },
+    ) = pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
     {
-        if let graphdb::query::executor::base::ExecutionResult::DataSet { data, .. } = result {
-            if let Some(row) = data.rows.first() {
-                if let Some(Value::String(text)) = row.first() {
-                    println!("--- EXPLAIN ANALYZE:\n{text}");
-                }
+        if let Some(row) = data.rows.first() {
+            if let Some(Value::String(text)) = row.first() {
+                println!("--- EXPLAIN ANALYZE:\n{text}");
             }
         }
     }

@@ -1279,9 +1279,9 @@ impl DataChunk {
         typed_used: &mut bool,
     ) -> Result<Vec<Value>, ExpressionError> {
         // Typed batch fast path: all leaves are typed columns/literals.
-        if let Some(batch) = self.try_eval_typed_batch(expression, col_cache, params)? {
+        if let Some(batch) = self.try_eval_typed_batch(expression, params)? {
             *typed_used = true;
-            return Ok(batch.to_values());
+            return Ok(batch.into_values());
         }
         match expression {
             Expression::Literal(v) => Ok(vec![v.clone(); self.rows.len()]),
@@ -1409,7 +1409,6 @@ impl DataChunk {
     fn try_eval_typed_batch(
         &mut self,
         expression: &Expression,
-        col_cache: &HashMap<String, Vec<Value>>,
         params: Option<&Arc<HashMap<String, Value>>>,
     ) -> Result<Option<TypedBatch>, ExpressionError> {
         match expression {
@@ -1428,16 +1427,16 @@ impl DataChunk {
                 Ok(self.typed_column(slot).and_then(typed_column_batch))
             }
             Expression::Unary { op, operand } => {
-                let Some(batch) = self.try_eval_typed_batch(operand, col_cache, params)? else {
+                let Some(batch) = self.try_eval_typed_batch(operand, params)? else {
                     return Ok(None);
                 };
                 Ok(typed_unary_batch(op, batch))
             }
             Expression::Binary { left, op, right } => {
-                let Some(left_batch) = self.try_eval_typed_batch(left, col_cache, params)? else {
+                let Some(left_batch) = self.try_eval_typed_batch(left, params)? else {
                     return Ok(None);
                 };
-                let Some(right_batch) = self.try_eval_typed_batch(right, col_cache, params)? else {
+                let Some(right_batch) = self.try_eval_typed_batch(right, params)? else {
                     return Ok(None);
                 };
                 typed_binary_batch(op, &left_batch, &right_batch)
@@ -1446,7 +1445,7 @@ impl DataChunk {
                 expression,
                 target_type,
             } => {
-                let Some(batch) = self.try_eval_typed_batch(expression, col_cache, params)? else {
+                let Some(batch) = self.try_eval_typed_batch(expression, params)? else {
                     return Ok(None);
                 };
                 Ok(typed_cast_batch(batch, target_type))
@@ -1501,7 +1500,7 @@ enum TypedBatch {
 }
 
 impl TypedBatch {
-    fn to_values(self) -> Vec<Value> {
+    fn into_values(self) -> Vec<Value> {
         match self {
             TypedBatch::I64(v) => v.into_iter().map(Value::BigInt).collect(),
             TypedBatch::F64(v) => v.into_iter().map(Value::Double).collect(),

@@ -65,7 +65,7 @@ pub struct PlanCacheContext {
     pub capability_set: u64,
 }
 
-use crate::query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
+use crate::query::planning::plan::execution_plan::PartitionSpec;
 
 /// Query Plan Cache Key
 ///
@@ -1087,6 +1087,7 @@ impl Default for ParameterizedQueryHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::planning::plan::execution_plan::PartitionSource;
 
     #[test]
     fn test_plan_cache_key() {

@@ -43,9 +43,6 @@ pub fn create_vertex_type(
                 ctx.vertex_table_shards(),
             ))
         })
-        .and_then(|label| {
-            Ok(label)
-        })
 }
 
 pub fn create_vertex_type_with_id(
@@ -83,9 +80,6 @@ pub fn create_vertex_type_with_id(
                 schema,
                 ctx.vertex_table_shards(),
             ))
-        })
-        .and_then(|label| {
-            Ok(label)
         })
 }
 
@@ -141,9 +135,6 @@ pub fn create_edge_type(
             }
             Ok(table)
         })
-        .and_then(|label| {
-            Ok(label)
-        })
 }
 
 pub fn create_edge_type_with_id(
@@ -189,9 +180,6 @@ pub fn create_edge_type_with_id(
                 Ok(table)
             },
         )
-        .and_then(|label| {
-            Ok(label)
-        })
 }
 
 pub fn drop_vertex_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<()> {

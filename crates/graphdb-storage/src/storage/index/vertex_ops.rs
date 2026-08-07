@@ -292,7 +292,7 @@ impl IndexDataManagerImpl {
         if merge_pending {
             let pending_guard = self.pending_deltas.lock();
             if let Some(pending) = pending_guard.get(&identity) {
-                for (_, (forward, _)) in pending.per_shard.iter() {
+                for (forward, _) in pending.per_shard.values() {
                     for (key, entry) in forward.range((
                         std::ops::Bound::Included(prefix.0.clone()),
                         std::ops::Bound::Excluded(end.0.clone()),

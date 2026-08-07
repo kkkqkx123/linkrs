@@ -167,9 +167,9 @@ impl PartitioningPlanner {
                 Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
             }
         } else if scans.is_empty() {
-            return self.decide_edge_scan(root, statistics, &range);
+            self.decide_edge_scan(root, statistics, &range)
         } else {
-            return self.decide_multi_scan(root, statistics, &range);
+            self.decide_multi_scan(root, statistics, &range)
         }
     }
 
@@ -405,10 +405,10 @@ impl PartitioningPlanner {
     ) -> bool {
         hash_keys.len() == 1
             && probe_keys.len() == 1
-            && hash_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+            && hash_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
                 matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
             })
-            && probe_keys.first().and_then(|k| k.expression()).map_or(false, |m| {
+            && probe_keys.first().and_then(|k| k.expression()).is_some_and(|m| {
                 matches!(m.inner(), crate::core::types::expr::Expression::Variable(_))
             })
     }

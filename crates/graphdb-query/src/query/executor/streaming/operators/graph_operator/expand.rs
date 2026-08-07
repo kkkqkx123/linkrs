@@ -136,8 +136,7 @@ pub(super) fn handle_all(
                     },
                 )?;
                 if count > 0 {
-                    let mut out_row = Vec::with_capacity(1);
-                    out_row.push(Value::BigInt(count));
+                    let out_row = vec![Value::BigInt(count)];
                     return Ok(Some(DataChunk::new_with_layout(
                         vec![out_row],
                         Arc::clone(&base.output_layout),

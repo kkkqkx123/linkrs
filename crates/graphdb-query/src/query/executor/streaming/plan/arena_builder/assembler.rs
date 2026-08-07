@@ -7,6 +7,7 @@ pub(super) mod fragment_ops;
 
 pub(super) use fragment_ops::BinaryOperatorSpec;
 pub(super) use fragment_ops::FragmentCtx;
+pub(super) use fragment_ops::HashExchangeParams;
 
 pub(super) struct ArenaPlanAssembler;
 

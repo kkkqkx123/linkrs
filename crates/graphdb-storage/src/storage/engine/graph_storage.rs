@@ -226,13 +226,6 @@ impl GraphStorage {
             .retired_generation_count()
     }
 
-    /// The index data manager (tests and diagnostics).
-    pub(crate) fn index_data_manager(
-        &self,
-    ) -> &parking_lot::RwLock<crate::storage::index::IndexDataManagerImpl> {
-        self.ctx.index_data_manager()
-    }
-
     pub fn with_vertex_gc(mut self, config: crate::storage::vertex::VertexGcConfig) -> Self {
         let new_ctx = Arc::new((*self.ctx).clone().with_vertex_gc(config));
         self.ctx = new_ctx;
