@@ -23,7 +23,9 @@ fn create_chunk(size: usize) -> DataChunk {
             ]
         })
         .collect();
-    DataChunk::new_with_layout(rows, layout)
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns();
+    chunk
 }
 
 fn bench_expression_eval(c: &mut Criterion) {
