@@ -33,9 +33,11 @@
 use std::sync::Arc;
 
 use crate::core::types::{CharsetInfo, SpaceInfo};
+use crate::query::executor::streaming::query_registry::CancelToken;
+use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::utils::{Arena, IdGenerator};
 
-use super::{QueryExecutionManager, QueryRequestContext};
+use super::QueryRequestContext;
 
 /// Query context
 ///
@@ -45,7 +47,8 @@ use super::{QueryExecutionManager, QueryRequestContext};
 /// # Responsibilities
 ///
 /// - Query request context (session information, request parameters)
-/// - Query execution manager (execution plan, termination flags)
+/// - Request-scoped cancellation token (shared with the execution runtime and
+///   the process-level query registry — one token for all cancellation)
 /// - ID generation for query execution
 /// - Space information management (space info, character set)
 /// - Optional arena allocator for high-performance temporary allocations
@@ -56,8 +59,12 @@ use super::{QueryExecutionManager, QueryRequestContext};
 pub struct QueryContext {
     /// Query request context
     rctx: Arc<QueryRequestContext>,
-    /// Query Execution Manager
-    execution_manager: QueryExecutionManager,
+    /// Request-scoped cancellation token.
+    ///
+    /// The execution pipeline threads this token into the query registry and
+    /// the execution runtime (`instantiate_plan`), so `mark_killed`, KILL
+    /// QUERY, and runtime cancel all flip the same underlying state.
+    cancel_token: CancelToken,
     /// ID Generator for query execution
     id_gen: IdGenerator,
     /// Current space information
@@ -76,7 +83,7 @@ impl QueryContext {
     pub fn new(rctx: Arc<QueryRequestContext>) -> Self {
         Self {
             rctx,
-            execution_manager: QueryExecutionManager::new(),
+            cancel_token: CancelToken::new(),
             id_gen: IdGenerator::new(0),
             space_info: None,
             charset_info: None,
@@ -103,7 +110,7 @@ impl QueryContext {
     /// Only visible within the query::context module.
     pub(super) fn from_builder(
         rctx: Arc<QueryRequestContext>,
-        execution_manager: QueryExecutionManager,
+        cancel_token: CancelToken,
         id_gen: IdGenerator,
         space_info: Option<SpaceInfo>,
         charset_info: Option<Box<CharsetInfo>>,
@@ -111,7 +118,7 @@ impl QueryContext {
     ) -> Self {
         Self {
             rctx,
-            execution_manager,
+            cancel_token,
             id_gen,
             space_info,
             charset_info,
@@ -134,19 +141,12 @@ impl QueryContext {
         &self.rctx
     }
 
-    /// Obtain the execution plan
-    pub fn plan(&self) -> Option<crate::query::planning::plan::ExecutionPlan> {
-        self.execution_manager.plan()
-    }
-
-    /// Setting the execution plan
-    pub fn set_plan(&mut self, plan: crate::query::planning::plan::ExecutionPlan) {
-        self.execution_manager.set_plan(plan);
-    }
-
-    /// Obtain the execution plan ID
-    pub fn plan_id(&self) -> Option<i64> {
-        self.execution_manager.plan_id()
+    /// The request-scoped cancellation token.
+    ///
+    /// Threaded into the execution runtime and query registry at instantiation
+    /// so all cancellation paths share one source of truth.
+    pub fn cancel_token(&self) -> CancelToken {
+        self.cancel_token.clone()
     }
 
     /// Obtaining character set information
@@ -189,14 +189,18 @@ impl QueryContext {
         self.space_info.as_ref().map(|s| s.space_name.clone())
     }
 
-    /// Marked as terminated
+    /// Mark this query as killed.
+    ///
+    /// Cancels the request-scoped token shared with the execution runtime and
+    /// the query registry, so running operators abort at the next cooperative
+    /// cancellation check and `KILL QUERY` observability reflects the state.
     pub fn mark_killed(&self) {
-        self.execution_manager.mark_killed();
+        self.cancel_token.cancel(CancelReason::UserKill);
     }
 
-    /// Check whether it was terminated.
+    /// Check whether this query has been killed/cancelled.
     pub fn is_killed(&self) -> bool {
-        self.execution_manager.is_killed()
+        self.cancel_token.is_cancelled()
     }
 
     /// Check whether the parameters exist.
@@ -216,7 +220,7 @@ impl QueryContext {
 
     /// Reset the query context
     pub fn reset(&mut self) {
-        self.execution_manager.reset();
+        self.cancel_token.clear();
         self.id_gen.reset(0);
         self.space_info = None;
         self.charset_info = None;
@@ -241,16 +245,6 @@ impl QueryContext {
         self.arena.as_ref().map(|a| a.allocated_bytes())
     }
 
-    /// Obtain a reference to the query execution manager.
-    pub fn execution_manager(&self) -> &QueryExecutionManager {
-        &self.execution_manager
-    }
-
-    /// Obtain a variable reference to the query execution manager.
-    pub fn execution_manager_mut(&mut self) -> &mut QueryExecutionManager {
-        &mut self.execution_manager
-    }
-
     // Note: resource_context() and space_context() methods have been removed
     // as part of the optimization to inline these contexts into QueryContext.
     // Use the direct accessor methods instead:
@@ -262,7 +256,6 @@ impl std::fmt::Debug for QueryContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryContext")
             .field("rctx", &self.rctx)
-            .field("plan_id", &self.plan_id())
             .field("space_id", &self.space_id())
             .field("killed", &self.is_killed())
             .field("has_arena", &self.arena.is_some())
@@ -273,5 +266,53 @@ impl std::fmt::Debug for QueryContext {
 impl Default for QueryContext {
     fn default() -> Self {
         Self::new(Arc::new(QueryRequestContext::default()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_killed_cancels_shared_token() {
+        let rctx = Arc::new(QueryRequestContext::new("MATCH (n) RETURN n".to_string()));
+        let ctx = QueryContext::new(rctx);
+        assert!(!ctx.is_killed());
+
+        // A clone of the token is what the pipeline hands to the runtime.
+        let runtime_token = ctx.cancel_token();
+        assert!(!runtime_token.is_cancelled());
+
+        ctx.mark_killed();
+
+        assert!(ctx.is_killed());
+        assert!(runtime_token.is_cancelled());
+        assert_eq!(runtime_token.reason(), Some(CancelReason::UserKill));
+    }
+
+    #[test]
+    fn runtime_adopts_context_token() {
+        use crate::query::executor::streaming::runtime::ExecutionRuntime;
+        let rctx = Arc::new(QueryRequestContext::new("MATCH (n) RETURN n".to_string()));
+        let ctx = QueryContext::new(rctx);
+
+        let mut runtime = ExecutionRuntime::default_budget();
+        runtime.set_cancel_token(ctx.cancel_token());
+        assert!(!runtime.is_cancelled());
+
+        ctx.mark_killed();
+        assert!(runtime.is_cancelled());
+        assert!(runtime.ensure_not_cancelled().is_err());
+    }
+
+    #[test]
+    fn reset_clears_cancellation() {
+        let rctx = Arc::new(QueryRequestContext::new("MATCH (n) RETURN n".to_string()));
+        let mut ctx = QueryContext::new(rctx);
+        ctx.mark_killed();
+        assert!(ctx.is_killed());
+
+        ctx.reset();
+        assert!(!ctx.is_killed());
     }
 }

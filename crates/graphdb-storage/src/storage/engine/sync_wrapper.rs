@@ -6,6 +6,9 @@
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use crate::storage::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
+};
 use crate::storage::engine::graph_storage::AutoCommitBatchWindow;
 use crate::storage::macros::forward_methods;
 use crate::storage::{
@@ -694,6 +697,20 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             from_version: u64,
             to_version: u64,
         ) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn create_vertex_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn VertexCursor>, StorageError>;
+        fn create_edge_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn EdgeCursor>, StorageError>;
+        fn create_index_cursor(
+            &self,
+            plan: &IndexScanPlan,
+        ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
     );
 }
 

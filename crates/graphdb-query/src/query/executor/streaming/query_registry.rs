@@ -92,9 +92,43 @@ impl QueryRegistry {
     /// The caller should later call [`Self::unregister`] once the query
     /// lifecycle ends (after teardown).
     pub fn register(&self, metadata: QueryMetadata) -> (QueryId, CancelToken) {
-        let id = self.allocate_id();
-        let reason = Arc::new(parking_lot::Mutex::new(None));
-        let token = CancelToken(reason.clone());
+        self.register_with_token(QueryId(0), metadata, None)
+    }
+
+    /// Register a query under a caller-provided ID.
+    ///
+    /// Used to honor a request-scoped `query_id` (e.g. one supplied by the
+    /// server layer).  If the requested ID is already active or zero, the
+    /// registry falls back to allocating a fresh unique ID so that identity
+    /// uniqueness is never violated.
+    pub fn register_with_id(
+        &self,
+        requested: QueryId,
+        metadata: QueryMetadata,
+    ) -> (QueryId, CancelToken) {
+        self.register_with_token(requested, metadata, None)
+    }
+
+    /// Register a query with an externally-owned cancellation token.
+    ///
+    /// When `external_token` is provided, the registry entry shares the same
+    /// underlying cancellation state, so a `CancelToken::cancel` performed by
+    /// the owner (e.g. [`QueryContext::mark_killed`]) is immediately visible
+    /// through the registry and vice versa.  This is the single-token
+    /// convergence point for KILL QUERY / cancellation.
+    pub fn register_with_token(
+        &self,
+        requested: QueryId,
+        metadata: QueryMetadata,
+        external_token: Option<CancelToken>,
+    ) -> (QueryId, CancelToken) {
+        let id = if requested.is_zero() || self.active.contains_key(&requested) {
+            self.allocate_id()
+        } else {
+            requested
+        };
+        let token = external_token.unwrap_or_default();
+        let reason = token.0.clone();
 
         self.active.insert(
             id,
@@ -380,5 +414,102 @@ mod tests {
             assert!(!id.is_zero());
             assert!(ids.insert(id));
         }
+    }
+
+    #[test]
+    fn test_register_with_requested_id_honored() {
+        let reg = Arc::new(QueryRegistry::new());
+        let meta = QueryMetadata {
+            query_id: QueryId(0),
+            session_id: Some(7),
+            user_name: None,
+            space_name: None,
+            query_text: None,
+            start_time: Instant::now(),
+        };
+        let (id, _) = reg.register_with_id(QueryId(42), meta);
+        assert_eq!(id, QueryId(42), "request-scoped id must be honored");
+        assert_eq!(reg.active_count(), 1);
+
+        let (id2, _) = reg.register_with_id(
+            QueryId(42),
+            QueryMetadata {
+                query_id: QueryId(0),
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query_text: None,
+                start_time: Instant::now(),
+            },
+        );
+        assert_ne!(
+            id2,
+            QueryId(42),
+            "a duplicate requested id must fall back to a fresh allocation"
+        );
+        assert!(!id2.is_zero());
+        assert_eq!(reg.active_count(), 2);
+    }
+
+    #[test]
+    fn test_register_with_zero_id_allocates() {
+        let reg = Arc::new(QueryRegistry::new());
+        let meta = QueryMetadata {
+            query_id: QueryId(0),
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query_text: None,
+            start_time: Instant::now(),
+        };
+        let (id, _) = reg.register_with_id(QueryId(0), meta);
+        assert!(!id.is_zero(), "zero is never a valid id");
+    }
+
+    #[test]
+    fn test_register_with_external_token_shares_state() {
+        let reg = Arc::new(QueryRegistry::new());
+        let external = CancelToken::new();
+        let meta = QueryMetadata {
+            query_id: QueryId(0),
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query_text: None,
+            start_time: Instant::now(),
+        };
+        let (id, token) = reg.register_with_token(QueryId(0), meta.clone(), Some(external.clone()));
+        assert!(!id.is_zero());
+        assert!(!token.is_cancelled());
+        assert_eq!(reg.cancellation_reason(id), None);
+
+        // Cancelling the external token must be visible through the registry.
+        external.cancel(CancelReason::UserKill);
+        assert!(token.is_cancelled());
+        assert_eq!(reg.cancellation_reason(id), Some(CancelReason::UserKill));
+
+        // Cancelling via the registry must be visible through the token.
+        let external2 = CancelToken::new();
+        let (id2, token2) = reg.register_with_token(QueryId(0), meta, Some(external2.clone()));
+        reg.cancel(id2, CancelReason::Deadline);
+        assert!(token2.is_cancelled());
+        assert_eq!(external2.reason(), Some(CancelReason::Deadline));
+    }
+
+    #[test]
+    fn test_register_without_token_allocates_fresh() {
+        let reg = Arc::new(QueryRegistry::new());
+        let meta = QueryMetadata {
+            query_id: QueryId(0),
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query_text: None,
+            start_time: Instant::now(),
+        };
+        let (id, token) = reg.register_with_token(QueryId(0), meta, None);
+        assert!(!token.is_cancelled());
+        reg.cancel(id, CancelReason::Shutdown);
+        assert!(token.is_cancelled());
     }
 }

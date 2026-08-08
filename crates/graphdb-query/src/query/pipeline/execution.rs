@@ -152,68 +152,37 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok((result, metrics, profile));
         }
 
-        // Compile with per-phase timing (not from cache, to measure each phase)
-        let plan_start = Instant::now();
+        // Compile through the shared plan-cache path (parses to a cached
+        // physical plan when available, otherwise compiles + caches).  The
+        // elapsed time covers the whole compile phase; `optimize_us` stays
+        // zero because optimization is folded into the cache-compile step.
+        let compile_start = Instant::now();
         let bound_for_profile = request
             .bound_statement
             .as_ref()
             .expect("bound statement must exist");
-        let execution_plan = match self.generate_execution_plan_from_bound(
+        let physical_plan = match self.compile_or_get_cached(
+            &request.query_text,
             request.query_context.clone(),
             bound_for_profile,
+            &request.stmt,
             &request.ast,
+            request.dml_shape_cacheable,
         ) {
             Ok(plan) => {
-                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                metrics.set_plan_node_count(plan.node_count());
-                metrics.record_plan_time(plan_start.elapsed());
+                profile.stages.plan_us = compile_start.elapsed().as_micros() as u64;
+                metrics.set_plan_node_count(plan.operator_count());
+                metrics.record_plan_time(compile_start.elapsed());
                 plan
             }
             Err(e) => {
-                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                profile.stages.plan_us = compile_start.elapsed().as_micros() as u64;
                 let error_info =
                     ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
                 profile.mark_failed_with_info(error_info.clone());
                 profile.total_duration_us = total_start.elapsed().as_micros() as u64;
                 self.stats_manager
                     .record_failed_query(profile.clone(), error_info);
-                let _ = request.finalize_owned_operation(false);
-                return Err(e);
-            }
-        };
-
-        let optimize_start = Instant::now();
-        let space_name = request
-            .query_context
-            .space_name()
-            .or_else(|| request.query_context.request_context().space_name.clone());
-        let optimized_plan =
-            match self.optimize_execution_plan(execution_plan, space_name.as_deref()) {
-                Ok(plan) => {
-                    profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
-                    metrics.record_optimize_time(optimize_start.elapsed());
-                    plan
-                }
-                Err(e) => {
-                    profile.stages.optimize_us = optimize_start.elapsed().as_micros() as u64;
-                    let error_info = ErrorInfo::new(
-                        ErrorType::OptimizationError,
-                        QueryPhase::Optimize,
-                        e.to_string(),
-                    );
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    let _ = request.finalize_owned_operation(false);
-                    return Err(e);
-                }
-            };
-
-        let physical_plan = match self.build_physical_plan(&optimized_plan, &request.query_context)
-        {
-            Ok(plan) => plan,
-            Err(e) => {
                 let _ = request.finalize_owned_operation(false);
                 return Err(e);
             }
@@ -406,6 +375,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());
         }
+        if let Some(query_id) = query_context.request_context().query_id {
+            context.query_id = query_id;
+        }
+        context.cancel_token = Some(query_context.cancel_token());
         if query_context.has_arena() {
             context.arena = Some(Arc::new(
                 parking_lot::Mutex::new(crate::utils::Arena::new()),

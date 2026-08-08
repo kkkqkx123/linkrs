@@ -1,4 +1,3 @@
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::core::error::QueryError;
@@ -9,6 +8,7 @@ use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
+use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::traversal::config::TraversalConfig;
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
@@ -360,7 +360,7 @@ pub(super) fn traverse_on_chunk(
     reader: &dyn QueryStorage,
     config: &TraversalConfig,
     visited: &mut VisitedSet,
-    cancel_token: Option<Arc<AtomicBool>>,
+    cancel_token: Option<CancelToken>,
 ) -> Result<Option<DataChunk>, QueryError> {
     let _col_names = chunk.col_names();
     let edge_type = config.edge_types.first().map(|s| s.as_str()).unwrap_or("");

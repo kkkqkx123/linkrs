@@ -94,7 +94,7 @@ pub use cost_based::{
 // Re-export heuristic types
 pub use heuristic::{
     BaseRewriteRule, EliminationRule, HeuristicRule, HeuristicRuleAdapter, IntoOptRule,
-    MatchedResult, MergeRule, PlanRewriter, PushDownRule, RewriteContext, RewriteError,
+    MatchedResult, MergeRule, NodeRewriter, PushDownRule, RewriteContext, RewriteError,
     RewriteRule, RuleWrapper, TransformResult,
 };
 

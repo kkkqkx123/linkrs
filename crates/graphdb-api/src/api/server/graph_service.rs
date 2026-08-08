@@ -481,12 +481,16 @@ impl<
                 .map(StreamingQueryResult::from_execution_result);
         }
 
+        // Assign a server-side monotonic query ID up front so the request-scoped
+        // id is threaded through QueryRequestContext → ExecutionContext → runtime.
+        let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
         let query_request = crate::api::core::QueryRequest {
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
             parameters: None,
+            query_id: Some(query_id as u64),
         };
 
         let mut query_api = self.query_api.write();
@@ -515,7 +519,6 @@ impl<
         };
 
         // Assign a server-side monotonic query ID (not from SQL text hash).
-        let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
         result.runtime().assign_query_id(query_id as u64);
         session.register_streaming_query(query_id, stmt.to_string(), result.runtime_downgrade());
 
@@ -591,6 +594,7 @@ impl<
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
             parameters: None,
+            query_id: None,
         };
 
         let mut query_api = self.query_api.write();
@@ -1205,6 +1209,7 @@ where
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            query_id: None,
         };
         let outcomes = self
             .query_api

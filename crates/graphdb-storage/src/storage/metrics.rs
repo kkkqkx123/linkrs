@@ -6,6 +6,9 @@ use crate::core::types::{
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use crate::storage::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
+};
 use crate::storage::macros::forward_methods;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
@@ -90,6 +93,20 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         fn get_edge_schema_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
         fn detect_vertex_breaking_changes(&self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
         fn detect_edge_breaking_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn create_vertex_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn VertexCursor>, StorageError>;
+        fn create_edge_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn EdgeCursor>, StorageError>;
+        fn create_index_cursor(
+            &self,
+            plan: &IndexScanPlan,
+        ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
     );
 }
 

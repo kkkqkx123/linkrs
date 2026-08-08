@@ -38,6 +38,8 @@ pub struct ExecutionContext {
     pub max_workers: usize,
     /// Server-assigned query ID for KILL QUERY / cancellation support.
     pub query_id: u64,
+    /// Request-scoped cancellation token threaded to the runtime/registry.
+    pub cancel_token: Option<crate::query::executor::streaming::query_registry::CancelToken>,
     /// Streaming chunk size (rows per chunk).
     pub chunk_size: usize,
     /// Maximum buffered chunks before back-pressure.
@@ -69,6 +71,7 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            cancel_token: None,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
@@ -96,6 +99,7 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            cancel_token: None,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
@@ -122,6 +126,7 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            cancel_token: None,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
@@ -158,6 +163,7 @@ impl ExecutionContext {
             memory_budget: budget,
             max_workers: 1,
             query_id: 0,
+            cancel_token: None,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
@@ -229,6 +235,7 @@ impl Default for ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            cancel_token: None,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,

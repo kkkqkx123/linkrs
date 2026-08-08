@@ -332,6 +332,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
 
         // Constructing a QueryRequestContext
         let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        request_context.query_id = ctx.query_id;
         request_context.transaction_id = ctx.transaction_id.or_else(|| {
             operation_context
                 .as_ref()
@@ -461,6 +462,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     ) -> CoreResult<StreamingQueryResult> {
         let operation_owned = operation_storage.is_some() && ctx.auto_commit;
         let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        request_context.query_id = ctx.query_id;
         request_context.transaction_id = ctx.transaction_id.or_else(|| {
             operation_context
                 .as_ref()
@@ -525,6 +527,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             auto_commit: ctx.auto_commit,
             transaction_id: ctx.transaction_id,
             parameters: Some(params),
+            query_id: ctx.query_id,
         };
         self.execute(query, new_ctx)
     }

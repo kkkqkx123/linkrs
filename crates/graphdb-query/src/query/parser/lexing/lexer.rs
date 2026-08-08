@@ -468,7 +468,7 @@ impl<'a> Lexer<'a> {
             "DESCENDING" => Tk::Descending,
             "FETCH" => Tk::Fetch,
             "PROP" => Tk::Prop,
-            "BALANCE" => Tk::Balance,
+            "BALANCE" => Tk::Identifier("balance".to_string()),
             "STOP" => Tk::Stop,
             "REVERT" => Tk::Revert,
             "USE" => Tk::Use,
@@ -677,6 +677,10 @@ impl<'a> Lexer<'a> {
                     Some(&'=') => {
                         self.read_char();
                         Token::new(Tk::Le, "<=".to_string(), self.line, self.column)
+                    }
+                    Some(&'>') => {
+                        self.read_char();
+                        Token::new(Tk::Ne, "<>".to_string(), self.line, self.column)
                     }
                     _ => Token::new(Tk::Lt, "<".to_string(), self.line, self.column),
                 }

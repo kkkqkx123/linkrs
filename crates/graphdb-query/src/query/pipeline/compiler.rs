@@ -43,14 +43,28 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Arc<PhysicalPlan>,
         crate::query::planning::plan::ExecutionPlan,
     )> {
+        let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
+        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+        Ok((physical_plan, optimized_plan))
+    }
+
+    /// Bind + plan + optimize only, returning the optimized logical plan
+    /// without materializing the physical plan.
+    ///
+    /// Split out of [`compile_from_bound`] so callers can inspect the
+    /// partition layout and serve a cached physical plan before building it.
+    pub(crate) fn optimize_from_bound(
+        &mut self,
+        query_context: Arc<QueryContext>,
+        bound: &BoundStatement,
+        ast: &Arc<crate::query::parser::ast::stmt::Ast>,
+    ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
         let execution_plan =
             self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
         let space_name = query_context
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
-        let optimized_plan = self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
-        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
-        Ok((physical_plan, optimized_plan))
+        self.optimize_execution_plan(execution_plan, space_name.as_deref())
     }
 
     pub(crate) fn generate_execution_plan_from_bound(
@@ -73,13 +87,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ))
         })?;
 
-        let sub_plan = match planner_enum.plan_bound(bound, query_context.clone()) {
+        // The AST-derived validated statement is the primary input for
+        // clause planning; the lazy metadata context is built from the
+        // referenced tags/edges only (never the full space schema).
+        let validated = super::prepared::build_validated_fallback(ast);
+        let metadata = self.build_metadata_context(&query_context, bound);
+
+        let sub_plan = match planner_enum.plan_bound(
+            bound,
+            query_context.clone(),
+            metadata.as_ref(),
+            &validated,
+        ) {
             Ok(plan) => plan,
             Err(PlannerError::UnsupportedOperation(_)) => {
-                let validated = super::prepared::build_validated_fallback(ast);
-                if let Some(metadata) = self.build_metadata_context(&query_context) {
+                if let Some(metadata) = metadata.as_ref() {
                     planner_enum
-                        .transform_with_metadata(&validated, query_context.clone(), &metadata)
+                        .transform_with_metadata(&validated, query_context.clone(), metadata)
                         .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
                 } else {
                     planner_enum
@@ -190,7 +214,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             planning_config_hash: planning_config.config_hash,
             capability_set: 0,
         };
-        if let Some(cached) = self.plan_cache.get_with_context(query_text, cache_context) {
+        if let Some(cached) = self
+            .plan_cache
+            .get_with_context(query_text, cache_context.clone())
+        {
             crate::query::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
                 &cached.plan,
                 schema_version,
@@ -207,7 +234,33 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok(cached.plan.clone());
         }
 
-        let (plan, _) = self.compile_from_bound(query_context, bound, ast)?;
+        // Two-phase compile: bind + optimize first so a partitioned plan can
+        // be served from the cache under its layout fingerprint, skipping the
+        // expensive physical-plan build + validation on subsequent runs.
+        let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
+        if let Some(spec) = optimized_plan.partition_spec() {
+            if let Some(cached) =
+                self.plan_cache
+                    .get_with_partition_context(query_text, spec, cache_context.clone())
+            {
+                crate::query::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
+                    &cached.plan,
+                    schema_version,
+                )
+                .map_err(DBError::from)?;
+                if let Some(sig) = dml_param_sig {
+                    *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
+                        normalized_text: query_text.to_string(),
+                        schema_version,
+                        param_sig: sig,
+                        plan: cached.plan.clone(),
+                    });
+                }
+                return Ok(cached.plan.clone());
+            }
+        }
+
+        let plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         let cacheable = super::prepared::is_read_only_cacheable(stmt) || dml_shape_cacheable;
         if cacheable {
             if let Some(sig) = dml_param_sig {
@@ -223,8 +276,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             // layout version) yields a cache miss instead of reusing a stale
             // physical plan. Single-tree plans keep the plain-text key.
             if let Some(spec) = plan.partition_spec() {
-                self.plan_cache
-                    .put_with_partition(query_text, spec, plan.clone(), param_positions);
+                let dependent_tables = collect_dependent_tables(bound);
+                self.plan_cache.put_with_partition(
+                    query_text,
+                    spec,
+                    plan.clone(),
+                    param_positions,
+                    crate::query::cache::plan_cache::PlanCachePutContext {
+                        dependent_tables,
+                        space_name,
+                        schema_version,
+                        index_version,
+                        is_dml: dml_shape_cacheable,
+                        is_transaction: false,
+                        optimizer_version: planning_config.optimizer_version,
+                        planning_config_hash: planning_config.config_hash,
+                        capability_set: 0,
+                    },
+                );
             } else {
                 let dependent_tables = collect_dependent_tables(bound);
                 self.plan_cache.put_with_context(
@@ -297,11 +366,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         hasher.finish()
     }
 
-    /// Build a `MetadataContext` for the current space from schema and index
-    /// managers, used for index scan selection during planning.
+    /// Build a `MetadataContext` for the current space scoped to the schema
+    /// objects referenced by the bound statement.
+    ///
+    /// Only the referenced tags, edge types, and their indexes are loaded, so
+    /// planning does not pay the cost of the full space schema on every query.
     fn build_metadata_context(
         &self,
         query_context: &QueryContext,
+        bound: &BoundStatement,
     ) -> Option<crate::query::metadata::MetadataContext> {
         use crate::query::metadata::{
             EdgeTypeMetadata, IndexMetadata, IndexType, MetadataContext, PropertyDefinition,
@@ -313,33 +386,67 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .or_else(|| query_context.request_context().space_name.clone())?;
         let space_id = query_context.space_id().unwrap_or(0);
 
+        let (referenced_tags, referenced_edges, full_load) =
+            referenced_schema_objects(bound);
+
         let mut metadata = MetadataContext::new();
 
         if let Some(schema_manager) = &self.schema_manager {
-            if let Ok(tags) = schema_manager.list_tags(&space_name) {
-                for tag in tags {
-                    let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
-                    for prop in &tag.properties {
-                        tag_metadata.properties.push(PropertyDefinition::new(
-                            prop.name.clone(),
-                            PropertyType::from(prop.data_type.clone()),
-                        ));
+            if full_load {
+                if let Ok(tags) = schema_manager.list_tags(&space_name) {
+                    for tag in tags {
+                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
+                        for prop in &tag.properties {
+                            tag_metadata.properties.push(PropertyDefinition::new(
+                                prop.name.clone(),
+                                PropertyType::from(prop.data_type.clone()),
+                            ));
+                        }
+                        metadata.set_tag_metadata(tag.tag_name.clone(), tag_metadata);
                     }
-                    metadata.set_tag_metadata(tag.tag_name.clone(), tag_metadata);
                 }
-            }
-            if let Ok(edge_types) = schema_manager.list_edge_types(&space_name) {
-                for edge_type in edge_types {
-                    let mut edge_metadata =
-                        EdgeTypeMetadata::new(edge_type.edge_type_name.clone(), space_id);
-                    for prop in &edge_type.properties {
-                        edge_metadata.properties.push(PropertyDefinition::new(
-                            prop.name.clone(),
-                            PropertyType::from(prop.data_type.clone()),
-                        ));
+                if let Ok(edge_types) = schema_manager.list_edge_types(&space_name) {
+                    for edge_type in edge_types {
+                        let mut edge_metadata =
+                            EdgeTypeMetadata::new(edge_type.edge_type_name.clone(), space_id);
+                        for prop in &edge_type.properties {
+                            edge_metadata.properties.push(PropertyDefinition::new(
+                                prop.name.clone(),
+                                PropertyType::from(prop.data_type.clone()),
+                            ));
+                        }
+                        metadata
+                            .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
                     }
-                    metadata
-                        .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
+                }
+            } else {
+                for tag_name in &referenced_tags {
+                    if let Ok(Some(tag)) = schema_manager.get_tag(&space_name, tag_name) {
+                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
+                        for prop in &tag.properties {
+                            tag_metadata.properties.push(PropertyDefinition::new(
+                                prop.name.clone(),
+                                PropertyType::from(prop.data_type.clone()),
+                            ));
+                        }
+                        metadata.set_tag_metadata(tag.tag_name.clone(), tag_metadata);
+                    }
+                }
+                for edge_type_name in &referenced_edges {
+                    if let Ok(Some(edge_type)) =
+                        schema_manager.get_edge_type(&space_name, edge_type_name)
+                    {
+                        let mut edge_metadata =
+                            EdgeTypeMetadata::new(edge_type.edge_type_name.clone(), space_id);
+                        for prop in &edge_type.properties {
+                            edge_metadata.properties.push(PropertyDefinition::new(
+                                prop.name.clone(),
+                                PropertyType::from(prop.data_type.clone()),
+                            ));
+                        }
+                        metadata
+                            .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
+                    }
                 }
             }
         }
@@ -352,6 +459,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(index_manager) = index_manager {
             if let Ok(indexes) = index_manager.list_tag_indexes(space_id) {
                 for index in indexes {
+                    if !full_load
+                        && !referenced_tags
+                            .iter()
+                            .any(|t| t.as_str() == index.schema_name.as_str())
+                    {
+                        continue;
+                    }
                     let field_name = index
                         .fields
                         .first()
@@ -370,6 +484,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
             if let Ok(indexes) = index_manager.list_edge_indexes(space_id) {
                 for index in indexes {
+                    if !full_load
+                        && !referenced_edges
+                            .iter()
+                            .any(|e| e.as_str() == index.schema_name.as_str())
+                    {
+                        continue;
+                    }
                     let field_name = index
                         .fields
                         .first()
@@ -492,4 +613,119 @@ fn collect_dependent_tables(bound: &crate::query::binder::BoundStatement) -> Vec
         }
     }
     tables
+}
+
+/// Split the schema objects referenced by a bound statement into referenced
+/// tag names and edge-type names, used to scope lazy metadata loading.
+///
+/// Only [`BoundStatement::Match`] and [`BoundStatement::Lookup`] consume the
+/// metadata context during planning, so their references must be exact.  For
+/// composite statements (`Pipe` / `SetOperation`) the references are merged
+/// from the child statements.  Statements bound as [`BoundStatement::Other`]
+/// (DDL / DML / management / fulltext / vector / EXPLAIN) cannot be
+/// introspected and must fall back to full-space metadata loading.
+fn referenced_schema_objects(
+    bound: &crate::query::binder::BoundStatement,
+) -> (Vec<String>, Vec<String>, bool) {
+    use crate::query::binder::bound::{BoundLookupTarget, BoundStatement};
+
+    fn push_unique(target: &mut Vec<String>, name: &str) {
+        if !target.iter().any(|t| t.as_str() == name) {
+            target.push(name.to_string());
+        }
+    }
+
+    fn merge(
+        tags: &mut Vec<String>,
+        edges: &mut Vec<String>,
+        other: &(Vec<String>, Vec<String>, bool),
+    ) -> bool {
+        for name in &other.0 {
+            push_unique(tags, name);
+        }
+        for name in &other.1 {
+            push_unique(edges, name);
+        }
+        other.2
+    }
+
+    let mut tags: Vec<String> = Vec::new();
+    let mut edges: Vec<String> = Vec::new();
+
+    match bound {
+        BoundStatement::Match(match_stmt) => {
+            for node in &match_stmt.query_graph.nodes {
+                for tag in &node.tags {
+                    push_unique(&mut tags, tag.tag_name.as_ref());
+                }
+            }
+            for edge in &match_stmt.query_graph.edges {
+                for edge_type in &edge.edge_types {
+                    push_unique(&mut edges, edge_type.edge_type_name.as_ref());
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Lookup(lookup) => match &lookup.target {
+            BoundLookupTarget::Tag(name) => {
+                push_unique(&mut tags, name);
+                (tags, edges, false)
+            }
+            BoundLookupTarget::Edge(name) => {
+                push_unique(&mut edges, name);
+                (tags, edges, false)
+            }
+        },
+        BoundStatement::Go(go) => {
+            if let Some(over) = &go.over {
+                for name in over {
+                    push_unique(&mut edges, name);
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::FetchVertices(fetch) => {
+            if let Some(name) = &fetch.tag_name {
+                push_unique(&mut tags, name);
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::FetchEdges(fetch) => {
+            push_unique(&mut edges, &fetch.edge_type);
+            (tags, edges, false)
+        }
+        BoundStatement::FindPath(path) => {
+            if let Some((over, _)) = &path.over {
+                for name in over {
+                    push_unique(&mut edges, name);
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Subgraph(subgraph) => {
+            if let Some((over, _)) = &subgraph.over {
+                for name in over {
+                    push_unique(&mut edges, name);
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Pipe(pipe) => {
+            let mut full = false;
+            for stmt in &pipe.statements {
+                full |= merge(&mut tags, &mut edges, &referenced_schema_objects(stmt));
+            }
+            (tags, edges, full)
+        }
+        BoundStatement::SetOperation(set_op) => {
+            let full = merge(&mut tags, &mut edges, &referenced_schema_objects(&set_op.left))
+                | merge(&mut tags, &mut edges, &referenced_schema_objects(&set_op.right));
+            (tags, edges, full)
+        }
+        BoundStatement::Return(_)
+        | BoundStatement::With(_)
+        | BoundStatement::Unwind(_)
+        | BoundStatement::GroupBy(_) => (tags, edges, false),
+        BoundStatement::Other(_) => (tags, edges, true),
+    }
 }

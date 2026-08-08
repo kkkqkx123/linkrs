@@ -213,7 +213,7 @@ impl RecursiveFragmentOperator {
                                     limit: 1000,
                                     direction: *direction,
                                 },
-                                cancel_token.as_deref(),
+                                cancel_token.as_ref(),
                             )?;
                             for path in &paths {
                                 base.ensure_not_cancelled()?;
@@ -305,7 +305,7 @@ impl RecursiveFragmentOperator {
                                 limit: if *single_shortest { 1 } else { 10 },
                                 direction: *direction,
                             },
-                            cancel_token.as_deref(),
+                            cancel_token.as_ref(),
                         )?;
                         for path in &paths {
                             base.ensure_not_cancelled()?;
@@ -391,7 +391,7 @@ impl RecursiveFragmentOperator {
                                 limit: if *allow_loops { 1000 } else { 1 },
                                 direction: *direction,
                             },
-                            cancel_token.as_deref(),
+                            cancel_token.as_ref(),
                         )?;
                         for path in &paths {
                             base.ensure_not_cancelled()?;
@@ -476,7 +476,7 @@ impl RecursiveFragmentOperator {
                                     acyclic: *acyclic,
                                     result_cap: limit.unwrap_or(usize::MAX),
                                 },
-                                cancel_token.as_deref(),
+                                cancel_token.as_ref(),
                             )?;
                             for path in paths.iter().skip(*offset) {
                                 base.ensure_not_cancelled()?;

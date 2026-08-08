@@ -18,10 +18,11 @@
 //! ```
 
 use crate::core::types::{CharsetInfo, SpaceInfo, SpaceSummary};
+use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::utils::{Arena, IdGenerator};
 use std::sync::Arc;
 
-use super::{QueryContext, QueryExecutionManager, QueryRequestContext};
+use super::{QueryContext, QueryRequestContext};
 
 /// QueryContext Builder
 ///
@@ -42,7 +43,6 @@ use super::{QueryContext, QueryExecutionManager, QueryRequestContext};
 #[derive(Default)]
 pub struct QueryContextBuilder {
     rctx: Option<Arc<QueryRequestContext>>,
-    execution_manager: Option<QueryExecutionManager>,
     id_gen: Option<IdGenerator>,
     space_info: Option<SpaceInfo>,
     charset_info: Option<Box<CharsetInfo>>,
@@ -54,7 +54,6 @@ impl QueryContextBuilder {
     pub fn new(rctx: Arc<QueryRequestContext>) -> Self {
         Self {
             rctx: Some(rctx),
-            execution_manager: None,
             id_gen: None,
             space_info: None,
             charset_info: None,
@@ -69,18 +68,11 @@ impl QueryContextBuilder {
     pub fn from_session(rctx: Arc<QueryRequestContext>, space: Option<SpaceSummary>) -> Self {
         Self {
             rctx: Some(rctx),
-            execution_manager: None,
             id_gen: None,
             space_info: space.map(SpaceInfo::from),
             charset_info: None,
             arena: None,
         }
-    }
-
-    /// Set the execution manager.
-    pub fn with_execution_manager(mut self, execution_manager: QueryExecutionManager) -> Self {
-        self.execution_manager = Some(execution_manager);
-        self
     }
 
     /// Set the space information.
@@ -123,12 +115,11 @@ impl QueryContextBuilder {
     /// Panics if QueryRequestContext was not provided.
     pub fn build(self) -> QueryContext {
         let rctx = self.rctx.expect("QueryRequestContext is required");
-        let execution_manager = self.execution_manager.unwrap_or_default();
         let id_gen = self.id_gen.unwrap_or_else(|| IdGenerator::new(0));
 
         QueryContext::from_builder(
             rctx,
-            execution_manager,
+            CancelToken::new(),
             id_gen,
             self.space_info,
             self.charset_info,

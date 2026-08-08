@@ -14,6 +14,8 @@ pub struct QueryRequest {
     pub auto_commit: bool,
     pub transaction_id: Option<TransactionId>,
     pub parameters: Option<HashMap<String, Value>>,
+    /// Optional server-assigned query ID threaded to the execution runtime.
+    pub query_id: Option<u64>,
 }
 
 impl Default for QueryRequest {
@@ -24,6 +26,7 @@ impl Default for QueryRequest {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            query_id: None,
         }
     }
 }

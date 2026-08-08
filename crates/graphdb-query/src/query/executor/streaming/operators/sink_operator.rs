@@ -116,6 +116,22 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
 }
 
+/// Build a row context that resolves `$name` parameter references.
+///
+/// Sink operators evaluate shape-normalized DML expressions (`$__dml_N`
+/// placeholders), so the context must carry the runtime parameter values —
+/// otherwise parameter resolution fails with "Undefined parameter".
+fn row_context(
+    row: Vec<Value>,
+    layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    params: Option<Arc<HashMap<String, Value>>>,
+) -> ValueRowContext {
+    match params {
+        Some(parameters) => ValueRowContext::with_parameters(row, layout, parameters),
+        None => ValueRowContext::new(row, layout),
+    }
+}
+
 /// Row predicate semantics for update conditions (`WHEN`/`WHERE`), matching
 /// the filter operator: false/null/zero/empty reject the row.
 fn condition_matches(value: &Value) -> bool {
@@ -366,9 +382,10 @@ impl SinkOperator {
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
+                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -452,9 +469,10 @@ impl SinkOperator {
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
+                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -528,9 +546,10 @@ impl SinkOperator {
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
+                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -648,9 +667,10 @@ impl SinkOperator {
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
+                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())

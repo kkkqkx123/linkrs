@@ -38,7 +38,6 @@ pub mod join_order_rewriter;
 pub mod memory_budget;
 pub mod subquery_unnesting;
 pub mod topn_optimization;
-pub mod trait_def;
 pub mod traversal_direction;
 pub mod traversal_start;
 
@@ -87,6 +86,3 @@ pub use crate::query::cache::{
     CteCacheConfig, CteCacheDecision, CteCacheDecisionMaker, CteCacheEntry, CteCacheManager,
     CteCacheStats,
 };
-
-// Re-export strategy trait types
-pub use trait_def::{NoOpStrategy, OptimizationStrategy, StrategyChain};

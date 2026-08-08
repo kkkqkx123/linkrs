@@ -194,7 +194,6 @@ pub enum TokenKind {
     Descending,
     Fetch,
     Prop,
-    Balance,
     Stop,
     Revert,
     Use,

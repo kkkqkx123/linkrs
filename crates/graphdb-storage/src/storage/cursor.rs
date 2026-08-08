@@ -984,9 +984,10 @@ impl EdgeCursor for VecEdgeCursor {
 
 /// Open a vertex scan cursor through a storage client.
 ///
-/// Prefers the storage engine's native cursor when available (via
-/// [`StorageReader::create_vertex_cursor`]), falling back to the default
-/// Vec-backed cursor.
+/// Requires the storage engine's native lazy cursor (via
+/// [`StorageReader::create_vertex_cursor`]); storage engines without one
+/// report a capability error.  The [`VecVertexCursor`] type is only used by
+/// adapters and test doubles, not as an implicit fallback.
 ///
 /// When `options.limit` is `Some(n)`, at most `n` vertices are returned.
 pub fn open_vertex_scan<S: crate::storage::StorageReader + ?Sized>(
@@ -1000,9 +1001,10 @@ pub fn open_vertex_scan<S: crate::storage::StorageReader + ?Sized>(
 
 /// Open an edge scan cursor through a storage client.
 ///
-/// Prefers the storage engine's native cursor when available (via
-/// [`StorageReader::create_edge_cursor`]), falling back to the default
-/// Vec-backed cursor.
+/// Requires the storage engine's native lazy cursor (via
+/// [`StorageReader::create_edge_cursor`]); storage engines without one
+/// report a capability error.  The [`VecEdgeCursor`] type is only used by
+/// adapters and test doubles, not as an implicit fallback.
 ///
 /// When `options.edge_type` is set, only edges of that type are scanned.
 /// When `options.limit` is `Some(n)`, at most `n` edges are returned.

@@ -54,18 +54,14 @@
 //!
 //! # Usage Examples
 //!
-//! ```rust
-//! use crate::query::optimizer::heuristic::{PlanRewriter, create_default_rewriter, rewrite_plan};
-//! use crate::query::planning::plan::ExecutionPlan;
+//! Heuristic rules are applied through the batch optimizer (Phase 1):
 //!
-//! // Use the default rewriter
-//! let plan = ExecutionPlan::new(...);
-//! let optimized_plan = rewrite_plan(plan)?;
+//! ```rust,ignore
+//! use crate::query::optimizer::heuristic::batch::BatchOptimizer;
+//! use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
 //!
-//! // Custom rewriter
-//! let mut rewriter = PlanRewriter::new();
-//! rewriter.add_rule(MyCustomRule);
-//! let optimized_plan = rewriter.rewrite(plan)?;
+//! let batch = BatchOptimizer::from_registry(RuleRegistry::default());
+//! let optimized_root = batch.optimize(root)?;
 //! ```
 
 // Core Type Modules (New)
@@ -116,7 +112,7 @@ pub use visitor::ChildRewriteVisitor;
 // Export from the compatibility layer
 pub use rewrite_rule::{HeuristicRule, HeuristicRuleAdapter, IntoOptRule};
 
-pub use plan_rewriter::{create_default_rewriter, rewrite_plan, PlanRewriter};
+pub use plan_rewriter::NodeRewriter;
 
 // Export the enumeration of static distribution rules.
 pub use rule_enum::{RewriteRule as RewriteRuleEnum, RuleRegistry};

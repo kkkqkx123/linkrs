@@ -291,6 +291,7 @@ impl TestDb {
                 auto_commit: false,
                 transaction_id: Some(txn_id),
                 parameters: None,
+                query_id: None,
             };
             let result = self
                 .query_api
@@ -306,6 +307,7 @@ impl TestDb {
                 auto_commit: true,
                 transaction_id: None,
                 parameters: None,
+                query_id: None,
             };
             self.query_api.execute(query, ctx)
         };
@@ -328,6 +330,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            query_id: None,
         };
         self.query_api.execute_stream(query, ctx)
     }
@@ -345,6 +348,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            query_id: None,
         };
         let outcomes = self.query_api.execute_batch(statements, ctx);
         let mut results = Vec::with_capacity(outcomes.len());

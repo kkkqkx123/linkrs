@@ -7,16 +7,13 @@ use std::sync::Arc;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::OptimizerEngine;
-use crate::query::optimizer::{
-    CostModelConfig, CteCacheManager, SelectivityFeedbackManager, StatisticsManager,
-};
+use crate::query::optimizer::{CostModelConfig, CteCacheManager, StatisticsManager};
 
 /// Builder for creating OptimizerEngine instances
 pub struct OptimizerEngineBuilder {
     cost_config: Option<CostModelConfig>,
     expression_context: Option<Arc<ExpressionAnalysisContext>>,
     stats_manager: Option<Arc<StatisticsManager>>,
-    selectivity_feedback_manager: Option<Arc<SelectivityFeedbackManager>>,
     cte_cache_manager: Option<Arc<CteCacheManager>>,
 }
 
@@ -33,7 +30,6 @@ impl OptimizerEngineBuilder {
             cost_config: None,
             expression_context: None,
             stats_manager: None,
-            selectivity_feedback_manager: None,
             cte_cache_manager: None,
         }
     }
@@ -56,15 +52,6 @@ impl OptimizerEngineBuilder {
         self
     }
 
-    /// Set the selectivity feedback manager.
-    pub fn with_selectivity_feedback_manager(
-        mut self,
-        manager: Arc<SelectivityFeedbackManager>,
-    ) -> Self {
-        self.selectivity_feedback_manager = Some(manager);
-        self
-    }
-
     /// Set the CTE cache manager.
     pub fn with_cte_cache_manager(mut self, manager: Arc<CteCacheManager>) -> Self {
         self.cte_cache_manager = Some(manager);
@@ -80,9 +67,6 @@ impl OptimizerEngineBuilder {
         let stats_manager = self
             .stats_manager
             .unwrap_or_else(|| Arc::new(StatisticsManager::new()));
-        let selectivity_feedback_manager = self
-            .selectivity_feedback_manager
-            .unwrap_or_else(|| Arc::new(SelectivityFeedbackManager::new()));
         let cte_cache_manager = self
             .cte_cache_manager
             .unwrap_or_else(|| Arc::new(CteCacheManager::new()));
@@ -90,7 +74,6 @@ impl OptimizerEngineBuilder {
         OptimizerEngine::with_components(
             expression_context,
             stats_manager,
-            selectivity_feedback_manager,
             cte_cache_manager,
             cost_config,
         )

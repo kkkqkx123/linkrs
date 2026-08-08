@@ -78,6 +78,8 @@ impl Planner for UnwindPlanner {
         &mut self,
         bound: &BoundStatement,
         _qctx: Arc<QueryContext>,
+        _metadata: Option<&crate::query::metadata::MetadataContext>,
+        _validated: &ValidatedStatement,
     ) -> Result<SubPlan, PlannerError> {
         let unwind_stmt = match bound {
             BoundStatement::Unwind(stmt) => stmt,

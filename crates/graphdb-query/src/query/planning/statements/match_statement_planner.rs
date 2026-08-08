@@ -12,6 +12,7 @@
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::binder::validation::CypherClauseKind;
 use crate::query::binder::validation::ValidationInfo;
+use crate::query::binder::BoundStatement;
 use crate::query::metadata::MetadataContext;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::SubPlan;
@@ -152,6 +153,37 @@ impl Planner for MatchStatementPlanner {
                     index.field_name
                 );
             }
+        }
+
+        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)
+    }
+
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&MetadataContext>,
+        validated: &ValidatedStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        if !matches!(bound, BoundStatement::Match(_)) {
+            return Err(PlannerError::UnsupportedOperation(
+                "Expected a MATCH bound statement".to_string(),
+            ));
+        }
+
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        if let Some(metadata_context) = metadata {
+            self.metadata_context = Some(metadata_context.clone());
+        }
+
+        self.expr_context = Some(validated.ast.expr_context().clone());
+
+        let validation_info = &validated.validation_info;
+
+        for hint in &validation_info.optimization_hints {
+            log::debug!("Optimization Tip: {:?}", hint);
         }
 
         self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)

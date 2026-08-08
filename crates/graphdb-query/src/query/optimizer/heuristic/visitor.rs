@@ -376,7 +376,20 @@ mod tests {
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use std::sync::Arc;
 
-    use crate::query::optimizer::heuristic::plan_rewriter::PlanRewriter;
+    use crate::query::optimizer::heuristic::plan_rewriter::NodeRewriter;
+
+    struct NoopRewriter;
+
+    impl NodeRewriter for NoopRewriter {
+        fn rewrite_node(
+            &self,
+            _ctx: &mut RewriteContext,
+            node: &PlanNodeEnum,
+            _node_id: usize,
+        ) -> RewriteResult<PlanNodeEnum> {
+            Ok(node.clone())
+        }
+    }
 
     #[test]
     fn test_child_rewrite_visitor_single_input() {
@@ -392,7 +405,7 @@ mod tests {
             .expect("Failed to create FilterNode");
 
         let mut rewrite_ctx = RewriteContext::new();
-        let rewriter = PlanRewriter::new();
+        let rewriter = NoopRewriter;
         let mut visitor = ChildRewriteVisitor::new(&mut rewrite_ctx, &rewriter);
 
         let result = visitor.visit_filter(&filter);
@@ -403,7 +416,7 @@ mod tests {
     fn test_child_rewrite_visitor_leaf_node() {
         let start = StartNode::new();
         let mut rewrite_ctx = RewriteContext::new();
-        let rewriter = PlanRewriter::new();
+        let rewriter = NoopRewriter;
         let mut visitor = ChildRewriteVisitor::new(&mut rewrite_ctx, &rewriter);
 
         let result = visitor.visit_start(&start);

@@ -42,26 +42,15 @@ use crate::query::optimizer::heuristic::batch::{
     BatchOptimizer, BatchStatistics, OptimizationBatch,
 };
 use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
-use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::stats::StatsView;
 use crate::query::optimizer::{
-    AggregateStrategySelector, BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager,
-    SelectivityEstimator, SelectivityFeedbackManager, SortEliminationOptimizer, StatisticsManager,
-    SubqueryUnnestingOptimizer,
+    BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager, SelectivityEstimator,
+    StatisticsManager, SubqueryUnnestingOptimizer,
 };
 
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::planning::plan::PlanNodeEnum;
-
-/// Heuristic optimization mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeuristicMode {
-    /// Use the batch optimizer (default)
-    Batch,
-    /// Use the legacy single-loop plan rewriter (differential comparison / fallback)
-    LegacyRewriter,
-}
 
 /// Optimizer engine
 ///
@@ -73,18 +62,12 @@ pub struct OptimizerEngine {
     expression_context: Arc<ExpressionAnalysisContext>,
     /// Statistics Information Manager
     stats_manager: Arc<StatisticsManager>,
-    /// Selective Feedback Manager
-    selectivity_feedback_manager: Arc<SelectivityFeedbackManager>,
     /// CTE Cache Manager
     cte_cache_manager: Arc<CteCacheManager>,
     /// Cost Calculator
     cost_calculator: Arc<CostCalculator>,
     /// Selective Estimator
     selectivity_estimator: Arc<SelectivityEstimator>,
-    /// Sorting Elimination Optimizer
-    sort_elimination_optimizer: Arc<SortEliminationOptimizer>,
-    /// Aggregation Policy Selector
-    aggregate_strategy_selector: AggregateStrategySelector,
     /// Batch plan analyzer (unified analysis)
     batch_plan_analyzer: BatchPlanAnalyzer,
     /// Subquery de-correlating optimizer
@@ -93,10 +76,6 @@ pub struct OptimizerEngine {
     cost_config: CostModelConfig,
     /// Heuristic batch optimizer (production heuristic main chain)
     heuristic_batch: BatchOptimizer,
-    /// Legacy heuristic plan rewriter (kept for differential testing / fallback)
-    heuristic_rewriter: PlanRewriter,
-    /// Heuristic mode selector
-    heuristic_mode: HeuristicMode,
     /// Last batch optimization statistics (exposed for EXPLAIN diagnostics)
     last_batch_statistics: Mutex<Vec<(OptimizationBatch, BatchStatistics)>>,
     /// Conservative selector for physical streaming partitions.
@@ -128,16 +107,12 @@ impl OptimizerEngine {
         // Create a statistical information manager
         let stats_manager = Arc::new(StatisticsManager::new());
 
-        // Create a selective feedback manager
-        let selectivity_feedback_manager = Arc::new(SelectivityFeedbackManager::new());
-
         // Create a CTE (Common Table Expression) for cache manager management.
         let cte_cache_manager = Arc::new(CteCacheManager::new());
 
         Self::with_components(
             expression_context,
             stats_manager,
-            selectivity_feedback_manager,
             cte_cache_manager,
             cost_config,
         )
@@ -150,7 +125,6 @@ impl OptimizerEngine {
     pub(crate) fn with_components(
         expression_context: Arc<ExpressionAnalysisContext>,
         stats_manager: Arc<StatisticsManager>,
-        selectivity_feedback_manager: Arc<SelectivityFeedbackManager>,
         cte_cache_manager: Arc<CteCacheManager>,
         cost_config: CostModelConfig,
     ) -> Self {
@@ -161,21 +135,11 @@ impl OptimizerEngine {
         ));
         let selectivity_estimator = Arc::new(SelectivityEstimator::new(stats_manager.clone()));
 
-        // Create a sorting elimination optimizer
-        let sort_elimination_optimizer =
-            Arc::new(SortEliminationOptimizer::new(cost_calculator.clone()));
-
         // Create batch plan analyzer (unified analysis)
         let batch_plan_analyzer = BatchPlanAnalyzer::new();
 
-        // Create an aggregate policy selector
-        let aggregate_strategy_selector = AggregateStrategySelector::new(cost_calculator.clone());
-
         // Create a subquery to de-associate the optimizer.
         let subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new();
-
-        // Create a heuristic plan rewriter
-        let heuristic_rewriter = PlanRewriter::default();
 
         // Create the heuristic batch optimizer (production heuristic main chain)
         let heuristic_batch = BatchOptimizer::from_registry(RuleRegistry::default());
@@ -183,18 +147,13 @@ impl OptimizerEngine {
         Self {
             expression_context,
             stats_manager,
-            selectivity_feedback_manager,
             cte_cache_manager,
             cost_calculator,
             selectivity_estimator,
-            sort_elimination_optimizer,
-            aggregate_strategy_selector,
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
             cost_config,
             heuristic_batch,
-            heuristic_rewriter,
-            heuristic_mode: HeuristicMode::Batch,
             last_batch_statistics: Mutex::new(Vec::new()),
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
@@ -232,11 +191,6 @@ impl OptimizerEngine {
         &self.selectivity_estimator
     }
 
-    /// Obtaining the sorting elimination optimizer
-    pub fn sort_elimination_optimizer(&self) -> &SortEliminationOptimizer {
-        &self.sort_elimination_optimizer
-    }
-
     /// Obtain the context of the expression.
     pub fn expression_context(&self) -> &Arc<ExpressionAnalysisContext> {
         &self.expression_context
@@ -247,19 +201,9 @@ impl OptimizerEngine {
         &self.batch_plan_analyzer
     }
 
-    /// Obtain the Aggregation Policy Selector
-    pub fn aggregate_strategy_selector(&self) -> &AggregateStrategySelector {
-        &self.aggregate_strategy_selector
-    }
-
     /// Obtaining the subquery to de-associate the optimizer
     pub fn subquery_unnesting_optimizer(&self) -> &SubqueryUnnestingOptimizer {
         &self.subquery_unnesting_optimizer
-    }
-
-    /// Obtaining the Selective Feedback Manager
-    pub fn selectivity_feedback_manager(&self) -> &SelectivityFeedbackManager {
-        &self.selectivity_feedback_manager
     }
 
     /// Obtaining the CTE Cache Manager
@@ -284,14 +228,8 @@ impl OptimizerEngine {
             self.stats_manager.clone(),
             self.cost_config,
         ));
-        // Re-create the sorting elimination optimizer, using a new cost calculator.
-        self.sort_elimination_optimizer =
-            Arc::new(SortEliminationOptimizer::new(self.cost_calculator.clone()));
         // Re-create batch plan analyzer
         self.batch_plan_analyzer = BatchPlanAnalyzer::new();
-        // Recreate the Aggregation Policy Selector
-        self.aggregate_strategy_selector =
-            AggregateStrategySelector::new(self.cost_calculator.clone());
         // Re-create the subquery to de-associate the optimizer.
         self.subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new();
         log::info!(
@@ -399,32 +337,23 @@ impl OptimizerEngine {
         plan: ExecutionPlan,
         max_iterations: usize,
     ) -> OptimizeResult<ExecutionPlan> {
-        // Interior mutability via Cell: set_max_iterations does not need &mut self.
+        // Interior mutability via AtomicUsize: set_max_iterations does not need &mut self.
         self.heuristic_batch.set_max_iterations(max_iterations);
-        self.heuristic_rewriter.set_max_iterations(max_iterations);
 
-        match self.heuristic_mode {
-            HeuristicMode::Batch => {
-                let root = match plan.root.clone() {
-                    Some(root) => root,
-                    None => return Ok(plan),
-                };
-                let result = self
-                    .heuristic_batch
-                    .optimize(root)
-                    .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
-                if let Ok(mut guard) = self.last_batch_statistics.lock() {
-                    *guard = result.batch_statistics.clone();
-                }
-                let mut new_plan = plan;
-                new_plan.set_root(result.optimized_plan);
-                Ok(new_plan)
-            }
-            HeuristicMode::LegacyRewriter => self
-                .heuristic_rewriter
-                .rewrite(plan)
-                .map_err(|e| OptimizeError::HeuristicFailed(e.to_string())),
+        let root = match plan.root.clone() {
+            Some(root) => root,
+            None => return Ok(plan),
+        };
+        let result = self
+            .heuristic_batch
+            .optimize(root)
+            .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))?;
+        if let Ok(mut guard) = self.last_batch_statistics.lock() {
+            *guard = result.batch_statistics.clone();
         }
+        let mut new_plan = plan;
+        new_plan.set_root(result.optimized_plan);
+        Ok(new_plan)
     }
 
     /// Apply cost-based optimization strategies.
@@ -539,25 +468,9 @@ impl OptimizerEngine {
         }
     }
 
-    /// Get the heuristic rewriter (legacy, kept for differential testing / fallback)
-    pub fn heuristic_rewriter(&self) -> &PlanRewriter {
-        &self.heuristic_rewriter
-    }
-
     /// Get the heuristic batch optimizer
     pub fn heuristic_batch(&self) -> &BatchOptimizer {
         &self.heuristic_batch
-    }
-
-    /// Set the heuristic optimization mode
-    pub fn set_heuristic_mode(&mut self, mode: HeuristicMode) {
-        self.heuristic_mode = mode;
-        log::info!("Heuristic optimization mode set to {:?}", mode);
-    }
-
-    /// Get the current heuristic optimization mode
-    pub fn heuristic_mode(&self) -> HeuristicMode {
-        self.heuristic_mode
     }
 
     /// Get the batch statistics of the last heuristic optimization (for EXPLAIN diagnostics)

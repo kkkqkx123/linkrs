@@ -17,6 +17,7 @@ use std::sync::Arc;
 /// - Graph Space Name
 /// - Query string
 /// - Query parameters
+/// - Optional caller-assigned query ID (threaded to the runtime)
 #[derive(Debug, Clone, Default)]
 pub struct QueryRequestContext {
     /// Session ID
@@ -29,6 +30,12 @@ pub struct QueryRequestContext {
     pub query: String,
     /// Query parameters
     pub parameters: HashMap<String, Value>,
+    /// Optional caller/server-assigned query ID.
+    ///
+    /// When set, the execution runtime is registered and identified under
+    /// this ID; when absent, the [`QueryRegistry`] allocates a unique id.
+    /// [`QueryRegistry`]: crate::query::executor::streaming::query_registry::QueryRegistry
+    pub query_id: Option<u64>,
     /// Transaction identity and storage binding for this execution.
     pub transaction_id: Option<crate::core::types::TransactionId>,
     pub auto_commit: bool,
@@ -46,6 +53,7 @@ impl QueryRequestContext {
             space_name: None,
             query,
             parameters: HashMap::new(),
+            query_id: None,
             transaction_id: None,
             auto_commit: true,
             read_only: false,
@@ -75,6 +83,12 @@ impl QueryRequestContext {
     /// Set the name of the graph space.
     pub fn with_space_name(mut self, space_name: String) -> Self {
         self.space_name = Some(space_name);
+        self
+    }
+
+    /// Set the caller/server-assigned query ID.
+    pub fn with_query_id(mut self, query_id: u64) -> Self {
+        self.query_id = Some(query_id);
         self
     }
 

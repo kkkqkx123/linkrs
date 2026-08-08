@@ -195,6 +195,18 @@ impl PlanCacheKey {
     /// Create a key that additionally captures a physical partition layout,
     /// preventing stale cached plans from being reused after layout changes.
     pub fn from_query_with_partition(query: &str, spec: &PartitionSpec) -> Self {
+        Self::from_query_with_partition_and_context(query, spec, PlanCacheContext::default())
+    }
+
+    /// Create a partition-scoped key that also carries the full compatibility
+    /// context (space / schema / index / param types / optimizer / planning
+    /// config).  Used so partitioned plans are invalidated on DDL, cross-space
+    /// reuse is blocked, and a changed layout fingerprint forces a replan.
+    pub fn from_query_with_partition_and_context(
+        query: &str,
+        spec: &PartitionSpec,
+        context: PlanCacheContext,
+    ) -> Self {
         use std::hash::Hash;
 
         let fp = Self::compute_fingerprint(spec);
@@ -202,19 +214,28 @@ impl PlanCacheKey {
         let mut hasher = Self::hasher();
         Self::normalize_query(query).hash(&mut hasher);
         fp.hash(&mut hasher);
+        if let Some(ref name) = context.space_name {
+            name.hash(&mut hasher);
+        }
+        context.schema_version.hash(&mut hasher);
+        context.param_type_signature.hash(&mut hasher);
+        context.index_version.hash(&mut hasher);
+        context.optimizer_version.hash(&mut hasher);
+        context.planning_config_hash.hash(&mut hasher);
+        context.capability_set.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
             hash,
             query_text: query.to_string(),
             partition_fingerprint: Some(fp),
-            space_name: None,
-            schema_version: None,
-            param_type_signature: None,
-            index_version: None,
-            optimizer_version: 0,
-            planning_config_hash: 0,
-            capability_set: 0,
+            space_name: context.space_name,
+            schema_version: context.schema_version,
+            param_type_signature: context.param_type_signature,
+            index_version: context.index_version,
+            optimizer_version: context.optimizer_version,
+            planning_config_hash: context.planning_config_hash,
+            capability_set: context.capability_set,
         }
     }
 
@@ -704,7 +725,18 @@ impl QueryPlanCache {
     /// the current layout (e.g. re-planning against a previous execution's
     /// metadata); plain-text lookups deliberately miss partitioned entries.
     pub fn get_with_partition(&self, query: &str, spec: &PartitionSpec) -> Option<Arc<CachedPlan>> {
-        let key = PlanCacheKey::from_query_with_partition(query, spec);
+        self.get_with_partition_context(query, spec, PlanCacheContext::default())
+    }
+
+    /// Partition-keyed lookup that additionally scopes by the full
+    /// compatibility context, matching [`put_with_partition`](Self::put_with_partition).
+    pub fn get_with_partition_context(
+        &self,
+        query: &str,
+        spec: &PartitionSpec,
+        context: PlanCacheContext,
+    ) -> Option<Arc<CachedPlan>> {
+        let key = PlanCacheKey::from_query_with_partition_and_context(query, spec, context);
 
         if let Some(plan) = self.cache.get(&key) {
             if plan.query_template != query {
@@ -718,10 +750,20 @@ impl QueryPlanCache {
                 return None;
             }
             self.stats.counters.record_hit();
+            if let Ok(ref sm_guard) = self.stats_manager.read() {
+                if let Some(ref sm) = **sm_guard {
+                    sm.record_cache_hit(0, true);
+                }
+            }
             return Some(plan);
         }
 
         self.stats.counters.record_miss();
+        if let Ok(ref sm_guard) = self.stats_manager.read() {
+            if let Some(ref sm) = **sm_guard {
+                sm.record_cache_hit(0, false);
+            }
+        }
         None
     }
 
@@ -736,8 +778,33 @@ impl QueryPlanCache {
         spec: &PartitionSpec,
         plan: Arc<PhysicalPlan>,
         param_positions: Vec<ParamPosition>,
+        context: PlanCachePutContext,
     ) {
-        let key = PlanCacheKey::from_query_with_partition(query, spec);
+        let PlanCachePutContext {
+            dependent_tables,
+            space_name,
+            schema_version,
+            index_version,
+            is_dml,
+            is_transaction,
+            optimizer_version,
+            planning_config_hash,
+            capability_set,
+        } = context;
+        let param_type_sig = Self::compute_param_type_signature(&param_positions);
+        let key = PlanCacheKey::from_query_with_partition_and_context(
+            query,
+            spec,
+            PlanCacheContext {
+                space_name,
+                schema_version,
+                index_version,
+                param_type_signature: param_type_sig,
+                optimizer_version,
+                planning_config_hash,
+                capability_set,
+            },
+        );
         let priority = if self.config.priority_config.enable_priority {
             self.calculate_priority(&plan)
         } else {
@@ -757,9 +824,9 @@ impl QueryPlanCache {
             complexity_score,
             estimated_compute_cost: self.estimate_compute_cost_from_score(complexity_score),
             current_ttl: Duration::from_secs(self.config.ttl_config.base_ttl_seconds),
-            dependent_tables: Vec::new(),
-            is_dml: false,
-            is_transaction: false,
+            dependent_tables,
+            is_dml,
+            is_transaction,
         });
         self.cache.insert(key, cached_plan);
         self.stats.memory.update(
@@ -818,6 +885,10 @@ impl QueryPlanCache {
     /// P2: index_version must match the value used during `put_with_context` to
     /// locate the cached plan; otherwise the keys will differ and the record
     /// will miss.
+    ///
+    /// `param_type_signature` must match the signature used during
+    /// `put_with_context` (i.e. the hash of the parameter *types*) or the
+    /// record will miss for parameterized queries.
     pub fn record_execution_with_space(
         &self,
         query: &str,
@@ -825,12 +896,13 @@ impl QueryPlanCache {
         space_name: Option<String>,
         schema_version: Option<u64>,
         index_version: Option<u64>,
+        param_type_signature: Option<u64>,
     ) {
         let key = PlanCacheKey::from_query_with_full_context(
             query,
             space_name,
             schema_version,
-            None,
+            param_type_signature,
             index_version,
         );
 
@@ -1280,7 +1352,7 @@ mod tests {
             partition_spec: Some(spec.clone()),
         });
 
-        cache.put_with_partition(query, &spec, plan.clone(), Vec::new());
+        cache.put_with_partition(query, &spec, plan.clone(), Vec::new(), Default::default());
         assert!(
             cache.get(query).is_none(),
             "plain-text lookup must not serve a partitioned plan"
@@ -1294,6 +1366,117 @@ mod tests {
         assert!(
             cache.get_with_partition(query, &other).is_none(),
             "a different layout must not hit the cached partitioned plan"
+        );
+    }
+
+    #[test]
+    fn partitioned_plan_hit_respects_compatibility_context() {
+        use crate::query::executor::streaming::parameters::ParameterSchema;
+        use crate::query::executor::streaming::plan::types::{
+            CapabilitySet, FragmentGraph, FragmentId, OutputContract, PipelineMode,
+            PlanCompatibility, PlanFingerprint,
+        };
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use std::collections::HashMap;
+
+        let cache = QueryPlanCache::default();
+        let query = "MATCH (n:Node) RETURN n";
+        let spec = make_spec(&[(0, 100)], Some(1));
+        let plan = Arc::new(PhysicalPlan {
+            operators: Vec::new(),
+            logical_to_physical: HashMap::new(),
+            fragments: FragmentGraph::new(Vec::new(), FragmentId(0)),
+            root_fragment: FragmentId(0),
+            output: OutputContract {
+                output_layout: SlotLayout::new(Vec::new()),
+                always_produces_row: false,
+                nullability: Vec::new(),
+                ordering: Vec::new(),
+                delivery_streamable: true,
+                pipeline_mode: PipelineMode::Pipelined,
+            },
+            compatibility: PlanCompatibility {
+                fingerprint: PlanFingerprint {
+                    version: 1,
+                    hash: 0,
+                },
+                layout_version: None,
+                required_capabilities: CapabilitySet::EMPTY,
+                planning_config_hash: 0,
+                optimizer_version: 0,
+            },
+            required_capabilities: CapabilitySet::EMPTY,
+            parameter_schema: ParameterSchema {
+                params: Vec::new(),
+                name_to_slot: HashMap::new(),
+            },
+            parallel_fallback_reason: String::new(),
+            partition_spec: Some(spec.clone()),
+        });
+
+        let context = PlanCacheContext {
+            space_name: Some("space_a".to_string()),
+            schema_version: Some(1),
+            index_version: Some(1),
+            param_type_signature: Some(99),
+            optimizer_version: 2,
+            planning_config_hash: 3,
+            capability_set: 0,
+        };
+        // The put path derives the param signature from the param positions;
+        // use the same positions so the keys line up.
+        let param_positions = vec![ParamPosition {
+            index: 1,
+            name: None,
+            position: 0,
+            expected_type: Some(crate::core::types::DataType::String),
+        }];
+        let param_sig = QueryPlanCache::compute_param_type_signature(&param_positions);
+        let context = PlanCacheContext {
+            param_type_signature: param_sig,
+            ..context
+        };
+        cache.put_with_partition(
+            query,
+            &spec,
+            plan.clone(),
+            param_positions,
+            PlanCachePutContext {
+                space_name: context.space_name.clone(),
+                schema_version: context.schema_version,
+                index_version: context.index_version,
+                optimizer_version: context.optimizer_version,
+                planning_config_hash: context.planning_config_hash,
+                capability_set: context.capability_set,
+                ..PlanCachePutContext::default()
+            },
+        );
+
+        let hit = cache
+            .get_with_partition_context(query, &spec, context.clone())
+            .expect("same layout + context must hit");
+        assert_eq!(hit.plan.fragment_count(), 0);
+
+        let changed_space = PlanCacheContext {
+            space_name: Some("space_b".to_string()),
+            ..context.clone()
+        };
+        assert!(
+            cache
+                .get_with_partition_context(query, &spec, changed_space)
+                .is_none(),
+            "a different space must miss the partitioned entry"
+        );
+
+        let changed_schema = PlanCacheContext {
+            schema_version: Some(2),
+            ..context.clone()
+        };
+        assert!(
+            cache
+                .get_with_partition_context(query, &spec, changed_schema)
+                .is_none(),
+            "a schema-version bump must miss the partitioned entry"
         );
     }
 }

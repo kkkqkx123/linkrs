@@ -341,6 +341,13 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok(s)
             }
+            // Reserved words commonly used as tag/property names (e.g.
+            // `CREATE TAG ... (data STRING)`, `MATCH (:transaction)`).
+            TokenKind::Data | TokenKind::Transaction => {
+                let s = self.current_token.lexeme.clone();
+                self.next_token();
+                Ok(s)
+            }
             _ => {
                 let pos = self.current_position();
                 Err(ParseError::new(

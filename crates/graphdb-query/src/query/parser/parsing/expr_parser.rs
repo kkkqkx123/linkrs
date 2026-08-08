@@ -36,6 +36,24 @@ pub fn parse_expression_with_context(
     Ok(ContextualExpression::new(id, expr_ctx))
 }
 
+/// Parse a property-path expression (identifier or literal with optional
+/// `.property` access) and return the ContextualExpression.
+///
+/// Unlike [`parse_expression_with_context`], this does NOT treat `=` as a
+/// comparison operator.  It is used where `=` is the assignment separator
+/// rather than an equality comparison (e.g. the LHS of SET / UPDATE
+/// assignments such as `SET p.age = 30`), so the LHS expression stops at
+/// the `=` token.
+pub fn parse_property_path_with_context(
+    ctx: &mut ParseContext<'_>,
+    expr_ctx: Arc<ExpressionAnalysisContext>,
+) -> Result<ContextualExpression, ParseError> {
+    let result = parse_postfix_expression(ctx)?;
+    let expr_meta = ExpressionMeta::with_span(result.expr, result.span);
+    let id = expr_ctx.register_expression(expr_meta);
+    Ok(ContextualExpression::new(id, expr_ctx))
+}
+
 fn parse_or_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, ParseError> {
     let mut left = parse_and_expression(ctx)?;
 
@@ -99,7 +117,7 @@ fn parse_comparison_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult
 
 fn parse_comparison_op(ctx: &mut ParseContext<'_>) -> Option<BinaryOperator> {
     match ctx.current_token().kind {
-        TokenKind::Eq => {
+        TokenKind::Eq | TokenKind::Assign => {
             ctx.next_token();
             Some(BinaryOperator::Equal)
         }

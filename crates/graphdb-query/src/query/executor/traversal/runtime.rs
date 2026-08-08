@@ -1,10 +1,9 @@
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{Edge, Vertex};
+use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::query::executor::traversal::config::{TraversalConfig, TraversalOrder, VisitedPolicy};
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::stats::TraversalStats;
@@ -38,7 +37,7 @@ pub struct TraversalRuntime<'a> {
     /// Optional cancel token for cooperative cancellation.
     /// When set, `expand_frontier` checks the token at each iteration
     /// boundary and returns early if cancelled.
-    cancel_token: Option<Arc<AtomicBool>>,
+    cancel_token: Option<CancelToken>,
 }
 
 impl<'a> TraversalRuntime<'a> {
@@ -57,13 +56,13 @@ impl<'a> TraversalRuntime<'a> {
     }
 
     /// Attach an optional cancel token for cooperative cancellation.
-    pub fn with_cancel_token(mut self, token: Arc<AtomicBool>) -> Self {
+    pub fn with_cancel_token(mut self, token: CancelToken) -> Self {
         self.cancel_token = Some(token);
         self
     }
 
     /// Set the cancel token after creation.
-    pub fn set_cancel_token(&mut self, token: Arc<AtomicBool>) {
+    pub fn set_cancel_token(&mut self, token: CancelToken) {
         self.cancel_token = Some(token);
     }
 
@@ -71,7 +70,7 @@ impl<'a> TraversalRuntime<'a> {
     /// Returns `QueryError::execution` if cancelled.
     pub fn check_cancel(&self) -> Result<(), QueryError> {
         if let Some(ref token) = self.cancel_token {
-            if token.load(Ordering::Relaxed) {
+            if token.is_cancelled() {
                 return Err(QueryError::execution(
                     "Query cancelled during traversal".to_string(),
                 ));

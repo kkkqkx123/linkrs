@@ -109,6 +109,100 @@ impl Binder {
         self.bind_inner_expr(&inner, type_hint.as_ref())
     }
 
+    /// Walk an expression and reject any variable reference that is not
+    /// defined in the current binding scope.
+    ///
+    /// Used by clause binders that must validate their output variables
+    /// (e.g. RETURN), where an undefined reference is a user error rather
+    /// than a silently-null value.
+    fn ensure_variables_defined(&self, expr: &crate::core::types::ContextualExpression) -> DBResult<()> {
+        fn check(scope: &crate::query::binder::scope::BinderScope, e: &Expression) -> DBResult<()> {
+            match e {
+                Expression::Variable(name) => {
+                    if !scope.contains(name) {
+                        return Err(DBError::from(
+                            crate::core::error::QueryError::invalid_query(format!(
+                                "Undefined variable: {}",
+                                name
+                            )),
+                        ));
+                    }
+                    Ok(())
+                }
+                Expression::Property { object, .. } => check(scope, object),
+                Expression::Binary { left, right, .. } => {
+                    check(scope, left)?;
+                    check(scope, right)
+                }
+                Expression::Unary { operand, .. } => check(scope, operand),
+                Expression::Function { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
+                Expression::Aggregate { args, filter, .. } => {
+                    args.iter().try_for_each(|a| check(scope, a))?;
+                    if let Some(f) = filter {
+                        check(scope, f)?;
+                    }
+                    Ok(())
+                }
+                Expression::List(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::Map(pairs) => pairs
+                    .iter()
+                    .try_for_each(|(_, v)| check(scope, v)),
+                Expression::Case {
+                    test_expr,
+                    conditions,
+                    default,
+                } => {
+                    if let Some(t) = test_expr {
+                        check(scope, t)?;
+                    }
+                    for (c, v) in conditions {
+                        check(scope, c)?;
+                        check(scope, v)?;
+                    }
+                    if let Some(d) = default {
+                        check(scope, d)?;
+                    }
+                    Ok(())
+                }
+                Expression::TypeCast { expression, .. } => check(scope, expression),
+                Expression::Subscript { collection, index } => {
+                    check(scope, collection)?;
+                    check(scope, index)
+                }
+                Expression::Range { collection, .. } => check(scope, collection),
+                Expression::Path(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::ListComprehension { source, filter, map, .. } => {
+                    check(scope, source)?;
+                    if let Some(f) = filter {
+                        check(scope, f)?;
+                    }
+                    if let Some(m) = map {
+                        check(scope, m)?;
+                    }
+                    Ok(())
+                }
+                Expression::LabelTagProperty { tag, .. } => check(scope, tag),
+                Expression::Predicate { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
+                Expression::Reduce {
+                    initial, source, mapping, ..
+                } => {
+                    check(scope, initial)?;
+                    check(scope, source)?;
+                    check(scope, mapping)
+                }
+                Expression::PathBuild(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::WindowFunction { args, .. } => {
+                    args.iter().try_for_each(|a| check(scope, a))
+                }
+                _ => Ok(()),
+            }
+        }
+        let Some(inner) = expr.get_expression() else {
+            return Ok(());
+        };
+        check(&self.scope, &inner)
+    }
+
     fn bind_inner_expr(
         &mut self,
         expr: &Expression,
@@ -482,6 +576,39 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let query_graph = self.build_query_graph(&stmt.patterns)?;
 
+        // Register MATCH variables in scope BEFORE binding WHERE / RETURN /
+        // ORDER BY so those clauses can reference the matched entities.
+        for node in &query_graph.nodes {
+            self.scope.define_variable(BinderVariable {
+                name: node.variable.clone(),
+                alias_type: AliasType::Node,
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+        for edge in &query_graph.edges {
+            self.scope.define_variable(BinderVariable {
+                name: edge.variable.clone(),
+                alias_type: AliasType::Edge,
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+
         let where_clause = stmt
             .where_clause
             .as_ref()
@@ -519,38 +646,6 @@ impl Binder {
             .as_ref()
             .map(|dc| self.bind_match_delete(dc))
             .transpose()?;
-
-        // Register MATCH variables in scope
-        for node in &query_graph.nodes {
-            self.scope.define_variable(BinderVariable {
-                name: node.variable.clone(),
-                alias_type: AliasType::Node,
-                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
-                properties: node
-                    .tags
-                    .iter()
-                    .flat_map(|t| t.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
-        for edge in &query_graph.edges {
-            self.scope.define_variable(BinderVariable {
-                name: edge.variable.clone(),
-                alias_type: AliasType::Edge,
-                tags: edge
-                    .edge_types
-                    .iter()
-                    .map(|e| e.edge_type_name.to_string())
-                    .collect(),
-                properties: edge
-                    .edge_types
-                    .iter()
-                    .flat_map(|e| e.properties.clone())
-                    .collect(),
-                is_defined: true,
-            });
-        }
 
         Ok(BoundStatement::Match(BoundMatchStatement {
             span: stmt.span,
@@ -1083,6 +1178,20 @@ impl Binder {
             })
             .collect::<DBResult<Vec<_>>>()?;
 
+        // Register WITH aliases in scope so the WITH condition and subsequent
+        // clauses can reference them.
+        for item in &items {
+            if let Some(alias) = &item.alias {
+                self.scope.define_variable(BinderVariable {
+                    name: alias.clone(),
+                    alias_type: AliasType::Expression,
+                    tags: Vec::new(),
+                    properties: std::collections::HashMap::new(),
+                    is_defined: true,
+                });
+            }
+        }
+
         let condition = stmt
             .where_clause
             .as_ref()
@@ -1167,6 +1276,9 @@ impl Binder {
             .iter()
             .map(|item| match item {
                 ReturnItem::Expression { expression, alias } => {
+                    // Reject references to variables that are not defined in
+                    // the current binding scope (e.g. `RETURN undefined_var`).
+                    self.ensure_variables_defined(expression)?;
                     self.bind_expr(expression).map(|be| BoundReturnItem {
                         expression: be,
                         alias: alias.clone(),

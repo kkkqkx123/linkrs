@@ -556,14 +556,20 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         match &request.stmt {
             Stmt::Explain(ref explain_stmt) => {
                 if explain_stmt.analyze {
-                    self.execute_explain_analyze(explain_stmt, request.query_context.clone())
+                    self.execute_explain_analyze(
+                        explain_stmt,
+                        request.query_context.clone(),
+                        request.transaction_scope.clone(),
+                    )
                 } else {
                     self.execute_explain(explain_stmt, request.query_context.clone())
                 }
             }
-            Stmt::Profile(ref profile_stmt) => {
-                self.execute_profile(profile_stmt, request.query_context.clone())
-            }
+            Stmt::Profile(ref profile_stmt) => self.execute_profile(
+                profile_stmt,
+                request.query_context.clone(),
+                request.transaction_scope.clone(),
+            ),
             _ => Err(DBError::from(QueryError::execution(
                 "Not a diagnostic statement".to_string(),
             ))),
@@ -716,12 +722,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
+        let param_type_signature =
+            self.current_param_type_signature(query_text, query_context.request_context());
         self.plan_cache.record_execution_with_space(
             query_text,
             execution_time_ms,
             space_name,
             schema_version,
             index_version,
+            param_type_signature,
         );
     }
 
@@ -745,6 +754,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
+        let param_type_signature = self.current_param_type_signature(
+            &request.query_text,
+            request.query_context.request_context(),
+        );
 
         let plan_cache = Arc::clone(&self.plan_cache);
         let query_text = request.query_text.clone();
@@ -757,8 +770,30 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 space_name2,
                 schema_version,
                 index_version,
+                param_type_signature,
             );
         }));
+    }
+
+    /// Hash of the parameter *types* in the current request, matching the
+    /// dimension used by the plan-cache put path so execution-time feedback
+    /// updates the correct cache entry.
+    fn current_param_type_signature(
+        &self,
+        query_text: &str,
+        request: &QueryRequestContext,
+    ) -> Option<u64> {
+        let mut param_positions = self.param_handler.extract_params(query_text);
+        for position in &mut param_positions {
+            let name = position
+                .name
+                .clone()
+                .unwrap_or_else(|| position.index.to_string());
+            position.expected_type = request.parameters.get(&name).map(|value| value.data_type());
+        }
+        crate::query::cache::plan_cache::QueryPlanCache::compute_param_type_signature(
+            &param_positions,
+        )
     }
 }
 

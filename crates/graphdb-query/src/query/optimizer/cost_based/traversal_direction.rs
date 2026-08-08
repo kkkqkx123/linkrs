@@ -22,12 +22,8 @@
 use std::sync::Arc;
 
 use crate::core::types::EdgeDirection;
-use crate::query::optimizer::context::OptimizationContext;
 use crate::query::optimizer::cost::CostCalculator;
-use crate::query::optimizer::cost_based::trait_def::OptimizationStrategy;
-use crate::query::optimizer::error::OptimizeResult;
 use crate::query::optimizer::stats::EdgeTypeStatistics;
-use crate::query::planning::plan::core::nodes::PlanNodeEnum;
 
 /// Decision on the direction of traversal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -457,65 +453,6 @@ impl TraversalDirectionOptimizer {
                 is_out_super: s.avg_out_degree > self.super_node_threshold,
                 is_in_super: s.avg_in_degree > self.super_node_threshold,
             })
-    }
-}
-
-impl OptimizationStrategy for TraversalDirectionOptimizer {
-    fn apply(
-        &self,
-        node: PlanNodeEnum,
-        _ctx: &OptimizationContext,
-    ) -> OptimizeResult<PlanNodeEnum> {
-        // Only optimize ExpandNode
-        if let PlanNodeEnum::Expand(mut expand_node) = node {
-            // Extract edge type from ExpandNode
-            let edge_type = expand_node
-                .edge_types()
-                .first()
-                .cloned()
-                .unwrap_or_default();
-
-            // Preserve the original direction — the optimizer may only change
-            // direction when the user did not specify one explicitly (Both),
-            // and even then must prove semantic equivalence.
-            let original_dir = expand_node.direction();
-            let explicit = TraversalDirection::from_edge_direction(&original_dir);
-
-            // Create direction context
-            let direction_context = DirectionContext {
-                edge_type,
-                start_nodes: 1,
-                explicit_direction: Some(explicit),
-                allow_bidirectional: false,
-                steps: 1,
-            };
-
-            // Use underlying optimizer to make decision
-            let decision = self.optimize_direction(&direction_context);
-
-            log::debug!(
-                "Traversal direction decision: direction={:?}, cost={:.2}, reason={:?}",
-                decision.direction,
-                decision.estimated_cost,
-                decision.reason
-            );
-
-            // Update ExpandNode with optimized direction
-            expand_node.set_direction(decision.direction.to_edge_direction());
-            Ok(PlanNodeEnum::Expand(expand_node))
-        } else {
-            // Pass through non-ExpandNode
-            Ok(node)
-        }
-    }
-
-    fn name(&self) -> &str {
-        "TraversalDirectionOptimizer"
-    }
-
-    fn is_enabled(&self) -> bool {
-        // Traversal direction strategy is always enabled
-        true
     }
 }
 

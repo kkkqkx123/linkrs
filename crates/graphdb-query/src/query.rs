@@ -29,7 +29,7 @@ pub use executor::base::ExecutionResult;
 // Re-export QueryPipelineManager
 pub use pipeline::QueryPipelineManager;
 // Re-export context types from context module
-pub use context::{QueryContext, QueryContextBuilder, QueryExecutionManager, QueryRequestContext};
+pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
 // Re-export QueryManager
 pub use query_manager::{QueryInfo, QueryManager, QueryStats, QueryStatus};
 // Re-export OptimizerEngine

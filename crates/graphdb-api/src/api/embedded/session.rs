@@ -205,6 +205,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: None,
+            query_id: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -250,6 +251,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: Some(params),
+            query_id: None,
         };
 
         let mut query_api = self.db.query_api.write();

@@ -61,6 +61,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         explain_stmt: &ExplainStmt,
         qctx: Arc<QueryContext>,
+        transaction_scope: TransactionScope,
     ) -> DBResult<ExecutionResult> {
         let inner_ast = &explain_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -79,7 +80,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let exec_ctx = self.build_execution_context(&qctx);
-        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
 
         let mut instance = QueryExecutionInstance::instantiate_plan(
@@ -120,6 +121,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         profile_stmt: &ProfileStmt,
         qctx: Arc<QueryContext>,
+        transaction_scope: TransactionScope,
     ) -> DBResult<ExecutionResult> {
         let inner_ast = &profile_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -139,7 +141,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let exec_ctx = self.build_execution_context(&qctx);
-        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
 
         let mut instance = QueryExecutionInstance::instantiate_plan(

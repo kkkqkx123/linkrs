@@ -291,7 +291,13 @@ impl ClauseParser {
     ) -> Result<Vec<Assignment>, ParseError> {
         let mut assignments = Vec::new();
         loop {
-            let property_expr = self.parse_expression(ctx)?;
+            // Parse the LHS as a property path (not a full expression) so the
+            // assignment `=` is not consumed as an equality comparison.
+            let property_expr =
+                crate::query::parser::parsing::expr_parser::parse_property_path_with_context(
+                    ctx,
+                    ctx.expression_context_clone(),
+                )?;
             ctx.expect_token(TokenKind::Assign)?;
             let value = self.parse_expression(ctx)?;
 

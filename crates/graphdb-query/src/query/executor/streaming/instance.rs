@@ -29,7 +29,7 @@ use crate::storage::QueryStorage;
 use crate::utils::Arena;
 
 use super::parameters::{ParameterFrame, ParameterSchema};
-use super::query_registry::{QueryGuard, QueryId, QueryMetadata, QueryRegistry};
+use super::query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
 use super::transaction_scope::TransactionScope;
 
 // ── QueryBindings ───────────────────────────────────────────────────────────
@@ -65,6 +65,12 @@ pub struct QueryBindings {
     pub max_buffered_chunks: usize,
     /// Server-assigned query ID (for KILL QUERY / metrics).
     pub query_id: u64,
+    /// Request-scoped cancellation token.
+    ///
+    /// When present it is shared with the query registry and the execution
+    /// runtime so `QueryContext::mark_killed`, KILL QUERY, and runtime cancel
+    /// all flip the same underlying state.
+    pub cancel_token: Option<CancelToken>,
     /// Query text for diagnostics and logging.
     pub query_text: Option<String>,
     /// Session ID for the executing session.
@@ -102,6 +108,7 @@ impl QueryBindings {
             chunk_size: context.chunk_size,
             max_buffered_chunks: context.max_buffered_chunks,
             query_id: context.query_id,
+            cancel_token: context.cancel_token.clone(),
             query_text: None,
             session_id: None,
             user_name: None,
@@ -207,12 +214,28 @@ impl QueryExecutionInstance {
                 query_text: bindings.query_text.clone(),
                 start_time: std::time::Instant::now(),
             };
-            let (qid, _token) = reg.register(meta);
+            // Prefer a request-scoped query id when present so EXPLAIN/PROFILE,
+            // streaming, and materialized paths share one identity source;
+            // otherwise let the registry allocate a unique id.
+            //
+            // The external bindings token (request-scoped QueryContext token)
+            // is shared with the registry so mark_killed / KILL QUERY / runtime
+            // cancel all flip the SAME underlying cancellation state.
+            let (qid, token) = if bindings.query_id != 0 {
+                reg.register_with_token(
+                    QueryId(bindings.query_id),
+                    meta,
+                    bindings.cancel_token.clone(),
+                )
+            } else {
+                reg.register_with_token(QueryId(0), meta, bindings.cancel_token.clone())
+            };
             runtime.assign_query_id(qid.as_u64());
             // Arc::get_mut is safe here because runtime was just created
             // and has no other Arc references.
             if let Some(rt) = Arc::get_mut(&mut runtime) {
                 rt.set_query_registry(reg.clone(), qid);
+                rt.set_cancel_token(token);
             }
             QueryGuard::new(reg.clone(), qid)
         });

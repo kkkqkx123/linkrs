@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::core::error::QueryError;
@@ -9,6 +8,7 @@ use crate::core::{Edge, EdgeDirection, NPath, Path, Value};
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::context::ValueRowContext;
+use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 
@@ -68,7 +68,7 @@ pub(crate) fn bidir_bfs_shortest_path(
     start_id: &VertexId,
     end_id: &VertexId,
     cfg: BidirBfsConfig,
-    cancel_token: Option<&AtomicBool>,
+    cancel_token: Option<&CancelToken>,
 ) -> Result<Vec<Path>, QueryError> {
     let mut result_paths = Vec::new();
     let mut best_len: Option<usize> = None;
@@ -107,7 +107,7 @@ pub(crate) fn bidir_bfs_shortest_path(
 
     while !left_queue.is_empty() && !right_queue.is_empty() {
         if let Some(token) = cancel_token {
-            if token.load(std::sync::atomic::Ordering::Relaxed) {
+            if token.is_cancelled() {
                 return Err(QueryError::execution("Query cancelled".to_string()));
             }
         }
@@ -320,7 +320,7 @@ pub(crate) fn enumerate_all_paths(
     start_id: &VertexId,
     end_id: &VertexId,
     cfg: AllPathsConfig<'_>,
-    cancel_token: Option<&AtomicBool>,
+    cancel_token: Option<&CancelToken>,
 ) -> Result<Vec<Path>, QueryError> {
     let Some(start_vertex) = storage
         .get_vertex(cfg.space_name, start_id)
@@ -339,7 +339,7 @@ pub(crate) fn enumerate_all_paths(
 
     while let Some((current_id, current_path, visited)) = stack.pop() {
         if let Some(token) = cancel_token {
-            if token.load(std::sync::atomic::Ordering::Relaxed) {
+            if token.is_cancelled() {
                 return Err(QueryError::execution("Query cancelled".to_string()));
             }
         }

@@ -239,6 +239,7 @@ mod tests {
             chunk_size: 1024,
             max_buffered_chunks: 4,
             query_id: 1,
+            cancel_token: None,
             session_id: None,
             user_name: None,
             query_text: None,

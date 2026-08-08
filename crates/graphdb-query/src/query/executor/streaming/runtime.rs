@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -452,15 +452,13 @@ impl ResourceOwner {
 /// lifecycle, and query-registration so that operators do not each
 /// carry ad-hoc context.
 ///
-/// Phase 2 (M2): unified cancellation via [`CancelToken`] replaces the
-/// legacy `AtomicBool`.  Both coexist during migration.
+/// M2: unified cancellation via [`CancelToken`] — the legacy `AtomicBool`
+/// has been removed; operators check [`CancelToken::is_cancelled`].
 #[derive(Debug)]
 pub struct ExecutionRuntime {
     /// Query identity (behind Mutex for write-once from the API layer).
     query_id: parking_lot::Mutex<QueryIdentity>,
-    /// Legacy cancel flag (AtomicBool).  Replaced by `cancel_token_v2`.
-    cancel_token: Arc<AtomicBool>,
-    /// M2: typed cancellation token with reason tracking.
+    /// M2: typed cancellation token with reason tracking (single source).
     cancel_token_v2: CancelToken,
     /// Optional deadline; the query is cancelled after this instant.
     deadline: Option<Instant>,
@@ -550,7 +548,6 @@ impl ExecutionRuntime {
     ) -> Self {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
-            cancel_token: Arc::new(AtomicBool::new(false)),
             cancel_token_v2: CancelToken::new(),
             deadline: None,
             memory_budget,
@@ -684,18 +681,25 @@ impl ExecutionRuntime {
         self.cancel_token_v2.clone()
     }
 
-    // ── Cancellation ──
-
-    /// Legacy token used to signal cancellation (shared with operators and I/O).
-    pub fn cancel_token(&self) -> Arc<AtomicBool> {
-        self.cancel_token.clone()
+    /// Adopt an externally-owned cancellation token.
+    ///
+    /// Called at instantiation so the runtime, the query registry, and the
+    /// request-scoped [`QueryContext`] share one token (single source for
+    /// KILL QUERY / cancellation).
+    pub fn set_cancel_token(&mut self, token: CancelToken) {
+        self.cancel_token_v2 = token;
     }
 
-    /// Check whether the query has been cancelled (checks both legacy and v2).
+    // ── Cancellation ──
+
+    /// Shared cancellation token for cooperative checks by operators and I/O.
+    pub fn cancel_token(&self) -> CancelToken {
+        self.cancel_token_v2.clone()
+    }
+
+    /// Check whether the query has been cancelled (token or deadline).
     pub fn is_cancelled(&self) -> bool {
-        self.cancel_token.load(Ordering::Relaxed)
-            || self.cancel_token_v2.is_cancelled()
-            || self.deadline.is_some_and(|d| Instant::now() >= d)
+        self.cancel_token_v2.is_cancelled() || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 
     /// Return an error if the query has been cancelled.
@@ -714,11 +718,9 @@ impl ExecutionRuntime {
 
     /// Cancel this query with a typed reason.
     ///
-    /// Sets both the legacy `AtomicBool` and the M2 [`CancelToken`].
-    /// Also marks the query as Killed in the attached QueryManager and
-    /// cancels the registry entry (if configured).
+    /// Sets the M2 [`CancelToken`], marks the query as Killed in the
+    /// attached QueryManager, and cancels the registry entry (if configured).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
-        self.cancel_token.store(true, Ordering::Relaxed);
         self.cancel_token_v2.cancel(reason.clone());
         if let Some(ref qm) = self.query_manager {
             let id = self.query_id();

@@ -1,4 +1,3 @@
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -9,6 +8,7 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::storage::QueryStorage;
 
 use super::super::runtime::ExecutionRuntime;
@@ -36,7 +36,7 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) direction: EdgeDirection,
     pub(super) filter_expr: &'a Option<Expression>,
     pub(super) col_names_template: Vec<String>,
-    pub(super) cancel_token: Option<Arc<AtomicBool>>,
+    pub(super) cancel_token: Option<CancelToken>,
 }
 
 #[derive(Debug)]
