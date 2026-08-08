@@ -190,6 +190,8 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
     for tag in &tags {
         let tag_id = tag.tag_id;
         let tag_name = &tag.tag_name;
+        // Lazily register the statement snapshot for this label.
+        ctx.ensure_vertex_snapshot_registered(tag_id);
         ctx.data_store().with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&tag_id) {
                 let records = table.scan(ts);
@@ -1216,6 +1218,16 @@ pub(crate) fn scan_edges_by_type(
     // multiple edge tables. Use iter() directly instead of scan() to avoid
     // intermediate Vec<EdgeRecord> allocation per table.
     if src_label_id == 0 && dst_label_id == 0 {
+        // Lazily register the statement snapshots for every matching partition.
+        for key in ctx.data_store().with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label_id)
+                .collect::<Vec<_>>()
+        }) {
+            ctx.ensure_edge_snapshot_registered(key);
+        }
         ctx.data_store().with_edge_tables(|edge_tables| {
             let matching: Vec<_> = edge_tables
                 .values()
@@ -1274,55 +1286,59 @@ pub(crate) fn scan_edges_by_type(
 
     // Constrained path: access the specific edge table directly using iter()
     // instead of ctx.scan_edges() which collects into Vec.
-    ctx.data_store().with_edge_tables(|edge_tables| {
+    {
         use crate::storage::engine::data_store::EdgeTableKey;
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        if let Some(arc) = edge_tables.get(&key) {
-            let guard = arc.read();
-            let mut iter = guard.0.iter(ts);
-            loop {
-                let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
-                if batch.is_empty() {
-                    break;
-                }
-                for record in batch {
-                    record_edge_read(
-                        ctx,
-                        crate::core::types::EdgeIdentifier::new(
-                            src_label_id,
-                            record.src_vid,
-                            dst_label_id,
-                            record.dst_vid,
-                            edge_label_id,
-                            record.rank,
-                        ),
-                    );
-                    let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
-                    let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
+        // Lazily register the statement snapshot for this partition.
+        ctx.ensure_edge_snapshot_registered(key);
+        ctx.data_store().with_edge_tables(|edge_tables| {
+            if let Some(arc) = edge_tables.get(&key) {
+                let guard = arc.read();
+                let mut iter = guard.0.iter(ts);
+                loop {
+                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
+                    if batch.is_empty() {
+                        break;
+                    }
+                    for record in batch {
+                        record_edge_read(
+                            ctx,
+                            crate::core::types::EdgeIdentifier::new(
+                                src_label_id,
+                                record.src_vid,
+                                dst_label_id,
+                                record.dst_vid,
+                                edge_label_id,
+                                record.rank,
+                            ),
+                        );
+                        let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
+                        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
-                    let src_external = ctx
-                        .get_external_id(src_label_id, src_internal, ts)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(src_label_id, src_internal)
-                                .map(|v| vid_to_string(&v))
-                        })
-                        .unwrap_or_else(|| format!("{}", record.src_vid));
+                        let src_external = ctx
+                            .get_external_id(src_label_id, src_internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(src_label_id, src_internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| format!("{}", record.src_vid));
 
-                    let dst_external = ctx
-                        .get_external_id(dst_label_id, dst_internal, ts)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(dst_label_id, dst_internal)
-                                .map(|v| vid_to_string(&v))
-                        })
-                        .unwrap_or_else(|| format!("{}", record.dst_vid));
+                        let dst_external = ctx
+                            .get_external_id(dst_label_id, dst_internal, ts)
+                            .or_else(|| {
+                                ctx.get_external_id_by_internal_id(dst_label_id, dst_internal)
+                                    .map(|v| vid_to_string(&v))
+                            })
+                            .unwrap_or_else(|| format!("{}", record.dst_vid));
 
-                    let edge =
-                        edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
-                    edges.push(edge);
+                        let edge =
+                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
+                        edges.push(edge);
+                    }
                 }
             }
-        }
-    });
+        });
+    }
 
     edges = append_cold_scan_edges(
         ctx,
@@ -1702,6 +1718,8 @@ pub(crate) fn count_vertices_by_tag(
             .map(|t| t.total_count() as u64)
             .unwrap_or(0)
     });
+    // Lazily register the statement snapshot for this label.
+    ctx.ensure_vertex_snapshot_registered(tag_info.tag_id);
     Ok(count)
 }
 
@@ -1734,6 +1752,16 @@ pub(crate) fn count_edges_by_type(
     };
 
     let hot_count = if src_label_id == 0 && dst_label_id == 0 {
+        // Lazily register the statement snapshots for every matching partition.
+        for key in ctx.data_store().with_edge_tables(|edge_tables| {
+            edge_tables
+                .keys()
+                .copied()
+                .filter(|key| key.edge_label == edge_label_id)
+                .collect::<Vec<_>>()
+        }) {
+            ctx.ensure_edge_snapshot_registered(key);
+        }
         ctx.data_store().with_edge_tables(|edge_tables| {
             edge_tables
                 .values()
@@ -1748,6 +1776,7 @@ pub(crate) fn count_edges_by_type(
             dst_label_id,
             edge_label_id,
         );
+        ctx.ensure_edge_snapshot_registered(key);
         ctx.data_store()
             .with_single_edge_table(&key, |t| Ok(t.edge_count()))
             .unwrap_or(0)

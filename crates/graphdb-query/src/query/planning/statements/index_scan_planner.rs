@@ -38,10 +38,10 @@ pub fn try_create_index_scan_plan(
         find_suitable_index(metadata_ctx, tag_name, node, var_name, where_expression)?;
 
     match suitable_index {
-        Some((index, index_limits)) => {
+        Some((tag_id, index, index_limits)) => {
             let mut index_scan_node = IndexScanNode::new(
                 space_id,
-                0,
+                tag_id as i32,
                 index.index_id,
                 index.index_name.clone(),
                 tag_name.clone(),
@@ -74,7 +74,7 @@ fn find_suitable_index(
     node: &NodePattern,
     var_name: &str,
     where_expression: Option<&ContextualExpression>,
-) -> Result<Option<(IndexMetadata, Vec<IndexLimit>)>, PlannerError> {
+) -> Result<Option<(u32, IndexMetadata, Vec<IndexLimit>)>, PlannerError> {
     let tag_metadata = match metadata_ctx.get_tag_metadata(tag_name) {
         Some(meta) => meta,
         None => return Ok(None),
@@ -128,7 +128,7 @@ fn find_suitable_index(
                     };
 
                     if let Some(limit) = index_limit {
-                        return Ok(Some((index_meta.clone(), vec![limit])));
+                        return Ok(Some((tag_metadata.tag_id, index_meta.clone(), vec![limit])));
                     }
                 }
             }

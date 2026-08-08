@@ -122,6 +122,8 @@ impl GraphVertexCursor {
             let label_id = self.tags.labels[self.current_table_idx];
             self.current_table_idx += 1;
             if let Some(table) = tables.get(&label_id) {
+                // Lazily register the statement snapshot for this label.
+                self.ctx.ensure_vertex_snapshot_registered(label_id);
                 let ids = table.live_ids();
                 if !ids.is_empty() {
                     self.current_label = Some(label_id);
@@ -675,6 +677,8 @@ impl EdgeCursor for GraphEdgeCursor {
                 }
 
                 let td = &target.tables[*table_idx];
+                // Lazily register the statement snapshot for this partition.
+                ctx.ensure_edge_snapshot_registered(td.key);
                 let arc = match edge_tables.get(&td.key) {
                     Some(a) => a.clone(),
                     None => {

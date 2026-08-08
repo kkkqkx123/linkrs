@@ -1,6 +1,7 @@
 //! Structure definition of the execution plan
 //! Contains the ExecutionPlan and SubPlan structures.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::{error::Error, fmt};
 
@@ -356,6 +357,15 @@ pub struct ExecutionPlan {
     /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
     pub parallel_fallback_reason: String,
 
+    /// Cost-based decision notes produced during optimization (e.g. subquery
+    /// unnesting and join-order rewrites). Surfaced in EXPLAIN diagnostics.
+    pub cbo_notes: Vec<String>,
+
+    /// Per-logical-node output row estimates produced by the cost-based
+    /// phase, keyed by logical node id. Written into physical operator
+    /// specs (`estimated_cardinality`) by the `estimated_rows` metadata pass.
+    pub row_estimates: HashMap<i64, u64>,
+
     /// The pure logical plan (if conversion succeeded).
     /// Used by cost-based optimization to make physical decisions.
     pub logical_plan: Option<LogicalPlan>,
@@ -373,6 +383,8 @@ impl ExecutionPlan {
             max_workers: 1,
             max_buffered_chunks: 10,
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
+            row_estimates: HashMap::new(),
             logical_plan: None,
         }
     }

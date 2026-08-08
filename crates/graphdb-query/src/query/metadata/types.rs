@@ -67,6 +67,9 @@ impl std::fmt::Display for IndexType {
 /// Tag metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagMetadata {
+    /// Numeric tag id as assigned by the storage schema (`TagInfo.tag_id`).
+    /// 0 when the schema manager did not provide one.
+    pub tag_id: u32,
     pub tag_name: String,
     pub space_id: u64,
     pub properties: Vec<PropertyDefinition>,
@@ -76,11 +79,18 @@ pub struct TagMetadata {
 impl TagMetadata {
     pub fn new(tag_name: String, space_id: u64) -> Self {
         Self {
+            tag_id: 0,
             tag_name,
             space_id,
             properties: Vec::new(),
             indexes: Vec::new(),
         }
+    }
+
+    /// Set the numeric tag id (used to wire `IndexScanNode.tag_id`).
+    pub fn with_tag_id(mut self, tag_id: u32) -> Self {
+        self.tag_id = tag_id;
+        self
     }
 }
 

@@ -112,6 +112,12 @@ impl PhysicalPlanBuilder {
         metadata::propagate_layouts(operators, fragments)?;
         metadata::populate_input_contracts(operators, fragments)?;
         metadata::populate_runtime_metadata(operators);
+        metadata::populate_choice_reasons(operators);
+        metadata::populate_estimated_rows(
+            operators,
+            fragments,
+            &ctx.statistics.per_node_row_estimates,
+        );
 
         let output = operators
             .iter()
@@ -159,6 +165,7 @@ impl PhysicalPlanBuilder {
             required_capabilities,
             parameter_schema: ctx.parameter_schema.clone(),
             parallel_fallback_reason: ctx.parallel_fallback_reason.clone(),
+            cbo_notes: ctx.cbo_notes.clone(),
             partition_spec: ctx.partition_spec.clone(),
         };
 

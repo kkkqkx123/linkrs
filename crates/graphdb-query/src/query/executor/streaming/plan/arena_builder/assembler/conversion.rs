@@ -56,6 +56,7 @@ impl ArenaPlanAssembler {
                     properties: PhysicalProperties::single_streaming(),
                     state_ownership: StateOwnership::TreeLocal,
                     estimated_cardinality: estimate_source_cardinality(&spec),
+                    choice_reason: None,
                     explain_name: source_explain_name(&spec),
                 });
 

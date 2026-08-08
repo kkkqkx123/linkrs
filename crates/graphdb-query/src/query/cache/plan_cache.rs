@@ -50,7 +50,6 @@ pub struct PlanCachePutContext {
     pub is_transaction: bool,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
-    pub capability_set: u64,
 }
 
 /// Complete request/catalog/runtime context used for every plan-cache operation.
@@ -62,7 +61,6 @@ pub struct PlanCacheContext {
     pub param_type_signature: Option<u64>,
     pub optimizer_version: u64,
     pub planning_config_hash: u64,
-    pub capability_set: u64,
 }
 
 use crate::query::planning::plan::execution_plan::PartitionSpec;
@@ -108,7 +106,6 @@ pub struct PlanCacheKey {
     index_version: Option<u64>,
     optimizer_version: u64,
     planning_config_hash: u64,
-    capability_set: u64,
 }
 
 impl PlanCacheKey {
@@ -125,7 +122,6 @@ impl PlanCacheKey {
             index_version: None,
             optimizer_version: 0,
             planning_config_hash: 0,
-            capability_set: 0,
         }
     }
 
@@ -175,7 +171,6 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
-        context.capability_set.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
@@ -188,7 +183,6 @@ impl PlanCacheKey {
             index_version: context.index_version,
             optimizer_version: context.optimizer_version,
             planning_config_hash: context.planning_config_hash,
-            capability_set: context.capability_set,
         }
     }
 
@@ -222,7 +216,6 @@ impl PlanCacheKey {
         context.index_version.hash(&mut hasher);
         context.optimizer_version.hash(&mut hasher);
         context.planning_config_hash.hash(&mut hasher);
-        context.capability_set.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
@@ -235,7 +228,6 @@ impl PlanCacheKey {
             index_version: context.index_version,
             optimizer_version: context.optimizer_version,
             planning_config_hash: context.planning_config_hash,
-            capability_set: context.capability_set,
         }
     }
 
@@ -622,7 +614,6 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
-            capability_set,
         } = context;
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
@@ -635,7 +626,6 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
-                capability_set,
             },
         );
 
@@ -789,7 +779,6 @@ impl QueryPlanCache {
             is_transaction,
             optimizer_version,
             planning_config_hash,
-            capability_set,
         } = context;
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
         let key = PlanCacheKey::from_query_with_partition_and_context(
@@ -802,7 +791,6 @@ impl QueryPlanCache {
                 param_type_signature: param_type_sig,
                 optimizer_version,
                 planning_config_hash,
-                capability_set,
             },
         );
         let priority = if self.config.priority_config.enable_priority {
@@ -959,7 +947,6 @@ impl QueryPlanCache {
                 index_version: k.index_version,
                 optimizer_version: k.optimizer_version,
                 planning_config_hash: k.planning_config_hash,
-                capability_set: k.capability_set,
             })
             .collect();
         let removed = keys_to_remove.len();
@@ -1187,7 +1174,6 @@ mod tests {
             param_type_signature: Some(3),
             optimizer_version: 4,
             planning_config_hash: 5,
-            capability_set: 6,
         };
         let key = PlanCacheKey::from_query_with_context("MATCH (n) RETURN n", base.clone());
         for changed in [
@@ -1197,10 +1183,6 @@ mod tests {
             },
             PlanCacheContext {
                 planning_config_hash: 7,
-                ..base.clone()
-            },
-            PlanCacheContext {
-                capability_set: 7,
                 ..base.clone()
             },
             PlanCacheContext {
@@ -1349,6 +1331,7 @@ mod tests {
                 name_to_slot: HashMap::new(),
             },
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
             partition_spec: Some(spec.clone()),
         });
 
@@ -1411,6 +1394,7 @@ mod tests {
                 name_to_slot: HashMap::new(),
             },
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
             partition_spec: Some(spec.clone()),
         });
 
@@ -1421,7 +1405,6 @@ mod tests {
             param_type_signature: Some(99),
             optimizer_version: 2,
             planning_config_hash: 3,
-            capability_set: 0,
         };
         // The put path derives the param signature from the param positions;
         // use the same positions so the keys line up.
@@ -1447,7 +1430,6 @@ mod tests {
                 index_version: context.index_version,
                 optimizer_version: context.optimizer_version,
                 planning_config_hash: context.planning_config_hash,
-                capability_set: context.capability_set,
                 ..PlanCachePutContext::default()
             },
         );

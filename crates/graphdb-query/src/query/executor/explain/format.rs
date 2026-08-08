@@ -37,6 +37,13 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
             plan_desc.parallel_fallback_reason,
         ));
     }
+    if !plan_desc.cbo_notes.is_empty() {
+        output.push_str("\nCBO decisions: ");
+        output.push_str(&plan_desc.cbo_notes.join("; "));
+    }
+    if !plan_desc.columnar_summary.is_empty() {
+        output.push_str(&format!("\nColumnar: {}", plan_desc.columnar_summary));
+    }
     output.push('\n');
     output.push('\n');
 

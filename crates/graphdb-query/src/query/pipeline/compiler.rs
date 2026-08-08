@@ -212,7 +212,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             param_type_signature: param_signature,
             optimizer_version: planning_config.optimizer_version,
             planning_config_hash: planning_config.config_hash,
-            capability_set: 0,
         };
         if let Some(cached) = self
             .plan_cache
@@ -291,7 +290,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         is_transaction: false,
                         optimizer_version: planning_config.optimizer_version,
                         planning_config_hash: planning_config.config_hash,
-                        capability_set: 0,
                     },
                 );
             } else {
@@ -309,7 +307,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         is_transaction: false,
                         optimizer_version: planning_config.optimizer_version,
                         planning_config_hash: planning_config.config_hash,
-                        capability_set: 0,
                     },
                 );
             }
@@ -386,8 +383,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .or_else(|| query_context.request_context().space_name.clone())?;
         let space_id = query_context.space_id().unwrap_or(0);
 
-        let (referenced_tags, referenced_edges, full_load) =
-            referenced_schema_objects(bound);
+        let (referenced_tags, referenced_edges, full_load) = referenced_schema_objects(bound);
 
         let mut metadata = MetadataContext::new();
 
@@ -395,7 +391,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if full_load {
                 if let Ok(tags) = schema_manager.list_tags(&space_name) {
                     for tag in tags {
-                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
+                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id)
+                            .with_tag_id(tag.tag_id);
                         for prop in &tag.properties {
                             tag_metadata.properties.push(PropertyDefinition::new(
                                 prop.name.clone(),
@@ -415,14 +412,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                                 PropertyType::from(prop.data_type.clone()),
                             ));
                         }
-                        metadata
-                            .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
+                        metadata.set_edge_type_metadata(
+                            edge_type.edge_type_name.clone(),
+                            edge_metadata,
+                        );
                     }
                 }
             } else {
                 for tag_name in &referenced_tags {
                     if let Ok(Some(tag)) = schema_manager.get_tag(&space_name, tag_name) {
-                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id);
+                        let mut tag_metadata = TagMetadata::new(tag.tag_name.clone(), space_id)
+                            .with_tag_id(tag.tag_id);
                         for prop in &tag.properties {
                             tag_metadata.properties.push(PropertyDefinition::new(
                                 prop.name.clone(),
@@ -444,8 +444,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                                 PropertyType::from(prop.data_type.clone()),
                             ));
                         }
-                        metadata
-                            .set_edge_type_metadata(edge_type.edge_type_name.clone(), edge_metadata);
+                        metadata.set_edge_type_metadata(
+                            edge_type.edge_type_name.clone(),
+                            edge_metadata,
+                        );
                     }
                 }
             }
@@ -540,6 +542,38 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
 
+        // Register the index catalog for cost-based index selection. The
+        // optimizer engine has no schema access, so the per-query metadata
+        // context (which only loads referenced objects) feeds the catalog.
+        let stats_manager = self.optimizer_engine.stats_manager();
+        for tag_metadata in metadata.get_all_tags() {
+            let mut indexes = Vec::new();
+            for index_name in &tag_metadata.indexes {
+                if let Some(index_meta) = metadata.get_index_metadata(index_name) {
+                    indexes.push(crate::core::types::Index {
+                        id: index_meta.index_id,
+                        name: index_meta.index_name.clone(),
+                        space_id,
+                        schema_name: index_meta.tag_name.clone(),
+                        fields: Vec::new(),
+                        properties: vec![index_meta.field_name.clone()],
+                        index_type: crate::core::types::IndexType::TagIndex,
+                        status: crate::core::types::IndexStatus::Active,
+                        is_unique: false,
+                        comment: None,
+                        covering: false,
+                        partial_condition: None,
+                    });
+                }
+            }
+            stats_manager.register_tag_indexes(
+                &space_name,
+                &tag_metadata.tag_name,
+                tag_metadata.tag_id as i32,
+                indexes,
+            );
+        }
+
         Some(metadata)
     }
 
@@ -562,6 +596,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         build_ctx.parameter_schema = self.parameter_schema(query_context);
         build_ctx.partition_spec = plan.partition_spec().cloned();
         build_ctx.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
+        build_ctx.cbo_notes = plan.cbo_notes.clone();
+        build_ctx.statistics.per_node_row_estimates = plan.row_estimates.clone();
         let physical_plan = PhysicalPlanBuilder::build(root_node, &mut build_ctx, &exec_ctx)
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
@@ -718,8 +754,15 @@ fn referenced_schema_objects(
             (tags, edges, full)
         }
         BoundStatement::SetOperation(set_op) => {
-            let full = merge(&mut tags, &mut edges, &referenced_schema_objects(&set_op.left))
-                | merge(&mut tags, &mut edges, &referenced_schema_objects(&set_op.right));
+            let full = merge(
+                &mut tags,
+                &mut edges,
+                &referenced_schema_objects(&set_op.left),
+            ) | merge(
+                &mut tags,
+                &mut edges,
+                &referenced_schema_objects(&set_op.right),
+            );
             (tags, edges, full)
         }
         BoundStatement::Return(_)

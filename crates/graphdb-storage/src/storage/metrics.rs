@@ -234,6 +234,12 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
         }
     }
 
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        Ok(Self {
+            inner: self.inner.bind_read_operation_context()?,
+        })
+    }
+
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
     }

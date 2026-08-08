@@ -20,6 +20,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
     let mut desc = PlanDescription::new();
     desc.requested_workers = 1;
     desc.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
+    desc.cbo_notes = plan.cbo_notes.clone();
     if let Some(spec) = plan.partition_spec() {
         let ranges = spec
             .ranges()
@@ -104,6 +105,9 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         let mut pairs = Vec::new();
         if let Some(est) = op_spec.estimated_cardinality {
             pairs.push(Pair::new("est_rows", est.to_string()));
+        }
+        if let Some(reason) = &op_spec.choice_reason {
+            pairs.push(Pair::new("reason", reason.clone()));
         }
 
         let props = &op_spec.properties;

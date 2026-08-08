@@ -1,19 +1,104 @@
+use crate::core::types::expr::Expression;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::streaming::spill::SpilledFile;
+use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::streaming::executor::{SortDirection, ValueRowContext};
+use crate::query::executor::streaming::helpers::compare_values;
+use crate::query::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
+
+/// Sort the rows of a single window partition by the ORDER BY expressions.
+pub(crate) fn sort_partition_rows(
+    partition_rows: &mut [(usize, Vec<Value>)],
+    col_names: &[String],
+    order_by_exprs: &[Expression],
+    order_by_directions: &[SortDirection],
+) {
+    if order_by_exprs.is_empty() {
+        return;
+    }
+    partition_rows.sort_by(|a, b| {
+        for (idx, expr) in order_by_exprs.iter().enumerate() {
+            let direction = order_by_directions
+                .get(idx)
+                .copied()
+                .unwrap_or(SortDirection::Ascending);
+            let mut ctx_a = ValueRowContext::from_names(a.1.clone(), col_names.to_vec());
+            let mut ctx_b = ValueRowContext::from_names(b.1.clone(), col_names.to_vec());
+            let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                .unwrap_or(Value::Null(NullType::Null));
+            let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                .unwrap_or(Value::Null(NullType::Null));
+            let cmp = compare_values(&val_a, &val_b);
+            let final_cmp = match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            };
+            if final_cmp != std::cmp::Ordering::Equal {
+                return final_cmp;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+}
 
 #[derive(Debug)]
 pub struct WindowFunctionState {
     pub all_rows: Vec<Vec<Value>>,
+    pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
+    pub partition_spiller: Option<HashPartitionSpiller>,
+    pub spilled_runs: Vec<Option<SpilledRun>>,
+    pub current_partition: usize,
+    pub has_spilled: bool,
+    /// True once all partitions have been emitted.
+    pub output_complete: bool,
 }
 
 #[derive(Debug)]
 pub struct WindowState {
     pub all_rows: Vec<Vec<Value>>,
+    pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
+    pub partition_spiller: Option<HashPartitionSpiller>,
+    pub spilled_runs: Vec<Option<SpilledRun>>,
+    pub current_partition: usize,
+    pub has_spilled: bool,
+    /// True once all partitions have been emitted.
+    pub output_complete: bool,
+}
+
+/// Compute the result rows for one window partition.
+///
+/// The partition rows must already be ordered as desired (partition-order
+/// sort happens at the caller). Positional window values are computed per
+/// `window_exprs` and appended to each source row.
+pub(crate) fn compute_window_partition_result(
+    partition_rows: &[(usize, Vec<Value>)],
+    col_names: &[String],
+    window_exprs: &[Expression],
+) -> Vec<Vec<Value>> {
+    let mut result_rows = Vec::with_capacity(partition_rows.len());
+    for (pos, (_, row)) in partition_rows.iter().enumerate() {
+        let mut result_row = row.clone();
+        for window_expr in window_exprs.iter() {
+            if let Expression::WindowFunction { name, args, .. } = window_expr {
+                let func_args: Vec<Value> = args
+                    .iter()
+                    .map(|arg| {
+                        let mut ctx = ValueRowContext::from_names(row.clone(), col_names.to_vec());
+                        ExpressionEvaluator::evaluate(arg, &mut ctx)
+                            .unwrap_or(Value::Null(NullType::Null))
+                    })
+                    .collect();
+                let window_result = compute_window_function(name, &func_args, partition_rows, pos);
+                result_row.push(window_result);
+            }
+        }
+        result_rows.push(result_row);
+    }
+    result_rows
 }
 
 pub(crate) fn compute_window_function(

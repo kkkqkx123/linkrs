@@ -907,6 +907,11 @@ impl GraphStorageContext {
 
     /// Lazily register a vertex label snapshot if not already registered.
     /// Returns the snapshot handle if registration succeeded.
+    ///
+    /// Read-only statement contexts (see `with_read_operation_context`) pin
+    /// their read timestamp the same way auto-commit writes pin their write
+    /// timestamp, so a long-running read cannot be unterminated by GC while
+    /// the statement still observes the snapshot.
     pub(crate) fn ensure_vertex_snapshot_registered(
         &self,
         label: LabelId,
@@ -925,7 +930,7 @@ impl GraphStorageContext {
         }
 
         // Register snapshot for this label
-        let timestamp = operation.write_timestamp?;
+        let timestamp = operation.snapshot_timestamp()?;
         let vertex_tables = self
             .persistent
             .data_store
@@ -943,6 +948,9 @@ impl GraphStorageContext {
     }
 
     /// Lazily register an edge partition snapshot if not already registered.
+    ///
+    /// Supports both auto-commit write contexts (write timestamp) and
+    /// read-only statement contexts (read timestamp).
     pub(crate) fn ensure_edge_snapshot_registered(
         &self,
         edge_key: crate::storage::engine::data_store::EdgeTableKey,
@@ -961,9 +969,8 @@ impl GraphStorageContext {
         }
 
         // Register snapshot for this edge partition
-        let timestamp = match operation.write_timestamp {
-            Some(ts) => ts,
-            None => return false,
+        let Some(timestamp) = operation.snapshot_timestamp() else {
+            return false;
         };
 
         let edge_tables = self

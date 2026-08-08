@@ -469,7 +469,7 @@ fn build_hash_inner_join(
 }
 
 enum OptResult {
-    Changed(Box<PlanNodeEnum>),
+    Changed(Box<PlanNodeEnum>, String),
     Unchanged,
 }
 
@@ -501,114 +501,124 @@ fn try_optimize_join_tree(
         result.order,
     );
 
-    OptResult::Changed(Box::new(reconstruct_join_tree(root, &chain, &result)))
+    let note = format!(
+        "join_order: {} tables, method={:?}, order=[{}]",
+        chain.leaves.len(),
+        result.optimization_method,
+        result.order.join(", ")
+    );
+    OptResult::Changed(Box::new(reconstruct_join_tree(root, &chain, &result)), note)
 }
 
 pub fn walk_and_optimize_joins(
     root: &PlanNodeEnum,
     stats: &StatsView,
     cost_calculator: &CostCalculator,
+    notes: &mut Vec<String>,
 ) -> PlanNodeEnum {
-    if let OptResult::Changed(optimized) = try_optimize_join_tree(root, stats, cost_calculator) {
+    if let OptResult::Changed(optimized, note) =
+        try_optimize_join_tree(root, stats, cost_calculator)
+    {
+        notes.push(note);
         return *optimized;
     }
 
     match root {
         PlanNodeEnum::Project(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Project(cloned)
         }
         PlanNodeEnum::Filter(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Filter(cloned)
         }
         PlanNodeEnum::Sort(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Sort(cloned)
         }
         PlanNodeEnum::Limit(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Limit(cloned)
         }
         PlanNodeEnum::TopN(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::TopN(cloned)
         }
         PlanNodeEnum::Sample(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Sample(cloned)
         }
         PlanNodeEnum::Dedup(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Dedup(cloned)
         }
         PlanNodeEnum::Aggregate(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Aggregate(cloned)
         }
         PlanNodeEnum::Window(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Window(cloned)
         }
         PlanNodeEnum::Traverse(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator);
+            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Traverse(cloned)
         }
         PlanNodeEnum::LeftJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator);
+            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
+            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::LeftJoin(cloned)
         }
         PlanNodeEnum::RightJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator);
+            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
+            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::RightJoin(cloned)
         }
         PlanNodeEnum::HashLeftJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator);
+            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
+            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::HashLeftJoin(cloned)
         }
         PlanNodeEnum::FullOuterJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator);
+            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
+            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::FullOuterJoin(cloned)
         }
         PlanNodeEnum::SemiJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator);
+            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
+            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
@@ -702,7 +712,8 @@ mod tests {
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
-        let result = walk_and_optimize_joins(&a, &stats_view, &cost_calc);
+        let mut notes = Vec::new();
+        let result = walk_and_optimize_joins(&a, &stats_view, &cost_calc, &mut notes);
         // StartNode is preserved (same variant)
         assert!(matches!(result, PlanNodeEnum::Start(_)));
         // Output var is preserved
@@ -720,7 +731,8 @@ mod tests {
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
-        let optimized = walk_and_optimize_joins(&join2, &stats_view, &cost_calc);
+        let mut notes = Vec::new();
+        let optimized = walk_and_optimize_joins(&join2, &stats_view, &cost_calc, &mut notes);
 
         // The smallest table (b, 10 rows) should be first in the new tree
         assert!(matches!(optimized, PlanNodeEnum::HashInnerJoin(_)));
@@ -745,7 +757,8 @@ mod tests {
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
-        let result = walk_and_optimize_joins(&left_join, &stats_view, &cost_calc);
+        let mut notes = Vec::new();
+        let result = walk_and_optimize_joins(&left_join, &stats_view, &cost_calc, &mut notes);
 
         // The root should still be a LeftJoin
         assert!(matches!(result, PlanNodeEnum::LeftJoin(_)));
@@ -766,7 +779,8 @@ mod tests {
         let stats = StatisticsManager::new();
         let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
         let stats_view = StatsView::new(&stats, None);
-        let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc);
+        let mut notes = Vec::new();
+        let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
 
         // Should complete without panic (greedy path)
         assert!(matches!(result, PlanNodeEnum::HashInnerJoin(_)));

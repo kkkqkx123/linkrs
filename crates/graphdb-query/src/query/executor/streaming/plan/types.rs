@@ -405,6 +405,10 @@ pub struct PhysicalOperatorSpec {
     /// Where this operator's mutable state is owned.
     pub state_ownership: StateOwnership,
     pub estimated_cardinality: Option<f64>,
+    /// Why the optimizer chose this operator: CBO decision summary (e.g.
+    /// `join_order: greedy`), scan-mode choice, or `None` when the operator
+    /// is dictated by the plan shape. Surfaced in EXPLAIN diagnostics.
+    pub choice_reason: Option<String>,
     pub explain_name: &'static str,
 }
 
@@ -456,6 +460,9 @@ pub struct PhysicalPlan {
     /// Why parallel partitioning was not applied (empty = partitioning
     /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
     pub parallel_fallback_reason: String,
+    /// Cost-based decision notes (subquery unnest / join order) recorded by
+    /// the optimizer. Surfaced in EXPLAIN / PROFILE diagnostics.
+    pub cbo_notes: Vec<String>,
     /// Physical partition layout selected for this plan (absent for
     /// single-tree execution). Retained so the plan cache can key on the
     /// layout and EXPLAIN/PROFILE can describe it without re-planning.
@@ -605,6 +612,7 @@ mod tests {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name: "Start",
         }];
         let fp1 = PlanFingerprint::compute(&ops);
@@ -625,6 +633,7 @@ mod tests {
                 properties: PhysicalProperties::single_blocking(),
                 state_ownership: StateOwnership::TaskLocal,
                 estimated_cardinality: None,
+                choice_reason: None,
                 explain_name: "Distinct",
             },
         ];
@@ -649,6 +658,7 @@ mod tests {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name: "Start",
         }];
         let ops_b = vec![PhysicalOperatorSpec {
@@ -663,6 +673,7 @@ mod tests {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name: "Start",
         }];
         assert_eq!(

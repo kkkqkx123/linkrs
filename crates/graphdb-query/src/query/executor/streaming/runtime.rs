@@ -322,6 +322,70 @@ impl ProfileBoard {
     }
 }
 
+/// Point-in-time snapshot of the columnar fast-path counters for PROFILE.
+///
+/// Surfaces how much of the evaluation work ran through the columnar batch
+/// fast path vs. row-wise fallback, and how often storage column blocks /
+/// selection vectors were used.  This is the data behind the typed-column
+/// decision gate: when `hit_rate` is high for typical workloads, a typed
+/// column representation becomes unnecessary; a low `typed_hit_rate` with
+/// sustained `columnar_misses` motivates revisiting it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ColumnarStatsSnapshot {
+    pub columnar_hits: u64,
+    pub columnar_misses: u64,
+    pub columnar_typed_hits: u64,
+    pub selection_attached: u64,
+    pub selection_materialized: u64,
+    pub column_block_hits: u64,
+}
+
+impl ColumnarStatsSnapshot {
+    pub fn from_stats(stats: &ColumnarStats) -> Self {
+        Self {
+            columnar_hits: stats.columnar_hits.load(Ordering::Relaxed),
+            columnar_misses: stats.columnar_misses.load(Ordering::Relaxed),
+            columnar_typed_hits: stats.columnar_typed_hits.load(Ordering::Relaxed),
+            selection_attached: stats.selection_attached.load(Ordering::Relaxed),
+            selection_materialized: stats.selection_materialized.load(Ordering::Relaxed),
+            column_block_hits: stats.column_block_hits.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Fraction of evaluations served by the columnar batch fast path.
+    pub fn hit_rate(&self) -> f64 {
+        let total = self.columnar_hits + self.columnar_misses;
+        if total == 0 {
+            1.0
+        } else {
+            self.columnar_hits as f64 / total as f64
+        }
+    }
+
+    /// Fraction of evaluations served by the typed batch fast path.
+    pub fn typed_hit_rate(&self) -> f64 {
+        if self.columnar_hits == 0 {
+            0.0
+        } else {
+            self.columnar_typed_hits as f64 / self.columnar_hits as f64
+        }
+    }
+
+    /// Human-readable one-line summary for PROFILE output.
+    pub fn summary(&self) -> String {
+        format!(
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, column_block_hits={}",
+            self.columnar_hits,
+            self.columnar_misses,
+            self.hit_rate(),
+            self.typed_hit_rate(),
+            self.selection_attached,
+            self.selection_materialized,
+            self.column_block_hits,
+        )
+    }
+}
+
 /// Collects execution profile data across all operators (for EXPLAIN output).
 #[derive(Debug, Default)]
 pub struct ProfileCollector {
@@ -459,7 +523,11 @@ pub struct ExecutionRuntime {
     /// Query identity (behind Mutex for write-once from the API layer).
     query_id: parking_lot::Mutex<QueryIdentity>,
     /// M2: typed cancellation token with reason tracking (single source).
-    cancel_token_v2: CancelToken,
+    /// Behind a `Mutex` because the token is adopted after the runtime is
+    /// shared with the executor tree (`Arc::get_mut` is unusable once the
+    /// tree holds clones); `&self` mutation keeps the registry-None path
+    /// wired without `&mut` access.
+    cancel_token_v2: parking_lot::Mutex<CancelToken>,
     /// Optional deadline; the query is cancelled after this instant.
     deadline: Option<Instant>,
     /// Per-query memory budget for blocking operators.
@@ -476,9 +544,12 @@ pub struct ExecutionRuntime {
     /// M2: Transaction scope for this execution (set by bindings).
     transaction_scope: Option<TransactionScope>,
     /// M2: Optional reference to the [`QueryRegistry`] for KILL QUERY.
-    query_registry: Option<Arc<QueryRegistry>>,
+    /// Behind a `Mutex` for the same interior-mutability reason as the
+    /// cancel token (the registry is attached after the executor tree clones
+    /// the runtime `Arc`).
+    query_registry: parking_lot::Mutex<Option<Arc<QueryRegistry>>>,
     /// M2: Query ID allocated by the registry.
-    registry_query_id: Option<QueryId>,
+    registry_query_id: parking_lot::Mutex<Option<QueryId>>,
     /// M6: Engine-level shared scheduler for dynamic partition execution.
     /// When set, all queries share the same worker pool instead of creating
     /// per-query threads.  Falls back to serial if neither this nor the
@@ -548,7 +619,7 @@ impl ExecutionRuntime {
     ) -> Self {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
-            cancel_token_v2: CancelToken::new(),
+            cancel_token_v2: parking_lot::Mutex::new(CancelToken::new()),
             deadline: None,
             memory_budget,
             profile: Arc::new(ProfileBoard::new()),
@@ -556,8 +627,8 @@ impl ExecutionRuntime {
             query_manager: None,
             session_controller: parking_lot::RwLock::new(None),
             transaction_scope: None,
-            query_registry: None,
-            registry_query_id: None,
+            query_registry: parking_lot::Mutex::new(None),
+            registry_query_id: parking_lot::Mutex::new(None),
             shared_scheduler: parking_lot::Mutex::new(None),
             worker_pool: Arc::new(parking_lot::Mutex::new(None)),
             max_buffered_chunks: AtomicUsize::new(10),
@@ -636,14 +707,17 @@ impl ExecutionRuntime {
     // ── M2: QueryRegistry integration ──
 
     /// Attach a [`QueryRegistry`] and the allocated [`QueryId`].
-    pub fn set_query_registry(&mut self, registry: Arc<QueryRegistry>, qid: QueryId) {
-        self.query_registry = Some(registry);
-        self.registry_query_id = Some(qid);
+    ///
+    /// Interior mutability via `Mutex`: the runtime is shared with the
+    /// executor tree before registration, so `&mut` access is not available.
+    pub fn set_query_registry(&self, registry: Arc<QueryRegistry>, qid: QueryId) {
+        *self.query_registry.lock() = Some(registry);
+        *self.registry_query_id.lock() = Some(qid);
     }
 
     /// Return the registry-allocated query ID, if set.
     pub fn registry_query_id(&self) -> Option<QueryId> {
-        self.registry_query_id
+        *self.registry_query_id.lock()
     }
 
     /// Set the session-level transaction controller for transaction commands.
@@ -678,28 +752,31 @@ impl ExecutionRuntime {
 
     /// Return the typed [`CancelToken`] for cooperative cancellation.
     pub fn cancel_token_v2(&self) -> CancelToken {
-        self.cancel_token_v2.clone()
+        self.cancel_token_v2.lock().clone()
     }
 
     /// Adopt an externally-owned cancellation token.
     ///
     /// Called at instantiation so the runtime, the query registry, and the
     /// request-scoped [`QueryContext`] share one token (single source for
-    /// KILL QUERY / cancellation).
-    pub fn set_cancel_token(&mut self, token: CancelToken) {
-        self.cancel_token_v2 = token;
+    /// KILL QUERY / cancellation).  Interior mutability via `Mutex` because
+    /// the executor tree holds an `Arc` clone of the runtime by the time
+    /// instantiation wires the token.
+    pub fn set_cancel_token(&self, token: CancelToken) {
+        *self.cancel_token_v2.lock() = token;
     }
 
     // ── Cancellation ──
 
     /// Shared cancellation token for cooperative checks by operators and I/O.
     pub fn cancel_token(&self) -> CancelToken {
-        self.cancel_token_v2.clone()
+        self.cancel_token_v2.lock().clone()
     }
 
     /// Check whether the query has been cancelled (token or deadline).
     pub fn is_cancelled(&self) -> bool {
-        self.cancel_token_v2.is_cancelled() || self.deadline.is_some_and(|d| Instant::now() >= d)
+        self.cancel_token_v2.lock().is_cancelled()
+            || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 
     /// Return an error if the query has been cancelled.
@@ -707,6 +784,7 @@ impl ExecutionRuntime {
         if self.is_cancelled() {
             let reason = self
                 .cancel_token_v2
+                .lock()
                 .reason()
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| "Query cancelled".to_string());
@@ -721,12 +799,15 @@ impl ExecutionRuntime {
     /// Sets the M2 [`CancelToken`], marks the query as Killed in the
     /// attached QueryManager, and cancels the registry entry (if configured).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
-        self.cancel_token_v2.cancel(reason.clone());
+        self.cancel_token_v2.lock().cancel(reason.clone());
         if let Some(ref qm) = self.query_manager {
             let id = self.query_id();
             let _ = qm.kill_query(id.query_id as i64);
         }
-        if let (Some(ref reg), Some(qid)) = (&self.query_registry, self.registry_query_id) {
+        if let (Some(ref reg), Some(qid)) = (
+            &*self.query_registry.lock(),
+            self.registry_query_id.lock().as_ref().copied(),
+        ) {
             reg.cancel(qid, reason);
         }
     }

@@ -33,11 +33,16 @@ pub mod aggregate_strategy;
 pub mod bidirectional_traversal;
 pub mod expression_precomputation;
 pub mod index;
+pub mod index_selection;
 pub mod join_order;
 pub mod join_order_rewriter;
 pub mod memory_budget;
+pub mod precomputation_wiring;
+pub mod row_estimates;
 pub mod subquery_unnesting;
 pub mod topn_optimization;
+pub mod topn_wiring;
+pub mod traversal;
 pub mod traversal_direction;
 pub mod traversal_start;
 

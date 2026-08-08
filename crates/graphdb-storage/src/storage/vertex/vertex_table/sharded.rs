@@ -358,6 +358,18 @@ impl ShardedVertexTable {
         Ok(())
     }
 
+    /// Minimum timestamp among all active snapshots across shards
+    /// (the GC watermark; `Timestamp::MAX` when no snapshot is active).
+    /// Exposed for snapshot-lifecycle tests and diagnostics.
+    #[cfg(test)]
+    pub fn min_active_snapshot_ts(&self) -> Timestamp {
+        self.shards
+            .iter()
+            .map(|shard| shard.read().min_active_snapshot_ts())
+            .min()
+            .unwrap_or(Timestamp::MAX)
+    }
+
     pub fn gc(&self, min_ts: Timestamp) -> StorageResult<usize> {
         let mut total = 0;
         for shard in &self.shards {

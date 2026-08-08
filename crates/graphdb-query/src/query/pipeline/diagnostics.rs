@@ -227,6 +227,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 plan_desc.requested_workers
             )
         };
+        let parallel_info = if plan_desc.cbo_notes.is_empty() {
+            parallel_info
+        } else {
+            format!("{}; cbo: {}", parallel_info, plan_desc.cbo_notes.join(", "))
+        };
+        let parallel_info = if plan_desc.columnar_summary.is_empty() {
+            parallel_info
+        } else {
+            format!("{}; {}", parallel_info, plan_desc.columnar_summary)
+        };
         ids.push(Value::BigInt(-1));
         names.push(Value::string("Parallel"));
         dependencies.push(Value::string(""));
@@ -284,7 +294,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan_desc: &mut crate::query::planning::plan::explain::PlanDescription,
         max_workers: usize,
     ) {
-        let (wall_us, work_us, workers, chunks_peak, bytes_peak) = {
+        let ((wall_us, work_us, workers, chunks_peak, bytes_peak), columnar) = {
             let profile = instance.runtime().profile().flush_to_collector();
             for (key, op_profile) in &profile.operators {
                 let node_id = key.physical_operator_id.0 as i64;
@@ -331,7 +341,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     node_desc.add_profile(profiling);
                 }
             }
-            profile.parallel_profile()
+            (
+                profile.parallel_profile(),
+                crate::query::executor::streaming::runtime::ColumnarStatsSnapshot::from_stats(
+                    &instance.runtime().columnar_stats(),
+                ),
+            )
         };
         plan_desc.requested_workers = max_workers;
         if workers > 0 {
@@ -341,6 +356,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan_desc.parallel_work_time_us = work_us;
         plan_desc.parallel_buffered_chunks_peak = chunks_peak;
         plan_desc.parallel_buffered_bytes_peak = bytes_peak;
+        plan_desc.columnar_summary = columnar.summary();
         if plan_desc.actual_workers == 0
             && plan_desc.requested_workers > 1
             && plan_desc.parallel_fallback_reason.is_empty()

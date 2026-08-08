@@ -5,6 +5,8 @@
 use dashmap::DashMap;
 use std::sync::Arc;
 
+use crate::core::types::Index;
+
 use super::{EdgeTypeStatistics, PropertyCombinationStats, PropertyStatistics, TagStatistics};
 
 /// Statistical Information Manager
@@ -26,6 +28,10 @@ pub struct StatisticsManager {
     property_combo_stats: Arc<DashMap<String, PropertyCombinationStats>>,
     /// Schema version at which each space's statistics were last collected.
     space_versions: Arc<DashMap<String, u64>>,
+    /// Index catalog for cost-based index selection, keyed by
+    /// `"{space}.{tag_name}"` → (tag_id, available indexes). Registered
+    /// per query from the planning metadata context.
+    index_catalog: Arc<DashMap<String, (i32, Vec<Index>)>>,
 }
 
 impl StatisticsManager {
@@ -38,6 +44,7 @@ impl StatisticsManager {
             property_stats: Arc::new(DashMap::new()),
             property_combo_stats: Arc::new(DashMap::new()),
             space_versions: Arc::new(DashMap::new()),
+            index_catalog: Arc::new(DashMap::new()),
         }
     }
 
@@ -73,6 +80,29 @@ impl StatisticsManager {
     pub fn set_space_version(&self, space: &str, schema_version: u64) {
         self.space_versions
             .insert(space.to_string(), schema_version);
+    }
+
+    /// Register the available indexes for `tag_name` in `space`.
+    ///
+    /// Called by the query pipeline when it builds the planning metadata
+    /// context; registration overwrites any previously registered catalog
+    /// for the tag, so schema changes are picked up on the next query.
+    pub fn register_tag_indexes(
+        &self,
+        space: &str,
+        tag_name: &str,
+        tag_id: i32,
+        indexes: Vec<Index>,
+    ) {
+        self.index_catalog
+            .insert(Self::composite_key(space, tag_name), (tag_id, indexes));
+    }
+
+    /// The available indexes for `tag_name` in `space`, with the tag id.
+    pub fn get_tag_indexes(&self, space: &str, tag_name: &str) -> Option<(i32, Vec<Index>)> {
+        self.index_catalog
+            .get(&Self::composite_key(space, tag_name))
+            .map(|entry| entry.clone())
     }
 
     /// Mapping of registered tag IDs to their corresponding names
@@ -169,6 +199,7 @@ impl StatisticsManager {
         self.property_stats.clear();
         self.property_combo_stats.clear();
         self.space_versions.clear();
+        self.index_catalog.clear();
     }
 
     /// Get property combination statistics for GROUP BY cardinality estimation.
@@ -248,6 +279,7 @@ impl Clone for StatisticsManager {
             property_stats: Arc::clone(&self.property_stats),
             property_combo_stats: Arc::clone(&self.property_combo_stats),
             space_versions: Arc::clone(&self.space_versions),
+            index_catalog: Arc::clone(&self.index_catalog),
         }
     }
 }

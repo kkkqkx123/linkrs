@@ -15,7 +15,6 @@ use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::helpers::accumulator_states::{
     accumulator_to_value, AggregateAccumulator,
 };
-use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::spill::{
     HashPartitionConfig, HashPartitionSpiller, SpillManager, SpilledFile,
@@ -34,7 +33,7 @@ pub use window::{WindowFunctionState, WindowState};
 use crate::query::executor::streaming::slot::SlotLayout;
 use aggregate::{extract_field_value, value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES};
 use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
-use window::compute_window_function;
+use window::{compute_window_partition_result, sort_partition_rows};
 
 /// Reject spill for operators that do not support disk-based overflow.
 /// Per D9: may return resource-exhaustion error for non-spillable operators,
@@ -331,22 +330,40 @@ impl BlockingOperator {
             Self::GroupBy { state, .. } => {
                 *state = Some(GroupByState {
                     all_rows: vec![],
+                    col_names: vec![],
                     result_iter: None,
                     spill_files: vec![],
+                    partition_spiller: None,
+                    spilled_runs: vec![],
+                    current_partition: 0,
+                    has_spilled: false,
+                    output_complete: false,
                 });
             }
             Self::WindowFunction { state, .. } => {
                 *state = Some(WindowFunctionState {
                     all_rows: vec![],
+                    col_names: vec![],
                     result_iter: None,
                     spill_files: vec![],
+                    partition_spiller: None,
+                    spilled_runs: vec![],
+                    current_partition: 0,
+                    has_spilled: false,
+                    output_complete: false,
                 });
             }
             Self::Window { state, .. } => {
                 *state = Some(WindowState {
                     all_rows: vec![],
+                    col_names: vec![],
                     result_iter: None,
                     spill_files: vec![],
+                    partition_spiller: None,
+                    spilled_runs: vec![],
+                    current_partition: 0,
+                    has_spilled: false,
+                    output_complete: false,
                 });
             }
             Self::TopN { state, .. } => {
@@ -902,70 +919,223 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
+                use crate::query::executor::streaming::spill::RunReader;
                 let state = state.as_mut().unwrap();
-                if state.result_iter.is_none() {
-                    while let Some(chunk) = input.advance()? {
-                        base.ensure_not_cancelled()?;
-                        for row in chunk.rows {
-                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                if let Some(sm) = base.spill_manager() {
-                                    spill_not_supported(
-                                        &mut state.all_rows,
-                                        &sm,
-                                        &mut state.spill_files,
-                                        memory_tracker,
-                                    )?;
-                                    memory_tracker.try_reserve_row(&row)?;
-                                } else {
-                                    return Err(e);
-                                }
-                            }
-                            state.all_rows.push(row);
-                        }
-                    }
 
-                    if !state.spill_files.is_empty() {
-                        return reject_spill_replay(&state.spill_files).map(|_| None);
+                // Evaluate the group key of a row against `col_names`.
+                let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
+                    let mut key = Vec::with_capacity(group_by_expressions.len());
+                    for expr in group_by_expressions.iter() {
+                        let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+                        key.push(
+                            ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                .unwrap_or(Value::Null(NullType::Null)),
+                        );
                     }
+                    key
+                };
 
-                    if state.all_rows.is_empty() {
+                // Group rows by their key and flatten values of each group.
+                let group_rows = |rows: Vec<Vec<Value>>, col_names: &[String]| -> Vec<Vec<Value>> {
+                    let mut groups: HashMap<String, Vec<Vec<Value>>> = HashMap::new();
+                    for row in rows {
+                        let key_parts: Vec<String> = eval_group_key(&row, col_names)
+                            .iter()
+                            .map(|v| format!("{:?}", v))
+                            .collect();
+                        let key = key_parts.join("|");
+                        groups.entry(key).or_default().push(row);
+                    }
+                    groups.into_values().flatten().collect()
+                };
+
+                loop {
+                    if state.output_complete {
                         return Ok(None);
                     }
 
-                    let col_names = (0..state.all_rows[0].len())
-                        .map(|i| format!("col_{}", i))
-                        .collect::<Vec<_>>();
-
-                    let mut groups: HashMap<String, Vec<Vec<Value>>> = HashMap::new();
-                    for row in state.all_rows.iter() {
-                        let mut key_parts: Vec<String> = Vec::new();
-                        for expr in group_by_expressions.iter() {
-                            let mut context =
-                                ValueRowContext::from_names(row.clone(), col_names.clone());
-                            let key_val = ExpressionEvaluator::evaluate(expr, &mut context)
-                                .unwrap_or(Value::Null(NullType::Null));
-                            key_parts.push(format!("{:?}", key_val));
+                    // Output phase: drain the result iterator.
+                    if let Some(ref mut iter) = state.result_iter {
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        if chunk_rows.is_empty() {
+                            state.result_iter = None;
+                            if !state.has_spilled
+                                || state.current_partition >= state.spilled_runs.len()
+                            {
+                                state.output_complete = true;
+                                return Ok(None);
+                            }
+                        } else {
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
-                        let key = key_parts.join("|");
-                        groups.entry(key).or_default().push(row.clone());
                     }
 
-                    let result_rows: Vec<Vec<Value>> = groups.into_values().flatten().collect();
-                    state.result_iter = Some(result_rows.into_iter());
-                }
+                    // Replay phase: group each spilled partition in memory.
+                    if state.has_spilled && state.partition_spiller.is_none() {
+                        while state.current_partition < state.spilled_runs.len() {
+                            base.ensure_not_cancelled()?;
 
-                if let Some(iter) = &mut state.result_iter {
-                    let result_rows: Vec<Vec<Value>> = iter.take(1024).collect();
-                    if result_rows.is_empty() {
-                        Ok(None)
+                            let run = match &state.spilled_runs[state.current_partition] {
+                                Some(r) => r,
+                                None => {
+                                    state.current_partition += 1;
+                                    continue;
+                                }
+                            };
+
+                            let mut reader = RunReader::open(run)?;
+                            let mut partition_rows = Vec::new();
+                            while let Some(row) = reader.read_row()? {
+                                memory_tracker.try_reserve_row(&row)?;
+                                partition_rows.push(row);
+                            }
+
+                            let col_names = if state.col_names.is_empty() {
+                                (0..partition_rows.first().map_or(0, |r| r.len()))
+                                    .map(|i| format!("col_{}", i))
+                                    .collect()
+                            } else {
+                                state.col_names.clone()
+                            };
+                            let result_rows = group_rows(partition_rows, &col_names);
+
+                            let _ = std::fs::remove_file(&run.path);
+                            state.current_partition += 1;
+                            memory_tracker.reset();
+
+                            if !result_rows.is_empty() {
+                                state.result_iter = Some(result_rows.into_iter());
+                                let chunk_rows: Vec<Vec<Value>> = state
+                                    .result_iter
+                                    .as_mut()
+                                    .unwrap()
+                                    .by_ref()
+                                    .take(1024)
+                                    .collect();
+                                if !chunk_rows.is_empty() {
+                                    return Ok(Some(DataChunk::new_with_layout(
+                                        chunk_rows,
+                                        Arc::clone(&base.output_layout),
+                                    )));
+                                }
+                                state.result_iter = None;
+                            }
+                        }
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+
+                    // Accumulation phase: read input into memory until the
+                    // budget is exhausted, then route to the partition spiller.
+                    let mut accumulating = true;
+                    while accumulating {
+                        match input.advance()? {
+                            Some(chunk) => {
+                                base.ensure_not_cancelled()?;
+                                if state.col_names.is_empty() {
+                                    state.col_names = match chunk.col_names() {
+                                        names if !names.is_empty() => names,
+                                        _ => (0..chunk.rows.first().map_or(0, |r| r.len()))
+                                            .map(|i| format!("col_{}", i))
+                                            .collect(),
+                                    };
+                                }
+                                for row in chunk.rows {
+                                    if let Some(ref mut spiller) = state.partition_spiller {
+                                        let manager = base.spill_manager().ok_or_else(|| {
+                                            QueryError::execution(
+                                                "Spill manager not available".to_string(),
+                                            )
+                                        })?;
+                                        let group_key = eval_group_key(&row, &state.col_names);
+                                        let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                            &group_key,
+                                            spiller.num_partitions(),
+                                        ) as usize;
+                                        spiller.insert_row_to_partition(&row, p, &manager)?;
+                                        continue;
+                                    }
+                                    if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                        if let Some(sm) = base.spill_manager() {
+                                            let config = HashPartitionConfig::default();
+                                            let num_partitions = config.num_partitions;
+                                            let mut spiller =
+                                                HashPartitionSpiller::new(config, &sm, 0)?;
+
+                                            // Spill accumulated rows by group-key hash.
+                                            for pending in std::mem::take(&mut state.all_rows) {
+                                                let group_key =
+                                                    eval_group_key(&pending, &state.col_names);
+                                                let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                                    &group_key,
+                                                    num_partitions,
+                                                ) as usize;
+                                                spiller
+                                                    .insert_row_to_partition(&pending, p, &sm)?;
+                                                memory_tracker.release(
+                                                    MemoryBudget::estimate_row_memory(&pending),
+                                                );
+                                            }
+
+                                            // Route the current row by group-key hash.
+                                            let group_key = eval_group_key(&row, &state.col_names);
+                                            let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                                &group_key,
+                                                num_partitions,
+                                            ) as usize;
+                                            spiller.insert_row_to_partition(&row, p, &sm)?;
+
+                                            state.partition_spiller = Some(spiller);
+                                            state.has_spilled = true;
+                                            continue;
+                                        } else {
+                                            return Err(e);
+                                        }
+                                    }
+                                    state.all_rows.push(row);
+                                }
+                            }
+                            None => {
+                                accumulating = false;
+                            }
+                        }
+                    }
+
+                    // Finalize spilled runs and replay them within the loop.
+                    if state.partition_spiller.is_some() {
+                        let runs = state.partition_spiller.take().unwrap().finalize()?;
+                        state.spilled_runs = runs;
+                        state.current_partition = 0;
+                        continue;
+                    }
+
+                    // In-memory output: group all accumulated rows.
+                    if state.all_rows.is_empty() {
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+                    let col_names = if state.col_names.is_empty() {
+                        (0..state.all_rows[0].len())
+                            .map(|i| format!("col_{}", i))
+                            .collect()
                     } else {
-                        Ok(Some(DataChunk::new_with_layout(
-                            result_rows,
-                            base.output_layout.clone(),
-                        )))
+                        state.col_names.clone()
+                    };
+                    let result_rows = group_rows(std::mem::take(&mut state.all_rows), &col_names);
+                    let mut result_iter = result_rows.into_iter();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    state.result_iter = Some(result_iter);
+                    if chunk_rows.is_empty() {
+                        state.output_complete = true;
+                        return Ok(None);
                     }
-                } else {
-                    Ok(None)
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
             }
 
@@ -978,147 +1148,245 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
+                use crate::query::executor::streaming::spill::RunReader;
                 let state = state.as_mut().unwrap();
-                if state.result_iter.is_none() {
-                    let mut col_names: Vec<String> = vec![];
-                    while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
-                        base.ensure_not_cancelled()?;
-                        if col_names.is_empty() {
-                            col_names = chunk.col_names();
-                        }
-                        for row in chunk.rows {
-                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                if let Some(sm) = base.spill_manager() {
-                                    spill_not_supported(
-                                        &mut state.all_rows,
-                                        &sm,
-                                        &mut state.spill_files,
-                                        memory_tracker,
-                                    )?;
-                                    memory_tracker.try_reserve_row(&row)?;
-                                } else {
-                                    return Err(e);
-                                }
+
+                // Evaluate the partition key of a row.
+                let eval_partition_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
+                    if partition_by_exprs.is_empty() {
+                        return vec![Value::Null(NullType::Null)];
+                    }
+                    let mut key = Vec::with_capacity(partition_by_exprs.len());
+                    for expr in partition_by_exprs.iter() {
+                        let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+                        key.push(
+                            ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                .unwrap_or(Value::Null(NullType::Null)),
+                        );
+                    }
+                    key
+                };
+
+                loop {
+                    if state.output_complete {
+                        return Ok(None);
+                    }
+
+                    // Output phase: drain the result iterator.
+                    if let Some(ref mut iter) = state.result_iter {
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        if chunk_rows.is_empty() {
+                            state.result_iter = None;
+                            if !state.has_spilled
+                                || state.current_partition >= state.spilled_runs.len()
+                            {
+                                state.output_complete = true;
+                                return Ok(None);
                             }
-                            state.all_rows.push(row);
+                        } else {
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                     }
 
-                    if !state.spill_files.is_empty() {
-                        return reject_spill_replay(&state.spill_files).map(|_| None);
+                    // Replay phase: compute each spilled partition in memory.
+                    if state.has_spilled && state.partition_spiller.is_none() {
+                        while state.current_partition < state.spilled_runs.len() {
+                            base.ensure_not_cancelled()?;
+
+                            let run = match &state.spilled_runs[state.current_partition] {
+                                Some(r) => r,
+                                None => {
+                                    state.current_partition += 1;
+                                    continue;
+                                }
+                            };
+
+                            let mut reader = RunReader::open(run)?;
+                            // A run may hold several distinct partition keys
+                            // (hash collisions); re-group rows by their exact
+                            // partition key before computing window results.
+                            let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                                BTreeMap::new();
+                            let mut run_row_count: u64 = 0;
+                            while let Some(row) = reader.read_row()? {
+                                memory_tracker.try_reserve_row(&row)?;
+                                let partition_key = eval_partition_key(&row, &state.col_names);
+                                partitions
+                                    .entry(partition_key)
+                                    .or_default()
+                                    .push((run_row_count as usize, row));
+                                run_row_count += 1;
+                            }
+
+                            let mut result_rows = Vec::with_capacity(run_row_count as usize);
+                            for (_key, mut partition_rows) in partitions {
+                                sort_partition_rows(
+                                    &mut partition_rows,
+                                    &state.col_names,
+                                    order_by_exprs,
+                                    order_by_directions,
+                                );
+                                result_rows.extend(compute_window_partition_result(
+                                    &partition_rows,
+                                    &state.col_names,
+                                    window_exprs,
+                                ));
+                            }
+
+                            let _ = std::fs::remove_file(&run.path);
+                            state.current_partition += 1;
+                            memory_tracker.reset();
+
+                            if !result_rows.is_empty() {
+                                state.result_iter = Some(result_rows.into_iter());
+                                let chunk_rows: Vec<Vec<Value>> = state
+                                    .result_iter
+                                    .as_mut()
+                                    .unwrap()
+                                    .by_ref()
+                                    .take(1024)
+                                    .collect();
+                                if !chunk_rows.is_empty() {
+                                    return Ok(Some(DataChunk::new_with_layout(
+                                        chunk_rows,
+                                        Arc::clone(&base.output_layout),
+                                    )));
+                                }
+                                state.result_iter = None;
+                            }
+                        }
+                        state.output_complete = true;
+                        return Ok(None);
                     }
 
-                    if state.all_rows.is_empty() {
-                        state.result_iter = Some(vec![].into_iter());
-                    } else {
-                        let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
-                            BTreeMap::new();
-
-                        for (idx, row) in state.all_rows.iter().enumerate() {
-                            let mut partition_key = Vec::new();
-                            if partition_by_exprs.is_empty() {
-                                partition_key.push(Value::Null(NullType::Null));
-                            } else {
-                                for expr in partition_by_exprs.iter() {
-                                    let mut ctx =
-                                        ValueRowContext::from_names(row.clone(), col_names.clone());
-                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                        Ok(val) => partition_key.push(val),
-                                        Err(_) => partition_key.push(Value::Null(NullType::Null)),
+                    // Accumulation phase: read input into memory until the
+                    // budget is exhausted, then route to the partition spiller.
+                    let mut accumulating = true;
+                    while accumulating {
+                        match input.advance()? {
+                            Some(mut chunk) => {
+                                chunk.materialize_selection();
+                                base.ensure_not_cancelled()?;
+                                if state.col_names.is_empty() {
+                                    state.col_names = chunk.col_names();
+                                }
+                                for row in chunk.rows {
+                                    if let Some(ref mut spiller) = state.partition_spiller {
+                                        let manager = base.spill_manager().ok_or_else(|| {
+                                            QueryError::execution(
+                                                "Spill manager not available".to_string(),
+                                            )
+                                        })?;
+                                        let partition_key =
+                                            eval_partition_key(&row, &state.col_names);
+                                        let p =
+                                        crate::query::executor::streaming::spill::hash_row_partition(
+                                            &partition_key,
+                                            spiller.num_partitions(),
+                                        ) as usize;
+                                        spiller.insert_row_to_partition(&row, p, &manager)?;
+                                        continue;
                                     }
-                                }
-                            }
-                            partitions
-                                .entry(partition_key)
-                                .or_default()
-                                .push((idx, row.clone()));
-                        }
+                                    if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                        if let Some(sm) = base.spill_manager() {
+                                            let config = HashPartitionConfig::default();
+                                            let num_partitions = config.num_partitions;
+                                            let mut spiller =
+                                                HashPartitionSpiller::new(config, &sm, 0)?;
 
-                        let mut result_rows = Vec::new();
-                        for (_key, mut partition_rows) in partitions {
-                            if !order_by_exprs.is_empty() {
-                                partition_rows.sort_by(|a, b| {
-                                    for (idx, expr) in order_by_exprs.iter().enumerate() {
-                                        let direction = order_by_directions
-                                            .get(idx)
-                                            .copied()
-                                            .unwrap_or(SortDirection::Ascending);
-                                        let mut ctx_a = ValueRowContext::from_names(
-                                            a.1.clone(),
-                                            col_names.clone(),
-                                        );
-                                        let mut ctx_b = ValueRowContext::from_names(
-                                            b.1.clone(),
-                                            col_names.clone(),
-                                        );
-                                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                                            .unwrap_or(Value::Null(NullType::Null));
-                                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                                            .unwrap_or(Value::Null(NullType::Null));
-                                        let cmp = compare_values(&val_a, &val_b);
-                                        let final_cmp = match direction {
-                                            SortDirection::Ascending => cmp,
-                                            SortDirection::Descending => cmp.reverse(),
-                                        };
-                                        if final_cmp != std::cmp::Ordering::Equal {
-                                            return final_cmp;
+                                            // Spill accumulated rows by partition-key hash.
+                                            for pending in std::mem::take(&mut state.all_rows) {
+                                                let partition_key =
+                                                    eval_partition_key(&pending, &state.col_names);
+                                                let p =
+                                                crate::query::executor::streaming::spill::hash_row_partition(
+                                                    &partition_key,
+                                                    num_partitions,
+                                                ) as usize;
+                                                spiller
+                                                    .insert_row_to_partition(&pending, p, &sm)?;
+                                                memory_tracker.release(
+                                                    MemoryBudget::estimate_row_memory(&pending),
+                                                );
+                                            }
+
+                                            // Route the current row as well.
+                                            let partition_key =
+                                                eval_partition_key(&row, &state.col_names);
+                                            let p =
+                                            crate::query::executor::streaming::spill::hash_row_partition(
+                                                &partition_key,
+                                                num_partitions,
+                                            ) as usize;
+                                            spiller.insert_row_to_partition(&row, p, &sm)?;
+
+                                            state.partition_spiller = Some(spiller);
+                                            state.has_spilled = true;
+                                            continue;
+                                        } else {
+                                            return Err(e);
                                         }
                                     }
-                                    std::cmp::Ordering::Equal
-                                });
-                            }
-
-                            for (row_idx, row) in partition_rows.iter() {
-                                let mut result_row = row.clone();
-                                for window_expr in window_exprs.iter() {
-                                    if let Expression::WindowFunction { name, args, .. } =
-                                        window_expr
-                                    {
-                                        let func_args: Vec<Value> = args
-                                            .iter()
-                                            .map(|arg| {
-                                                let mut ctx = ValueRowContext::from_names(
-                                                    row.clone(),
-                                                    col_names.clone(),
-                                                );
-                                                ExpressionEvaluator::evaluate(arg, &mut ctx)
-                                                    .unwrap_or(Value::Null(NullType::Null))
-                                            })
-                                            .collect();
-
-                                        let window_result = compute_window_function(
-                                            name,
-                                            &func_args,
-                                            &partition_rows,
-                                            partition_rows
-                                                .iter()
-                                                .position(|(i, _)| i == row_idx)
-                                                .unwrap_or(0),
-                                        );
-                                        result_row.push(window_result);
-                                    }
+                                    state.all_rows.push(row);
                                 }
-                                result_rows.push(result_row);
+                            }
+                            None => {
+                                accumulating = false;
                             }
                         }
-
-                        state.result_iter = Some(result_rows.into_iter());
                     }
-                }
 
-                if let Some(iter) = &mut state.result_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    // Finalize spilled runs and replay them within the loop.
+                    if state.partition_spiller.is_some() {
+                        let runs = state.partition_spiller.take().unwrap().finalize()?;
+                        state.spilled_runs = runs;
+                        state.current_partition = 0;
+                        continue;
+                    }
+
+                    // In-memory output: partition, order and compute windows.
+                    if state.all_rows.is_empty() {
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+                    let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                        BTreeMap::new();
+                    for (idx, row) in std::mem::take(&mut state.all_rows).into_iter().enumerate() {
+                        let partition_key = eval_partition_key(&row, &state.col_names);
+                        partitions
+                            .entry(partition_key)
+                            .or_default()
+                            .push((idx, row));
+                    }
+                    let mut result_rows = Vec::new();
+                    for (_key, mut partition_rows) in partitions {
+                        sort_partition_rows(
+                            &mut partition_rows,
+                            &state.col_names,
+                            order_by_exprs,
+                            order_by_directions,
+                        );
+                        result_rows.extend(compute_window_partition_result(
+                            &partition_rows,
+                            &state.col_names,
+                            window_exprs,
+                        ));
+                    }
+
+                    let mut result_iter = result_rows.into_iter();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            base.output_layout.clone(),
-                        )))
+                        state.output_complete = true;
+                        return Ok(None);
                     }
-                } else {
-                    Ok(None)
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
             }
 
@@ -1131,147 +1399,245 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
+                use crate::query::executor::streaming::spill::RunReader;
                 let state = state.as_mut().unwrap();
-                if state.result_iter.is_none() {
-                    let mut col_names: Vec<String> = vec![];
-                    while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
-                        base.ensure_not_cancelled()?;
-                        if col_names.is_empty() {
-                            col_names = chunk.col_names();
-                        }
-                        for row in chunk.rows {
-                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                if let Some(sm) = base.spill_manager() {
-                                    spill_not_supported(
-                                        &mut state.all_rows,
-                                        &sm,
-                                        &mut state.spill_files,
-                                        memory_tracker,
-                                    )?;
-                                    memory_tracker.try_reserve_row(&row)?;
-                                } else {
-                                    return Err(e);
-                                }
+
+                // Evaluate the partition key of a row.
+                let eval_partition_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
+                    if partition_by_exprs.is_empty() {
+                        return vec![Value::Null(NullType::Null)];
+                    }
+                    let mut key = Vec::with_capacity(partition_by_exprs.len());
+                    for expr in partition_by_exprs.iter() {
+                        let mut ctx = ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
+                        key.push(
+                            ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                .unwrap_or(Value::Null(NullType::Null)),
+                        );
+                    }
+                    key
+                };
+
+                loop {
+                    if state.output_complete {
+                        return Ok(None);
+                    }
+
+                    // Output phase: drain the result iterator.
+                    if let Some(ref mut iter) = state.result_iter {
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        if chunk_rows.is_empty() {
+                            state.result_iter = None;
+                            if !state.has_spilled
+                                || state.current_partition >= state.spilled_runs.len()
+                            {
+                                state.output_complete = true;
+                                return Ok(None);
                             }
-                            state.all_rows.push(row);
+                        } else {
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                     }
 
-                    if !state.spill_files.is_empty() {
-                        return reject_spill_replay(&state.spill_files).map(|_| None);
+                    // Replay phase: compute each spilled partition in memory.
+                    if state.has_spilled && state.partition_spiller.is_none() {
+                        while state.current_partition < state.spilled_runs.len() {
+                            base.ensure_not_cancelled()?;
+
+                            let run = match &state.spilled_runs[state.current_partition] {
+                                Some(r) => r,
+                                None => {
+                                    state.current_partition += 1;
+                                    continue;
+                                }
+                            };
+
+                            let mut reader = RunReader::open(run)?;
+                            // A run may hold several distinct partition keys
+                            // (hash collisions); re-group rows by their exact
+                            // partition key before computing window results.
+                            let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                                BTreeMap::new();
+                            let mut run_row_count: u64 = 0;
+                            while let Some(row) = reader.read_row()? {
+                                memory_tracker.try_reserve_row(&row)?;
+                                let partition_key = eval_partition_key(&row, &state.col_names);
+                                partitions
+                                    .entry(partition_key)
+                                    .or_default()
+                                    .push((run_row_count as usize, row));
+                                run_row_count += 1;
+                            }
+
+                            let mut result_rows = Vec::with_capacity(run_row_count as usize);
+                            for (_key, mut partition_rows) in partitions {
+                                sort_partition_rows(
+                                    &mut partition_rows,
+                                    &state.col_names,
+                                    order_by_exprs,
+                                    order_by_directions,
+                                );
+                                result_rows.extend(compute_window_partition_result(
+                                    &partition_rows,
+                                    &state.col_names,
+                                    window_exprs,
+                                ));
+                            }
+
+                            let _ = std::fs::remove_file(&run.path);
+                            state.current_partition += 1;
+                            memory_tracker.reset();
+
+                            if !result_rows.is_empty() {
+                                state.result_iter = Some(result_rows.into_iter());
+                                let chunk_rows: Vec<Vec<Value>> = state
+                                    .result_iter
+                                    .as_mut()
+                                    .unwrap()
+                                    .by_ref()
+                                    .take(1024)
+                                    .collect();
+                                if !chunk_rows.is_empty() {
+                                    return Ok(Some(DataChunk::new_with_layout(
+                                        chunk_rows,
+                                        Arc::clone(&base.output_layout),
+                                    )));
+                                }
+                                state.result_iter = None;
+                            }
+                        }
+                        state.output_complete = true;
+                        return Ok(None);
                     }
 
-                    if state.all_rows.is_empty() {
-                        state.result_iter = Some(vec![].into_iter());
-                    } else {
-                        let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
-                            BTreeMap::new();
-
-                        for (idx, row) in state.all_rows.iter().enumerate() {
-                            let mut partition_key = Vec::new();
-                            if partition_by_exprs.is_empty() {
-                                partition_key.push(Value::Null(NullType::Null));
-                            } else {
-                                for expr in partition_by_exprs.iter() {
-                                    let mut ctx =
-                                        ValueRowContext::from_names(row.clone(), col_names.clone());
-                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                        Ok(val) => partition_key.push(val),
-                                        Err(_) => partition_key.push(Value::Null(NullType::Null)),
+                    // Accumulation phase: read input into memory until the
+                    // budget is exhausted, then route to the partition spiller.
+                    let mut accumulating = true;
+                    while accumulating {
+                        match input.advance()? {
+                            Some(mut chunk) => {
+                                chunk.materialize_selection();
+                                base.ensure_not_cancelled()?;
+                                if state.col_names.is_empty() {
+                                    state.col_names = chunk.col_names();
+                                }
+                                for row in chunk.rows {
+                                    if let Some(ref mut spiller) = state.partition_spiller {
+                                        let manager = base.spill_manager().ok_or_else(|| {
+                                            QueryError::execution(
+                                                "Spill manager not available".to_string(),
+                                            )
+                                        })?;
+                                        let partition_key =
+                                            eval_partition_key(&row, &state.col_names);
+                                        let p =
+                                        crate::query::executor::streaming::spill::hash_row_partition(
+                                            &partition_key,
+                                            spiller.num_partitions(),
+                                        ) as usize;
+                                        spiller.insert_row_to_partition(&row, p, &manager)?;
+                                        continue;
                                     }
-                                }
-                            }
-                            partitions
-                                .entry(partition_key)
-                                .or_default()
-                                .push((idx, row.clone()));
-                        }
+                                    if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                        if let Some(sm) = base.spill_manager() {
+                                            let config = HashPartitionConfig::default();
+                                            let num_partitions = config.num_partitions;
+                                            let mut spiller =
+                                                HashPartitionSpiller::new(config, &sm, 0)?;
 
-                        let mut result_rows = Vec::new();
-                        for (_key, mut partition_rows) in partitions {
-                            if !order_by_exprs.is_empty() {
-                                partition_rows.sort_by(|a, b| {
-                                    for (idx, expr) in order_by_exprs.iter().enumerate() {
-                                        let direction = order_by_directions
-                                            .get(idx)
-                                            .copied()
-                                            .unwrap_or(SortDirection::Ascending);
-                                        let mut ctx_a = ValueRowContext::from_names(
-                                            a.1.clone(),
-                                            col_names.clone(),
-                                        );
-                                        let mut ctx_b = ValueRowContext::from_names(
-                                            b.1.clone(),
-                                            col_names.clone(),
-                                        );
-                                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                                            .unwrap_or(Value::Null(NullType::Null));
-                                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                                            .unwrap_or(Value::Null(NullType::Null));
-                                        let cmp = compare_values(&val_a, &val_b);
-                                        let final_cmp = match direction {
-                                            SortDirection::Ascending => cmp,
-                                            SortDirection::Descending => cmp.reverse(),
-                                        };
-                                        if final_cmp != std::cmp::Ordering::Equal {
-                                            return final_cmp;
+                                            // Spill accumulated rows by partition-key hash.
+                                            for pending in std::mem::take(&mut state.all_rows) {
+                                                let partition_key =
+                                                    eval_partition_key(&pending, &state.col_names);
+                                                let p =
+                                                crate::query::executor::streaming::spill::hash_row_partition(
+                                                    &partition_key,
+                                                    num_partitions,
+                                                ) as usize;
+                                                spiller
+                                                    .insert_row_to_partition(&pending, p, &sm)?;
+                                                memory_tracker.release(
+                                                    MemoryBudget::estimate_row_memory(&pending),
+                                                );
+                                            }
+
+                                            // Route the current row as well.
+                                            let partition_key =
+                                                eval_partition_key(&row, &state.col_names);
+                                            let p =
+                                            crate::query::executor::streaming::spill::hash_row_partition(
+                                                &partition_key,
+                                                num_partitions,
+                                            ) as usize;
+                                            spiller.insert_row_to_partition(&row, p, &sm)?;
+
+                                            state.partition_spiller = Some(spiller);
+                                            state.has_spilled = true;
+                                            continue;
+                                        } else {
+                                            return Err(e);
                                         }
                                     }
-                                    std::cmp::Ordering::Equal
-                                });
-                            }
-
-                            for (row_idx, row) in partition_rows.iter() {
-                                let mut result_row = row.clone();
-                                for window_expr in window_exprs.iter() {
-                                    if let Expression::WindowFunction { name, args, .. } =
-                                        window_expr
-                                    {
-                                        let func_args: Vec<Value> = args
-                                            .iter()
-                                            .map(|arg| {
-                                                let mut ctx = ValueRowContext::from_names(
-                                                    row.clone(),
-                                                    col_names.clone(),
-                                                );
-                                                ExpressionEvaluator::evaluate(arg, &mut ctx)
-                                                    .unwrap_or(Value::Null(NullType::Null))
-                                            })
-                                            .collect();
-
-                                        let window_result = compute_window_function(
-                                            name,
-                                            &func_args,
-                                            &partition_rows,
-                                            partition_rows
-                                                .iter()
-                                                .position(|(i, _)| i == row_idx)
-                                                .unwrap_or(0),
-                                        );
-                                        result_row.push(window_result);
-                                    }
+                                    state.all_rows.push(row);
                                 }
-                                result_rows.push(result_row);
+                            }
+                            None => {
+                                accumulating = false;
                             }
                         }
-
-                        state.result_iter = Some(result_rows.into_iter());
                     }
-                }
 
-                if let Some(iter) = &mut state.result_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    // Finalize spilled runs and replay them within the loop.
+                    if state.partition_spiller.is_some() {
+                        let runs = state.partition_spiller.take().unwrap().finalize()?;
+                        state.spilled_runs = runs;
+                        state.current_partition = 0;
+                        continue;
+                    }
+
+                    // In-memory output: partition, order and compute windows.
+                    if state.all_rows.is_empty() {
+                        state.output_complete = true;
+                        return Ok(None);
+                    }
+                    let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                        BTreeMap::new();
+                    for (idx, row) in std::mem::take(&mut state.all_rows).into_iter().enumerate() {
+                        let partition_key = eval_partition_key(&row, &state.col_names);
+                        partitions
+                            .entry(partition_key)
+                            .or_default()
+                            .push((idx, row));
+                    }
+                    let mut result_rows = Vec::new();
+                    for (_key, mut partition_rows) in partitions {
+                        sort_partition_rows(
+                            &mut partition_rows,
+                            &state.col_names,
+                            order_by_exprs,
+                            order_by_directions,
+                        );
+                        result_rows.extend(compute_window_partition_result(
+                            &partition_rows,
+                            &state.col_names,
+                            window_exprs,
+                        ));
+                    }
+
+                    let mut result_iter = result_rows.into_iter();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(DataChunk::new_with_layout(
-                            chunk_rows,
-                            base.output_layout.clone(),
-                        )))
+                        state.output_complete = true;
+                        return Ok(None);
                     }
-                } else {
-                    Ok(None)
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
             }
 
@@ -1946,6 +2312,11 @@ impl BlockingOperator {
             } => {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
+                    if let Some(ref s) = state {
+                        for r in s.spilled_runs.iter().flatten() {
+                            let _ = std::fs::remove_file(&r.path);
+                        }
+                    }
                     *state = None;
                     base.lifecycle.mark_closed();
                 }
@@ -1958,6 +2329,11 @@ impl BlockingOperator {
             } => {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
+                    if let Some(ref s) = state {
+                        for r in s.spilled_runs.iter().flatten() {
+                            let _ = std::fs::remove_file(&r.path);
+                        }
+                    }
                     *state = None;
                     base.lifecycle.mark_closed();
                 }
@@ -1970,6 +2346,11 @@ impl BlockingOperator {
             } => {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
+                    if let Some(ref s) = state {
+                        for r in s.spilled_runs.iter().flatten() {
+                            let _ = std::fs::remove_file(&r.path);
+                        }
+                    }
                     *state = None;
                     base.lifecycle.mark_closed();
                 }
@@ -2125,30 +2506,114 @@ impl BlockingOperator {
             Self::GroupBy {
                 state,
                 memory_tracker,
+                group_by_expressions,
                 ..
             } => {
                 if let Some(ref mut s) = state {
-                    spill_not_supported(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                    if s.partition_spiller.is_none() && !s.all_rows.is_empty() {
+                        let config = HashPartitionConfig::default();
+                        let num_partitions = config.num_partitions;
+                        let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
+                        for row in std::mem::take(&mut s.all_rows) {
+                            let mut group_key = Vec::new();
+                            for expr in group_by_expressions.iter() {
+                                let mut ctx =
+                                    ValueRowContext::from_names(row.clone(), s.col_names.clone());
+                                group_key.push(
+                                    ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                        .unwrap_or(Value::Null(NullType::Null)),
+                                );
+                            }
+                            let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                &group_key,
+                                num_partitions,
+                            ) as usize;
+                            spiller.insert_row_to_partition(&row, p, sm)?;
+                            memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
+                        }
+                        s.partition_spiller = Some(spiller);
+                        s.has_spilled = true;
+                    }
                 }
                 Ok(())
             }
             Self::WindowFunction {
                 state,
                 memory_tracker,
+                partition_by_exprs,
                 ..
             } => {
                 if let Some(ref mut s) = state {
-                    spill_not_supported(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                    if s.partition_spiller.is_none() && !s.all_rows.is_empty() {
+                        let config = HashPartitionConfig::default();
+                        let num_partitions = config.num_partitions;
+                        let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
+                        for row in std::mem::take(&mut s.all_rows) {
+                            let mut partition_key = Vec::new();
+                            if partition_by_exprs.is_empty() {
+                                partition_key.push(Value::Null(NullType::Null));
+                            } else {
+                                for expr in partition_by_exprs.iter() {
+                                    let mut ctx = ValueRowContext::from_names(
+                                        row.clone(),
+                                        s.col_names.clone(),
+                                    );
+                                    partition_key.push(
+                                        ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                            .unwrap_or(Value::Null(NullType::Null)),
+                                    );
+                                }
+                            }
+                            let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                &partition_key,
+                                num_partitions,
+                            ) as usize;
+                            spiller.insert_row_to_partition(&row, p, sm)?;
+                            memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
+                        }
+                        s.partition_spiller = Some(spiller);
+                        s.has_spilled = true;
+                    }
                 }
                 Ok(())
             }
             Self::Window {
                 state,
                 memory_tracker,
+                partition_by_exprs,
                 ..
             } => {
                 if let Some(ref mut s) = state {
-                    spill_not_supported(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                    if s.partition_spiller.is_none() && !s.all_rows.is_empty() {
+                        let config = HashPartitionConfig::default();
+                        let num_partitions = config.num_partitions;
+                        let mut spiller = HashPartitionSpiller::new(config, sm, 0)?;
+                        for row in std::mem::take(&mut s.all_rows) {
+                            let mut partition_key = Vec::new();
+                            if partition_by_exprs.is_empty() {
+                                partition_key.push(Value::Null(NullType::Null));
+                            } else {
+                                for expr in partition_by_exprs.iter() {
+                                    let mut ctx = ValueRowContext::from_names(
+                                        row.clone(),
+                                        s.col_names.clone(),
+                                    );
+                                    partition_key.push(
+                                        ExpressionEvaluator::evaluate(expr, &mut ctx)
+                                            .unwrap_or(Value::Null(NullType::Null)),
+                                    );
+                                }
+                            }
+                            let p = crate::query::executor::streaming::spill::hash_row_partition(
+                                &partition_key,
+                                num_partitions,
+                            ) as usize;
+                            spiller.insert_row_to_partition(&row, p, sm)?;
+                            memory_tracker.release(MemoryBudget::estimate_row_memory(&row));
+                        }
+                        s.partition_spiller = Some(spiller);
+                        s.has_spilled = true;
+                    }
                 }
                 Ok(())
             }
@@ -2234,6 +2699,15 @@ impl BlockingOperator {
             Self::Aggregate { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
+            Self::GroupBy { state, .. } => state.as_ref().map_or(0, |s| {
+                s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
+            }),
+            Self::WindowFunction { state, .. } => state.as_ref().map_or(0, |s| {
+                s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
+            }),
+            Self::Window { state, .. } => state.as_ref().map_or(0, |s| {
+                s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
+            }),
             Self::Distinct { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
@@ -2268,9 +2742,39 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::GroupBy { state, .. } => sum_spill!(state),
-            Self::WindowFunction { state, .. } => sum_spill!(state),
-            Self::Window { state, .. } => sum_spill!(state),
+            Self::GroupBy { state, .. } => {
+                let base = sum_spill!(state);
+                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
+                    s.spilled_runs
+                        .iter()
+                        .filter_map(|r| r.as_ref())
+                        .map(|r| r.byte_size)
+                        .sum::<u64>()
+                });
+                base + run_bytes
+            }
+            Self::WindowFunction { state, .. } => {
+                let base = sum_spill!(state);
+                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
+                    s.spilled_runs
+                        .iter()
+                        .filter_map(|r| r.as_ref())
+                        .map(|r| r.byte_size)
+                        .sum::<u64>()
+                });
+                base + run_bytes
+            }
+            Self::Window { state, .. } => {
+                let base = sum_spill!(state);
+                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
+                    s.spilled_runs
+                        .iter()
+                        .filter_map(|r| r.as_ref())
+                        .map(|r| r.byte_size)
+                        .sum::<u64>()
+                });
+                base + run_bytes
+            }
             Self::TopN { .. } => 0,
             Self::Distinct { state, .. } => {
                 let base = sum_spill!(state);

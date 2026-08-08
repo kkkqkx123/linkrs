@@ -1096,11 +1096,7 @@ impl Column {
                         .iter()
                         .map(|entry| {
                             // Approximate heap payload for the retained Value.
-                            entry
-                                .value
-                                .as_ref()
-                                .map(|v| value_payload_bytes(v))
-                                .unwrap_or(0)
+                            entry.value.as_ref().map(value_payload_bytes).unwrap_or(0)
                         })
                         .sum::<usize>()
             })

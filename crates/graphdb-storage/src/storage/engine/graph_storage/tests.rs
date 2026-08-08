@@ -2747,4 +2747,90 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    #[test]
+    fn test_read_operation_context_pins_and_releases_statement_snapshot() {
+        use crate::storage::StorageOperationContextOps;
+
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        insert_test_vertex(&mut storage, 1, "Alice");
+
+        let label = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| tables.keys().copied().collect::<Vec<_>>())[0];
+
+        // Bind a read-only statement context with a fixed snapshot timestamp.
+        let bound = storage.bind_read_operation_context().unwrap();
+        let op_ctx = bound.operation_context().expect("read context");
+        assert!(op_ctx.read_only, "read context must be read-only");
+        assert!(
+            op_ctx.write_timestamp.is_none(),
+            "read context has no write ts"
+        );
+        let read_ts = op_ctx.read_timestamp;
+        assert!(read_ts > 0, "read context must pin a snapshot timestamp");
+
+        // No snapshot is registered before the first table access (lazy).
+        let before = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<Timestamp, crate::core::StorageError>(
+                    tables
+                        .get(&label)
+                        .map(|t| t.min_active_snapshot_ts())
+                        .unwrap_or(Timestamp::MAX),
+                )
+            })
+            .unwrap();
+
+        // First read lazily registers the table snapshot at the read ts.
+        let vertex = bound
+            .get_vertex("test_space", &VertexId::from_int64(1))
+            .unwrap()
+            .expect("vertex should resolve");
+        assert_eq!(
+            vertex.properties.get("name").unwrap(),
+            &Value::string("Alice")
+        );
+        let pinned = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<Timestamp, crate::core::StorageError>(
+                    tables
+                        .get(&label)
+                        .map(|t| t.min_active_snapshot_ts())
+                        .unwrap_or(Timestamp::MAX),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            pinned, read_ts,
+            "lazy read registration must pin min_active_snapshot_ts to the read ts"
+        );
+        assert_ne!(before, pinned, "registration must change the pinned min");
+
+        // Finalize unregisters the statement snapshot.
+        bound.finalize_operation(true).unwrap();
+        let after = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<Timestamp, crate::core::StorageError>(
+                    tables
+                        .get(&label)
+                        .map(|t| t.min_active_snapshot_ts())
+                        .unwrap_or(Timestamp::MAX),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "finalize must unregister the read statement snapshot"
+        );
+    }
 }

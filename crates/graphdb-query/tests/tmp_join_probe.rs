@@ -149,14 +149,18 @@ fn probe_serial_join_plan() {
         "MATCH (a:Node) WHERE a.value < 5 RETURN count(*)",
         "MATCH (a:Node) RETURN count(*)",
     ] {
-        let plan = query_rows(
-            &mut serial,
-            &format!("EXPLAIN {q}"),
-        );
+        let plan = query_rows(&mut serial, &format!("EXPLAIN {q}"));
         let plan_str = format!("{:?}", plan);
         let summary = plan_str
             .lines()
-            .filter(|l| l.contains("StorageScanVe") || l.contains("| Filter") || l.contains("Aggregate") || l.contains("Join") || l.contains("Project") || l.contains("Return"))
+            .filter(|l| {
+                l.contains("StorageScanVe")
+                    || l.contains("| Filter")
+                    || l.contains("Aggregate")
+                    || l.contains("Join")
+                    || l.contains("Project")
+                    || l.contains("Return")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         println!("=== QUERY: {q}\n{summary}");
@@ -166,5 +170,9 @@ fn probe_serial_join_plan() {
         &mut serial,
         "MATCH (a:Node),(b:Other) WHERE a.value = b.value RETURN count(*)",
     );
-    println!("=== SERIAL COUNT ROWS (len {}) === {:?}", rows.len(), rows.iter().take(5).collect::<Vec<_>>());
+    println!(
+        "=== SERIAL COUNT ROWS (len {}) === {:?}",
+        rows.len(),
+        rows.iter().take(5).collect::<Vec<_>>()
+    );
 }

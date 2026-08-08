@@ -1045,6 +1045,108 @@ mod tests {
         assert_eq!(entry.output_rows, 50);
     }
 
+    /// Run a Sort operator over `rows` and return all output rows plus the
+    /// runtime (for spill-metric inspection).
+    fn run_sort(
+        rows: Vec<Vec<Value>>,
+        col_names: Vec<String>,
+        spill_budget_bytes: Option<usize>,
+    ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
+        use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
+
+        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let rt = Arc::new(ExecutionRuntime::new(
+            super::super::runtime::QueryIdentity {
+                query_id: 4243,
+                session_id: None,
+                space_name: None,
+            },
+            budget.clone(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        if spill_budget_bytes.is_some() {
+            let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4243).unwrap());
+            rt.set_spill_manager(Some(sm));
+        }
+
+        let scan = Box::new(scan_executor(rows, col_names.clone()));
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10)
+                .with_runtime(Some(rt.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(44))
+                .with_output_layout(output_layout),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::Sort {
+                    sort_expressions: vec![crate::core::types::expr::Expression::variable(
+                        col_names[0].clone(),
+                    )],
+                    sort_directions: vec![SortDirection::Ascending],
+                },
+                &budget,
+            ),
+        );
+
+        executor.open().unwrap();
+        let mut result = Vec::new();
+        while let Some(chunk) = executor.advance().unwrap() {
+            result.extend(chunk.rows);
+        }
+        executor.close().unwrap();
+        (result, rt)
+    }
+
+    #[test]
+    fn test_sort_multi_run_spill_output_sorted_and_complete() {
+        // Many rows with a tiny budget produce multiple spill runs; the merge
+        // must reconstruct the fully sorted output (write → read → merge →
+        // cleanup closed loop).
+        let rows: Vec<Vec<Value>> = (0..500)
+            .map(|i| vec![Value::BigInt(499 - i as i64)])
+            .collect();
+        let col_names = vec!["val".to_string()];
+
+        let (spilled, rt) = run_sort(rows, col_names, Some(64));
+        assert_eq!(spilled.len(), 500, "all rows must survive spill");
+        for (i, row) in spilled.iter().enumerate() {
+            assert_eq!(
+                row[0],
+                Value::BigInt(i as i64),
+                "merged output must be fully sorted at index {}",
+                i
+            );
+        }
+
+        let prof = rt.profile().flush_to_collector();
+        let key = OperatorProfileKey::new(PhysicalOperatorId(44), None);
+        let entry = prof.operators.get(&key).expect("profile entry exists");
+        assert!(
+            entry.spill_count >= 2,
+            "expected multiple spill runs, got {}",
+            entry.spill_count
+        );
+        assert!(entry.spilled_bytes > 0);
+
+        // Spilled result must be identical to the in-memory baseline.
+        let (in_memory, _) = run_sort(
+            (0..500)
+                .map(|i| vec![Value::BigInt(499 - i as i64)])
+                .collect(),
+            vec!["val".to_string()],
+            None,
+        );
+        assert_eq!(spilled, in_memory, "spill and in-memory results differ");
+    }
+
     /// Run an Aggregate operator over `rows` and return all result rows.
     ///
     /// When `spill_budget_bytes` is `Some`, a tiny memory budget plus a spill
@@ -1168,6 +1270,231 @@ mod tests {
             entry.spilled_bytes > 0,
             "expected spilled_bytes > 0, got {}",
             entry.spilled_bytes
+        );
+    }
+
+    /// Run a GroupBy operator over `rows` and return all result rows.
+    ///
+    /// When `spill_budget_bytes` is `Some`, a tiny memory budget plus a spill
+    /// manager force the partition-spill path; otherwise a large budget
+    /// keeps everything in memory.
+    fn run_groupby(
+        rows: Vec<Vec<Value>>,
+        col_names: Vec<String>,
+        spill_budget_bytes: Option<usize>,
+    ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
+        use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
+
+        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let rt = Arc::new(ExecutionRuntime::new(
+            super::super::runtime::QueryIdentity {
+                query_id: 4244,
+                session_id: None,
+                space_name: None,
+            },
+            budget.clone(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        if spill_budget_bytes.is_some() {
+            let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4244).unwrap());
+            rt.set_spill_manager(Some(sm));
+        }
+
+        let scan = Box::new(scan_executor(rows, col_names.clone()));
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10)
+                .with_runtime(Some(rt.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(45))
+                .with_output_layout(output_layout),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::GroupBy {
+                    group_by_expressions: vec![crate::core::types::expr::Expression::variable(
+                        col_names[0].clone(),
+                    )],
+                },
+                &budget,
+            ),
+        );
+
+        executor.open().unwrap();
+        let mut result = Vec::new();
+        while let Some(chunk) = executor.advance().unwrap() {
+            result.extend(chunk.rows);
+        }
+        executor.close().unwrap();
+
+        // GroupBy is a grouping (not sorting) operator; normalize order for
+        // comparison by sorting on the full row content.
+        result.sort_by(|a, b| {
+            for (x, y) in a.iter().zip(b.iter()) {
+                let c = compare_values(x, y);
+                if c != std::cmp::Ordering::Equal {
+                    return c;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+        (result, rt)
+    }
+
+    #[test]
+    fn test_groupby_spill_matches_in_memory() {
+        let rows: Vec<Vec<Value>> = (0..2000)
+            .map(|i| {
+                vec![
+                    Value::BigInt((i % 40) as i64),
+                    Value::BigInt((i as i64) * 3 - 1000),
+                ]
+            })
+            .collect();
+        let col_names = vec!["g".to_string(), "v".to_string()];
+
+        let (spilled, rt) = run_groupby(rows.clone(), col_names.clone(), Some(65536));
+        let (in_memory, _) = run_groupby(rows, col_names, None);
+
+        // Grouped output must be identical to the in-memory baseline.
+        assert_eq!(spilled, in_memory, "spill and in-memory results differ");
+
+        // The spill path must actually have spilled to disk.
+        let prof = rt.profile().flush_to_collector();
+        let key = OperatorProfileKey::new(PhysicalOperatorId(45), None);
+        let entry = prof.operators.get(&key).expect("profile entry exists");
+        assert!(
+            entry.spilled_bytes > 0,
+            "expected spilled_bytes > 0, got {}",
+            entry.spilled_bytes
+        );
+        assert!(
+            entry.spill_count > 0,
+            "expected spill_count > 0, got {}",
+            entry.spill_count
+        );
+    }
+
+    /// Run a WindowFunction operator over `rows` and return all result rows.
+    ///
+    /// When `spill_budget_bytes` is `Some`, a tiny memory budget plus a spill
+    /// manager force the partition-spill path; otherwise a large budget
+    /// keeps everything in memory.
+    fn run_window(
+        rows: Vec<Vec<Value>>,
+        col_names: Vec<String>,
+        spill_budget_bytes: Option<usize>,
+    ) -> (Vec<Vec<Value>>, Arc<ExecutionRuntime>) {
+        use crate::core::types::expr::Expression;
+        use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
+
+        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let rt = Arc::new(ExecutionRuntime::new(
+            super::super::runtime::QueryIdentity {
+                query_id: 4245,
+                session_id: None,
+                space_name: None,
+            },
+            budget.clone(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        if spill_budget_bytes.is_some() {
+            let sm = Arc::new(SpillManager::new(SpillConfig::default(), 4245).unwrap());
+            rt.set_spill_manager(Some(sm));
+        }
+
+        let scan = Box::new(scan_executor(rows, col_names.clone()));
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10)
+                .with_runtime(Some(rt.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(46))
+                .with_output_layout(output_layout),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::WindowFunction {
+                    window_exprs: vec![Expression::WindowFunction {
+                        name: "row_number".to_string(),
+                        args: vec![],
+                        over_partition_by: vec![Expression::variable(col_names[0].clone())],
+                        over_order_by: vec![Expression::variable(col_names[1].clone())],
+                        over_order_desc: vec![false],
+                    }],
+                    partition_by_exprs: vec![Expression::variable(col_names[0].clone())],
+                    order_by_exprs: vec![Expression::variable(col_names[1].clone())],
+                    order_by_directions: vec![SortDirection::Ascending],
+                },
+                &budget,
+            ),
+        );
+
+        executor.open().unwrap();
+        let mut result = Vec::new();
+        while let Some(chunk) = executor.advance().unwrap() {
+            result.extend(chunk.rows);
+        }
+        executor.close().unwrap();
+
+        // Partitions are emitted in different orders on the two paths; sort
+        // rows by content so the comparison is order-independent.
+        result.sort_by(|a, b| {
+            for (x, y) in a.iter().zip(b.iter()) {
+                let c = compare_values(x, y);
+                if c != std::cmp::Ordering::Equal {
+                    return c;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+        (result, rt)
+    }
+
+    #[test]
+    fn test_window_spill_matches_in_memory() {
+        let rows: Vec<Vec<Value>> = (0..2000)
+            .map(|i| {
+                vec![
+                    Value::BigInt((i % 40) as i64),
+                    Value::BigInt(((i * 7) % 1000) as i64),
+                ]
+            })
+            .collect();
+        let col_names = vec!["p".to_string(), "v".to_string()];
+
+        let (spilled, rt) = run_window(rows.clone(), col_names.clone(), Some(65536));
+        let (in_memory, _) = run_window(rows, col_names, None);
+
+        // Window output must be identical to the in-memory baseline.
+        assert_eq!(spilled, in_memory, "spill and in-memory results differ");
+        assert!(!spilled.is_empty(), "window produced no output rows");
+
+        // The spill path must actually have spilled to disk.
+        let prof = rt.profile().flush_to_collector();
+        let key = OperatorProfileKey::new(PhysicalOperatorId(46), None);
+        let entry = prof.operators.get(&key).expect("profile entry exists");
+        assert!(
+            entry.spilled_bytes > 0,
+            "expected spilled_bytes > 0, got {}",
+            entry.spilled_bytes
+        );
+        assert!(
+            entry.spill_count > 0,
+            "expected spill_count > 0, got {}",
+            entry.spill_count
         );
     }
 }

@@ -115,7 +115,10 @@ impl Binder {
     /// Used by clause binders that must validate their output variables
     /// (e.g. RETURN), where an undefined reference is a user error rather
     /// than a silently-null value.
-    fn ensure_variables_defined(&self, expr: &crate::core::types::ContextualExpression) -> DBResult<()> {
+    fn ensure_variables_defined(
+        &self,
+        expr: &crate::core::types::ContextualExpression,
+    ) -> DBResult<()> {
         fn check(scope: &crate::query::binder::scope::BinderScope, e: &Expression) -> DBResult<()> {
             match e {
                 Expression::Variable(name) => {
@@ -144,9 +147,7 @@ impl Binder {
                     Ok(())
                 }
                 Expression::List(items) => items.iter().try_for_each(|i| check(scope, i)),
-                Expression::Map(pairs) => pairs
-                    .iter()
-                    .try_for_each(|(_, v)| check(scope, v)),
+                Expression::Map(pairs) => pairs.iter().try_for_each(|(_, v)| check(scope, v)),
                 Expression::Case {
                     test_expr,
                     conditions,
@@ -171,7 +172,12 @@ impl Binder {
                 }
                 Expression::Range { collection, .. } => check(scope, collection),
                 Expression::Path(items) => items.iter().try_for_each(|i| check(scope, i)),
-                Expression::ListComprehension { source, filter, map, .. } => {
+                Expression::ListComprehension {
+                    source,
+                    filter,
+                    map,
+                    ..
+                } => {
                     check(scope, source)?;
                     if let Some(f) = filter {
                         check(scope, f)?;
@@ -184,7 +190,10 @@ impl Binder {
                 Expression::LabelTagProperty { tag, .. } => check(scope, tag),
                 Expression::Predicate { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
                 Expression::Reduce {
-                    initial, source, mapping, ..
+                    initial,
+                    source,
+                    mapping,
+                    ..
                 } => {
                     check(scope, initial)?;
                     check(scope, source)?;

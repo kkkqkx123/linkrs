@@ -55,6 +55,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -89,6 +90,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         let fragment = fragments
@@ -118,6 +120,7 @@ impl ArenaPlanAssembler {
             properties,
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         let fragment = ctx
@@ -151,6 +154,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name: "Exchange",
         });
         fragments.push(FragmentSpec {
@@ -195,6 +199,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name: "HashExchange",
         });
         fragments.push(FragmentSpec {
@@ -234,6 +239,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -274,6 +280,7 @@ impl ArenaPlanAssembler {
             properties,
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -310,6 +317,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -346,6 +354,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -387,6 +396,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking_with_budget(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         ctx.fragments.push(FragmentSpec {
@@ -423,6 +433,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -466,6 +477,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -502,6 +514,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -538,6 +551,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_streaming(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -581,6 +595,7 @@ impl ArenaPlanAssembler {
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
+            choice_reason: None,
             explain_name,
         });
         fragments.push(FragmentSpec {

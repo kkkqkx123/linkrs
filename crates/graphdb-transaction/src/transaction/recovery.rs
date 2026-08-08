@@ -34,13 +34,11 @@ impl RecoveryManager {
 
     /// Record a transaction whose finalization still needs to be re-driven.
     pub fn record(&self, txn_id: TransactionId, write_timestamp: Timestamp, commit_lsn: CommitLsn) {
-        self.pending_finalizations
-            .lock()
-            .push(PendingFinalization {
-                txn_id,
-                write_timestamp,
-                commit_lsn,
-            });
+        self.pending_finalizations.lock().push(PendingFinalization {
+            txn_id,
+            write_timestamp,
+            commit_lsn,
+        });
     }
 
     /// Recover transactions whose data was durably persisted but whose

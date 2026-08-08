@@ -149,6 +149,12 @@ pub struct PlanDescription {
     pub parallel_buffered_chunks_peak: usize,
     pub parallel_buffered_bytes_peak: usize,
     pub parallel_fallback_reason: String,
+
+    // ── Cost-based decision notes (populated at plan build) ──
+    pub cbo_notes: Vec<String>,
+
+    // ── Columnar fast-path counters (populated at runtime, PROFILE only) ──
+    pub columnar_summary: String,
 }
 
 impl PlanDescription {
@@ -166,6 +172,8 @@ impl PlanDescription {
             parallel_buffered_chunks_peak: 0,
             parallel_buffered_bytes_peak: 0,
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
+            columnar_summary: String::new(),
         }
     }
 

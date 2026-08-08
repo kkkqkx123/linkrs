@@ -277,12 +277,27 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let needs_write = requires_write_storage(parser_result.ast.stmt());
-        let auto_commit_needs_binding =
-            needs_write && effective_rctx.operation_storage.is_none() && effective_rctx.auto_commit;
+        // Read-only auto-commit statements get a statement-level snapshot
+        // context too (T2): every operator observes one fixed read timestamp
+        // and the per-table MVCC snapshots pin the versions until finalize.
+        // DDL / diagnostic / ANALYZE / transaction statements are excluded:
+        // DDL writes schema and must bind through the write path.
+        let is_read_only_statement = !needs_write
+            && !is_ddl(parser_result.ast.stmt())
+            && !is_diagnostic(parser_result.ast.stmt())
+            && !is_analyze(parser_result.ast.stmt())
+            && !is_transaction(parser_result.ast.stmt());
+        let auto_commit_needs_binding = effective_rctx.operation_storage.is_none()
+            && effective_rctx.auto_commit
+            && (needs_write || is_read_only_statement);
 
         let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
-                let storage = self.bind_auto_commit_storage()?;
+                let storage = if needs_write {
+                    self.bind_auto_commit_storage()?
+                } else {
+                    self.bind_read_operation_storage()?
+                };
                 let mut updated = (*effective_rctx).clone();
                 let op_ctx = storage.read().operation_context();
                 updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
@@ -673,6 +688,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let bound = storage
             .read()
             .bind_auto_commit_context()
+            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        Ok(Arc::new(RwLock::new(bound)))
+    }
+
+    /// Bind a read-only statement context with a fixed snapshot timestamp.
+    ///
+    /// Every storage access of the statement observes the same read
+    /// timestamp, and per-table MVCC snapshots are lazily registered so GC
+    /// cannot terminate versions the statement may still read. The bound
+    /// handle is finalized (snapshot unregistration) by the same
+    /// `finalize_owned_operation` lifecycle as auto-commit DML.
+    pub(crate) fn bind_read_operation_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "Read requires a storage binding".to_string(),
+            ))
+        })?;
+        let bound = storage
+            .read()
+            .bind_read_operation_context()
             .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
         Ok(Arc::new(RwLock::new(bound)))
     }

@@ -9,11 +9,11 @@ use dashmap::DashMap;
 
 use super::checkpoint::CheckpointGate;
 use super::mvcc::VersionManager;
+use crate::core::types::Timestamp;
 use crate::sync::SyncManager;
 use crate::transaction::context::TransactionContext;
 use crate::transaction::error::TransactionError;
 use crate::transaction::types::{TransactionId, TransactionState, TransactionStats};
-use crate::core::types::Timestamp;
 
 /// Transaction Cleaner
 ///

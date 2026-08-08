@@ -459,7 +459,6 @@ impl TransactionManager {
         self.certifier.prune(oldest_active_ts);
     }
 
-
     /// Start a new transaction (legacy API for compatibility)
     pub fn begin_transaction(
         &self,
@@ -776,7 +775,8 @@ impl TransactionManager {
                         max_retries,
                         error
                     );
-                    self.recovery.record(txn_id, context.timestamp(), commit_lsn);
+                    self.recovery
+                        .record(txn_id, context.timestamp(), commit_lsn);
                     self.active_transactions.remove(&txn_id);
                     let _ = context.transition_to(TransactionState::Aborting);
                     let _ = context.transition_to(TransactionState::Aborted);
@@ -799,7 +799,8 @@ impl TransactionManager {
                 txn_id,
                 error
             );
-            self.recovery.record(txn_id, context.timestamp(), commit_lsn);
+            self.recovery
+                .record(txn_id, context.timestamp(), commit_lsn);
             self.active_transactions.remove(&txn_id);
             let _ = context.transition_to(TransactionState::Aborting);
             let _ = context.transition_to(TransactionState::Aborted);
@@ -1213,10 +1214,10 @@ impl TransactionManager {
 
     /// Cleanup expired transactions
     pub fn cleanup_expired_transactions(&self) {
-        let _ = self.cleaner.cleanup_expired_transactions_with(
-            &self.active_transactions,
-            |txn_id| self.abort_transaction(txn_id),
-        );
+        self.cleaner
+            .cleanup_expired_transactions_with(&self.active_transactions, |txn_id| {
+                self.abort_transaction(txn_id)
+            });
     }
 
     /// Shutdown transaction manager
@@ -1931,5 +1932,4 @@ mod tests {
         assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
         assert_eq!(ctx.state(), TransactionState::Aborted);
     }
-
 }

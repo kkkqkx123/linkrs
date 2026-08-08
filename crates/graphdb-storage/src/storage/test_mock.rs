@@ -322,6 +322,21 @@ impl StorageOperationContextOps for MockStorage {
         bound
     }
 
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        Ok(self.bind_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: 1,
+            write_timestamp: None,
+            read_only: true,
+            auto_commit: true,
+            mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+        }))
+    }
+
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.operation_context.clone()
     }

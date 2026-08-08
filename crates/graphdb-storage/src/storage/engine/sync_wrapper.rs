@@ -977,6 +977,20 @@ impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
         }
     }
 
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        let inner = self.inner.bind_read_operation_context()?;
+        let inner = match inner.operation_context() {
+            Some(context) => inner.bind_operation_context((*context).clone()),
+            None => inner,
+        };
+        Ok(Self {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: true,
+        })
+    }
+
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
     }

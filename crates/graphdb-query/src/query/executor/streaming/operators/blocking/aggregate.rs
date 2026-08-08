@@ -35,8 +35,15 @@ pub struct AggregateState {
 #[derive(Debug)]
 pub struct GroupByState {
     pub all_rows: Vec<Vec<Value>>,
+    pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
+    pub partition_spiller: Option<HashPartitionSpiller>,
+    pub spilled_runs: Vec<Option<SpilledRun>>,
+    pub current_partition: usize,
+    pub has_spilled: bool,
+    /// True once all groups have been emitted.
+    pub output_complete: bool,
 }
 
 #[derive(Debug)]

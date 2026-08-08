@@ -62,6 +62,37 @@ impl GraphStorageContext {
         bound
     }
 
+    /// Bind a read-only statement context with a fixed snapshot timestamp.
+    ///
+    /// Unlike the unbound path (which resolves
+    /// `version_manager.read_timestamp()` per storage access), a read context
+    /// pins one snapshot for the whole statement: every operator observes the
+    /// same `read_timestamp`, and per-table MVCC snapshots registered lazily
+    /// on first table access pin the versions against GC until
+    /// [`finalize_operation`](Self::finalize_operation) unregisters them.
+    ///
+    /// The bound context is also the serialization boundary for distributed
+    /// reads: `(space, snapshot_ts)` can travel with the query plan to remote
+    /// shards. Read contexts never take the auto-commit write gate, so reads
+    /// do not contend with the DML serialization.
+    pub fn with_read_operation_context(&self) -> StorageResult<Self> {
+        let timestamp = self.persistent.version_manager.read_timestamp();
+        let mut bound = self.clone();
+        bound.operation_context = Some(Arc::new(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: timestamp,
+            write_timestamp: None,
+            read_only: true,
+            auto_commit: true,
+            mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
+            registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+        }));
+        Ok(bound)
+    }
+
     /// Register MVCC snapshots for an auto-commit operation at `timestamp`.
     ///
     /// Scatter-gather: collect table references under a brief catalog READ
@@ -203,63 +234,25 @@ impl GraphStorageContext {
         if !operation.auto_commit {
             return Ok(());
         }
+
+        // Window-bound statements (P4) share the batch window's MVCC
+        // snapshots; the window unregisters them once at `finalize`. Only
+        // per-statement contexts (registered by `with_auto_commit_context` /
+        // `with_read_operation_context`) unregister here.
+        if self.auto_commit_window.is_none() {
+            self.unregister_statement_snapshots(operation);
+        }
+
+        if operation.read_only {
+            // Read-only statement: nothing to commit or roll back; the pinned
+            // statement snapshots were unregistered above.
+            return Ok(());
+        }
+
         let timestamp = operation.write_timestamp.ok_or_else(|| {
             StorageError::db_error("Auto-commit operation has no write timestamp")
         })?;
         let transaction_id = operation.transaction_id;
-
-        // Window-bound statements (P4) share the batch window's MVCC
-        // snapshots; the window unregisters them once at `finalize`. Only
-        // per-statement contexts (registered by `with_auto_commit_context`)
-        // unregister here.
-        if self.auto_commit_window.is_none() {
-            // Unregister lazily registered vertex snapshots
-            let registered_labels: Vec<LabelId> = {
-                let registered = operation.registered_vertex_labels.read();
-                registered.iter().cloned().collect()
-            };
-
-            if !registered_labels.is_empty() {
-                let tables: Vec<(
-                    LabelId,
-                    Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
-                )> = self
-                    .persistent
-                    .data_store
-                    .with_vertex_tables(|vertex_tables| {
-                        registered_labels
-                            .iter()
-                            .filter_map(|label_id| {
-                                vertex_tables
-                                    .get(label_id)
-                                    .map(|table| (*label_id, table.clone()))
-                            })
-                            .collect()
-                    });
-                for (_label_id, vertex_table) in tables {
-                    let _ = vertex_table.unregister_snapshot_by_timestamp(timestamp);
-                }
-            }
-
-            // Unregister lazily registered edge snapshots
-            let registered_edge_keys: Vec<crate::storage::engine::data_store::EdgeTableKey> = {
-                let registered = operation.registered_edge_partitions.read();
-                registered.iter().cloned().collect()
-            };
-
-            if !registered_edge_keys.is_empty() {
-                let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
-                    self.persistent.data_store.with_edge_tables(|tables| {
-                        registered_edge_keys
-                            .iter()
-                            .filter_map(|key| tables.get(key).cloned())
-                            .collect()
-                    });
-                for edge_table in edge_tables {
-                    edge_table.write().unregister_snapshot(timestamp);
-                }
-            }
-        }
 
         if committed {
             self.commit_write_timestamp(timestamp);
@@ -290,6 +283,62 @@ impl GraphStorageContext {
         // loads (throttled; no-op when no GC manager is assembled).
         self.maybe_run_index_gc();
         Ok(())
+    }
+
+    /// Unregister the MVCC snapshots a per-statement context registered
+    /// lazily (vertex labels and edge partitions), at the operation's
+    /// snapshot timestamp. Shared by write and read statement contexts.
+    fn unregister_statement_snapshots(&self, operation: &StorageOperationContext) {
+        let Some(timestamp) = operation.snapshot_timestamp() else {
+            return;
+        };
+
+        // Unregister lazily registered vertex snapshots
+        let registered_labels: Vec<LabelId> = {
+            let registered = operation.registered_vertex_labels.read();
+            registered.iter().cloned().collect()
+        };
+
+        if !registered_labels.is_empty() {
+            let tables: Vec<(
+                LabelId,
+                Arc<crate::storage::vertex::vertex_table::ShardedVertexTable>,
+            )> = self
+                .persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    registered_labels
+                        .iter()
+                        .filter_map(|label_id| {
+                            vertex_tables
+                                .get(label_id)
+                                .map(|table| (*label_id, table.clone()))
+                        })
+                        .collect()
+                });
+            for (_label_id, vertex_table) in tables {
+                let _ = vertex_table.unregister_snapshot_by_timestamp(timestamp);
+            }
+        }
+
+        // Unregister lazily registered edge snapshots
+        let registered_edge_keys: Vec<crate::storage::engine::data_store::EdgeTableKey> = {
+            let registered = operation.registered_edge_partitions.read();
+            registered.iter().cloned().collect()
+        };
+
+        if !registered_edge_keys.is_empty() {
+            let edge_tables: Vec<Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>> =
+                self.persistent.data_store.with_edge_tables(|tables| {
+                    registered_edge_keys
+                        .iter()
+                        .filter_map(|key| tables.get(key).cloned())
+                        .collect()
+                });
+            for edge_table in edge_tables {
+                edge_table.write().unregister_snapshot(timestamp);
+            }
+        }
     }
 
     pub fn start_index_gc(&self) -> Option<crate::storage::thread_pool::BackgroundTaskHandle> {

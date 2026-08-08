@@ -16,6 +16,8 @@ impl GraphStorageContext {
         {
             return None;
         }
+        // Lazily register the statement snapshot for this label.
+        self.ensure_vertex_snapshot_registered(label);
         self.persistent
             .data_store
             .catalog_read_snapshot()

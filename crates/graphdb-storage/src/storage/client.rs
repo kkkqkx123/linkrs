@@ -648,6 +648,18 @@ impl StorageOperationContext {
         self.mutation_recorder = Some(recorder);
         self
     }
+
+    /// Timestamp at which MVCC snapshots are registered for this operation.
+    ///
+    /// Read-only operations pin their read snapshot; auto-commit writes pin
+    /// the write timestamp (the statement both reads and writes at it).
+    pub fn snapshot_timestamp(&self) -> Option<Timestamp> {
+        if self.read_only {
+            Some(self.read_timestamp)
+        } else {
+            self.write_timestamp
+        }
+    }
 }
 
 pub trait StorageCommitOps: Send + Sync + std::fmt::Debug {
@@ -679,6 +691,27 @@ pub trait StorageOperationContextOps: Send + Sync + std::fmt::Debug {
     fn bind_auto_commit_context(&self) -> StorageResult<Self>
     where
         Self: Sized;
+
+    /// Bind a read-only statement context with a fixed snapshot timestamp.
+    ///
+    /// Read statements get a consistent statement-level snapshot: every
+    /// storage access observes the same `read_timestamp`, and per-table MVCC
+    /// snapshots are lazily registered on first table access so GC keeps the
+    /// versions the statement may still read. The snapshot is unregistered by
+    /// [`finalize_operation`](Self::finalize_operation) (or on Drop as a
+    /// backstop). The bound `(space, snapshot_ts)` pair is also the
+    /// serialization boundary for distributed reads.
+    ///
+    /// The default implementation returns `not_supported`; engines without a
+    /// native read context fall back to the unbound handle.
+    fn bind_read_operation_context(&self) -> StorageResult<Self>
+    where
+        Self: Sized,
+    {
+        Err(StorageError::not_supported(
+            "Read operation context binding is not supported by this storage implementation",
+        ))
+    }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self
     where

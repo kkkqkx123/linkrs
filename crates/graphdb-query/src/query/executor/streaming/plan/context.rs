@@ -25,6 +25,10 @@ pub struct SchemaRef {
 #[derive(Debug, Clone, Default)]
 pub struct StatisticsSnapshot {
     pub row_count_estimates: Vec<(String, u64)>,
+    /// Per-logical-node output row estimates from the cost-based phase,
+    /// keyed by logical node id. Consumed by the `estimated_rows` metadata
+    /// pass to write `estimated_cardinality` onto physical operators.
+    pub per_node_row_estimates: std::collections::HashMap<i64, u64>,
 }
 
 /// Planning configuration flags and thresholds.
@@ -82,6 +86,11 @@ pub struct PhysicalPlanBuildContext {
     /// EXPLAIN / PROFILE diagnostics can surface it.
     pub parallel_fallback_reason: String,
 
+    /// Cost-based decision notes (unnest / join order) copied from the
+    /// optimized [`ExecutionPlan`] into the built [`PhysicalPlan`] so
+    /// EXPLAIN diagnostics can surface why the optimizer chose a shape.
+    pub cbo_notes: Vec<String>,
+
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
@@ -110,6 +119,7 @@ impl PhysicalPlanBuildContext {
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }
@@ -125,6 +135,7 @@ impl PhysicalPlanBuildContext {
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
             parallel_fallback_reason: String::new(),
+            cbo_notes: Vec::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }

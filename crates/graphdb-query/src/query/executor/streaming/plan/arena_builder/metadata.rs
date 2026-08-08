@@ -213,6 +213,134 @@ pub(super) fn populate_runtime_metadata(operators: &mut [PhysicalOperatorSpec]) 
     }
 }
 
+/// Populate per-operator `choice_reason` strings after full arena assembly.
+///
+/// This pass is the single place that turns physical spec facts into
+/// human-readable decision summaries for EXPLAIN: source scan modes
+/// (index scan vs full scan vs point lookup) and join algorithm choice.
+/// CBO decision notes (unnest / join order) are plan-level and carried
+/// separately in [`PhysicalPlan`]'s `cbo_notes`.
+pub(super) fn populate_choice_reasons(operators: &mut [PhysicalOperatorSpec]) {
+    for operator in operators {
+        operator.choice_reason = choice_reason_for_spec(&operator.spec);
+    }
+}
+
+/// Populate `estimated_cardinality` for every operator.
+///
+/// The cost-based phase attaches a per-logical-node row estimate map to the
+/// optimized plan (`ExecutionPlan.row_estimates`); this pass writes those
+/// estimates onto physical operators matched by `logical_node_id`. Operators
+/// without a matching logical node (synthesized exchanges, sinks, and
+/// materialization wrappers) fall back to their input's estimate, keeping
+/// EXPLAIN free of large `est_rows = None` gaps.
+pub(super) fn populate_estimated_rows(
+    operators: &mut [PhysicalOperatorSpec],
+    fragments: &[FragmentSpec],
+    estimates: &std::collections::HashMap<i64, u64>,
+) {
+    // Fragments form a DAG; propagate input-fragment root estimates so the
+    // fallback can flow across fragment boundaries.
+    let mut fragment_input_rows: std::collections::HashMap<
+        crate::query::executor::streaming::plan::types::FragmentId,
+        f64,
+    > = std::collections::HashMap::new();
+
+    for fragment in fragments {
+        let mut previous_rows = fragment
+            .inputs
+            .iter()
+            .filter_map(|input_id| fragment_input_rows.get(input_id))
+            .copied()
+            .fold(0.0, f64::max);
+        if previous_rows == 0.0 {
+            previous_rows = fragment
+                .inputs
+                .first()
+                .and_then(|input_id| fragment_input_rows.get(input_id))
+                .copied()
+                .unwrap_or(1.0);
+        }
+
+        for operator_id in &fragment.operators {
+            let Some(operator) = operators.get_mut(operator_id.0) else {
+                continue;
+            };
+            let mapped = operator
+                .logical_node_id
+                .and_then(|logical_id| estimates.get(&logical_id.0))
+                .copied();
+            let estimate = if let Some(rows) = mapped {
+                rows as f64
+            } else {
+                previous_rows * fallback_selectivity_factor(&operator.spec)
+            };
+            operator.estimated_cardinality = Some(estimate);
+            previous_rows = estimate;
+        }
+        fragment_input_rows.insert(
+            fragment.id,
+            operators
+                .get(fragment.root_operator.0)
+                .and_then(|operator| operator.estimated_cardinality)
+                .unwrap_or(previous_rows),
+        );
+    }
+}
+
+/// Fallback selectivity factor for operators without a CBO estimate.
+fn fallback_selectivity_factor(spec: &OperatorKindSpec) -> f64 {
+    match spec {
+        OperatorKindSpec::Unary(UnarySpec::Filter { .. }) => 0.5,
+        OperatorKindSpec::Blocking(BlockingSpec::Aggregate { .. })
+        | OperatorKindSpec::Blocking(BlockingSpec::PartialAggregate { .. })
+        | OperatorKindSpec::Blocking(BlockingSpec::FinalAggregate { .. }) => 0.1,
+        _ => 1.0,
+    }
+}
+
+fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
+    match spec {
+        OperatorKindSpec::Source(source) => Some(match source {
+            SourceSpec::IndexScan { index_name, .. } => {
+                format!("index_scan({})", index_name)
+            }
+            SourceSpec::StorageScanVertices {
+                partition_range: Some(_),
+                ..
+            }
+            | SourceSpec::StorageScanEdges {
+                partition_range: Some(_),
+                ..
+            } => "partitioned_full_scan".to_string(),
+            SourceSpec::StorageScanVertices { .. } | SourceSpec::StorageScanEdges { .. } => {
+                "storage_full_scan".to_string()
+            }
+            SourceSpec::ScanVertices { .. } | SourceSpec::ScanEdges { .. } => {
+                "materialized_scan".to_string()
+            }
+            SourceSpec::GetVertices { .. } => "point_lookup".to_string(),
+            SourceSpec::GetEdges { .. } => "edge_lookup".to_string(),
+            SourceSpec::GetNeighbors { .. } => "neighborhood_scan".to_string(),
+            SourceSpec::GetProp { .. } => "property_lookup".to_string(),
+            SourceSpec::StandaloneValues { .. } => "values".to_string(),
+            SourceSpec::Argument | SourceSpec::Start => "seed".to_string(),
+        }),
+        OperatorKindSpec::Join(_) => Some("hash_join".to_string()),
+        OperatorKindSpec::Blocking(spec) => Some(match spec {
+            BlockingSpec::TopN { .. } => "topn".to_string(),
+            BlockingSpec::Sort { .. } => "sort".to_string(),
+            BlockingSpec::Distinct => "distinct".to_string(),
+            BlockingSpec::Aggregate { .. }
+            | BlockingSpec::PartialAggregate { .. }
+            | BlockingSpec::FinalAggregate { .. } => "aggregate".to_string(),
+            _ => "blocking".to_string(),
+        }),
+        OperatorKindSpec::Exchange(_) => Some("exchange".to_string()),
+        _ => None,
+    }
+}
+
 /// Derive [`PhysicalProperties`] from the operator spec directly instead of
 /// relying on each builder call site to pass a consistent default.
 ///

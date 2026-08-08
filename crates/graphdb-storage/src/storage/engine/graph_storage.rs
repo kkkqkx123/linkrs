@@ -1573,6 +1573,12 @@ impl StorageOperationContextOps for GraphStorage {
         })
     }
 
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        Ok(Self {
+            ctx: Arc::new(self.ctx.with_read_operation_context()?),
+        })
+    }
+
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
         Self {
             ctx: Arc::new(self.ctx.with_operation_context(context)),

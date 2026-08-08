@@ -385,7 +385,8 @@ impl SinkOperator {
                         let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
+                            let mut context =
+                                row_context(row.clone(), layout.clone(), params.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -472,7 +473,8 @@ impl SinkOperator {
                         let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
+                            let mut context =
+                                row_context(row.clone(), layout.clone(), params.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -549,7 +551,8 @@ impl SinkOperator {
                         let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
+                            let mut context =
+                                row_context(row.clone(), layout.clone(), params.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -670,7 +673,8 @@ impl SinkOperator {
                         let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
-                            let mut context = row_context(row.clone(), layout.clone(), params.clone());
+                            let mut context =
+                                row_context(row.clone(), layout.clone(), params.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())

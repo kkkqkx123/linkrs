@@ -198,9 +198,17 @@ impl QueryExecutionInstance {
         PhysicalPlanValidator::validate(&plan)?;
 
         // Phase 2: materialize arena plan → executor tree via materializer.
-        let (executor, mut runtime) = PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
+        let (executor, runtime) = PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
 
-        // Phase 3: register with query registry (M2.8).
+        // Phase 3: adopt the request-scoped cancellation token on the runtime
+        // regardless of whether a registry is attached.  This is the
+        // single-token convergence point: `QueryContext::mark_killed`, KILL
+        // QUERY, and runtime cancel all flip the SAME underlying state, so
+        // pipelines without a shared registry (pure streaming / embedded
+        // paths) still honor mark_killed here.
+        runtime.set_cancel_token(bindings.cancel_token.clone().unwrap_or_default());
+
+        // Phase 4: register with the query registry (M2.8).
         let registry_guard = registry.as_ref().map(|reg| {
             let session_id = bindings
                 .session_id
@@ -231,16 +239,16 @@ impl QueryExecutionInstance {
                 reg.register_with_token(QueryId(0), meta, bindings.cancel_token.clone())
             };
             runtime.assign_query_id(qid.as_u64());
-            // Arc::get_mut is safe here because runtime was just created
-            // and has no other Arc references.
-            if let Some(rt) = Arc::get_mut(&mut runtime) {
-                rt.set_query_registry(reg.clone(), qid);
-                rt.set_cancel_token(token);
-            }
+            runtime.set_query_registry(reg.clone(), qid);
+            // Re-adopt the registry-canonical token (when no external
+            // token was supplied the registry allocated its own), keeping
+            // the registry entry and the runtime on one cancellation
+            // source.
+            runtime.set_cancel_token(token);
             QueryGuard::new(reg.clone(), qid)
         });
 
-        // Phase 4: set up the engine.
+        // Phase 5: set up the engine.
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(bindings.max_workers);
         engine.set_max_buffered_chunks(bindings.max_buffered_chunks);

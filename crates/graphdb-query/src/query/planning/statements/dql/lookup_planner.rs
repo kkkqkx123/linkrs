@@ -57,7 +57,7 @@ impl Planner for LookupPlanner {
             lookup_stmt.target,
             crate::query::parser::ast::LookupTarget::Edge(_)
         );
-        self.plan_lookup(validated, qctx, None, is_edge)
+        self.plan_lookup(validated, qctx, None, is_edge, 0)
     }
 
     fn transform_with_metadata(
@@ -102,7 +102,19 @@ impl Planner for LookupPlanner {
             &lookup_stmt.where_clause,
         );
 
-        self.plan_lookup(validated, qctx, selected_index.as_ref(), is_edge)
+        // Resolve the numeric tag id for tag-targeted index scans so the
+        // IndexScanNode can export it to the cost model and statistics
+        // manager.  Edge-targeted scans keep tag_id <= 0 (edge convention).
+        let tag_id = if is_edge {
+            0
+        } else {
+            metadata_context
+                .get_tag_metadata(&target_name)
+                .map(|meta| meta.tag_id as i32)
+                .unwrap_or(0)
+        };
+
+        self.plan_lookup(validated, qctx, selected_index.as_ref(), is_edge, tag_id)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
@@ -153,6 +165,7 @@ impl LookupPlanner {
         qctx: Arc<QueryContext>,
         selected_index: Option<&IndexMetadata>,
         is_edge: bool,
+        tag_id: i32,
     ) -> Result<SubPlan, PlannerError> {
         let lookup_stmt = match validated.stmt() {
             Stmt::Lookup(lookup_stmt) => lookup_stmt,
@@ -212,7 +225,7 @@ impl LookupPlanner {
             Some(index) => {
                 let mut index_scan_node = IndexScanNode::new(
                     space_id,
-                    0,
+                    tag_id,
                     index.index_id,
                     index.index_name.clone(),
                     target_name.clone(),

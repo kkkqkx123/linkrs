@@ -159,6 +159,9 @@ impl GraphStorageContext {
         projection: Option<&[String]>,
         ts: Timestamp,
     ) -> Option<VertexRecord> {
+        // Lazily register the statement snapshot for this label (MVCC GC
+        // coordination for read-only statement contexts).
+        self.ensure_vertex_snapshot_registered(label);
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| -> Option<VertexRecord> {
@@ -250,6 +253,9 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return None;
         }
+
+        // Lazily register the statement snapshot for this label.
+        self.ensure_vertex_snapshot_registered(label);
 
         let external_id_str = external_id.to_string();
         let internal_id = self
@@ -377,6 +383,8 @@ impl GraphStorageContext {
         internal_id: u32,
         ts: Timestamp,
     ) -> Option<String> {
+        // Lazily register the statement snapshot for this label.
+        self.ensure_vertex_snapshot_registered(label);
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| {
@@ -388,6 +396,14 @@ impl GraphStorageContext {
     }
 
     pub fn get_external_id_any(&self, internal_id: u32, ts: Timestamp) -> Option<String> {
+        // Lazily register the statement snapshot for every vertex label.
+        let labels: Vec<LabelId> = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| tables.keys().copied().collect());
+        for label in labels {
+            self.ensure_vertex_snapshot_registered(label);
+        }
         self.persistent
             .data_store
             .with_vertex_tables(|vertex_tables| {
@@ -397,7 +413,6 @@ impl GraphStorageContext {
                     .map(|k| k.to_string())
             })
     }
-
     pub fn get_external_id_by_internal_id(
         &self,
         label: LabelId,

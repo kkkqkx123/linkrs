@@ -38,6 +38,9 @@ use std::sync::Mutex;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::cost_based::subquery_unnesting::UnnestDecision;
+use crate::query::optimizer::cost_based::{
+    AggregateContext, AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
+};
 use crate::query::optimizer::heuristic::batch::{
     BatchOptimizer, BatchStatistics, OptimizationBatch,
 };
@@ -361,6 +364,11 @@ impl OptimizerEngine {
     /// Currently performs:
     /// - Subquery unnesting: PatternApply → HashInnerJoin when cost-beneficial
     /// - Join order optimization: reorder joins based on estimated costs
+    /// - Index selection: ScanVertices → IndexScan when an index is cheaper
+    /// - Sort + Limit → TopN conversion (residual patterns, cost-based)
+    /// - Aggregate strategy selection (decision notes)
+    /// - Per-node row estimate collection for `estimated_rows` writeback
+    /// - Expression precomputation decisions (decision notes)
     fn apply_cost_based(
         &self,
         plan: ExecutionPlan,
@@ -372,27 +380,144 @@ impl OptimizerEngine {
         // Phase 1: Subquery unnesting (PatternApply → HashInnerJoin)
         let root_clone = plan.root.clone();
         if let Some(ref root) = root_clone {
-            let rewritten = self.unnest_subqueries(root, &stats);
+            let mut notes = Vec::new();
+            let rewritten = self.unnest_subqueries(root, &stats, &mut notes);
             plan.set_root(rewritten);
+            plan.cbo_notes.extend(notes);
         }
 
         // Phase 2: Join order optimization (extract tables/conditions, reorder)
         if let Some(ref root) = plan.root.clone() {
+            let mut notes = Vec::new();
             let rewritten =
                 crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
                     root,
                     &stats,
                     &self.cost_calculator,
+                    &mut notes,
                 );
             plan.set_root(rewritten);
+            plan.cbo_notes.extend(notes);
+        }
+
+        // Phase 3: Cost-based index selection (ScanVertices → IndexScan)
+        if let Some(ref root) = plan.root.clone() {
+            let selector = IndexSelector::new(
+                self.cost_calculator.clone(),
+                self.selectivity_estimator.clone(),
+            );
+            let mut notes = Vec::new();
+            let rewritten =
+                crate::query::optimizer::cost_based::index_selection::rewrite_index_scans(
+                    root,
+                    &selector,
+                    &self.stats_manager,
+                    space,
+                    &mut notes,
+                );
+            plan.set_root(rewritten);
+            plan.cbo_notes.extend(notes);
+        }
+
+        // Phase 4: Sort + Limit → TopN conversion (residual patterns)
+        if let Some(ref root) = plan.root.clone() {
+            let optimizer = SortEliminationOptimizer::new(self.cost_calculator.clone());
+            let mut notes = Vec::new();
+            let rewritten =
+                crate::query::optimizer::cost_based::topn_wiring::rewrite_sort_with_limits(
+                    root,
+                    &optimizer,
+                    &stats,
+                    &self.selectivity_estimator,
+                    &mut notes,
+                );
+            plan.set_root(rewritten);
+            plan.cbo_notes.extend(notes);
+        }
+
+        // Phase 5: Aggregate strategy selection (decision notes; the
+        // strategy is consumed by the physical planner via the notes).
+        if let Some(ref root) = plan.root.clone() {
+            let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
+            let mut notes = Vec::new();
+            let rewritten = self.select_aggregate_strategies(root, &stats, &selector, &mut notes);
+            plan.set_root(rewritten);
+            plan.cbo_notes.extend(notes);
+        }
+
+        // Phase 6: Collect per-node row estimates for estimated_rows writeback.
+        if let Some(ref root) = plan.root.clone() {
+            plan.row_estimates =
+                crate::query::optimizer::cost_based::row_estimates::collect_node_row_estimates(
+                    root,
+                    &stats,
+                    &self.selectivity_estimator,
+                );
+        }
+
+        // Phase 7: Expression precomputation decisions (note-only; EXPLAIN
+        // observability for expressions worth precomputing).
+        if let Some(ref root) = plan.root.clone() {
+            let optimizer = crate::query::optimizer::cost_based::expression_precomputation::ExpressionPrecomputationOptimizer::new(self.cost_calculator.clone());
+            let notes =
+                crate::query::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
+                    root,
+                    &optimizer,
+                );
+            plan.cbo_notes.extend(notes);
         }
 
         Ok(plan)
     }
 
+    /// Walk the plan and record the aggregation strategy decision for every
+    /// aggregate node as a CBO note (cost-driven, observable in EXPLAIN).
+    fn select_aggregate_strategies(
+        &self,
+        node: &PlanNodeEnum,
+        stats: &StatsView,
+        selector: &AggregateStrategySelector,
+        notes: &mut Vec<String>,
+    ) -> PlanNodeEnum {
+        use crate::query::optimizer::cost_based::row_estimates::estimate_node_output_rows;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+        use PlanNodeEnum::*;
+
+        if let Aggregate(aggregate) = node {
+            let input_rows =
+                estimate_node_output_rows(aggregate.input(), stats, &self.selectivity_estimator);
+            let context = AggregateContext {
+                input_rows,
+                group_keys: aggregate.group_keys().to_vec(),
+                agg_function_count: aggregate.aggregation_functions().len(),
+                memory_limit: 0,
+                input_is_sorted: false,
+                sort_keys_match_group_keys: false,
+                is_deterministic: true,
+                complexity_score: 0,
+                table_name: None,
+            };
+            let decision = selector.select_strategy(stats.space().unwrap_or(""), &context);
+            notes.push(format!(
+                "aggregate: strategy={:?} (reason={:?}, est_rows={})",
+                decision.strategy, decision.reason, decision.estimated_output_rows
+            ));
+        }
+
+        // Recursively rewrite children.
+        let mut closure =
+            |child: &PlanNodeEnum| self.select_aggregate_strategies(child, stats, selector, notes);
+        crate::query::optimizer::cost_based::traversal::rewrite_children(node, &mut closure)
+    }
+
     /// Recursively walk the plan tree and rewrite PatternApply → HashInnerJoin
     /// when the subquery unnesting optimizer determines it is beneficial.
-    fn unnest_subqueries(&self, node: &PlanNodeEnum, stats: &StatsView) -> PlanNodeEnum {
+    fn unnest_subqueries(
+        &self,
+        node: &PlanNodeEnum,
+        stats: &StatsView,
+        notes: &mut Vec<String>,
+    ) -> PlanNodeEnum {
         use PlanNodeEnum::*;
 
         // Try PatternApply unnesting at this level first.
@@ -406,8 +531,9 @@ impl OptimizerEngine {
                     "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
                     reason
                 );
+                notes.push(format!("unnest pattern_apply -> hash_join ({:?})", reason));
                 if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
-                    return self.unnest_subqueries(&join, stats);
+                    return self.unnest_subqueries(&join, stats, notes);
                 }
             }
         }
@@ -419,7 +545,7 @@ impl OptimizerEngine {
         macro_rules! rewrite_single {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_input = self.unnest_subqueries(cloned.input(), stats);
+                let new_input = self.unnest_subqueries(cloned.input(), stats, notes);
                 cloned.set_input(new_input);
                 cloned
             }};
@@ -427,8 +553,8 @@ impl OptimizerEngine {
         macro_rules! rewrite_binary {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_left = self.unnest_subqueries(cloned.left_input(), stats);
-                let new_right = self.unnest_subqueries(cloned.right_input(), stats);
+                let new_left = self.unnest_subqueries(cloned.left_input(), stats, notes);
+                let new_right = self.unnest_subqueries(cloned.right_input(), stats, notes);
                 cloned.set_left_input(new_left);
                 cloned.set_right_input(new_right);
                 cloned
@@ -523,5 +649,174 @@ mod tests {
 
         engine.set_max_heuristic_iterations(50);
         assert_eq!(engine.max_heuristic_iterations, 50);
+    }
+
+    #[test]
+    fn cost_based_phases_rewrite_and_emit_notes() {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use crate::core::types::{Index, IndexStatus, IndexType};
+        use crate::core::Value;
+        use crate::query::optimizer::stats::TagStatistics;
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::{
+            LimitNode, SortItem, SortNode,
+        };
+        use std::sync::Arc;
+
+        let engine = OptimizerEngine::default();
+
+        // Register index + vertex statistics for the tag so cost-based
+        // index selection and the row estimates are data-driven.
+        engine.stats_manager().register_tag_indexes(
+            "test",
+            "person",
+            7,
+            vec![Index {
+                id: 3,
+                name: "idx_person_name".to_string(),
+                space_id: 1,
+                schema_name: "person".to_string(),
+                fields: Vec::new(),
+                properties: vec!["name".to_string()],
+                index_type: IndexType::TagIndex,
+                status: IndexStatus::Active,
+                is_unique: false,
+                comment: None,
+                covering: false,
+                partial_condition: None,
+            }],
+        );
+        let mut tag_stats = TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 10_000;
+        engine.stats_manager().update_tag_stats("test", tag_stats);
+
+        // Build: Limit -> Sort -> Filter(ScanVertices(person, name = 'alice')).
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        scan.set_col_names(vec!["n".to_string()]);
+        scan.set_output_var("n".to_string());
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let predicate = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: "name".to_string(),
+            }),
+            op: crate::core::types::operators::BinaryOperator::Equal,
+            right: Box::new(Expression::Literal(Value::String("alice".into()))),
+        };
+        let id = context.register_expression(ExpressionMeta::new(predicate));
+        let filter = FilterNode::new(
+            PlanNodeEnum::ScanVertices(scan),
+            ContextualExpression::new(id, context),
+        )
+        .expect("filter should build");
+        let sort = SortNode::new(
+            PlanNodeEnum::Filter(filter),
+            vec![SortItem::column_asc("n.name".to_string())],
+        )
+        .expect("sort should build");
+        let limit = LimitNode::new(PlanNodeEnum::Sort(sort), 0, 50).expect("limit should build");
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::Limit(limit)));
+
+        let optimized = engine
+            .optimize(plan, Some("test"))
+            .expect("optimization should succeed");
+
+        // The heuristic phase converts Limit(offset=0) -> Sort to TopN, so
+        // the plan must contain a TopN and an IndexScan for the predicate.
+        let root = optimized.root.as_ref().expect("root should exist");
+        assert!(
+            contains_variant(root, &|node| matches!(node, PlanNodeEnum::TopN(_))),
+            "expected TopN in optimized plan"
+        );
+        assert!(
+            contains_variant(root, &|node| matches!(node, PlanNodeEnum::IndexScan(_))),
+            "expected IndexScan in optimized plan"
+        );
+
+        // Decision notes and row estimates must be produced.
+        assert!(optimized
+            .cbo_notes
+            .iter()
+            .any(|note| note.starts_with("index:")));
+        assert!(!optimized.row_estimates.is_empty());
+
+        // The filter remains above the index scan (residual predicate).
+        assert!(contains_variant(root, &|node| matches!(
+            node,
+            PlanNodeEnum::Filter(_)
+        )));
+    }
+
+    fn contains_variant(node: &PlanNodeEnum, predicate: &dyn Fn(&PlanNodeEnum) -> bool) -> bool {
+        if predicate(node) {
+            return true;
+        }
+        node.children()
+            .iter()
+            .any(|child| contains_variant(child, predicate))
+    }
+
+    #[test]
+    fn precompute_notes_emitted_for_reused_expressions() {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use crate::core::types::operators::BinaryOperator;
+        use crate::core::Value;
+        use crate::core::YieldColumn;
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
+        use std::sync::Arc;
+
+        let mut engine = OptimizerEngine::default();
+        // Keep the plan shape untouched so duplicate projection columns
+        // survive (heuristic dedup would collapse them).
+        engine.set_enable_heuristic(false);
+
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        scan.set_col_names(vec!["n".to_string()]);
+        scan.set_output_var("n".to_string());
+
+        // (a + b) * 2: complex enough to clear the precomputation cost floor.
+        let expr = Expression::Binary {
+            left: Box::new(Expression::Binary {
+                left: Box::new(Expression::Variable("a".to_string())),
+                op: BinaryOperator::Add,
+                right: Box::new(Expression::Variable("b".to_string())),
+            }),
+            op: BinaryOperator::Multiply,
+            right: Box::new(Expression::Literal(Value::Int(2))),
+        };
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let id = context.register_expression(ExpressionMeta::new(expr));
+        let contextual = ContextualExpression::new(id, context);
+
+        // The same expression is referenced by three projection columns.
+        let columns: Vec<YieldColumn> = (0..3)
+            .map(|i| YieldColumn {
+                expression: contextual.clone(),
+                alias: format!("c{}", i),
+                is_matched: false,
+            })
+            .collect();
+        let project = ProjectNode::new(PlanNodeEnum::ScanVertices(scan), columns)
+            .expect("project should build");
+        let plan = ExecutionPlan::new(Some(PlanNodeEnum::Project(project)));
+
+        let optimized = engine
+            .optimize(plan, Some("test"))
+            .expect("optimization should succeed");
+
+        assert!(
+            optimized
+                .cbo_notes
+                .iter()
+                .any(|note| note.starts_with("precompute:")),
+            "expected precompute decision notes, got: {:?}",
+            optimized.cbo_notes
+        );
     }
 }
