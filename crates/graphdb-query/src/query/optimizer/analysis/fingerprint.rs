@@ -5,13 +5,17 @@
 //!
 //! ## Design Specifications
 //!
-//! The current implementation is a simplified version that only hashes the node types and the structure of the child nodes.
-//! Used to identify duplicate sub-plans (such as in the optimization of materialized CTEs).
-//! It does not include node configuration parameters or expression structures in order to improve performance.
+//! The fingerprint hashes the node type, the structure of the child nodes,
+//! and the node configuration (filter condition, projection columns, sort
+//! items, scan tag / projected properties).  Two sub-plans collide only when
+//! both their structure and their configuration match, so the fingerprint is
+//! a faithful equality proxy for both duplicate-sub-plan detection
+//! (materialized CTEs) and batch cycle/convergence detection.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use crate::core::types::expr::ContextualExpression;
 use crate::query::planning::plan::core::nodes::{BinaryInputNode, PlanNodeEnum, SingleInputNode};
 
 /// Plan node fingerprint
@@ -35,13 +39,16 @@ impl PlanFingerprint {
 /// Use a stable hashing algorithm to calculate the structural fingerprint of the planned nodes.
 /// Sub-plans with the same structure will generate the same fingerprint values.
 ///
-/// ## Simplified Design
+/// ## Hashed Content
 ///
-/// Only the node type and the sub-node structure are hashed; the actual data is not hashed.
-/// Node configuration parameters (such as Filter criteria, number of columns in the Project, etc.)
-/// Expression syntax (such as variable names, literal values, etc.)
+/// - Node type (enumeration discriminator) and child structure.
+/// - Node configuration: Filter condition, Project columns, Sort items,
+///   Scan tag / edge type / projected properties, plus limit amounts.
 ///
-/// This design meets the current requirements (identifying duplicate sub-plans) and also improves performance.
+/// Node configuration is hashed so that plans which differ only in their
+/// configuration (e.g. two Filter predicates) do not collide; this keeps
+/// cycle/oscillation detection in the batch optimizer truthful and prevents
+/// duplicate-sub-plan detection from merging distinct operators.
 #[derive(Debug, Clone)]
 pub struct FingerprintCalculator;
 
@@ -68,6 +75,7 @@ impl FingerprintCalculator {
     /// # Algorithms
     /// Hash node type (determined using an enumeration discriminator)
     /// 2. Recursive Hashing of Subnode Fingerprints
+    /// 3. Hash the node configuration (condition/columns/sort items/scans)
     pub fn calculate_fingerprint(&self, node: &PlanNodeEnum) -> PlanFingerprint {
         let mut hasher = DefaultHasher::new();
 
@@ -77,7 +85,89 @@ impl FingerprintCalculator {
         // Hash child node fingerprint
         self.hash_children(node, &mut hasher);
 
+        // Hash node configuration
+        self.hash_node_config(node, &mut hasher);
+
         PlanFingerprint::new(hasher.finish())
+    }
+
+    /// Hash the configuration of a node (operator parameters) into the
+    /// fingerprint.  Two nodes that differ only in their configuration must
+    /// produce different fingerprints, otherwise the cycle/convergence
+    /// detection in the batch optimizer can mistake a configuration change
+    /// for a no-op, and duplicate-sub-plan detection can merge unequal plans.
+    fn hash_node_config(&self, node: &PlanNodeEnum, hasher: &mut DefaultHasher) {
+        use crate::query::planning::plan::core::nodes::*;
+
+        match node {
+            PlanNodeEnum::Filter(n) => self.hash_expression(n.condition(), hasher),
+            PlanNodeEnum::Project(n) => {
+                for col in n.columns() {
+                    col.alias.hash(hasher);
+                    self.hash_expression(&col.expression, hasher);
+                }
+            }
+            PlanNodeEnum::Sort(n) => {
+                for item in n.sort_items() {
+                    item.expression.to_expression_string().hash(hasher);
+                    item.direction.hash(hasher);
+                }
+                n.limit().hash(hasher);
+            }
+            PlanNodeEnum::TopN(n) => {
+                for item in n.sort_items() {
+                    item.expression.to_expression_string().hash(hasher);
+                    item.direction.hash(hasher);
+                }
+                n.limit().hash(hasher);
+            }
+            PlanNodeEnum::Limit(n) => {
+                n.offset().hash(hasher);
+                n.count().hash(hasher);
+            }
+            PlanNodeEnum::Sample(n) => {
+                n.count().hash(hasher);
+            }
+            PlanNodeEnum::Aggregate(n) => {
+                for key in n.group_keys() {
+                    key.hash(hasher);
+                }
+            }
+            PlanNodeEnum::ScanVertices(n) => {
+                n.tag().hash(hasher);
+                n.projected_properties().hash(hasher);
+                if let Some(filter) = n.vertex_filter() {
+                    self.hash_expression(filter, hasher);
+                }
+                n.limit().hash(hasher);
+            }
+            PlanNodeEnum::ScanEdges(n) => {
+                n.edge_type().hash(hasher);
+                n.projected_properties().hash(hasher);
+                if let Some(filter) = n.filter() {
+                    self.hash_expression(filter, hasher);
+                }
+                n.limit().hash(hasher);
+            }
+            PlanNodeEnum::IndexScan(n) => {
+                n.schema_name().hash(hasher);
+                n.index_name().hash(hasher);
+                if let Some(filter) = n.filter() {
+                    self.hash_expression(filter, hasher);
+                }
+                n.limit().hash(hasher);
+            }
+            _ => {}
+        }
+    }
+
+    /// Hash a contextual expression by its string form, so that equivalent
+    /// expressions (regardless of their registered IDs) collide.
+    fn hash_expression(&self, expr: &ContextualExpression, hasher: &mut DefaultHasher) {
+        match expr.expression() {
+            Some(meta) => meta.to_expression_string().hash(hasher),
+            None => expr.id().hash(hasher),
+        }
     }
 
     /// Hash child node
@@ -120,31 +210,31 @@ impl FingerprintCalculator {
                 self.hash_single_input(n, hasher);
             }
             PlanNodeEnum::Expand(n) => {
-                // ExpandNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // ExpandNode uses MultipleInputNode, accessing children through inputs()
                 for dep in n.inputs() {
                     let fp = self.calculate_fingerprint(dep);
                     fp.hash(hasher);
                 }
             }
             PlanNodeEnum::ExpandAll(n) => {
-                // ExpandAllNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // ExpandAllNode uses MultipleInputNode, accessing children through inputs()
                 for dep in n.inputs() {
                     let fp = self.calculate_fingerprint(dep);
                     fp.hash(hasher);
                 }
             }
             PlanNodeEnum::AppendVertices(n) => {
-                // AppendVerticesNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // AppendVerticesNode uses MultipleInputNode, accessing children through inputs()
                 for dep in n.inputs() {
                     let fp = self.calculate_fingerprint(dep);
                     fp.hash(hasher);
                 }
             }
             PlanNodeEnum::Argument(_) => {
-                // The `ArgumentNode` is a node with zero inputs; therefore, it does not require any hash child nodes.
+                // The ArgumentNode has zero inputs; no child nodes to hash.
             }
             PlanNodeEnum::PassThrough(_) => {
-                // The PassThroughNode is a node with zero inputs; it does not require any hash-related child nodes.
+                // The PassThroughNode has zero inputs; no child nodes to hash.
             }
             PlanNodeEnum::PatternApply(n) => {
                 self.hash_single_input(n, hasher);
@@ -194,9 +284,8 @@ impl FingerprintCalculator {
                 right_fp.hash(hasher);
             }
 
-            // Add more nodes
+            // More nodes
             PlanNodeEnum::Select(n) => {
-                // The SelectNode method uses the if_branch and else_branch methods.
                 if let Some(ref branch) = n.if_branch() {
                     let fp = self.calculate_fingerprint(branch);
                     fp.hash(hasher);
@@ -207,7 +296,6 @@ impl FingerprintCalculator {
                 }
             }
             PlanNodeEnum::Loop(n) => {
-                // The `body` of `LoopNode` returns an `Option<Box<PlanNodeEnum>>`.
                 if let Some(ref body) = n.body() {
                     let body_fp = self.calculate_fingerprint(body);
                     body_fp.hash(hasher);
@@ -216,53 +304,53 @@ impl FingerprintCalculator {
 
             // Zero-input nodes (leaf nodes)
             PlanNodeEnum::Start(_) => {
-                // Leaf nodes do not require hashed child nodes.
+                // Leaf
             }
             PlanNodeEnum::GetVertices(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::GetEdges(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::GetNeighbors(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::ScanVertices(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::ScanEdges(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::IndexScan(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::ShortestPath(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::MultiShortestPath(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::BFSShortest(_) => {
-                // Leaf node
+                // Leaf
             }
             PlanNodeEnum::AllPaths(_) => {
-                // Leaf node
+                // Leaf
             }
 
-            // Management node (does not participate in optimization decisions)
+            // Management nodes (not involved in optimization decisions)
             _ => {
-                // The management node does not calculate fingerprints.
+                // No fingerprints for management nodes.
             }
         }
     }
 
-    /// Child nodes of a hash single-input node
+    /// Hash child nodes of a single-input node
     fn hash_single_input<T: SingleInputNode>(&self, node: &T, hasher: &mut DefaultHasher) {
         let input_fp = self.calculate_fingerprint(node.input());
         input_fp.hash(hasher);
     }
 
-    /// Child nodes of a hash dual-input node
+    /// Hash child nodes of a dual-input node
     fn hash_binary_input<T: BinaryInputNode>(&self, node: &T, hasher: &mut DefaultHasher) {
         let left_fp = self.calculate_fingerprint(node.left_input());
         let right_fp = self.calculate_fingerprint(node.right_input());

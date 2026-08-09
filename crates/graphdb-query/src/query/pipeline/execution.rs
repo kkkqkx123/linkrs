@@ -35,7 +35,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_info: Option<SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
         let request = self.prepare_request_with_auto_commit(query_text, space_info)?;
-        self.execute_prepared_materialized(&request)
+        match self.execute_prepared(&request, None, ResultSink::Materialize)? {
+            super::prepared::PreparedOutcome::Materialized(result) => Ok(result),
+            _ => unreachable!("materialize sink cannot stream"),
+        }
     }
 
     pub fn execute_query_stream_with_request(
@@ -55,7 +58,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         transaction_id: Option<TransactionId>,
     ) -> DBResult<StreamingQueryResult> {
         let request = self.prepare_request(query_text, rctx, space_info)?;
-        self.execute_prepared_streaming(&request, transaction_id)
+        match self.execute_prepared(&request, transaction_id, ResultSink::Stream)? {
+            super::prepared::PreparedOutcome::Stream(stream) => Ok(stream),
+            _ => unreachable!("stream sink cannot materialize"),
+        }
     }
 
     pub fn execute_query_with_request(
@@ -75,7 +81,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         transaction_id: Option<TransactionId>,
     ) -> DBResult<ExecutionResult> {
         let request = self.prepare_request(query_text, rctx, space_info)?;
-        self.execute_prepared(&request, transaction_id)
+        match self.execute_prepared(&request, transaction_id, ResultSink::Materialize)? {
+            super::prepared::PreparedOutcome::Materialized(result) => Ok(result),
+            _ => unreachable!("materialize sink cannot stream"),
+        }
     }
 
     pub fn execute_query_with_metrics(
@@ -141,61 +150,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         self.record_query_type_counter(&request.stmt);
 
-        // Diagnostic short-circuit via execute_diagnostic (already uses prepared request)
-        if matches!(
-            request.statement_class,
-            super::prepared::StatementClass::Diagnostic
-        ) {
-            let result = self.execute_diagnostic(&request)?;
-            profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-            metrics.record_total_time(total_start.elapsed());
-            return Ok((result, metrics, profile));
-        }
-
-        // Compile through the shared plan-cache path (parses to a cached
-        // physical plan when available, otherwise compiles + caches).  The
-        // elapsed time covers the whole compile phase; `optimize_us` stays
-        // zero because optimization is folded into the cache-compile step.
-        let compile_start = Instant::now();
-        let bound_for_profile = request
-            .bound_statement
-            .as_ref()
-            .expect("bound statement must exist");
-        let physical_plan = match self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            bound_for_profile,
-            &request.stmt,
-            &request.ast,
-            request.dml_shape_cacheable,
-        ) {
-            Ok(plan) => {
-                profile.stages.plan_us = compile_start.elapsed().as_micros() as u64;
-                metrics.set_plan_node_count(plan.operator_count());
-                metrics.record_plan_time(compile_start.elapsed());
-                plan
-            }
-            Err(e) => {
-                profile.stages.plan_us = compile_start.elapsed().as_micros() as u64;
-                let error_info =
-                    ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                let _ = request.finalize_owned_operation(false);
-                return Err(e);
-            }
-        };
-
+        // Dedicated compile + execute: `execute_prepared` runs the generated
+        // diagnostic/analyze/DDL paths internally and uses the shared plan
+        // cache.  Compilation is folded into the execute phase for profiling
+        // (optimization happens inside the cache-compile step).
         let execute_start = Instant::now();
-        let result = match self.execute_compiled_with_scope(
-            physical_plan,
-            request.query_context.clone(),
+        let result = match self.execute_prepared(
+            &request,
+            None,
             ResultSink::Materialize,
-            request.transaction_scope.clone(),
         ) {
-            Ok(result) => result,
+            Ok(super::prepared::PreparedOutcome::Materialized(result)) => result,
+            Ok(_) => unreachable!("materialize sink cannot stream"),
             Err(e) => {
                 profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
                 let error_info = ErrorInfo::new(
@@ -207,17 +173,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 profile.total_duration_us = total_start.elapsed().as_micros() as u64;
                 self.stats_manager
                     .record_failed_query(profile.clone(), error_info);
-                let _ = request.finalize_owned_operation(false);
                 return Err(e);
             }
         };
-
-        self.record_cache_execution(
-            &request.query_text,
-            &request.query_context,
-            &request.stmt,
-            execute_start.elapsed().as_secs_f64() * 1000.0,
-        );
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
         profile.result_count = result.count();
@@ -230,7 +188,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.stats_manager.record_query_metrics(&metrics);
         self.stats_manager.record_query_profile(profile.clone());
 
-        request.finalize_owned_operation(true)?;
         Ok((result, metrics, profile))
     }
 

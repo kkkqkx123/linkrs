@@ -44,6 +44,18 @@ pub fn requires_write_storage(stmt: &Stmt) -> bool {
     }
 }
 
+/// Outcome of executing a prepared request.
+///
+/// Returned by [`QueryPipelineManager::execute_prepared`] regardless of the
+/// sink: a materialized [`ExecutionResult`] or a streaming
+/// [`StreamingQueryResult`].
+pub(crate) enum PreparedOutcome {
+    /// Fully materialized result for `ResultSink::Materialize`.
+    Materialized(ExecutionResult),
+    /// Streaming result for `ResultSink::Stream`.
+    Stream(StreamingQueryResult),
+}
+
 /// A fully prepared request ready for execution.
 ///
 /// Contains everything needed to compile, execute, and finalize a query:
@@ -393,177 +405,109 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         })
     }
 
-    /// Compile (or get cached) and execute a prepared request with materialize sink.
+    /// Compile (or get cached) and execute a prepared request with a
+    /// materialized or streaming sink, finalizing auto-bound operation
+    /// storage on success/failure.
+    ///
+    /// Single unified entry point (replaces the three former
+    /// `execute_prepared*` variants): diagnostic, analyze, and DDL
+    /// statements take their dedicated paths, everything else shares one
+    /// compile + execute core distinguished only by the sink.
     pub(crate) fn execute_prepared(
         &mut self,
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
-    ) -> DBResult<ExecutionResult> {
-        match self.execute_prepared_inner(request, transaction_id) {
-            Ok(result) => {
-                request.finalize_owned_operation(true)?;
-                Ok(result)
-            }
-            Err(error) => {
-                let _ = request.finalize_owned_operation(false);
-                Err(error)
+        sink: ResultSink,
+    ) -> DBResult<PreparedOutcome> {
+        match sink {
+            ResultSink::Discard => Err(DBError::from(QueryError::execution(
+                "Discard sink must be handled by the caller".to_string(),
+            ))),
+            ResultSink::Materialize => match self.execute_prepared_inner(request, None, sink) {
+                Ok(outcome) => {
+                    request.finalize_owned_operation(true)?;
+                    Ok(outcome)
+                }
+                Err(error) => {
+                    let _ = request.finalize_owned_operation(false);
+                    Err(error)
+                }
+            },
+            ResultSink::Stream => {
+                match self.execute_prepared_inner(request, transaction_id, sink) {
+                    Ok(PreparedOutcome::Stream(stream)) => {
+                        if request.owns_operation_storage {
+                            if let Some(storage) = request.operation_storage.clone() {
+                                // Finalize when the stream ends: commit after full
+                                // consumption, abort on error, cancellation, or drop.
+                                let commit_storage = storage.clone();
+                                let abort_storage = storage;
+                                stream.set_transaction_finalizer_with_result(
+                                    Box::new(move || {
+                                        commit_storage
+                                            .write()
+                                            .finalize_operation(true)
+                                            .map_err(|error| error.to_string())
+                                    }),
+                                    Box::new(move || {
+                                        abort_storage
+                                            .write()
+                                            .finalize_operation(false)
+                                            .map_err(|error| error.to_string())
+                                    }),
+                                );
+                            }
+                        }
+                        Ok(PreparedOutcome::Stream(stream))
+                    }
+                    Ok(other) => Ok(other),
+                    Err(error) => {
+                        let _ = request.finalize_owned_operation(false);
+                        Err(error)
+                    }
+                }
             }
         }
     }
 
+    /// Shared inner execution core.
+    ///
+    /// Compile (or fetch from the plan cache), execute with the requested
+    /// sink, and record cache/DDL bookkeeping.  The outer
+    /// [`execute_prepared`](Self::execute_prepared) wrapper handles storage
+    /// finalization; DDL executed through a streaming sink is materialized
+    /// then re-wrapped as a stream.
     fn execute_prepared_inner(
         &mut self,
         request: &PreparedRequest,
         transaction_id: Option<TransactionId>,
-    ) -> DBResult<ExecutionResult> {
+        sink: ResultSink,
+    ) -> DBResult<PreparedOutcome> {
+        // Classification-specific paths: no plan is compiled.
         if request.statement_class == StatementClass::Diagnostic {
-            return self.execute_diagnostic(request);
-        }
-        if request.statement_class == StatementClass::Analyze {
-            return self.execute_analyze(request);
-        }
-        let physical_plan = self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            request.bound_statement.as_ref().ok_or_else(|| {
-                DBError::from(QueryError::execution("No bound statement".to_string()))
-            })?,
-            &request.stmt,
-            &request.ast,
-            request.dml_shape_cacheable,
-        )?;
-        let start = Instant::now();
-        let scope = transaction_id
-            .map(|id| TransactionScope::explicit(id, true))
-            .unwrap_or_else(|| request.transaction_scope.clone());
-        let result = self.execute_compiled_with_scope(
-            physical_plan,
-            request.query_context.clone(),
-            ResultSink::Materialize,
-            scope,
-        )?;
-        self.record_cache_execution(
-            &request.query_text,
-            &request.query_context,
-            &request.stmt,
-            start.elapsed().as_secs_f64() * 1000.0,
-        );
-        if request.statement_class == StatementClass::Ddl {
-            self.invalidate_after_ddl(request.query_context.space_name().as_deref());
-        }
-        Ok(result)
-    }
-
-    pub(crate) fn execute_prepared_materialized(
-        &mut self,
-        request: &PreparedRequest,
-    ) -> DBResult<ExecutionResult> {
-        match self.execute_prepared_materialized_inner(request) {
-            Ok(result) => {
-                request.finalize_owned_operation(true)?;
-                Ok(result)
-            }
-            Err(error) => {
-                let _ = request.finalize_owned_operation(false);
-                Err(error)
-            }
-        }
-    }
-
-    fn execute_prepared_materialized_inner(
-        &mut self,
-        request: &PreparedRequest,
-    ) -> DBResult<ExecutionResult> {
-        if request.statement_class == StatementClass::Diagnostic {
-            return self.execute_diagnostic(request);
-        }
-        if request.statement_class == StatementClass::Analyze {
-            return self.execute_analyze(request);
-        }
-        let physical_plan = self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            request.bound_statement.as_ref().ok_or_else(|| {
-                DBError::from(QueryError::execution("No bound statement".to_string()))
-            })?,
-            &request.stmt,
-            &request.ast,
-            request.dml_shape_cacheable,
-        )?;
-        let execution_start = Instant::now();
-        let result = self.execute_compiled_with_scope(
-            physical_plan,
-            request.query_context.clone(),
-            ResultSink::Materialize,
-            request.transaction_scope.clone(),
-        )?;
-        self.record_cache_execution(
-            &request.query_text,
-            &request.query_context,
-            &request.stmt,
-            execution_start.elapsed().as_secs_f64() * 1000.0,
-        );
-        if request.statement_class == StatementClass::Ddl {
-            self.invalidate_after_ddl(request.query_context.space_name().as_deref());
-        }
-        Ok(result)
-    }
-
-    pub(crate) fn execute_prepared_streaming(
-        &mut self,
-        request: &PreparedRequest,
-        transaction_id: Option<TransactionId>,
-    ) -> DBResult<StreamingQueryResult> {
-        match self.execute_prepared_streaming_inner(request, transaction_id) {
-            Ok(stream) => {
-                if request.owns_operation_storage {
-                    if let Some(storage) = request.operation_storage.clone() {
-                        // Finalize when the stream ends: commit after full
-                        // consumption, abort on error, cancellation, or drop.
-                        let commit_storage = storage.clone();
-                        let abort_storage = storage;
-                        stream.set_transaction_finalizer_with_result(
-                            Box::new(move || {
-                                commit_storage
-                                    .write()
-                                    .finalize_operation(true)
-                                    .map_err(|error| error.to_string())
-                            }),
-                            Box::new(move || {
-                                abort_storage
-                                    .write()
-                                    .finalize_operation(false)
-                                    .map_err(|error| error.to_string())
-                            }),
-                        );
-                    }
+            return Ok(match sink {
+                ResultSink::Materialize => {
+                    PreparedOutcome::Materialized(self.execute_diagnostic(request)?)
                 }
-                Ok(stream)
-            }
-            Err(error) => {
-                let _ = request.finalize_owned_operation(false);
-                Err(error)
-            }
-        }
-    }
-
-    fn execute_prepared_streaming_inner(
-        &mut self,
-        request: &PreparedRequest,
-        transaction_id: Option<TransactionId>,
-    ) -> DBResult<StreamingQueryResult> {
-        if request.statement_class == StatementClass::Diagnostic {
-            let result = self.execute_diagnostic(request)?;
-            return Ok(StreamingQueryResult::from_execution_result(result));
+                ResultSink::Stream => PreparedOutcome::Stream(
+                    StreamingQueryResult::from_execution_result(self.execute_diagnostic(request)?),
+                ),
+                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
+            });
         }
         if request.statement_class == StatementClass::Analyze {
             let result = self.execute_analyze(request)?;
-            return Ok(StreamingQueryResult::from_execution_result(result));
+            return Ok(match sink {
+                ResultSink::Materialize => PreparedOutcome::Materialized(result),
+                ResultSink::Stream => {
+                    PreparedOutcome::Stream(StreamingQueryResult::from_execution_result(result))
+                }
+                ResultSink::Discard => unreachable!("discard sink is rejected by the caller"),
+            });
         }
-        if request.statement_class == StatementClass::Ddl {
-            let result = self.execute_prepared_materialized(request)?;
-            return Ok(StreamingQueryResult::from_execution_result(result));
-        }
+        // DDL has no streaming semantics: materialize and wrap.
+        let stream_ddl = sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
+
         let physical_plan = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
@@ -577,13 +521,39 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let scope = transaction_id
             .map(|id| TransactionScope::explicit(id, true))
             .unwrap_or_else(|| request.transaction_scope.clone());
+
+        if stream_ddl || sink == ResultSink::Materialize {
+            let start = Instant::now();
+            let result = self.execute_compiled_with_scope(
+                physical_plan,
+                request.query_context.clone(),
+                ResultSink::Materialize,
+                scope,
+            )?;
+            self.record_cache_execution(
+                &request.query_text,
+                &request.query_context,
+                &request.stmt,
+                start.elapsed().as_secs_f64() * 1000.0,
+            );
+            if request.statement_class == StatementClass::Ddl {
+                self.invalidate_after_ddl(request.query_context.space_name().as_deref());
+            }
+            if stream_ddl {
+                return Ok(PreparedOutcome::Stream(
+                    StreamingQueryResult::from_execution_result(result),
+                ));
+            }
+            return Ok(PreparedOutcome::Materialized(result));
+        }
+
         let stream = self.execute_compiled_stream_with_scope(
             physical_plan,
             request.query_context.clone(),
             scope,
         )?;
         self.attach_stream_cache_execution_stats(&stream, request);
-        Ok(stream)
+        Ok(PreparedOutcome::Stream(stream))
     }
 
     pub(crate) fn execute_diagnostic(

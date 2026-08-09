@@ -15,26 +15,41 @@ use crate::storage::QueryStorage;
 use std::sync::Arc;
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
+    /// Compile the statement wrapped by an EXPLAIN / PROFILE.
+    ///
+    /// Goes through the shared `compile_or_get_cached` path so diagnostic
+    /// targets reuse the plan cache (and warm it for the same statement
+    /// executed directly).  The inner statement's source span is sliced from
+    /// the original request text to derive its cache key; when that is
+    /// unavailable the full query text is used as a fallback key.
+    fn compile_diagnostic_target(
+        &mut self,
+        qctx: Arc<QueryContext>,
+        inner_stmt: &crate::query::parser::ast::Stmt,
+    ) -> DBResult<Arc<crate::query::executor::streaming::plan::PhysicalPlan>> {
+        let full_text = qctx.request_context().query.clone();
+        let key_text = statement_source_text(&full_text, inner_stmt)
+            .unwrap_or_else(|| full_text.clone());
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
+            inner_stmt.clone(),
+            expr_ctx,
+        ));
+        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?.ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "EXPLAIN/PROFILE target statement could not be bound".to_string(),
+            ))
+        })?;
+        self.compile_or_get_cached(&key_text, qctx, &bound, inner_stmt, &ast, false)
+    }
+
     pub fn execute_explain(
         &mut self,
         explain_stmt: &ExplainStmt,
         qctx: Arc<QueryContext>,
     ) -> DBResult<ExecutionResult> {
-        let inner_ast = &explain_stmt.statement;
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
-            (**inner_ast).clone(),
-            expr_ctx,
-        ));
-        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
-
-        let physical_plan = if let Some(b) = bound {
-            self.compile_from_bound(qctx.clone(), &b, &ast)?
-        } else {
-            return Err(DBError::from(QueryError::execution(
-                "EXPLAIN target statement could not be bound".to_string(),
-            )));
-        };
+        let inner_stmt = (*explain_stmt.statement).clone();
+        let physical_plan = self.compile_diagnostic_target(qctx, &inner_stmt)?;
 
         let plan_desc =
             crate::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description(

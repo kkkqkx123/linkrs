@@ -81,6 +81,14 @@ impl NodeRewriter for BatchNodeRewriter<'_> {
     }
 }
 
+/// Maximum number of chain passes over all batches.
+///
+/// The batch chain can legitimately need more than one pass to reach a
+/// fixed point (later batches undo earlier ones).  This bounds the outer
+/// pass loop so pathological plans terminate; a boundary fingerprint that
+/// repeats an older boundary is reported as cross-batch oscillation.
+const MAX_CHAIN_PASSES: usize = 3;
+
 /// Optimization batch phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OptimizationBatch {
@@ -171,6 +179,34 @@ pub struct BatchOptimizer {
 impl Default for BatchOptimizer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Outcome of comparing a chain-boundary fingerprint against the history of
+/// previously seen boundary fingerprints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryOutcome {
+    /// The fingerprint is new; the chain should continue.
+    Progress,
+    /// The fingerprint repeats the immediately preceding boundary: the chain
+    /// reached a fixed point and stops.
+    Converged,
+    /// The fingerprint repeats an older boundary: the chain oscillates
+    /// across batches instead of converging.
+    Oscillation,
+}
+
+/// Classify a chain-boundary fingerprint against the boundary history.
+///
+/// A repeat of the last entry means the chain output equals its input
+/// (fixed point).  A repeat of an entry further back means the chain cycles
+/// through at least two distinct states across passes (cross-batch
+/// oscillation).
+fn classify_boundary_repeat(history: &[u64], fingerprint: u64) -> BoundaryOutcome {
+    match history.iter().position(|fp| *fp == fingerprint) {
+        None => BoundaryOutcome::Progress,
+        Some(index) if index + 1 == history.len() => BoundaryOutcome::Converged,
+        Some(_) => BoundaryOutcome::Oscillation,
     }
 }
 
@@ -306,9 +342,19 @@ impl BatchOptimizer {
     }
 
     /// Optimize a plan through all enabled batches
+    ///
+    /// The batch chain itself is repeated until the whole-plan fingerprint
+    /// at a chain boundary stabilizes.  A single pass is not guaranteed to
+    /// reach a fixed point because later batches can undo the work of
+    /// earlier ones (e.g. a Cleanup merge that re-opens a predicate that
+    /// PredicatePushdown pushed again).  The passes are bounded by
+    /// [`MAX_CHAIN_PASSES`]; a boundary fingerprint that repeats an older
+    /// boundary (not the immediately preceding one) is reported as a
+    /// cross-batch oscillation via `BatchStopReason::CycleDetected` on the
+    /// last batch's statistics.
     pub fn optimize(&self, plan: PlanNodeEnum) -> RewriteResult<OptimizationResult> {
         let mut current_plan = plan;
-        let mut batch_stats = Vec::new();
+        let mut batch_stats: Vec<(OptimizationBatch, BatchStatistics)> = Vec::new();
 
         // Define batch execution order
         let batch_order = [
@@ -319,31 +365,71 @@ impl BatchOptimizer {
             OptimizationBatch::Decorrelation,
             OptimizationBatch::Cleanup,
         ];
+        let enabled: Vec<OptimizationBatch> = batch_order
+            .iter()
+            .copied()
+            .filter(|batch| {
+                self.batch_rules
+                    .get(batch)
+                    .is_some_and(|rules| !rules.is_empty())
+            })
+            .collect();
 
-        for batch in &batch_order {
-            let Some(rules) = self.batch_rules.get(batch) else {
-                continue;
-            };
+        if enabled.is_empty() {
+            return Ok(OptimizationResult {
+                optimized_plan: current_plan,
+                batch_statistics: batch_stats,
+                total_iterations: 0,
+                total_rules_applied: 0,
+            });
+        }
 
-            if rules.is_empty() {
-                continue;
+        // Whole-plan fingerprint at each chain boundary.  A repeat of the
+        // immediately previous boundary means the chain reached a fixed
+        // point; a repeat of an older boundary means the chain oscillates
+        // across batches instead of converging.
+        let mut boundary_fingerprints: Vec<u64> = Vec::new();
+
+        for pass in 0..MAX_CHAIN_PASSES {
+            let boundary_fp = Self::calculate_fingerprint(&current_plan);
+            match classify_boundary_repeat(&boundary_fingerprints, boundary_fp) {
+                BoundaryOutcome::Converged => {
+                    log::debug!("Batch chain reached a fixed point after {pass} pass(es)");
+                    break;
+                }
+                BoundaryOutcome::Oscillation => {
+                    log::warn!(
+                        "Cross-batch oscillation detected: fingerprint of pass {pass} repeats an older boundary",
+                    );
+                    if let Some((_, last_stats)) = batch_stats.last_mut() {
+                        last_stats.stop_reason = BatchStopReason::CycleDetected;
+                    }
+                    break;
+                }
+                BoundaryOutcome::Progress => {
+                    boundary_fingerprints.push(boundary_fp);
+                }
             }
 
-            log::debug!("Starting optimization batch: {}", batch.name());
+            log::debug!("Starting optimization chain pass {pass}");
+            for batch in &enabled {
+                let rules = self.batch_rules.get(batch).expect("enabled batch has rules");
+                log::debug!("Starting optimization batch: {}", batch.name());
 
-            let (optimized_plan, stats) =
-                self.execute_batch(current_plan, rules, *batch, batch.default_max_iterations())?;
+                let (optimized_plan, stats) =
+                    self.execute_batch(current_plan, rules, *batch, batch.default_max_iterations())?;
 
-            log::debug!(
-                "Batch {} completed: {} iterations, {} rules applied, converged={}",
-                batch.name(),
-                stats.iterations,
-                stats.rules_applied,
-                stats.converged
-            );
+                log::debug!(
+                    "Batch {} completed: {} iterations, {} rules applied, converged={}",
+                    batch.name(),
+                    stats.iterations,
+                    stats.rules_applied,
+                    stats.converged
+                );
 
-            current_plan = optimized_plan;
-            batch_stats.push((*batch, stats));
+                current_plan = optimized_plan;
+                batch_stats.push((*batch, stats));
+            }
         }
 
         let total_iterations: usize = batch_stats.iter().map(|(_, s)| s.iterations).sum();
@@ -575,5 +661,89 @@ mod tests {
         let summary = result.summary();
         assert!(summary.contains("10 total iterations"));
         assert!(summary.contains("25 rules applied"));
+    }
+
+    #[test]
+    fn test_classify_boundary_repeat() {
+        // A fresh fingerprint makes progress.
+        assert_eq!(
+            classify_boundary_repeat(&[], 1),
+            BoundaryOutcome::Progress
+        );
+        assert_eq!(
+            classify_boundary_repeat(&[1, 2], 3),
+            BoundaryOutcome::Progress
+        );
+        // Repeating the immediately preceding boundary is a fixed point.
+        assert_eq!(
+            classify_boundary_repeat(&[1], 1),
+            BoundaryOutcome::Converged
+        );
+        assert_eq!(
+            classify_boundary_repeat(&[1, 2, 3], 3),
+            BoundaryOutcome::Converged
+        );
+        // Repeating an older boundary is cross-batch oscillation.
+        assert_eq!(
+            classify_boundary_repeat(&[1, 2], 1),
+            BoundaryOutcome::Oscillation
+        );
+        assert_eq!(
+            classify_boundary_repeat(&[1, 2, 3, 4], 2),
+            BoundaryOutcome::Oscillation
+        );
+    }
+
+    #[test]
+    fn test_optimize_with_real_rules_is_idempotent_and_terminates() {
+        // The default rule registry, applied to a plan with a pushable
+        // filter, must converge within the bounded chain passes: the
+        // optimized plan is unchanged when optimized again (fixed point),
+        // and no cross-batch oscillation is reported.
+        use crate::core::types::expr::ExpressionMeta;
+        use crate::core::Expression;
+        use crate::core::Value;
+        use crate::query::optimizer::analysis::FingerprintCalculator;
+        use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
+        use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+        use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        use std::sync::Arc;
+
+        let optimizer = BatchOptimizer::from_registry(RuleRegistry::default());
+
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        let input = PlanNodeEnum::ScanVertices(scan);
+
+        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let condition = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: "age".to_string(),
+            }),
+            op: crate::core::types::BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Value::Int(18))),
+        };
+        let id = expr_ctx.register_expression(ExpressionMeta::new(condition));
+        let condition = crate::core::types::ContextualExpression::new(id, expr_ctx);
+        let plan = PlanNodeEnum::Filter(
+            FilterNode::new(input, condition).expect("FilterNode creation should succeed"),
+        );
+
+        let result = optimizer
+            .optimize(plan)
+            .expect("optimization should succeed");
+        assert!(!result.has_oscillation());
+        assert!(result.total_iterations > 0);
+
+        let again = optimizer
+            .optimize(result.optimized_plan.clone())
+            .expect("second optimization should succeed");
+        let calculator = FingerprintCalculator::new();
+        assert_eq!(
+            calculator.calculate_fingerprint(&again.optimized_plan),
+            calculator.calculate_fingerprint(&result.optimized_plan),
+            "optimization must reach a fixed point"
+        );
     }
 }
