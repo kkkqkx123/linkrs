@@ -86,6 +86,10 @@ pub enum SourceSpec {
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,
+        /// Tag-restricted scan: only rows of this tag are scanned at the
+        /// storage layer (the matching `contains(labels(v), ...)` residual
+        /// conjunct may then be elided).
+        tag: Option<String>,
         /// Optional vertex-id range restricting the scan to one partition.
         /// Set only on per-partition copies produced by the partitioned
         /// physical-plan builder; `None` means a full scan.

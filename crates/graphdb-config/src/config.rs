@@ -417,6 +417,11 @@ impl Config {
         &self.common.query_resource
     }
 
+    /// Get columnar fast-path configuration
+    pub fn columnar(&self) -> &ColumnarConfig {
+        &self.common.columnar
+    }
+
     /// Check if vector search is enabled
     pub fn is_vector_enabled(&self) -> bool {
         #[cfg(feature = "qdrant")]

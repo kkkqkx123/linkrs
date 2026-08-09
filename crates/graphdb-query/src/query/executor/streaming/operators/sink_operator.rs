@@ -377,7 +377,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -465,7 +465,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -485,17 +485,18 @@ impl SinkOperator {
                             if let (Ok(src), Ok(dst)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
-                                if let Some(_existing) = writer
-                                    .get_edge(space_name, &src, &dst, edge_type, 0)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?
+                                // Multi-edge semantics: the storage layer
+                                // assigns an increasing rank when a
+                                // (src, dst, edge_type) pair already exists,
+                                // so plain INSERT always succeeds. The
+                                // if-not-exists guard only skips duplicates.
+                                if *if_not_exists
+                                    && writer
+                                        .get_edge(space_name, &src, &dst, edge_type, 0)
+                                        .map_err(|e| QueryError::execution(e.to_string()))?
+                                        .is_some()
                                 {
-                                    if *if_not_exists {
-                                        continue;
-                                    }
-                                    return Err(QueryError::execution(format!(
-                                        "Edge already exists: {} -> {} of {}",
-                                        src, dst, edge_type
-                                    )));
+                                    continue;
                                 }
                                 let mut props = HashMap::new();
                                 for (prop_name, expr) in edge_properties.iter() {
@@ -543,7 +544,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -665,7 +666,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -770,7 +771,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -821,7 +822,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -882,7 +883,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
@@ -941,7 +942,7 @@ impl SinkOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Sink");
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();

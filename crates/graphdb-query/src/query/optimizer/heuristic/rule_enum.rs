@@ -38,6 +38,7 @@ use crate::query::optimizer::heuristic::predicate_pushdown;
 use crate::query::optimizer::heuristic::projection_pushdown;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule as RewriteRuleTrait;
+use crate::query::optimizer::heuristic::slot_coverage;
 use crate::query::planning::plan::PlanNodeEnum;
 
 macro_rules! define_rewrite_rules {
@@ -148,6 +149,7 @@ define_rewrite_rules! {
         PushEFilterDown(predicate_pushdown::PushEFilterDownRule),
         PushVFilterDownScanVertices(predicate_pushdown::PushVFilterDownScanVerticesRule),
         PushFilterDownScanVertices(predicate_pushdown::PushFilterDownScanVerticesRule),
+        EliminateRedundantTagFilter(predicate_pushdown::EliminateRedundantTagFilterRule),
         PushFilterDownInnerJoin(predicate_pushdown::PushFilterDownInnerJoinRule),
         PushFilterDownHashInnerJoin(predicate_pushdown::PushFilterDownHashInnerJoinRule),
         PushFilterDownHashLeftJoin(predicate_pushdown::PushFilterDownHashLeftJoinRule),
@@ -163,6 +165,10 @@ define_rewrite_rules! {
         // after implementing typed required-property pruning (Phase 4).
         PushProjectDownScanVertices(projection_pushdown::PushProjectDownScanVerticesRule),
         PushProjectDownScanEdges(projection_pushdown::PushProjectDownScanEdgesRule),
+        // Enriches scan `projected_properties` with residual filter
+        // predicate columns so the columnar evaluator can serve WHERE
+        // clauses directly above scan sources (G1 closure).
+        EnrichScanSlotsWithFilterProps(slot_coverage::EnrichScanSlotsWithFilterPropsRule),
 
         // ==================== Rules for Pushing Limits Down ====================
         PushLimitDownGetVertices(limit_pushdown::PushLimitDownGetVerticesRule),
@@ -291,6 +297,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushVFilterDownScanVertices(
             predicate_pushdown::PushVFilterDownScanVerticesRule::new(),
         ));
+        registry.add(RewriteRule::EliminateRedundantTagFilter(
+            predicate_pushdown::EliminateRedundantTagFilterRule::new(),
+        ));
         registry.add(RewriteRule::PushFilterDownScanVertices(
             predicate_pushdown::PushFilterDownScanVerticesRule::new(),
         ));
@@ -317,6 +326,9 @@ impl Default for RuleRegistry {
         ));
         registry.add(RewriteRule::PushProjectDownScanEdges(
             projection_pushdown::PushProjectDownScanEdgesRule::new(),
+        ));
+        registry.add(RewriteRule::EnrichScanSlotsWithFilterProps(
+            slot_coverage::EnrichScanSlotsWithFilterPropsRule::new(),
         ));
         registry.add(RewriteRule::PushLimitDownGetVertices(
             limit_pushdown::PushLimitDownGetVerticesRule::new(),
@@ -383,7 +395,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 47);
+        assert_eq!(registry.len(), 49);
     }
 
     #[test]

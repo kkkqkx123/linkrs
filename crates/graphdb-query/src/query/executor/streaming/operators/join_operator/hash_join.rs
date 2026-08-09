@@ -27,7 +27,7 @@ fn build_side_loop(
         // The build side materializes any propagated selection — it must
         // hash every (visible) build row once, so there is no benefit in
         // carrying a selection into the build store.
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("HashJoin");
         let col_names = chunk.col_names();
         if right_col_names.is_empty() {
             *right_col_names = col_names.clone();

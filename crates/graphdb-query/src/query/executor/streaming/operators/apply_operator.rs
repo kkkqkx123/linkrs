@@ -116,7 +116,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection();
+                    left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
@@ -190,7 +190,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection();
+                    left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
@@ -251,7 +251,7 @@ impl ApplyOperator {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
                     };
-                    left_chunk.materialize_selection();
+                    left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::with_capacity(left_chunk.rows.len());
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
@@ -349,7 +349,7 @@ fn materialize_right(
     }
     let mut materialized = Vec::new();
     while let Some(mut chunk) = right.advance()? {
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Apply");
         base.ensure_not_cancelled()?;
         if layout.is_none() {
             *layout = Some(chunk.get_layout());
@@ -438,7 +438,7 @@ mod tests {
         executor.open()?;
         let mut rows = Vec::new();
         while let Some(mut chunk) = executor.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("Apply");
             rows.extend(chunk.rows);
         }
         executor.close()?;

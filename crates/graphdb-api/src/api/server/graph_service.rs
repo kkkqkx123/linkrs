@@ -156,6 +156,14 @@ impl<
         external_stats_manager: Option<Arc<StatsManager>>,
         #[cfg(feature = "qdrant")] shared_vector_manager: Option<Arc<vector_client::VectorManager>>,
     ) -> Arc<Self> {
+        // Columnar fast-path switches are process-level toggles in the query
+        // executor; mirror the `[columnar]` config section onto them so the
+        // server config (e.g. `column_block_enabled`) becomes the production
+        // channel for the A1 scan path (default off).
+        crate::query::executor::streaming::operators::source_operator::set_column_block_enabled(
+            config.common.columnar.column_block_enabled,
+        );
+
         let session_idle_timeout = Duration::from_secs(config.transaction.default_timeout * 10);
         let session_manager = GraphSessionManager::new(
             format!("{}:{}", config.database.host, config.database.port),

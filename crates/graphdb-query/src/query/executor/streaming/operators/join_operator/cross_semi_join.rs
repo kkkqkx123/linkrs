@@ -26,7 +26,7 @@ pub(super) fn next_cross_join(
     let right = &mut *ctx.right;
     if !*left_consumed {
         while let Some(mut chunk) = left.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("CrossSemiJoin");
             base.ensure_not_cancelled()?;
             for row in &chunk.rows {
                 memory_tracker.try_reserve_row(row)?;
@@ -39,7 +39,7 @@ pub(super) fn next_cross_join(
     if !*right_consumed {
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("CrossSemiJoin");
             base.ensure_not_cancelled()?;
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
@@ -89,7 +89,7 @@ pub(super) fn next_semi_join(
     let right = &mut *ctx.right;
     if !*right_consumed {
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("CrossSemiJoin");
             base.ensure_not_cancelled()?;
             for row in chunk.rows {
                 memory_tracker.try_reserve_row(&row)?;
@@ -100,7 +100,7 @@ pub(super) fn next_semi_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection();
+        left_chunk.materialize_selection_by("CrossSemiJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 

@@ -34,8 +34,7 @@ pub(super) fn handle_traverse(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let tc = TraversalConfig::traverse(
@@ -78,7 +77,9 @@ pub(super) fn handle_traverse(
                 data_type: "bigint".to_string(),
             });
             let _schema = Arc::new(Schema::new(new_cols));
-            let mut rows = chunk.rows;
+            let mut rows = common::visible_rows(&chunk)
+                .map(|(_, row)| row.clone())
+                .collect::<Vec<_>>();
             for row in rows.iter_mut() {
                 row.push(Value::string(edge_types.join("/")));
                 row.push(Value::string(format!("{:?}", direction).to_lowercase()));
@@ -115,15 +116,14 @@ pub(super) fn handle_bi_expand(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiExpand not opened".to_string()));
     }
-    while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;
             let col_names = chunk.col_names();
 
             let mut out_rows = Vec::new();
-            for row in &chunk.rows {
+            for (_, row) in common::visible_rows(&chunk) {
                 base.ensure_not_cancelled()?;
                 let context = ValueRowContext::new(row.clone(), chunk.get_layout());
                 let vid_val = context
@@ -202,15 +202,14 @@ pub(super) fn handle_bi_traverse(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiTraverse not opened".to_string()));
     }
-    while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;
             let col_names = chunk.col_names();
 
             let mut out_rows = Vec::new();
-            for row in &chunk.rows {
+            for (_, row) in common::visible_rows(&chunk) {
                 base.ensure_not_cancelled()?;
                 let ctx = ValueRowContext::new(row.clone(), chunk.get_layout());
                 let vid_val = ctx

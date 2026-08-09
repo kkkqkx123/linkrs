@@ -141,7 +141,10 @@ fn test_limit_in_chain() {
     limit.open().unwrap();
     let chunk = limit.advance().unwrap();
     assert!(chunk.is_some());
-    if let Some(ref chunk_data) = chunk {
+    if let Some(mut chunk_data) = chunk {
+        // P2: Limit is selection-aware — materialize to observe the rows an
+        // API consumer would see (the engine does this at the root).
+        chunk_data.materialize_selection();
         assert_eq!(chunk_data.len(), 10);
     }
     let chunk2 = limit.advance().unwrap();
@@ -228,7 +231,10 @@ fn test_pipeline_scan_limit() {
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
     assert!(result.is_some());
-    if let Some(ref chunk) = result {
+    if let Some(mut chunk) = result {
+        // P2: Limit is selection-aware — materialize to observe the rows an
+        // API consumer would see (the engine does this at the root).
+        chunk.materialize_selection();
         assert_eq!(chunk.len(), 5);
     }
     pipeline.close().unwrap();
@@ -284,7 +290,10 @@ fn test_pipeline_scan_filter_limit() {
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
     assert!(result.is_some());
-    if let Some(ref chunk) = result {
+    if let Some(mut chunk) = result {
+        // P2: Limit is selection-aware — materialize to observe the rows an
+        // API consumer would see (the engine does this at the root).
+        chunk.materialize_selection();
         assert_eq!(chunk.len(), 8);
     }
     pipeline.close().unwrap();
@@ -705,6 +714,103 @@ mod storage_backed {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(sorted, vec!["Alice", "Bob", "Charlie", "Diana"]);
+    }
+
+    /// P2 differential test: selection propagation on/off.
+    ///
+    /// The selection propagation feature allows chunks to be handed downstream
+    /// with a selection vector attached, avoiding materialization at
+    /// transparent operator boundaries (Filter/Project/Limit/Offset). This
+    /// test verifies that results are identical with propagation enabled vs.
+    /// disabled.
+    #[test]
+    fn test_selection_propagation_differential() {
+        use graphdb::query::executor::streaming::chunk::set_selection_propagation_enabled;
+
+        let test_storage = TestStorage::new().expect("Failed to create test storage");
+        let storage = test_storage.storage();
+        setup_test_data(&storage);
+
+        let stats_manager = Arc::new(StatsManager::new());
+        let schema_manager = {
+            let guard = storage.read();
+            StorageSchemaContextOps::get_schema_manager(&*guard)
+                .expect("Schema manager not available")
+        };
+        let space_info = {
+            let store = storage.read();
+            store.get_space("test").unwrap()
+        };
+
+        // Queries that exercise selection propagation: scan + filter with
+        // select vectors flowing through Filter/Project/Limit boundaries.
+        let queries = [
+            "MATCH (n:Person) WHERE n.age > 25 RETURN n.name",
+            "MATCH (n:Person) WHERE n.age > 25 RETURN n.name LIMIT 2",
+            "MATCH (n:Person) WHERE n.age > 10 AND n.age < 40 RETURN n.name, n.age ORDER BY n.age LIMIT 3",
+            "MATCH (n:Person) WHERE n.name > 'B' RETURN count(n)",
+        ];
+
+        // Run with propagation ON (default)
+        let mut pipeline_on = QueryPipelineManager::with_optimizer(
+            storage.clone(),
+            stats_manager.clone(),
+            Arc::new(OptimizerEngine::default()),
+        )
+        .with_schema_manager(schema_manager.clone());
+        let on_results: Vec<Vec<String>> = queries
+            .iter()
+            .map(|sql| {
+                let rctx = Arc::new(QueryRequestContext::new(sql.to_string()));
+                let result: StreamingQueryResult = pipeline_on
+                    .execute_query_stream_with_request(sql, rctx, space_info.clone())
+                    .expect("query should succeed");
+                let mut rows = Vec::new();
+                while let Ok(Some(chunk)) = result.next_chunk() {
+                    for row in &chunk.rows {
+                        rows.push(format!("{:?}", row));
+                    }
+                }
+                rows
+            })
+            .collect();
+
+        // Run with propagation OFF
+        set_selection_propagation_enabled(false);
+        let mut pipeline_off = QueryPipelineManager::with_optimizer(
+            storage.clone(),
+            stats_manager,
+            Arc::new(OptimizerEngine::default()),
+        )
+        .with_schema_manager(schema_manager);
+        let off_results: Vec<Vec<String>> = queries
+            .iter()
+            .map(|sql| {
+                let rctx = Arc::new(QueryRequestContext::new(sql.to_string()));
+                let result: StreamingQueryResult = pipeline_off
+                    .execute_query_stream_with_request(sql, rctx, space_info.clone())
+                    .expect("query should succeed");
+                let mut rows = Vec::new();
+                while let Ok(Some(chunk)) = result.next_chunk() {
+                    for row in &chunk.rows {
+                        rows.push(format!("{:?}", row));
+                    }
+                }
+                rows
+            })
+            .collect();
+        set_selection_propagation_enabled(true);
+
+        // Assert equality
+        for (sql, (on, off)) in queries.iter().zip(on_results.iter().zip(off_results.iter())) {
+            assert_eq!(
+                on.len(),
+                off.len(),
+                "row count diverge for query: {}",
+                sql
+            );
+            assert_eq!(on, off, "selection propagation changes results for query: {}", sql);
+        }
     }
 }
 

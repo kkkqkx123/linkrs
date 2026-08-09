@@ -196,7 +196,7 @@ impl UnaryOperator {
                                 return Ok(Some(chunk));
                             }
                             // Rollback mode: never hand a selection downstream.
-                            chunk.materialize_selection();
+                            chunk.materialize_selection_by("Filter");  // rollback path
                             return Ok(Some(chunk));
                         }
                         if !selection_propagation_enabled() {
@@ -279,34 +279,38 @@ impl UnaryOperator {
                     let Some(mut chunk) = input.advance()? else {
                         return Ok(None);
                     };
-                    // P2: materialize any propagated selection (boundary).
-                    chunk.materialize_selection();
-
-                    if *skipped < *offset {
-                        let remaining_offset = (*offset - *skipped) as usize;
-                        let rows_to_skip = remaining_offset.min(chunk.rows.len());
-                        chunk.rows.drain(..rows_to_skip);
-                        *skipped += rows_to_skip as u32;
+                    // P2: consume offset/limit directly on the visible rows.
+                    // The selection vector (if any) is trimmed in place and
+                    // handed downstream, so the chunk stays compact across
+                    // the boundary instead of materializing.
+                    let mut vis = chunk.visible_indices();
+                    let remain_offset = (*offset).saturating_sub(*skipped) as usize;
+                    *skipped += vis.len().min(remain_offset) as u32;
+                    if remain_offset < vis.len() {
+                        vis.drain(..remain_offset);
+                    } else {
+                        vis.clear();
                     }
-
-                    if chunk.rows.is_empty() {
+                    if vis.is_empty() {
                         continue;
                     }
-
                     let remaining_limit = (*limit - *consumed) as usize;
-                    if chunk.rows.len() > remaining_limit {
-                        chunk.rows.truncate(remaining_limit);
+                    if vis.len() > remaining_limit {
+                        vis.truncate(remaining_limit);
                     }
-                    *consumed += chunk.rows.len() as u32;
-                    return Ok(Some(DataChunk::new_with_layout(
-                        chunk.rows,
-                        Arc::clone(&base.output_layout),
-                    )));
+                    *consumed += vis.len() as u32;
+                    if vis.len() == chunk.rows.len() {
+                        // Every row is visible again — drop the redundant
+                        // selection so the invariant stays tight.
+                        let _ = chunk.take_selection();
+                        return Ok(Some(chunk));
+                    }
+                    return Ok(Some(chunk.with_selection(vis)));
                 }
             }
             Self::Dedup { seen_rows } => {
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Dedup");
                     let mut result_rows = vec![];
                     for row in chunk.rows {
                         if seen_rows.insert(row.clone()) {
@@ -324,7 +328,7 @@ impl UnaryOperator {
             }
             Self::Assign { assignments, state } => loop {
                 if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Assign");
                     let params = state.parameters.as_ref();
                     // Batch-evaluate all assignment expressions first
                     let mut new_cols: Vec<Vec<Value>> = Vec::with_capacity(assignments.len());
@@ -358,7 +362,7 @@ impl UnaryOperator {
             },
             Self::Remove { columns_to_remove } => loop {
                 if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Remove");
                     let col_names = chunk.col_names();
                     let mut indices_to_keep = vec![];
                     for (idx, col_name) in col_names.iter().enumerate() {
@@ -401,7 +405,7 @@ impl UnaryOperator {
                     match input.advance()? {
                         Some(mut chunk) => {
                             // P2: boundary materialization.
-                            chunk.materialize_selection();
+                            chunk.materialize_selection_by("Unwind");
                             let col_names = chunk.col_names();
                             *col_index = col_names.iter().position(|c| c == unwind_column.as_str());
                             *layout = Some(chunk.get_layout());
@@ -460,7 +464,7 @@ impl UnaryOperator {
                 state,
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("AppendVertices");
                     let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
@@ -500,7 +504,7 @@ impl UnaryOperator {
                     match input.advance()? {
                         Some(mut chunk) => {
                             // P2: boundary materialization.
-                            chunk.materialize_selection();
+                            chunk.materialize_selection_by("Sample");
                             let remaining = (*count - *consumed) as usize;
                             let take_count = chunk.rows.len().min(remaining);
                             let rows: Vec<Vec<Value>> =

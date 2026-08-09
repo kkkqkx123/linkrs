@@ -14,6 +14,7 @@ pub mod push_filter_down_node;
 pub mod push_filter_down_scan_vertices;
 pub mod push_filter_down_traverse;
 pub mod push_vfilter_down_scan_vertices;
+pub mod eliminate_redundant_tag_filter;
 
 pub use push_efilter_down::PushEFilterDownRule;
 pub use push_filter_down_all_paths::PushFilterDownAllPathsRule;
@@ -27,3 +28,4 @@ pub use push_filter_down_node::PushFilterDownNodeRule;
 pub use push_filter_down_scan_vertices::PushFilterDownScanVerticesRule;
 pub use push_filter_down_traverse::PushFilterDownTraverseRule;
 pub use push_vfilter_down_scan_vertices::PushVFilterDownScanVerticesRule;
+pub use eliminate_redundant_tag_filter::EliminateRedundantTagFilterRule;

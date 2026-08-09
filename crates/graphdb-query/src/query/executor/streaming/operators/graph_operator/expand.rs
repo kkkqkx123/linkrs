@@ -27,8 +27,7 @@ pub(super) fn handle(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             if let Some(output) = common::expand_on_chunk(
@@ -67,7 +66,9 @@ pub(super) fn handle(
                 data_type: "vertex".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            let mut rows = chunk.rows;
+            let mut rows = common::visible_rows(&chunk)
+                .map(|(_, row)| row.clone())
+                .collect::<Vec<_>>();
             for row in rows.iter_mut() {
                 row.push(Value::Null(crate::core::NullType::Null));
                 row.push(Value::Vertex(Box::default()));
@@ -114,8 +115,7 @@ pub(super) fn handle_all(
         step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && !ctx.is_recursive;
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
 
@@ -199,7 +199,9 @@ pub(super) fn handle_all(
                 data_type: "vertex".to_string(),
             });
             let _schema = Arc::new(Schema::new(new_cols));
-            let mut rows = chunk.rows;
+            let mut rows = common::visible_rows(&chunk)
+                .map(|(_, row)| row.clone())
+                .collect::<Vec<_>>();
             for row in rows.iter_mut() {
                 row.push(Value::Null(crate::core::NullType::Null));
                 row.push(Value::Vertex(Box::default()));

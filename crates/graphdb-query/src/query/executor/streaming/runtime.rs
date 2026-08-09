@@ -29,6 +29,69 @@ pub struct QueryIdentity {
     pub space_name: Option<String>,
 }
 
+/// Decision-gate constants for typed-column analysis (see
+/// `docs/plan/fallback-and-typed-column-analysis.md` §3).
+///
+/// These are exported so that benchmark harnesses can emit machine-readable
+/// D1/D2 status lines that mirror the decision logic.
+pub const D1_EVAL_THRESHOLD: u64 = 1_000_000;
+pub const D1_TYPED_RATE_THRESHOLD: f64 = 0.5;
+
+/// Closed enumeration of opaque operator boundaries that materialize a
+/// selection vector.  Each entry pairs a display name (used by callers via
+/// `materialize_selection_by("Name")`) with a per-query counter slot.
+///
+/// Keeping this list static lets the hot path attribute a materialization
+/// with a cheap index lookup instead of a `Mutex<HashMap>` write, while the
+/// snapshot routine still emits the same `HashMap<&'static str, u64>` shape
+/// that PROFILE tooling already consumes.
+///
+/// New callers of [`DataChunk::materialize_selection_by`] must append their
+/// label here (the lookup falls back to the unattributed path for unknown
+/// names, but adding the label keeps per-operator visibility).
+pub const SELECTION_BOUNDARY_OPS: &[&'static str] = &[
+    "Filter",
+    "Dedup",
+    "Assign",
+    "Remove",
+    "Unwind",
+    "AppendVertices",
+    "Sample",
+    "Root",
+    "Engine",
+    "Sort",
+    "WindowFunction",
+    "Window",
+    "TopN",
+    "Distinct",
+    "Materialize",
+    "DataCollect",
+    "RollUpApply",
+    "Sink",
+    "Exchange",
+    "CrossSemiJoin",
+    "NestedLoopJoin",
+    "HashJoin",
+    "MergeJoin",
+    "Apply",
+    "ShuffleJoin",
+    "Set",
+    "VectorSearch",
+    "RecursiveFragment",
+    "Fulltext",
+    "Subgraph",
+    "Gather",
+];
+
+/// Number of distinct opaque-boundary operator labels.
+const N_BOUNDARY_OPS: usize = SELECTION_BOUNDARY_OPS.len();
+
+/// Index of an opaque-boundary label inside [`SELECTION_BOUNDARY_OPS`], or
+/// `None` for ad-hoc strings not part of the closed enumeration.
+fn boundary_op_index(op: &'static str) -> Option<usize> {
+    SELECTION_BOUNDARY_OPS.iter().position(|n| *n == op)
+}
+
 /// Query-level columnar fast-path counters (observability).
 ///
 /// Shared via `Arc` with the chunks produced by source operators; every
@@ -40,7 +103,7 @@ pub struct QueryIdentity {
 /// batch fast path (raw `Vec<i64>`/`Vec<f64>`/`Vec<i32>` buffers).
 /// Selection-vector counters record how often chunks are handed downstream
 /// with a selection attached vs. materialized at a boundary.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ColumnarStats {
     pub columnar_hits: AtomicU64,
     pub columnar_misses: AtomicU64,
@@ -50,8 +113,30 @@ pub struct ColumnarStats {
     pub selection_attached: AtomicU64,
     /// Chunks materialized at a selection boundary.
     pub selection_materialized: AtomicU64,
+    /// P2: evaluations served by the selection-aware visible-row fast path
+    /// (selection vector consumed without materializing).
+    pub selection_pushed: AtomicU64,
+    /// P2: per-operator materialization counters, indexed by the position of
+    /// the label inside [`SELECTION_BOUNDARY_OPS`].  Lock-free on the hot
+    /// path; only the snapshot iterates the array (no per-call Mutex).
+    selection_materialized_by_op: [AtomicU64; N_BOUNDARY_OPS],
     /// Chunks produced by a source via the storage column-block path (A1).
     pub column_block_hits: AtomicU64,
+}
+
+impl Default for ColumnarStats {
+    fn default() -> Self {
+        Self {
+            columnar_hits: AtomicU64::new(0),
+            columnar_misses: AtomicU64::new(0),
+            columnar_typed_hits: AtomicU64::new(0),
+            selection_attached: AtomicU64::new(0),
+            selection_materialized: AtomicU64::new(0),
+            selection_pushed: AtomicU64::new(0),
+            selection_materialized_by_op: [const { AtomicU64::new(0) }; N_BOUNDARY_OPS],
+            column_block_hits: AtomicU64::new(0),
+        }
+    }
 }
 
 impl ColumnarStats {
@@ -80,6 +165,35 @@ impl ColumnarStats {
     /// Record a chunk materialized at a selection boundary.
     pub fn record_selection_materialized(&self) {
         self.selection_materialized.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a chunk materialized at a named operator boundary (P2).
+    ///
+    /// The hot path is lock-free: it bumps the global counter and, if `op`
+    /// belongs to the closed [`SELECTION_BOUNDARY_OPS`] enumeration, the
+    /// matching per-operator atomic slot.  Unknown labels still count toward
+    /// the global materialization total but are not attributed per operator.
+    pub fn record_selection_materialized_by(&self, op: &'static str) {
+        self.selection_materialized.fetch_add(1, Ordering::Relaxed);
+        if let Some(idx) = boundary_op_index(op) {
+            self.selection_materialized_by_op[idx].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// P2: record an evaluation served by the selection-aware visible-row
+    /// fast path (selection consumed in place, upstream chunk untouched).
+    pub fn record_selection_pushed(&self) {
+        self.selection_pushed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// P2: materialization sites, attributed per operator.
+    pub fn materialized_by_operator(&self) -> HashMap<&'static str, u64> {
+        SELECTION_BOUNDARY_OPS
+            .iter()
+            .zip(self.selection_materialized_by_op.iter())
+            .filter(|(_, c)| c.load(Ordering::Relaxed) > 0)
+            .map(|(name, c)| (*name, c.load(Ordering::Relaxed)))
+            .collect()
     }
 
     /// Record a chunk produced via the storage column-block path (A1).
@@ -337,6 +451,7 @@ pub struct ColumnarStatsSnapshot {
     pub columnar_typed_hits: u64,
     pub selection_attached: u64,
     pub selection_materialized: u64,
+    pub selection_pushed: u64,
     pub column_block_hits: u64,
 }
 
@@ -348,6 +463,7 @@ impl ColumnarStatsSnapshot {
             columnar_typed_hits: stats.columnar_typed_hits.load(Ordering::Relaxed),
             selection_attached: stats.selection_attached.load(Ordering::Relaxed),
             selection_materialized: stats.selection_materialized.load(Ordering::Relaxed),
+            selection_pushed: stats.selection_pushed.load(Ordering::Relaxed),
             column_block_hits: stats.column_block_hits.load(Ordering::Relaxed),
         }
     }
@@ -374,13 +490,14 @@ impl ColumnarStatsSnapshot {
     /// Human-readable one-line summary for PROFILE output.
     pub fn summary(&self) -> String {
         format!(
-            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, column_block_hits={}",
+            "columnar_hits={}, misses={}, hit_rate={:.3}, typed_hit_rate={:.3}, selection_attached={}, selection_materialized={}, selection_pushed={}, column_block_hits={}",
             self.columnar_hits,
             self.columnar_misses,
             self.hit_rate(),
             self.typed_hit_rate(),
             self.selection_attached,
             self.selection_materialized,
+            self.selection_pushed,
             self.column_block_hits,
         )
     }

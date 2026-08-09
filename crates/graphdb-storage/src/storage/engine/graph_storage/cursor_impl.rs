@@ -81,6 +81,23 @@ impl GraphVertexCursor {
                 .map(|t| (t.tag_id, t.tag_name))
                 .collect(),
         };
+        // When the scan is tag-restricted, scan only that tag's table.  A tag
+        // that does not exist in the schema yields no rows (an unknown tag
+        // matches no vertex), which mirrors the old residual
+        // `contains(labels(v), ...)` filter evaluating to false for every row.
+        let mut labels = tags.labels.clone();
+        if let Some(tag_name) = options.tag.as_deref() {
+            labels.retain(|label_id| {
+                tags.names
+                    .get(label_id)
+                    .map(|name| name == tag_name)
+                    .unwrap_or(false)
+            });
+        }
+        let tags = TagCache {
+            labels,
+            names: tags.names,
+        };
 
         let exhausted = ctx.data_store().with_vertex_tables(|tables| {
             tags.labels

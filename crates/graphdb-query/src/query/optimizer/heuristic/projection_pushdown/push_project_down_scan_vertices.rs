@@ -100,22 +100,46 @@ impl RewriteRule for PushProjectDownScanVerticesRule {
                 PlanNodeEnum::ScanVertices(new_scan)
             }
             PlanNodeEnum::Filter(filter) => {
-                let PlanNodeEnum::ScanVertices(scan_node) = filter.input() else {
-                    return Ok(None);
+                // Walk the chain of Filters down to the ScanVertices node. The
+                // planner may interleave a tag-filter (labels(in, tag)) between
+                // the WHERE-filter and the scan, so the scan may be deeper than
+                // one level. The filter directly above the scan is included as
+                // well, since its condition may reference projected values.
+                let mut chain: Vec<PlanNodeEnum> = Vec::new();
+                let mut current = PlanNodeEnum::Filter(filter.clone());
+                let scan_node = loop {
+                    match &current {
+                        PlanNodeEnum::Filter(f) => {
+                            chain.push(current.clone());
+                            current = f.input().clone();
+                        }
+                        PlanNodeEnum::ScanVertices(s) => break s.clone(),
+                        _ => return Ok(None),
+                    }
                 };
                 let mut new_scan =
-                    self.create_scan_vertices_with_projection(scan_node, project_node.columns());
-                let mut properties = new_scan.projected_properties().to_vec();
-                properties.extend(extract_property_refs(filter.condition()));
-                properties.sort();
-                properties.dedup();
-                if properties == scan_node.projected_properties() {
+                    self.create_scan_vertices_with_projection(&scan_node, project_node.columns());
+                for level in &chain {
+                    let PlanNodeEnum::Filter(f) = level else { unreachable!() };
+                    let mut props = new_scan.projected_properties().to_vec();
+                    props.extend(extract_property_refs(f.condition()));
+                    props.sort();
+                    props.dedup();
+                    new_scan.set_projected_properties(props);
+                }
+                if new_scan.projected_properties() == scan_node.projected_properties() {
                     return Ok(None);
                 }
-                new_scan.set_projected_properties(properties);
-                let mut new_filter = filter.clone();
-                new_filter.set_input(PlanNodeEnum::ScanVertices(new_scan));
-                PlanNodeEnum::Filter(new_filter)
+                let mut input = PlanNodeEnum::ScanVertices(new_scan);
+                for level in chain.into_iter().rev() {
+                    let mut f = match level {
+                        PlanNodeEnum::Filter(f) => f,
+                        _ => unreachable!(),
+                    };
+                    f.set_input(input);
+                    input = PlanNodeEnum::Filter(f);
+                }
+                input
             }
             _ => return Ok(None),
         };

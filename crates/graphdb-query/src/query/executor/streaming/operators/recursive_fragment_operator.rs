@@ -172,7 +172,7 @@ impl RecursiveFragmentOperator {
                 let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
                 };
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("RecursiveFragment");
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -261,7 +261,7 @@ impl RecursiveFragmentOperator {
                 let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
                 };
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("RecursiveFragment");
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -349,7 +349,7 @@ impl RecursiveFragmentOperator {
                 let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
                 };
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("RecursiveFragment");
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
@@ -440,7 +440,7 @@ impl RecursiveFragmentOperator {
                 let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
                 };
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("RecursiveFragment");
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();

@@ -2,6 +2,7 @@
 //!
 //! Contains configuration that is shared across all usage patterns (server, embedded, c-api)
 
+pub mod columnar;
 pub mod database;
 pub mod fulltext;
 pub mod log;
@@ -11,6 +12,7 @@ pub mod parallel;
 pub mod storage;
 pub mod transaction;
 
+pub use columnar::*;
 pub use database::*;
 pub use fulltext::*;
 pub use log::*;
@@ -58,6 +60,10 @@ pub struct CommonConfig {
     /// Query resource configuration
     #[serde(default)]
     pub query_resource: QueryResourceConfig,
+
+    /// Columnar fast-path configuration
+    #[serde(default)]
+    pub columnar: ColumnarConfig,
 }
 
 impl CommonConfig {
@@ -91,6 +97,7 @@ mod tests {
         assert_eq!(config.database.port, 9758);
         assert_eq!(config.log.level, "info");
         assert_eq!(config.optimizer.max_iteration_rounds, 5);
+        assert!(!config.columnar.column_block_enabled);
     }
 
     #[test]

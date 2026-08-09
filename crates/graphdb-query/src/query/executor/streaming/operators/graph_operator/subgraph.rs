@@ -26,7 +26,7 @@ pub(super) fn handle(
         return Err(QueryError::execution("Subgraph not opened".to_string()));
     }
     while let Some(mut chunk) = input.advance()? {
-        chunk.materialize_selection();
+        chunk.materialize_selection_by("Subgraph");
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let col_names = chunk.col_names();

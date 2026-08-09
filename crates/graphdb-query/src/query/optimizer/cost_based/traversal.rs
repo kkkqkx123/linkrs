@@ -89,29 +89,117 @@ pub fn rewrite_children(
         // Dependency-based operators: deps hold the single input clone plus
         // the second input; both the `input` field and the deps are rewritten
         // so the arena converter (which reads `input()`/`union_input()`) sees
-        // the rewritten subtrees.
+        // the rewritten subtrees.  `set_input` must NOT be used here: it
+        // truncates `deps` to the single input, destroying `deps[1]`.
         Union(n) => {
-            let mut cloned = rewrite_single!(n);
+            let mut cloned = n.clone();
             for child in cloned.dependencies_mut() {
                 *child = f(child);
             }
+            let first = cloned.dependencies()[0].clone();
+            *cloned.input_mut() = first;
             Union(cloned)
         }
         Minus(n) => {
-            let mut cloned = rewrite_single!(n);
+            let mut cloned = n.clone();
             for child in cloned.dependencies_mut() {
                 *child = f(child);
             }
+            let first = cloned.dependencies()[0].clone();
+            *cloned.input_mut() = first;
             Minus(cloned)
         }
         Intersect(n) => {
-            let mut cloned = rewrite_single!(n);
+            let mut cloned = n.clone();
             for child in cloned.dependencies_mut() {
                 *child = f(child);
             }
+            let first = cloned.dependencies()[0].clone();
+            *cloned.input_mut() = first;
             Intersect(cloned)
         }
 
         _ => node.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+    use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
+        IntersectNode, MinusNode,
+    };
+
+    /// Regression test for the `set_input` truncation bug on
+    /// `Union`/`Minus`/`Intersect`: `rewrite_children` previously went through
+    /// `rewrite_single!`, which called `set_input`.  For dependency-based
+    /// nodes that macro clears `deps` (`set_input` calls `deps.clear()`), so
+    /// `union_input()` / `minus_input()` / `intersect_input()` (which index
+    /// `deps[1]`) would either panic on out-of-bounds or silently drop the
+    /// second subtree from the converted plan.  The current inline path
+    /// rewrites every dependency in-place and only reassigns `input_mut()`,
+    /// keeping both inputs intact.
+    fn assert_two_deps_rewritten<F>(make_node: F)
+    where
+        F: Fn(
+            PlanNodeEnum,
+            PlanNodeEnum,
+        ) -> Result<PlanNodeEnum, crate::query::planning::planner::PlannerError>,
+    {
+        let left = PlanNodeEnum::Start(StartNode::new());
+        let right = PlanNodeEnum::Start(StartNode::new());
+        let node = make_node(left, right).expect("node builds");
+
+        // Identity closure that records how many children were rewritten.
+        // We do not change the children here: the regression target is whether
+        // `rewrite_children` *visits* both deps and leaves them intact, not
+        // the rewrite result itself.
+        let mut visited = 0usize;
+        let rewritten = rewrite_children(&node, &mut |child: &PlanNodeEnum| {
+            visited += 1;
+            child.clone()
+        });
+
+        // Two deps means two recursive calls — the second subtree must not be
+        // dropped by `set_input`.
+        assert_eq!(visited, 2, "both deps must be rewritten");
+
+        let (deps_len, second_input_is_start) = match rewritten {
+            PlanNodeEnum::Union(n) => (n.dependencies().len(), matches!(n.union_input(), PlanNodeEnum::Start(_))),
+            PlanNodeEnum::Minus(n) => (n.dependencies().len(), matches!(n.minus_input(), PlanNodeEnum::Start(_))),
+            PlanNodeEnum::Intersect(n) => {
+                (n.dependencies().len(), matches!(n.intersect_input(), PlanNodeEnum::Start(_)))
+            }
+            other => panic!("expected Union/Minus/Intersect, got {:?}", other),
+        };
+        assert_eq!(deps_len, 2, "deps must keep both subtrees");
+        // The second input remained a Start node (closure was identity).
+        assert!(
+            second_input_is_start,
+            "union_input/minus_input/intersect_input survived the rewrite"
+        );
+    }
+
+    #[test]
+    fn rewrite_children_keeps_both_union_deps() {
+        assert_two_deps_rewritten(|left, right| {
+            UnionNode::new(left, right, true).map(PlanNodeEnum::Union)
+        });
+    }
+
+    #[test]
+    fn rewrite_children_keeps_both_minus_deps() {
+        assert_two_deps_rewritten(|left, right| {
+            MinusNode::new(left, right).map(PlanNodeEnum::Minus)
+        });
+    }
+
+    #[test]
+    fn rewrite_children_keeps_both_intersect_deps() {
+        assert_two_deps_rewritten(|left, right| {
+            IntersectNode::new(left, right).map(PlanNodeEnum::Intersect)
+        });
     }
 }

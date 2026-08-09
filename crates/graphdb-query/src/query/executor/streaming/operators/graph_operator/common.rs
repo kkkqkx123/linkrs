@@ -52,6 +52,42 @@ impl ExpandOutputBuffer {
     }
 }
 
+/// Iterator over the visible rows of a chunk.
+///
+/// When a selection vector is attached (P2), only the selected rows are
+/// yielded, preserving the absolute upstream row order. The output carries
+/// `(row_index, &row)` so consumers that need the absolute index (e.g. for
+/// `get_variable` on a per-row basis) keep working identically.
+pub(super) struct VisibleRows<'a> {
+    chunk: &'a DataChunk,
+    pos: usize,
+}
+
+impl<'a> Iterator for VisibleRows<'a> {
+    type Item = (usize, &'a Vec<Value>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.chunk.selection() {
+            Some(indices) => {
+                let i = *indices.get(self.pos)?;
+                self.pos += 1;
+                Some((i, &self.chunk.rows[i]))
+            }
+            None => {
+                let i = self.pos;
+                let row = self.chunk.rows.get(i)?;
+                self.pos += 1;
+                Some((i, row))
+            }
+        }
+    }
+}
+
+/// Yield the visible rows of `chunk` in upstream row order.
+pub(super) fn visible_rows(chunk: &DataChunk) -> VisibleRows<'_> {
+    VisibleRows { chunk, pos: 0 }
+}
+
 pub(super) fn row_passes_filter(
     row: &[Value],
     col_names: &[String],
@@ -130,7 +166,7 @@ pub(super) fn expand_single_step(
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
 
-    for row in &chunk.rows {
+    for (_, row) in visible_rows(&chunk) {
         let vid_val = row
             .get(seed_slot)
             .or_else(|| row.first())
@@ -161,7 +197,10 @@ pub(super) fn expand_single_step(
     }
 
     let seed_width = seed_rows.first().map_or(0, |r| r.len());
-    let mut buf = ExpandOutputBuffer::new(seed_width, chunk.rows.len() * 4);
+    let mut buf = ExpandOutputBuffer::new(
+        seed_width,
+        chunk.visible_count().saturating_mul(4).max(1),
+    );
 
     if emit_raw_ids {
         // Raw-id path: one batched storage read for the whole chunk, no
@@ -242,7 +281,7 @@ pub(super) fn expand_count_only(
 
     let mut seed_vids: Vec<VertexId> = Vec::new();
 
-    for row in &chunk.rows {
+    for (_, row) in visible_rows(&chunk) {
         let vid_val = row
             .get(seed_slot)
             .or_else(|| row.first())
@@ -284,7 +323,7 @@ pub(super) fn expand_on_chunk(
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
 
-    for row in &chunk.rows {
+    for (_, row) in visible_rows(&chunk) {
         let vid_val = row
             .get(seed_slot)
             .or_else(|| row.first())
@@ -371,7 +410,7 @@ pub(super) fn traverse_on_chunk(
     };
 
     let mut out_rows = Vec::new();
-    for row in &chunk.rows {
+    for (_, row) in visible_rows(&chunk) {
         let context = ValueRowContext::new(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")

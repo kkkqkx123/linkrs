@@ -1039,8 +1039,8 @@ fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
 }
 
 /// Aggregate functions that support per-partition partial accumulation
-/// followed by a global merge (same predicate as
-/// `PartitionedPhysicalPlan::split_node`).
+/// followed by a global merge (mirrors the predicate previously used by the
+/// removed planner-side `PartitionedPhysicalPlan` decomposition).
 fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
     funcs.iter().all(|f| {
         matches!(

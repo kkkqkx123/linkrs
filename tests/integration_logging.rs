@@ -57,6 +57,7 @@ fn test_log_config_serialization() {
             parallel: graphdb::config::ParallelConfig::default(),
             monitoring: graphdb::config::MonitoringConfig::default(),
             query_resource: graphdb::config::QueryResourceConfig::default(),
+            columnar: graphdb::config::ColumnarConfig::default(),
         },
         #[cfg(feature = "server")]
         server: graphdb::config::ServerConfig::default(),

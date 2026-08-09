@@ -128,6 +128,7 @@ impl DataChunk {
                 }
             }
             self.count_columnar(true);
+            self.count_selection_pushed();
             return Ok(out);
         }
         let layout = self.get_layout();
@@ -141,6 +142,7 @@ impl DataChunk {
             out.push(ExpressionEvaluator::evaluate(expression, &mut ctx)?);
         }
         self.count_columnar(false);
+        self.count_selection_pushed();
         Ok(out)
     }
 

@@ -131,6 +131,13 @@ pub fn requires_auto_commit(stmt: &Stmt) -> bool {
 /// normalization. Shared with the shape-cache candidate check in
 /// [`prepare_request`] so the set of write statements stays in one place.
 fn is_direct_dml(stmt: &Stmt) -> bool {
+    is_direct_dml_statement(stmt) || is_direct_dcl(stmt)
+}
+
+/// Whether the statement is one of the direct DML forms eligible for shape
+/// normalization. Shared with the shape-cache candidate check in
+/// [`prepare_request`] so the set of write statements stays in one place.
+fn is_direct_dml_statement(stmt: &Stmt) -> bool {
     matches!(
         stmt,
         Stmt::Insert(_)
@@ -139,6 +146,21 @@ fn is_direct_dml(stmt: &Stmt) -> bool {
             | Stmt::Merge(_)
             | Stmt::Set(_)
             | Stmt::Remove(_)
+    )
+}
+
+/// Direct DCL statements that write the user/privilege store: they must run
+/// on the auto-commit write path, not the read-only snapshot path.
+fn is_direct_dcl(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::CreateUser(_)
+            | Stmt::AlterUser(_)
+            | Stmt::DropUser(_)
+            | Stmt::ChangePassword(_)
+            | Stmt::Grant(_)
+            | Stmt::Revoke(_)
+            | Stmt::UpdateConfigs(_)
     )
 }
 

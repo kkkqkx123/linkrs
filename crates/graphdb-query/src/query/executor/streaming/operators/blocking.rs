@@ -451,7 +451,7 @@ impl BlockingOperator {
 
                 if st.merge_state.is_none() && st.row_iter.is_none() {
                     while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
+                        chunk.materialize_selection_by("Sort");
                         base.ensure_not_cancelled()?;
                         if st.col_names.is_empty() {
                             st.col_names = chunk.col_names();
@@ -1268,7 +1268,7 @@ impl BlockingOperator {
                     while accumulating {
                         match input.advance()? {
                             Some(mut chunk) => {
-                                chunk.materialize_selection();
+                                chunk.materialize_selection_by("WindowFunction");
                                 base.ensure_not_cancelled()?;
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
@@ -1519,7 +1519,7 @@ impl BlockingOperator {
                     while accumulating {
                         match input.advance()? {
                             Some(mut chunk) => {
-                                chunk.materialize_selection();
+                                chunk.materialize_selection_by("Window");
                                 base.ensure_not_cancelled()?;
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
@@ -1658,7 +1658,7 @@ impl BlockingOperator {
                     let limit = *n as usize;
 
                     while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
+                        chunk.materialize_selection_by("TopN");
                         base.ensure_not_cancelled()?;
                         if state.col_names.is_empty() {
                             state.col_names = chunk.col_names();
@@ -1809,7 +1809,7 @@ impl BlockingOperator {
                 while accumulating {
                     match input.advance()? {
                         Some(mut chunk) => {
-                            chunk.materialize_selection();
+                            chunk.materialize_selection_by("Distinct");
                             base.ensure_not_cancelled()?;
                             if state.col_names.is_empty() {
                                 state.col_names = chunk.col_names();
@@ -1855,7 +1855,7 @@ impl BlockingOperator {
                 // Spill consumption phase: route remaining input to partition spiller
                 if let Some(ref mut spiller) = state.partition_spiller {
                     while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
+                        chunk.materialize_selection_by("Distinct");
                         base.ensure_not_cancelled()?;
                         let sm = base.spill_manager().ok_or_else(|| {
                             QueryError::execution("Spill manager not available".to_string())
@@ -1906,7 +1906,7 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if !state.materialized {
                     while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
+                        chunk.materialize_selection_by("Materialize");
                         base.ensure_not_cancelled()?;
                         if state.input_layout.is_none() {
                             state.input_layout = Some(chunk.get_layout());
@@ -1968,7 +1968,7 @@ impl BlockingOperator {
                 }
 
                 while let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("DataCollect");
                     base.ensure_not_cancelled()?;
                     if state.input_layout.is_none() {
                         state.input_layout = Some(chunk.get_layout());
@@ -2021,7 +2021,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = Vec::new();
                     while let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection();
+                        chunk.materialize_selection_by("RollUpApply");
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();

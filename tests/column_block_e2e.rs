@@ -121,3 +121,91 @@ fn column_block_matches_row_path_e2e() {
         );
     }
 }
+
+/// P1 differential test: enrich scan slots rule on/off.
+///
+/// The `EnrichScanSlotsWithFilterPropsRule` widens the scan output layout
+/// with predicate columns so the columnar evaluator can serve WHERE clauses
+/// directly. This test verifies that results are identical with the optimizer
+/// enabled (rule applies) vs. disabled (rule does not apply).
+#[test]
+fn enrich_scan_slots_rule_differential() {
+    let test_storage = TestStorage::new().expect("storage");
+    let storage = test_storage.storage();
+    {
+        let mut storage = storage.write();
+        let mut space = SpaceInfo::new(SPACE.to_string()).with_vid_type(DataType::BigInt);
+        storage.create_space(&mut space).expect("create space");
+        storage
+            .create_tag(
+                SPACE,
+                &TagInfo::new("node".to_string()).with_properties(vec![
+                    PropertyDef::new("value".to_string(), DataType::BigInt),
+                    PropertyDef::new("name".to_string(), DataType::String),
+                ]),
+            )
+            .expect("create tag");
+        let vertices: Vec<Vertex> = (0..100)
+            .map(|i| {
+                Vertex::new(
+                    VertexId::from_int64(i),
+                    vec![Tag::new(
+                        "node".to_string(),
+                        vec![
+                            ("value".to_string(), Value::BigInt(i)),
+                            ("name".to_string(), Value::string(format!("node_{i}"))),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )],
+                )
+            })
+            .collect();
+        storage
+            .batch_insert_vertices(SPACE, vertices)
+            .expect("insert");
+    }
+
+    let stats = Arc::new(StatsManager::new());
+    let space = space_info(&storage);
+
+    // Pipeline WITH optimizer (enrich rule applies)
+    let mut pipeline_on = QueryPipelineManager::with_optimizer(
+        storage.clone(),
+        stats.clone(),
+        Arc::new(OptimizerEngine::default()),
+    );
+
+    // Pipeline WITHOUT optimizer (enrich rule does not apply)
+    let mut opt_off_engine = OptimizerEngine::default();
+    opt_off_engine.set_enable_heuristic(false);
+    let mut pipeline_off = QueryPipelineManager::with_optimizer(
+        storage.clone(),
+        stats,
+        Arc::new(opt_off_engine),
+    );
+
+    // Queries that trigger the enrich rule: Filter(ScanVertices) where the
+    // predicate column is NOT in the RETURN clause.
+    let queries = [
+        "MATCH (n:node) WHERE n.value < 50 RETURN n.name",
+        "MATCH (n:node) WHERE n.name > 'node_50' RETURN n.value",
+        "MATCH (n:node) WHERE n.value > 10 AND n.value < 30 RETURN n.name",
+    ];
+
+    for sql in &queries {
+        let on_result = query_rows(&mut pipeline_on, &space, sql);
+        let off_result = query_rows(&mut pipeline_off, &space, sql);
+        assert_eq!(
+            on_result.len(),
+            off_result.len(),
+            "row count diverge for query: {}",
+            sql
+        );
+        assert_eq!(
+            on_result, off_result,
+            "enrich rule changes results for query: {}",
+            sql
+        );
+    }
+}

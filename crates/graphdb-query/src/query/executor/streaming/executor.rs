@@ -853,7 +853,10 @@ mod tests {
 
         executor.open().unwrap();
         let mut total = 0;
-        while let Some(chunk) = executor.advance().unwrap() {
+        while let Some(mut chunk) = executor.advance().unwrap() {
+            // P2: Limit is selection-aware — materialize to count the rows
+            // an API consumer would observe (engine does this at the root).
+            chunk.materialize_selection();
             total += chunk.len();
         }
         executor.close().unwrap();
@@ -879,7 +882,10 @@ mod tests {
 
         executor.open().expect("limit should open");
         let mut values = Vec::new();
-        while let Some(chunk) = executor.advance().expect("limit should advance") {
+        while let Some(mut chunk) = executor.advance().expect("limit should advance") {
+            // P2: materialize the selection to observe the rows an API
+            // consumer would see (engine does this at the root).
+            chunk.materialize_selection();
             values.extend(chunk.rows.into_iter().filter_map(|row| match row.first() {
                 Some(Value::BigInt(value)) => Some(*value),
                 _ => None,
@@ -948,6 +954,7 @@ mod tests {
                 col_names: vec![],
                 projected_properties: vec![],
                 predicate: Vec::new(),
+                tag: None,
                 cursor: None,
             },
         );

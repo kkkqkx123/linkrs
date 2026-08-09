@@ -271,6 +271,48 @@ fn explain_analyze_reports_fallback_reason_without_partitioning_config() {
     );
 }
 
+/// P1: EXPLAIN assertion that the enrich scan slots rule widens the scan
+/// output with predicate columns.
+///
+/// The `EnrichScanSlotsWithFilterPropsRule` merges predicate columns into the
+/// scan `projected_properties` so the columnar evaluator can serve WHERE
+/// clauses directly. This test verifies that the EXPLAIN output shows the
+/// predicate column in the scan output even when it is not in the RETURN
+/// clause.
+#[test]
+fn enrich_scan_slots_rule_widens_scan_output() {
+    let storage = setup_storage();
+    let mut pipeline = build_pipeline(&storage, 1);
+
+    // Query: Filter(ScanVertices) where the predicate column `value` is NOT
+    // in the RETURN clause. The enrich rule should add `value` to the scan
+    // output layout.
+    let output = query_rows(
+        &mut pipeline,
+        "EXPLAIN FORMAT = DOT MATCH (n:Node) WHERE n.value < 50 RETURN n.name",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+
+    // The scan node's `projected` list must contain both `name` (RETURN
+    // column) and `value` (predicate column merged by the enrich rule).
+    assert!(
+        plan.contains("projected"),
+        "EXPLAIN should report the scan's projected properties, got:\n{plan}"
+    );
+    let projected_line = plan
+        .lines()
+        .find(|line| line.contains("projected:"))
+        .unwrap_or_else(|| panic!("no projected line in plan:\n{plan}"));
+    assert!(
+        projected_line.contains("name"),
+        "scan should project RETURN column 'name', got: {projected_line}"
+    );
+    assert!(
+        projected_line.contains("value"),
+        "scan should project predicate column 'value' (enrich rule), got: {projected_line}"
+    );
+}
+
 #[test]
 fn partitioned_edge_scan_matches_serial_results() {
     let storage = setup_storage();

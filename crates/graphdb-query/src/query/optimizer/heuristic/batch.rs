@@ -239,6 +239,7 @@ impl BatchOptimizer {
             | PushEFilterDown(_)
             | PushVFilterDownScanVertices(_)
             | PushFilterDownScanVertices(_)
+            | EliminateRedundantTagFilter(_)
             | PushFilterDownInnerJoin(_)
             | PushFilterDownHashInnerJoin(_)
             | PushFilterDownHashLeftJoin(_)
@@ -248,7 +249,7 @@ impl BatchOptimizer {
             | PushFilterDownAggregate(_) => OptimizationBatch::PredicatePushdown,
 
             // Property pruning batch
-            PushProjectDownScanVertices(_) | PushProjectDownScanEdges(_) => {
+            PushProjectDownScanVertices(_) | PushProjectDownScanEdges(_) | EnrichScanSlotsWithFilterProps(_) => {
                 OptimizationBatch::PropertyPruning
             }
 
@@ -368,8 +369,14 @@ impl BatchOptimizer {
         let mut stats = BatchStatistics::default();
         let mut fingerprints_seen = HashSet::new();
 
-        let max_iterations = max_iterations.min(self.max_iterations.load(Ordering::Relaxed));
-
+        // `max_iterations` is the batch's tuned budget from
+        // `OptimizationBatch::default_max_iterations()`. Treat it as
+        // authoritative for both the outer fixed-point loop and the inner
+        // per-node rewrite loop, so a single cap governs the whole batch.
+        // The previous code shadowed this with `min(global_atomic)`, which let
+        // a mutated global ceiling shrink every batch below its own tuned
+        // default (min-cap dominance) and left the per-node loop using the
+        // raw, un-capped global — inconsistent with the batch-level limit.
         for iteration in 0..max_iterations {
             // Calculate fingerprint before iteration
             let fingerprint_before = Self::calculate_fingerprint(&current_plan);
@@ -391,7 +398,7 @@ impl BatchOptimizer {
 
             // Execute one iteration
             let (new_plan, rules_applied, rule_hits) =
-                self.batch_iteration(current_plan, rules, batch)?;
+                self.batch_iteration(current_plan, rules, batch, max_iterations)?;
 
             // Calculate fingerprint after iteration
             let fingerprint_after = Self::calculate_fingerprint(&new_plan);
@@ -422,11 +429,6 @@ impl BatchOptimizer {
             current_plan = new_plan;
         }
 
-        // Check if we hit the iteration limit
-        if !stats.converged && matches!(stats.stop_reason, BatchStopReason::CycleDetected) {
-            stats.stop_reason = BatchStopReason::IterationLimit(max_iterations);
-        }
-
         Ok((current_plan, stats))
     }
 
@@ -440,6 +442,7 @@ impl BatchOptimizer {
         plan: PlanNodeEnum,
         rules: &[RewriteRule],
         _batch: OptimizationBatch,
+        max_iterations: usize,
     ) -> RewriteResult<(
         PlanNodeEnum,
         usize,
@@ -449,7 +452,10 @@ impl BatchOptimizer {
         let root_id = ctx.allocate_node_id();
         let rewriter = BatchNodeRewriter {
             rules,
-            max_iterations: self.max_iterations.load(Ordering::Relaxed),
+            // Use the resolved per-batch cap for the per-node fixed-point
+            // loop too, so a single consistent limit governs the whole
+            // batch (outer iterations + inner per-node rewrites).
+            max_iterations,
             applied: RefCell::new(0),
             hits: RefCell::new(HashMap::new()),
         };

@@ -59,6 +59,9 @@ pub enum SourceOperator {
         projected_properties: Vec<String>,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
+        /// Tag-restricted scan: only rows of this tag are scanned at the
+        /// storage layer.
+        tag: Option<String>,
         cursor: Option<Box<dyn VertexCursor>>,
     },
     /// Buffered edge scan — rows come from the spec.
@@ -159,6 +162,7 @@ impl SourceOperator {
                 col_names,
                 projected_properties,
                 predicate,
+                tag,
                 partition_range,
             } => Self::StorageScanVertices {
                 storage: storage.clone(),
@@ -168,6 +172,7 @@ impl SourceOperator {
                 col_names: col_names.clone(),
                 projected_properties: projected_properties.clone(),
                 predicate: predicate.clone(),
+                tag: tag.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::ScanEdges { rows, col_names } => Self::ScanEdges {

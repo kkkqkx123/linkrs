@@ -28,7 +28,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         ));
         let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
-        let (physical_plan, _optimized_plan) = if let Some(b) = bound {
+        let physical_plan = if let Some(b) = bound {
             self.compile_from_bound(qctx.clone(), &b, &ast)?
         } else {
             return Err(DBError::from(QueryError::execution(
@@ -71,7 +71,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         ));
         let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
-        let (physical_plan, _optimized_plan) = if let Some(b) = bound {
+        let physical_plan = if let Some(b) = bound {
             self.compile_from_bound(qctx.clone(), &b, &ast)?
         } else {
             return Err(DBError::from(QueryError::execution(
@@ -132,8 +132,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
         let physical_plan = if let Some(b) = bound {
-            let (plan, _) = self.compile_from_bound(qctx.clone(), &b, &ast)?;
-            plan
+            self.compile_from_bound(qctx.clone(), &b, &ast)?
         } else {
             return Err(DBError::from(QueryError::execution(
                 "PROFILE target statement could not be bound".to_string(),

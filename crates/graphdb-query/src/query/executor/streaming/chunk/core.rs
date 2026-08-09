@@ -509,4 +509,12 @@ impl DataChunk {
             stats.record_typed_hit();
         }
     }
+
+    /// P2: record an evaluation served by the selection-aware visible-row
+    /// fast path (selection consumed in place, no materialization).
+    pub(super) fn count_selection_pushed(&self) {
+        if let Some(stats) = &self.columnar_stats {
+            stats.record_selection_pushed();
+        }
+    }
 }

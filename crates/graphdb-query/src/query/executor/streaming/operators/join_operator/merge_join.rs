@@ -27,7 +27,7 @@ pub(super) fn next_inner_join(
     if !*left_consumed {
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("MergeJoin");
             base.ensure_not_cancelled()?;
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
@@ -42,7 +42,7 @@ pub(super) fn next_inner_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection();
+        left_chunk.materialize_selection_by("MergeJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -95,7 +95,7 @@ pub(super) fn next_left_join(
     if !*left_consumed {
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("MergeJoin");
             base.ensure_not_cancelled()?;
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
@@ -110,7 +110,7 @@ pub(super) fn next_left_join(
     }
 
     while let Some(mut left_chunk) = left.advance()? {
-        left_chunk.materialize_selection();
+        left_chunk.materialize_selection_by("MergeJoin");
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -183,7 +183,7 @@ pub(super) fn next_right_join(
     if !*right_consumed {
         let mut captured_left_names = Vec::new();
         while let Some(mut chunk) = left.advance()? {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("MergeJoin");
             base.ensure_not_cancelled()?;
             if captured_left_names.is_empty() {
                 captured_left_names = chunk.col_names();
@@ -198,7 +198,7 @@ pub(super) fn next_right_join(
     }
 
     while let Some(mut right_chunk) = right.advance()? {
-        right_chunk.materialize_selection();
+        right_chunk.materialize_selection_by("MergeJoin");
         let right_cols = right_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -277,7 +277,7 @@ pub(super) fn next_full_outer_join(
             FullOuterJoinPhase::BuildingRight => {
                 let mut captured_right_names = Vec::new();
                 while let Some(mut chunk) = left.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("MergeJoin");
                     base.ensure_not_cancelled()?;
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
@@ -285,7 +285,7 @@ pub(super) fn next_full_outer_join(
                     left_rows.extend(chunk.rows);
                 }
                 while let Some(mut chunk) = right.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("MergeJoin");
                     base.ensure_not_cancelled()?;
                     if captured_right_names.is_empty() {
                         captured_right_names = chunk.col_names();

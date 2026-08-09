@@ -3,7 +3,9 @@ use graphdb::core::stats::StatsManager;
 use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::query::executor::streaming::runtime::ColumnarStatsSnapshot;
+use graphdb::query::executor::streaming::runtime::{
+    ColumnarStatsSnapshot, D1_EVAL_THRESHOLD, D1_TYPED_RATE_THRESHOLD,
+};
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::pipeline::QueryPipelineManager;
 use graphdb::query::QueryRequestContext;
@@ -14,6 +16,7 @@ use graphdb::storage::{
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -339,9 +342,24 @@ fn bench_large_edge_density(c: &mut Criterion) {
 // Redirect stdout (or set COLUMNAR_BENCH_OUT) to collect the data rows that
 // back the decision record table in the analysis document.
 
-const DEC_VERTICES: u64 = 20_000;
+const BASE_DEC_VERTICES: u64 = 20_000;
 const DEC_EDGES_PER_VERTEX: usize = 3;
-const DEC_SPACE: &str = "dec_q20000e3";
+
+fn dec_vertices() -> u64 {
+    static SCALE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        env::var("COLUMNAR_BENCH_SCALE")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1)
+            .max(1)
+            * BASE_DEC_VERTICES
+    })
+}
+
+fn dec_space() -> String {
+    format!("dec_q{}e{}", dec_vertices(), DEC_EDGES_PER_VERTEX)
+}
 
 /// Aggregates runtime observability across all criterion iterations of a
 /// benchmark, so the reported counters reflect a large number of runs.
@@ -353,6 +371,7 @@ struct Accum {
     typed_hits: AtomicU64,
     selection_attached: AtomicU64,
     selection_materialized: AtomicU64,
+    selection_pushed: AtomicU64,
     column_block_hits: AtomicU64,
     peak_memory_bytes: AtomicU64,
     spill_count: AtomicU64,
@@ -373,6 +392,8 @@ impl Accum {
             .fetch_add(stats.selection_attached, Ordering::Relaxed);
         self.selection_materialized
             .fetch_add(stats.selection_materialized, Ordering::Relaxed);
+        self.selection_pushed
+            .fetch_add(stats.selection_pushed, Ordering::Relaxed);
         self.column_block_hits
             .fetch_add(stats.column_block_hits, Ordering::Relaxed);
         self.peak_memory_bytes
@@ -414,6 +435,7 @@ impl Accum {
             "typed_hit_rate": typed_hit_rate,
             "selection_attached": self.selection_attached.load(Ordering::Relaxed),
             "selection_materialized": self.selection_materialized.load(Ordering::Relaxed),
+            "selection_pushed": self.selection_pushed.load(Ordering::Relaxed),
             "column_block_hits": self.column_block_hits.load(Ordering::Relaxed),
             "peak_memory_bytes": self.peak_memory_bytes.load(Ordering::Relaxed),
             "spill_count": self.spill_count.load(Ordering::Relaxed),
@@ -435,6 +457,36 @@ impl Accum {
                 let _ = writeln!(file, "{}", line);
             }
         }
+
+        // Emit D1_STATUS line (decision-gate observability).
+        let d1_holds = total > D1_EVAL_THRESHOLD && typed_hit_rate < D1_TYPED_RATE_THRESHOLD;
+        let d1_status = serde_json::json!({
+            "benchmark": benchmark,
+            "name": name,
+            "evals": total,
+            "threshold": D1_EVAL_THRESHOLD,
+            "typed_rate": typed_hit_rate,
+            "d1_holds": d1_holds,
+        });
+        println!("D1_STATUS {}", serde_json::to_string(&d1_status).expect("json"));
+
+        // Emit D2_PROXY line (memory proxy for D2 decision gate).
+        let output_rows = self.output_rows.load(Ordering::Relaxed);
+        let spill_count = self.spill_count.load(Ordering::Relaxed);
+        let spill_rate = if output_rows > 0 {
+            spill_count as f64 / output_rows as f64
+        } else {
+            0.0
+        };
+        let d2_proxy = serde_json::json!({
+            "benchmark": benchmark,
+            "name": name,
+            "peak_memory_bytes": self.peak_memory_bytes.load(Ordering::Relaxed),
+            "output_rows": output_rows,
+            "spill_count": spill_count,
+            "spill_rate": spill_rate,
+        });
+        println!("D2_PROXY {}", serde_json::to_string(&d2_proxy).expect("json"));
     }
 }
 
@@ -450,11 +502,12 @@ struct ProfileCollectorView {
 /// name/value, Link edges with weight).
 fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
     let mut storage = GraphStorage::new().expect("storage init");
-    let mut space = SpaceInfo::new(DEC_SPACE.to_string()).with_vid_type(DataType::BigInt);
+    let space_name = dec_space();
+    let mut space = SpaceInfo::new(space_name.clone()).with_vid_type(DataType::BigInt);
     storage.create_space(&mut space).expect("create space");
     storage
         .create_tag(
-            DEC_SPACE,
+            &space_name,
             &TagInfo::new("Node".to_string()).with_properties(vec![
                 PropertyDef::new("name".to_string(), DataType::String),
                 PropertyDef::new("value".to_string(), DataType::Double),
@@ -463,14 +516,14 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
         .expect("create tag");
     storage
         .create_edge_type(
-            DEC_SPACE,
+            &space_name,
             &EdgeTypeInfo::new("Link".to_string()).with_properties(vec![PropertyDef::new(
                 "weight".to_string(),
                 DataType::Double,
             )]),
         )
         .expect("create edge type");
-    for i in 0..DEC_VERTICES as i64 {
+    for i in 0..dec_vertices() as i64 {
         let vertex = Vertex::new(
             VertexId::from_int64(i),
             vec![Tag::new(
@@ -484,13 +537,13 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
             )],
         );
         storage
-            .insert_vertex(DEC_SPACE, vertex)
+            .insert_vertex(&space_name, vertex)
             .expect("insert vertex");
     }
-    let max_edges = DEC_EDGES_PER_VERTEX.min((DEC_VERTICES as usize).saturating_sub(1));
-    for src in 0..DEC_VERTICES as i64 {
+    let max_edges = DEC_EDGES_PER_VERTEX.min((dec_vertices() as usize).saturating_sub(1));
+    for src in 0..dec_vertices() as i64 {
         for k in 1..=max_edges as i64 {
-            let dst = (src + k) % DEC_VERTICES as i64;
+            let dst = (src + k) % dec_vertices() as i64;
             let edge = Edge {
                 src: VertexId::from_int64(src),
                 dst: VertexId::from_int64(dst),
@@ -500,7 +553,7 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
                     .into_iter()
                     .collect(),
             };
-            storage.insert_edge(DEC_SPACE, edge).expect("insert edge");
+            storage.insert_edge(&space_name, edge).expect("insert edge");
         }
     }
     Arc::new(RwLock::new(storage))
@@ -523,8 +576,9 @@ fn setup_query_pipeline(
     .with_schema_manager(schema_manager);
     let space_info = {
         let guard = storage.read();
+        let space_name = dec_space();
         guard
-            .get_space(DEC_SPACE)
+            .get_space(&space_name)
             .expect("space")
             .expect("space info")
     };

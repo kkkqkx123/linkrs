@@ -122,6 +122,11 @@ pub struct ScanOptions {
     pub edge_src_id_range: Option<std::ops::Range<i64>>,
     /// Edge type filter (for edge scans only).
     pub edge_type: Option<String>,
+    /// Optional tag filter for vertex scans: only rows whose tag matches
+    /// this name are scanned.  The tag tables of all other tags are skipped
+    /// at scan time (the query layer may therefore elide the matching
+    /// `contains(labels(v), ...)` residual conjunct).
+    pub tag: Option<String>,
     /// Optional property projection pushed into the physical scan.
     pub projection: Option<Vec<RequiredProperty>>,
     /// Read timestamp captured by the caller.
@@ -199,6 +204,12 @@ impl ScanOptions {
     /// Builder: enable column-block scan mode.
     pub fn with_column_block_mode(mut self, enabled: bool) -> Self {
         self.column_block_mode = enabled;
+        self
+    }
+
+    /// Builder: restrict a vertex scan to a single tag by name.
+    pub fn with_tag(mut self, tag: String) -> Self {
+        self.tag = Some(tag);
         self
     }
 
@@ -750,6 +761,28 @@ impl ColumnValues {
     }
 }
 
+/// Default data type for a fallback `General` column: scan the decoded values
+/// and pick the type of the first non-null / non-empty row; when every value
+/// is missing keep [`DataType::Empty`] (the upstream typed-column path then
+/// degrades to `TypedColumn::Fallback`, matching the pre-existing behavior).
+///
+/// This is the analog of what the storage-side `GraphVertexCursor` does in
+/// `assemble_column_batch` (`cursor_impl.rs`); keeping the trait default
+/// aligned with the real engine path means non-GraphStorage engines
+/// (`VecVertexCursor`, `VecEdgeCursor`) get the same typed-column coverage
+/// when they opt into the column-block scan path.
+fn column_data_type(values: &[Option<crate::core::Value>]) -> DataType {
+    for value in values {
+        if let Some(v) = value {
+            let ty = v.get_type();
+            if !matches!(ty, DataType::Empty | DataType::Null) {
+                return ty;
+            }
+        }
+    }
+    DataType::Empty
+}
+
 /// One property column of a column-major vertex batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyColumn {
@@ -789,6 +822,40 @@ impl VertexColumnBatch {
 
     pub fn len(&self) -> usize {
         self.vids.len()
+    }
+}
+
+/// A column-major edge batch produced by `EdgeCursor::next_column_batch`.
+///
+/// Rows are implicit: every column (and `srcs`/`dsts`/`edge_types`/
+/// `rankings`) has the same length.  `columns` holds one entry per requested
+/// property in projection order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeColumnBatch {
+    pub srcs: Vec<crate::core::types::VertexId>,
+    pub dsts: Vec<crate::core::types::VertexId>,
+    pub edge_types: Vec<String>,
+    pub rankings: Vec<i64>,
+    pub columns: Vec<PropertyColumn>,
+}
+
+impl EdgeColumnBatch {
+    pub fn empty() -> Self {
+        Self {
+            srcs: Vec::new(),
+            dsts: Vec::new(),
+            edge_types: Vec::new(),
+            rankings: Vec::new(),
+            columns: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.srcs.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.srcs.len()
     }
 }
 
@@ -873,7 +940,7 @@ pub trait VertexCursor: Send + std::fmt::Debug {
         for (i, name) in prop_names.iter().enumerate() {
             batch.columns.push(PropertyColumn {
                 name: name.clone(),
-                data_type: DataType::Empty,
+                data_type: column_data_type(&per_name[i]),
                 values: ColumnValues::General(std::mem::take(&mut per_name[i])),
             });
         }
@@ -887,6 +954,54 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Edge>, StorageError>;
+
+    /// Read the next batch as column-major data (at most `batch_size` rows).
+    ///
+    /// `prop_names` lists the properties to decode; an empty list means decode
+    /// every property of the edge.  The returned batch carries one
+    /// [`PropertyColumn`] per requested property.
+    ///
+    /// The default implementation falls back to [`Self::next_batch`] and
+    /// transposes the rows into columns.  Storage engines override this when
+    /// they can decode straight from the column store.
+    ///
+    /// Returns an empty batch when the scan is exhausted.
+    fn next_column_batch(
+        &mut self,
+        prop_names: &[String],
+        batch_size: usize,
+    ) -> Result<EdgeColumnBatch, StorageError> {
+        let edges = self.next_batch(batch_size)?;
+        let row_count = edges.len();
+        let mut batch = EdgeColumnBatch {
+            srcs: Vec::with_capacity(row_count),
+            dsts: Vec::with_capacity(row_count),
+            edge_types: Vec::with_capacity(row_count),
+            rankings: Vec::with_capacity(row_count),
+            columns: Vec::with_capacity(prop_names.len()),
+        };
+        let mut per_name: Vec<Vec<Option<crate::core::Value>>> = prop_names
+            .iter()
+            .map(|_| Vec::with_capacity(row_count))
+            .collect();
+        for edge in edges {
+            batch.srcs.push(edge.src);
+            batch.dsts.push(edge.dst);
+            batch.edge_types.push(edge.edge_type);
+            batch.rankings.push(edge.ranking);
+            for (i, name) in prop_names.iter().enumerate() {
+                per_name[i].push(edge.props.get(name).cloned());
+            }
+        }
+        for (i, name) in prop_names.iter().enumerate() {
+            batch.columns.push(PropertyColumn {
+                name: name.clone(),
+                data_type: column_data_type(&per_name[i]),
+                values: ColumnValues::General(std::mem::take(&mut per_name[i])),
+            });
+        }
+        Ok(batch)
+    }
 }
 
 /// A cursor that yields index entries (row IDs or covering rows) in batches.

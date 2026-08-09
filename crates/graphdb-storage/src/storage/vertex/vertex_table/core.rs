@@ -169,7 +169,11 @@ impl VertexTable {
                 return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
             }
 
-            let _ = self.timestamps.revert_remove(internal_id, ts);
+            // Re-insert after deletion: the vertex id stays allocated, so
+            // re-open its lifetime window at `ts` (revert_remove alone would
+            // require ts <= deletion ts and is only valid for transaction
+            // rollbacks, not for a plain INSERT after DELETE).
+            self.timestamps.insert(internal_id, ts);
             self.columns
                 .set_versioned(internal_id as usize, &converted, ts)?;
             return Ok(internal_id);

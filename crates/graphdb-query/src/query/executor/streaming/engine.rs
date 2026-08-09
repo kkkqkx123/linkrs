@@ -476,7 +476,7 @@ impl StreamingExecutionEngine {
         // Materialize any propagated selection before the chunk leaves the
         // executor tree (the API layer consumes full rows).
         if let Some(chunk) = chunk.as_mut() {
-            chunk.materialize_selection();
+            chunk.materialize_selection_by("Root");
         }
         Ok(chunk)
     }
@@ -616,7 +616,7 @@ impl StreamingExecutionEngine {
             executor.open()?;
             let loop_result = (|| -> Result<(), QueryError> {
                 while let Some(mut chunk) = executor.advance()? {
-                    chunk.materialize_selection();
+                    chunk.materialize_selection_by("Engine");
                     all_chunks.push(chunk);
                 }
                 Ok(())
@@ -646,7 +646,7 @@ impl StreamingExecutionEngine {
         executor.open()?;
         let loop_result = (|| -> Result<(), QueryError> {
             while let Some(mut chunk) = executor.advance()? {
-                chunk.materialize_selection();
+                chunk.materialize_selection_by("Engine");
                 output_chunks.push(chunk);
             }
             Ok(())

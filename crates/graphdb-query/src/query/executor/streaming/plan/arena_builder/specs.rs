@@ -96,6 +96,7 @@ pub(super) fn build_source_spec(
                 col_names: scan_node.col_names().to_vec(),
                 projected_properties,
                 predicate,
+                tag: scan_node.tag().map(|s| s.to_string()),
                 partition_range: None,
             })
         }

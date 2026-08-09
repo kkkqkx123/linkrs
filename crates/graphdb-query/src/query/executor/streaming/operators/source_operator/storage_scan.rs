@@ -9,7 +9,9 @@ use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::open_edge_scan;
 use crate::storage::open_vertex_scan;
-use crate::storage::{RequiredProperty, ScanOptions, StorageError, VertexColumnBatch};
+use crate::storage::{
+    EdgeColumnBatch, RequiredProperty, ScanOptions, StorageError, VertexColumnBatch,
+};
 
 use super::util::{
     attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
@@ -45,6 +47,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             col_names,
             projected_properties,
             predicate,
+            tag,
             cursor,
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
@@ -64,6 +67,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                                 .collect()
                         }),
                         predicate: (!predicate.is_empty()).then(|| predicate.clone()),
+                        tag: tag.clone(),
                         column_block_mode: column_block_enabled(),
                         ..ScanOptions::default()
                     },
@@ -182,15 +186,25 @@ pub(crate) fn next(
             projected_properties,
             ..
         } => {
-            let flatten = projected_properties.clone();
-            next_cursor_chunk(
-                cursor,
-                space_name,
-                "StorageScanEdges",
-                base,
-                move |edge| make_flat_edge_row(edge, &flatten),
-                |cur, batch_size| cur.next_batch(batch_size),
-            )
+            if column_block_enabled() {
+                next_edge_column_chunk(
+                    cursor,
+                    space_name,
+                    "StorageScanEdges",
+                    base,
+                    projected_properties,
+                )
+            } else {
+                let flatten = projected_properties.clone();
+                next_cursor_chunk(
+                    cursor,
+                    space_name,
+                    "StorageScanEdges",
+                    base,
+                    move |edge| make_flat_edge_row(edge, &flatten),
+                    |cur, batch_size| cur.next_batch(batch_size),
+                )
+            }
         }
         _ => unreachable!("storage_scan::next called for a non-scan source"),
     }
@@ -395,4 +409,136 @@ fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) 
         }
         _ => TypedColumn::Fallback(fallback.to_vec()),
     }
+}
+
+/// Column-block pull loop for edges (A1).
+///
+/// Mirrors [`next_column_chunk`]: pulls an [`EdgeColumnBatch`] from the
+/// cursor and assembles the chunk directly from the batch columns.
+fn next_edge_column_chunk(
+    cursor: &mut Option<Box<dyn crate::storage::EdgeCursor>>,
+    space_name: &str,
+    source: &str,
+    base: &mut OperatorBase,
+    projected_properties: &[String],
+) -> Result<Option<DataChunk>, QueryError> {
+    base.ensure_not_cancelled()?;
+    let mut cur = match cursor.take() {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let batch = cur
+        .next_column_batch(projected_properties, base.chunk_size)
+        .map_err(|error| storage_error(source, "read edge column batch", space_name, error))?;
+    if batch.is_empty() {
+        return Ok(None);
+    }
+    let chunk = build_edge_column_chunk(base, batch, projected_properties)?;
+    *cursor = Some(cur);
+    Ok(Some(chunk))
+}
+
+/// Assemble a [`DataChunk`] from an [`EdgeColumnBatch`], building the typed
+/// column layout straight from the batch columns.
+fn build_edge_column_chunk(
+    base: &OperatorBase,
+    batch: EdgeColumnBatch,
+    flatten: &[String],
+) -> Result<DataChunk, QueryError> {
+    let layout = Arc::clone(&base.output_layout);
+    let row_count = batch.len();
+
+    // Pre-compute per-column `Value` vectors once (used for both the rows and
+    // the fallback typed columns).
+    let mut prop_values: Vec<Vec<Value>> = Vec::with_capacity(batch.columns.len());
+    for column in &batch.columns {
+        prop_values.push(
+            (0..row_count)
+                .map(|row| {
+                    column
+                        .values
+                        .value_at(row)
+                        .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+                })
+                .collect(),
+        );
+    }
+
+    let mut rows = Vec::with_capacity(row_count);
+    for (row, (src, dst, edge_type, ranking)) in batch
+        .srcs
+        .iter()
+        .zip(&batch.dsts)
+        .zip(&batch.edge_types)
+        .zip(&batch.rankings)
+        .map(|(((src, dst), edge_type), ranking)| (src, dst, edge_type, ranking))
+        .enumerate()
+    {
+        let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
+        for (index, column) in batch.columns.iter().enumerate() {
+            let value = &prop_values[index][row];
+            if !matches!(value, Value::Null(_)) {
+                properties.insert(column.name.clone(), value.clone());
+            }
+        }
+        let edge = crate::core::Edge {
+            src: *src,
+            dst: *dst,
+            edge_type: edge_type.clone(),
+            ranking: *ranking,
+            props: properties,
+        };
+        let flat_values: Vec<Value> = flatten
+            .iter()
+            .map(|prop| {
+                edge
+                    .get_property(prop)
+                    .cloned()
+                    .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
+            })
+            .collect();
+        let mut row_vec = Vec::with_capacity(flatten.len() + 1);
+        row_vec.push(Value::Edge(Box::new(edge)));
+        row_vec.extend(flat_values);
+        rows.push(row_vec);
+    }
+
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    if crate::query::executor::streaming::chunk::typed_columns_enabled() {
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
+        typed.push(TypedColumn::Fallback(
+            chunk.rows.iter().map(|r| r[0].clone()).collect(),
+        ));
+        for prop in flatten {
+            match batch.columns.iter().position(|c| c.name == *prop) {
+                Some(index) => typed.push(typed_from_column(
+                    &batch.columns[index].values,
+                    &prop_values[index],
+                )),
+                None => typed.push(TypedColumn::Fallback(
+                    (0..row_count)
+                        .map(|_| Value::Null(crate::core::value::NullType::Null))
+                        .collect(),
+                )),
+            }
+        }
+        chunk.typed_columns = Some(typed);
+    }
+
+    if let Some(runtime) = base.runtime.as_ref() {
+        runtime.columnar_stats().record_column_block_hit();
+    }
+
+    let typed_bytes = chunk
+        .typed_columns
+        .as_ref()
+        .map(|cols| cols.iter().map(TypedColumn::estimated_size).sum())
+        .unwrap_or(0);
+    let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
+    let chunk = attach_columnar_stats(base, chunk);
+    Ok(if let Some(r) = reservation {
+        chunk.with_memory_reservation(r)
+    } else {
+        chunk
+    })
 }

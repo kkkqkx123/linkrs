@@ -39,13 +39,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         bound: &BoundStatement,
         ast: &Arc<crate::query::parser::ast::stmt::Ast>,
-    ) -> DBResult<(
-        Arc<PhysicalPlan>,
-        crate::query::planning::plan::ExecutionPlan,
-    )> {
+    ) -> DBResult<Arc<PhysicalPlan>> {
         let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
         let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
-        Ok((physical_plan, optimized_plan))
+        Ok(physical_plan)
     }
 
     /// Bind + plan + optimize only, returning the optimized logical plan

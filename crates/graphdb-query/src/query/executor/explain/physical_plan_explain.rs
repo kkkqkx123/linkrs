@@ -195,6 +195,21 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             if !col_names.is_empty() {
                 pnd.output_var = col_names.join(", ");
             }
+            // Surface the projected property list for storage scans so the
+            // slot-coverage optimization (P1: EnrichScanSlotsWithFilterProps)
+            // is observable in EXPLAIN output.
+            let projected: Vec<String> = match src_spec {
+                crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { projected_properties, .. }
+                | crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { projected_properties, .. }
+                => projected_properties.clone(),
+                _ => vec![],
+            };
+            if !projected.is_empty() {
+                pairs.push(crate::query::planning::plan::explain::Pair::new(
+                    "projected",
+                    projected.join(","),
+                ));
+            }
         }
 
         if !pairs.is_empty() {
