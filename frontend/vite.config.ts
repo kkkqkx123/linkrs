@@ -1,30 +1,20 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [svelte(), tailwindcss()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
-      '@components': path.resolve(__dirname, './src/components'),
-      '@pages': path.resolve(__dirname, './src/pages'),
-      '@stores': path.resolve(__dirname, './src/stores'),
-      '@utils': path.resolve(__dirname, './src/utils'),
-      '@services': path.resolve(__dirname, './src/services'),
-      '@hooks': path.resolve(__dirname, './src/hooks'),
-      '@types': path.resolve(__dirname, './src/types'),
-      '@assets': path.resolve(__dirname, './src/assets'),
-      '@config': path.resolve(__dirname, './src/config'),
-      '@locales': path.resolve(__dirname, './src/i18n/locales'),
-      '@styles': path.resolve(__dirname, './src/styles'),
-    },
-  },
-  css: {
-    preprocessorOptions: {
-      less: {
-        javascriptEnabled: true,
-      },
+      $lib: path.resolve('./src/lib'),
+      $types: path.resolve('./src/lib/types'),
+      $utils: path.resolve('./src/lib/utils'),
+      $services: path.resolve('./src/lib/services'),
+      $stores: path.resolve('./src/lib/stores'),
+      $config: path.resolve('./src/lib/config'),
+      $components: path.resolve('./src/lib/components'),
+      $pages: path.resolve('./src/lib/pages'),
     },
   },
   server: {
@@ -45,15 +35,8 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
-              return 'react-vendor';
-            }
-            if (id.includes('cytoscape')) {
-              return 'cytoscape-vendor';
-            }
-            if (id.includes('axios') || id.includes('lodash') || id.includes('dayjs') || id.includes('json-bigint')) {
-              return 'utils-vendor';
-            }
+            if (id.includes('cytoscape')) return 'cytoscape-vendor';
+            if (id.includes('axios') || id.includes('lodash') || id.includes('dayjs') || id.includes('json-bigint')) return 'utils-vendor';
             return 'vendor';
           }
         },

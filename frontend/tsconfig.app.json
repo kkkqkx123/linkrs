@@ -1,45 +1,26 @@
 {
+  "extends": "@tsconfig/svelte/tsconfig.json",
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "target": "ES2023",
-    "useDefineForClassFields": true,
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "types": ["vite/client"],
-    "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
+    "target": "es2023",
+    "module": "esnext",
+    "types": ["svelte", "vite/client"],
+    "allowArbitraryExtensions": true,
     "noEmit": true,
-    "jsx": "react-jsx",
-
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-
-    /* Path Aliases */
+    "allowJs": true,
+    "checkJs": true,
+    "moduleDetection": "force",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "@components/*": ["./src/components/*"],
-      "@pages/*": ["./src/pages/*"],
-      "@stores/*": ["./src/stores/*"],
-      "@utils/*": ["./src/utils/*"],
-      "@services/*": ["./src/services/*"],
-      "@hooks/*": ["./src/hooks/*"],
-      "@types/*": ["./src/types/*"],
-      "@assets/*": ["./src/assets/*"],
-      "@config/*": ["./src/config/*"],
-      "@locales/*": ["./src/i18n/locales/*"],
-      "@styles/*": ["./src/styles/*"]
+      "$lib/*": ["./src/lib/*"],
+      "$types/*": ["./src/lib/types/*"],
+      "$utils/*": ["./src/lib/utils/*"],
+      "$services/*": ["./src/lib/services/*"],
+      "$stores/*": ["./src/lib/stores/*"],
+      "$config/*": ["./src/lib/config/*"],
+      "$components/*": ["./src/lib/components/*"],
+      "$pages/*": ["./src/lib/pages/*"]
     }
   },
-  "include": ["src", "src/types/**/*.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
 }
