@@ -48,25 +48,17 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
     pub(crate) statistics_sample_limit: usize,
-    /// P1: whether shape-normalized DML statements reuse cached physical plans.
-    ///
-    /// When enabled, structurally identical INSERT/UPDATE/DELETE statements
-    /// (only differing in literal values) are compiled once and reused via the
-    /// plan cache, binding per-statement values as parameters.  Disabling
-    /// restores per-statement compilation (rollback path).
     pub(crate) dml_shape_cache_enabled: bool,
-    /// P6 Level 2: memoize the last shape-normalized DML physical plan so a
-    /// run of consecutive same-shape statements skips parameter extraction,
-    /// cache-key construction, and the moka lookup entirely. Keyed by
-    /// (normalized text, schema version, param type signature); one entry.
     pub(crate) last_dml_plan: parking_lot::Mutex<Option<LastDmlPlan>>,
-    /// Observation counter for P6 Level 2 memo hits.
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
+    pub(crate) dml_template_ast: parking_lot::Mutex<Option<(String, Arc<crate::query::parser::ast::stmt::Ast>)>>,
+    pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
+    pub(crate) dml_bind_skipped_count: std::sync::atomic::AtomicU64,
 }
 
-/// Memoized same-shape DML plan entry (P6 Level 2).
 pub(crate) struct LastDmlPlan {
     pub normalized_text: String,
+    pub space_name: Option<String>,
     pub schema_version: Option<u64>,
     pub param_sig: u64,
     pub plan: Arc<PhysicalPlan>,
@@ -109,6 +101,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             last_dml_plan: parking_lot::Mutex::new(None),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
+            dml_template_ast: parking_lot::Mutex::new(None),
+            dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
+            dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -240,6 +235,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             last_dml_plan: parking_lot::Mutex::new(None),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
+            dml_template_ast: parking_lot::Mutex::new(None),
+            dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
+            dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -299,6 +297,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// Whether P1 DML shape plan caching is enabled.
     pub fn dml_shape_cache_enabled(&self) -> bool {
         self.dml_shape_cache_enabled
+    }
+
+    pub fn dml_template_ast_parse_count(&self) -> u64 {
+        self.dml_template_ast_parse_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn dml_bind_skipped_count(&self) -> u64 {
+        self.dml_bind_skipped_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The underlying storage binding, if any.

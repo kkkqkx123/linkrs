@@ -55,6 +55,21 @@ impl<S: StorageClient + crate::storage::AutoCommitBatchOps> crate::storage::Auto
     }
 }
 
+impl<S: StorageClient + crate::storage::AutoCommitGroupOps> crate::storage::AutoCommitGroupOps
+    for MetricsStorage<S>
+{
+    fn begin_auto_commit_group(&self) -> StorageResult<Arc<crate::storage::AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_group()
+    }
+
+    fn finalize_auto_commit_group(
+        &self,
+        window: &crate::storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_group(window)
+    }
+}
+
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;

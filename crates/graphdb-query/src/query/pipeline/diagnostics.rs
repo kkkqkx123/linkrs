@@ -19,17 +19,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ///
     /// Goes through the shared `compile_or_get_cached` path so diagnostic
     /// targets reuse the plan cache (and warm it for the same statement
-    /// executed directly).  The inner statement's source span is sliced from
-    /// the original request text to derive its cache key; when that is
-    /// unavailable the full query text is used as a fallback key.
+    /// executed directly).  The full request text is used as the cache key
+    /// (the inner statement's source span is not separately extracted).
     fn compile_diagnostic_target(
         &mut self,
         qctx: Arc<QueryContext>,
         inner_stmt: &crate::query::parser::ast::Stmt,
     ) -> DBResult<Arc<crate::query::executor::streaming::plan::PhysicalPlan>> {
-        let full_text = qctx.request_context().query.clone();
-        let key_text = statement_source_text(&full_text, inner_stmt)
-            .unwrap_or_else(|| full_text.clone());
+        let key_text = qctx.request_context().query.clone();
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
             inner_stmt.clone(),
@@ -40,7 +37,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 "EXPLAIN/PROFILE target statement could not be bound".to_string(),
             ))
         })?;
-        self.compile_or_get_cached(&key_text, qctx, &bound, inner_stmt, &ast, false)
+        self.compile_or_get_cached(&key_text, qctx, Some(&bound), inner_stmt, &ast, false)
     }
 
     pub fn execute_explain(

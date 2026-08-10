@@ -391,17 +391,6 @@ impl WriteTimestampLease {
 }
 
 /// Serializes auto-commit DML statements.
-///
-/// Auto-commit statements bypass the transaction manager, so they have no
-/// write-set conflict detection. Serializing them with this gate gives
-/// deterministic statement ordering: each auto-commit write observes every
-/// previously committed auto-commit write, eliminating silent lost updates
-/// (Last-Writer-Wins on read-modify-write). This mirrors the single-writer
-/// default of other embedded graph databases. Read-only statements never
-/// acquire the gate, so reads stay fully concurrent.
-///
-/// Implemented as a flag + condvar so the lease can be shared across clones
-/// of the bound context; the lease is released on finalize or Drop.
 struct AutoCommitWriteGate {
     locked: AtomicBool,
     mutex: Mutex<()>,
@@ -441,7 +430,6 @@ struct AutoCommitWriteLease {
 }
 
 impl AutoCommitWriteLease {
-    /// Release the gate immediately (idempotent; Drop is the backstop).
     fn release(&self) {
         if self.held.swap(false, Ordering::AcqRel) {
             self.gate.release();
@@ -459,12 +447,6 @@ impl Drop for AutoCommitWriteLease {
 
 /// Collects before-image undo entries and write-set entity keys while an
 /// auto-commit statement executes.
-///
-/// Property writes build MVCC version chains (see `set_versioned`), so
-/// committed statements leave a version history; undo recorded here lets
-/// `finalize_operation(false)` roll back the partial writes of a failed
-/// statement, restoring the before-images. The write set additionally gives
-/// auto-commit statements a conflict signal against concurrent writers.
 struct AutoCommitMutationRecorder {
     undo: Arc<Mutex<UndoLogManager>>,
     /// Write set for conflict detection (tracks modified vertices and edges)
@@ -515,45 +497,29 @@ impl graphdb_transaction::transaction::TransactionMutationRecorder for AutoCommi
 }
 
 /// A shared auto-commit batch window (P4).
-///
-/// Acquires the auto-commit write gate and registers MVCC snapshots exactly
-/// once for a run of auto-commit statements, so each statement inside the
-/// window only allocates a fresh write timestamp, transaction id, and
-/// before-image undo log instead of re-acquiring the gate and re-registering
-/// every vertex/edge table's snapshots. Snapshot unregistration and gate
-/// release happen in [`finalize`](Self::finalize) (or on `Drop` as a
-/// backstop against abandoned windows).
-///
-/// Must be created from the pristine base context (no operation bound);
-/// see [`GraphStorageContext::begin_auto_commit_batch`].
 pub struct AutoCommitBatchWindow {
     base_ctx: Arc<GraphStorageContext>,
-    /// Window-exclusive auto-commit write gate lease.
     gate_lease: Arc<AutoCommitWriteLease>,
-    /// Write timestamp of the first statement; `None` until the first
-    /// `bind_statement` call, which also registers the shared snapshots.
     first_ts: Mutex<Option<Timestamp>>,
     vertex_snapshot_handles: Mutex<Vec<(LabelId, SnapshotHandle)>>,
     edge_snapshot_registered: AtomicBool,
-    /// Number of statements bound in this window (observation).
     statement_count: AtomicU64,
-    /// Number of snapshot-registration rounds performed (observation; must be
-    /// 1 for a correctly reused window).
     snapshot_rounds: AtomicU64,
+    /// Group mode (P0 C): statements share one write timestamp (first_ts),
+    /// one undo log, and one commit point; see `begin_auto_commit_group`.
+    group: AtomicBool,
+    /// Shared before-image undo log for group mode (one segment per statement).
+    group_undo: Option<Arc<Mutex<UndoLogManager>>>,
 }
 
 impl AutoCommitBatchWindow {
-    /// Bind one auto-commit statement inside this window.
-    ///
-    /// Allocates a fresh write timestamp (the first call also registers the
-    /// shared MVCC snapshots at that timestamp), transaction id, and undo log.
-    /// The returned context shares the window's snapshots and write gate and
-    /// must be finalized via `finalize_operation` per statement.
     pub(crate) fn bind_statement(self: &Arc<Self>) -> StorageResult<GraphStorageContext> {
         let base = &self.base_ctx;
+        let is_group = self.group.load(Ordering::Acquire);
         let ts = {
             let mut first = self.first_ts.lock();
             match *first {
+                Some(ts) if is_group => ts,
                 Some(_) => base
                     .persistent
                     .version_manager
@@ -583,7 +549,18 @@ impl AutoCommitBatchWindow {
                 .next_auto_transaction_id
                 .fetch_add(1, Ordering::SeqCst),
         );
-        let undo_log = Arc::new(Mutex::new(UndoLogManager::new()));
+        let undo_log = if is_group {
+            Arc::clone(self.group_undo.as_ref().expect(
+                "group mode requires group_undo to be initialized",
+            ))
+        } else {
+            Arc::new(Mutex::new(UndoLogManager::new()))
+        };
+        let group_undo_start = if is_group {
+            Some(undo_log.lock().len())
+        } else {
+            None
+        };
         let context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: ts,
@@ -600,6 +577,7 @@ impl AutoCommitBatchWindow {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: group_undo_start,
         };
 
         self.statement_count.fetch_add(1, Ordering::SeqCst);
@@ -616,25 +594,52 @@ impl AutoCommitBatchWindow {
         Ok(bound)
     }
 
-    /// Finalize the batch window: unregister the shared MVCC snapshots and
-    /// release the write gate. Idempotent.
     pub fn finalize(&self) -> StorageResult<()> {
         self.unregister_snapshots();
         self.gate_lease.release();
         Ok(())
     }
 
-    /// Number of statements bound in this window.
     pub fn statement_count(&self) -> u64 {
         self.statement_count.load(Ordering::SeqCst)
     }
 
-    /// Number of snapshot-registration rounds performed (1 for a reused window).
     pub fn snapshot_rounds(&self) -> u64 {
         self.snapshot_rounds.load(Ordering::SeqCst)
     }
 
-    /// Unregister all snapshots this window registered (idempotent).
+    pub fn is_grouped(&self) -> bool {
+        self.group.load(Ordering::Acquire)
+    }
+
+    /// Single group commit point: one fsync, then barrier advance, then the
+    /// shared write-timestamp commit. Order: durability → visibility.
+    pub fn finalize_group(&self) -> StorageResult<()> {
+        // 1) Durability: one sync covering every no-wait appended statement.
+        if let Some(persistence) = self.base_ctx.persistent.persistence.as_ref() {
+            if let Some(wal) = persistence.read().wal_manager() {
+                wal.read().sync()?;
+                let durable = wal.read().durable_lsn();
+                self.base_ctx
+                    .persistent
+                    .index_data_manager
+                    .read()
+                    .advance_barriers(crate::core::types::CommitLsn::new(durable.as_u64()));
+            }
+        }
+        // 2) Visibility: commit the shared write timestamp once.
+        if let Some(ts) = *self.first_ts.lock() {
+            self.base_ctx
+                .persistent
+                .version_manager
+                .commit_write_timestamp(ts);
+        }
+        // 3) Window cleanup (unchanged): unregister snapshots, release gate.
+        self.unregister_snapshots();
+        self.gate_lease.release();
+        Ok(())
+    }
+
     fn unregister_snapshots(&self) {
         let vertex_handles = std::mem::take(&mut *self.vertex_snapshot_handles.lock());
         if !vertex_handles.is_empty() {
@@ -677,8 +682,6 @@ impl AutoCommitBatchWindow {
 
 impl Drop for AutoCommitBatchWindow {
     fn drop(&mut self) {
-        // Backstop for abandoned windows: unregister snapshots (idempotent);
-        // the gate lease releases the write gate on Drop.
         self.unregister_snapshots();
     }
 }
@@ -789,9 +792,6 @@ impl GraphStorageRuntime {
             .unwrap_or(false)
     }
 
-    /// P5: run an opportunistic index-GC pass, throttled to at most once every
-    /// two seconds, so generation retirement/reclamation stays bounded even
-    /// when no background GC thread is running.
     fn maybe_run_index_gc(&self) {
         let Some(gc) = self.index_gc_manager.as_ref() else {
             return;

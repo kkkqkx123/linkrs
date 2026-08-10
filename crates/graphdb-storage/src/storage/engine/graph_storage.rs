@@ -67,16 +67,10 @@ impl GraphStorage {
         self.ctx.version_manager().clone()
     }
 
-    /// Open an auto-commit batch window (P4): acquire the auto-commit write
-    /// gate once and register MVCC snapshots once for a run of auto-commit
-    /// statements. Must be called on the pristine base storage.
     pub fn begin_auto_commit_batch(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
         self.ctx.begin_auto_commit_batch()
     }
 
-    /// Bind one auto-commit statement inside `window`, reusing the window's
-    /// write-gate lease and MVCC snapshot registrations. Each bound storage
-    /// must be finalized (`finalize_operation`) per statement.
     pub fn bind_auto_commit_statement(
         &self,
         window: &Arc<context::AutoCommitBatchWindow>,
@@ -86,8 +80,6 @@ impl GraphStorage {
         })
     }
 
-    /// Finalize an auto-commit batch window: unregister the window's MVCC
-    /// snapshots and release the write gate. Idempotent.
     pub fn finalize_auto_commit_batch(
         &self,
         window: &context::AutoCommitBatchWindow,
@@ -95,11 +87,25 @@ impl GraphStorage {
         window.finalize()
     }
 
+    pub fn begin_auto_commit_group(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
+        self.ctx.begin_auto_commit_group()
+    }
+
+    pub fn finalize_auto_commit_group(
+        &self,
+        window: &context::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        window.finalize_group()
+    }
+
     fn commit_auto_if_needed(&self) -> StorageResult<()> {
         let Some(context) = self.ctx.operation_context() else {
             return Ok(());
         };
         if !context.auto_commit || context.read_only {
+            return Ok(());
+        }
+        if self.ctx.is_group_bound() {
             return Ok(());
         }
         let transaction_id = context.transaction_id.ok_or_else(|| {
@@ -591,6 +597,19 @@ impl crate::storage::AutoCommitBatchOps for GraphStorage {
         window: &context::AutoCommitBatchWindow,
     ) -> StorageResult<()> {
         GraphStorage::finalize_auto_commit_batch(self, window)
+    }
+}
+
+impl crate::storage::AutoCommitGroupOps for GraphStorage {
+    fn begin_auto_commit_group(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {
+        self.ctx.begin_auto_commit_group()
+    }
+
+    fn finalize_auto_commit_group(
+        &self,
+        window: &context::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        window.finalize_group()
     }
 }
 
@@ -1347,6 +1366,7 @@ impl StorageSchemaOps for GraphStorage {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_tag_index(
@@ -1399,6 +1419,7 @@ impl StorageSchemaOps for GraphStorage {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_edge_index(

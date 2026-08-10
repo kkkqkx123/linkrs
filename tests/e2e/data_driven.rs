@@ -5,7 +5,7 @@
 
 use crate::common::{
     assert_count_eq, assert_query_row_count, assert_row_count, create_test_db, load_gql_file,
-    setup_test_space,
+    load_gql_file_grouped, setup_test_space,
 };
 use graphdb::core::Value;
 
@@ -254,6 +254,52 @@ fn test_batch_load_reuses_dml_plan() {
     assert!(
         hits > 15_000,
         "consecutive same-shape DML should hit the plan memo, got {hits}"
+    );
+    // P0 A: the shape-normalized template AST must be parsed at most once per
+    // distinct template. optimizer_data.gql has exactly three templates
+    // (person / company INSERT VERTEX, works_at INSERT EDGE).
+    let template_parses = db.query_api().dml_template_ast_parse_count();
+    assert!(
+        template_parses <= 3,
+        "template AST parse count must be bounded by the number of distinct DML shapes, got {template_parses}"
+    );
+    assert_count_eq(
+        &mut db,
+        "MATCH (p:person) RETURN count(p)",
+        10000,
+        "10000 persons",
+    );
+    assert_count_eq(
+        &mut db,
+        "MATCH ()-[w:works_at]->() RETURN count(w)",
+        10000,
+        "10000 works_at edges",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P0 C: group-commit batch load
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_batch_load_grouped_commit() {
+    let mut db = create_test_db();
+    load_gql_file_grouped(
+        &mut db,
+        &format!("{}/optimizer_data.gql", DATA_DIR),
+        500,
+    )
+    .expect("Failed to load optimizer_data.gql (grouped)");
+
+    let hits = db.query_api().dml_plan_memo_hits();
+    assert!(
+        hits > 15_000,
+        "consecutive same-shape DML should hit the plan memo, got {hits}"
+    );
+    let staged_wal = db.storage().read().staged_wal_len();
+    assert!(
+        staged_wal <= 8,
+        "staged WAL must not grow unboundedly, got {staged_wal}"
     );
     assert_count_eq(
         &mut db,

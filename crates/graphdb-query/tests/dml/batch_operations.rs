@@ -5,14 +5,17 @@
 //! - Batch UPDATE operations
 //! - Batch DELETE operations
 //! - Complex DML workflows
+//! - DML shape template AST cache
 
 use super::common;
 
 use common::test_scenario::TestScenario;
 use common::TestStorage;
 use graphdb_query::core::stats::StatsManager;
+use graphdb_query::core::types::VertexId;
 use graphdb_query::query::optimizer::OptimizerEngine;
 use graphdb_query::query::pipeline::QueryPipelineManager;
+use graphdb_query::storage::StorageReader;
 use std::sync::Arc;
 
 // ==================== Batch INSERT Tests ====================
@@ -216,4 +219,97 @@ fn test_large_batch_insert() {
         )
         .assert_success()
         .assert_vertex_count("Person", 10);
+}
+
+// ==================== DML Shape Template AST Cache ====================
+
+/// P0 A: the shape-normalized DML template AST must be parsed at most once
+/// per distinct template, and the cached AST must not misalign statement
+/// parameters with column values.
+#[test]
+fn test_dml_shape_template_ast_cache() {
+    let test_storage = TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let stats_manager = Arc::new(StatsManager::new());
+    let schema_manager = test_storage.schema_manager();
+
+    let mut pipeline = QueryPipelineManager::with_optimizer(
+        storage.clone(),
+        stats_manager,
+        Arc::new(OptimizerEngine::default()),
+    )
+    .with_schema_manager(schema_manager);
+
+    pipeline
+        .execute_query_with_space("CREATE SPACE IF NOT EXISTS cache_space", None)
+        .expect("create space");
+    let space = storage
+        .read()
+        .get_space("cache_space")
+        .expect("space lookup")
+        .expect("space exists");
+    pipeline
+        .execute_query_with_space(
+            "CREATE TAG person(name STRING, age INT)",
+            Some(space.clone()),
+        )
+        .expect("create tag");
+
+    // Statement 1: cold — the template is parsed and cached.
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX person(name, age) VALUES \"p1\": (\"A\", 1)",
+            Some(space.clone()),
+        )
+        .expect("insert p1");
+    assert_eq!(
+        pipeline.dml_template_ast_parse_count(),
+        1,
+        "first statement must parse the template exactly once"
+    );
+
+    // Statement 2: same shape — the cached template AST is reused.
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX person(name, age) VALUES \"p2\": (\"B\", 2)",
+            Some(space.clone()),
+        )
+        .expect("insert p2");
+    assert_eq!(
+        pipeline.dml_template_ast_parse_count(),
+        1,
+        "same-shape statement must reuse the cached template AST"
+    );
+
+    // Statement 3: heterogeneous shape (different column subset) — a new
+    // template is parsed, replacing the cached slot.
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX person(name) VALUES \"p3\": (\"C\")",
+            Some(space.clone()),
+        )
+        .expect("insert p3");
+    assert_eq!(
+        pipeline.dml_template_ast_parse_count(),
+        2,
+        "heterogeneous shape must parse a new template"
+    );
+
+    // The two same-shape statements must have landed their own parameter
+    // values (the cached AST must not shift values across statements).
+    let read = |vid: &str| {
+        storage
+            .read()
+            .get_vertex("cache_space", &VertexId::from_string(vid))
+            .expect("vertex read")
+            .expect("vertex exists")
+    };
+    let p1 = read("p1");
+    assert_eq!(p1.properties.get("name"), Some(&graphdb_query::core::Value::string("A")));
+    assert_eq!(p1.properties.get("age"), Some(&graphdb_query::core::Value::BigInt(1)));
+    let p2 = read("p2");
+    assert_eq!(p2.properties.get("name"), Some(&graphdb_query::core::Value::string("B")));
+    assert_eq!(p2.properties.get("age"), Some(&graphdb_query::core::Value::BigInt(2)));
+    let p3 = read("p3");
+    assert_eq!(p3.properties.get("name"), Some(&graphdb_query::core::Value::string("C")));
 }

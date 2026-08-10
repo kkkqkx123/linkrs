@@ -360,6 +360,32 @@ impl TestDb {
         Ok(results)
     }
 
+    /// Execute a batch of auto-commit statements using group-commit windows
+    /// (P0 C). Each group of `group_size` statements shares one write timestamp
+    /// and one WAL fsync.
+    pub fn execute_batch_grouped(
+        &mut self,
+        statements: &[String],
+        group_size: usize,
+    ) -> CoreResult<Vec<QueryResult>> {
+        let ctx = graphdb::api::core::types::QueryRequest {
+            space_id: self.current_space_id,
+            space_name: self.current_space_name.clone(),
+            auto_commit: true,
+            transaction_id: None,
+            parameters: None,
+            query_id: None,
+        };
+        let outcomes = self.query_api.execute_batch_grouped(statements, ctx, group_size);
+        let mut results = Vec::with_capacity(outcomes.len());
+        for outcome in outcomes {
+            let result = outcome?;
+            self.track_space_from_result(&result);
+            results.push(result);
+        }
+        Ok(results)
+    }
+
     /// Apply space-switch state from a USE result.
     fn track_space_from_result(&mut self, result: &QueryResult) {
         if result.columns.iter().any(|c| c == "space_name") {
@@ -483,6 +509,61 @@ pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
                 index += 1;
             }
             db.execute_batch(&batch)?;
+        } else {
+            db.execute_query(&statements[index])?;
+            index += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Load a GQL file, executing consecutive INSERT statements via group-commit
+/// windows (P0 C). Non-INSERT statements execute individually.
+pub fn load_gql_file_grouped(
+    db: &mut TestDb,
+    path: &str,
+    group_size: usize,
+) -> CoreResult<()> {
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        graphdb::api::core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
+    })?;
+
+    let mut statements: Vec<String> = Vec::new();
+    let mut buffer = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            if !buffer.is_empty() {
+                statements.push(std::mem::take(&mut buffer));
+            }
+            continue;
+        }
+        if line.starts_with(' ') || line.starts_with('\t') || trimmed.starts_with(')') {
+            buffer.push(' ');
+            buffer.push_str(trimmed);
+        } else {
+            if !buffer.is_empty() {
+                statements.push(std::mem::take(&mut buffer));
+            }
+            buffer = trimmed.to_string();
+        }
+    }
+    if !buffer.is_empty() {
+        statements.push(buffer);
+    }
+
+    let is_insert = |statement: &str| statement.trim().to_uppercase().starts_with("INSERT ");
+    let mut index = 0;
+    while index < statements.len() {
+        if is_insert(&statements[index]) {
+            let mut batch = vec![statements[index].clone()];
+            index += 1;
+            while index < statements.len() && is_insert(&statements[index]) {
+                batch.push(statements[index].clone());
+                index += 1;
+            }
+            db.execute_batch_grouped(&batch, group_size)?;
         } else {
             db.execute_query(&statements[index])?;
             index += 1;

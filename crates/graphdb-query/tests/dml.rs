@@ -19,6 +19,8 @@ mod delete;
 mod insert_edge;
 #[path = "dml/insert_vertex.rs"]
 mod insert_vertex;
+#[path = "dml/memo_skip_bind.rs"]
+mod memo_skip_bind;
 #[path = "dml/update.rs"]
 mod update;
 #[path = "dml/upsert.rs"]

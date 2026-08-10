@@ -62,19 +62,6 @@ impl GraphStorageContext {
         bound
     }
 
-    /// Bind a read-only statement context with a fixed snapshot timestamp.
-    ///
-    /// Unlike the unbound path (which resolves
-    /// `version_manager.read_timestamp()` per storage access), a read context
-    /// pins one snapshot for the whole statement: every operator observes the
-    /// same `read_timestamp`, and per-table MVCC snapshots registered lazily
-    /// on first table access pin the versions against GC until
-    /// [`finalize_operation`](Self::finalize_operation) unregisters them.
-    ///
-    /// The bound context is also the serialization boundary for distributed
-    /// reads: `(space, snapshot_ts)` can travel with the query plan to remote
-    /// shards. Read contexts never take the auto-commit write gate, so reads
-    /// do not contend with the DML serialization.
     pub fn with_read_operation_context(&self) -> StorageResult<Self> {
         let timestamp = self.persistent.version_manager.read_timestamp();
         let mut bound = self.clone();
@@ -89,38 +76,19 @@ impl GraphStorageContext {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         }));
         Ok(bound)
     }
 
-    /// Register MVCC snapshots for an auto-commit operation at `timestamp`.
-    ///
-    /// Scatter-gather: collect table references under a brief catalog READ
-    /// lock (so concurrent transactions and DDL never block on the catalog
-    /// write lock here), then register each table under its own per-table
-    /// lock outside the catalog lock. Shared by the per-statement
-    /// `with_auto_commit_context` path and the batch window (P4).
-    ///
-    /// NOTE: This function now implements lazy registration - it returns empty
-    /// handles and the actual registration happens on first access to each table.
-    /// This avoids traversing all tables at transaction start.
     pub(crate) fn register_auto_commit_snapshots(
         &self,
         _timestamp: Timestamp,
     ) -> StorageResult<(Vec<(LabelId, SnapshotHandle)>, bool)> {
-        // Lazy registration: don't register all tables upfront.
-        // Registration will happen on first access to each table.
-        // Return empty handles - actual handles will be stored in
-        // StorageOperationContext.registered_vertex_labels/registered_edge_partitions
         Ok((Vec::new(), false))
     }
 
     pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
-        // Auto-commit DML is serialized through the write gate: these
-        // statements bypass the transaction manager and have no write-set
-        // conflict detection, so serializing them makes statement ordering
-        // deterministic and prevents silent lost updates (see
-        // `AutoCommitWriteGate`). Read-only statements never take this path.
         let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
         let timestamp = self
             .persistent
@@ -143,8 +111,6 @@ impl GraphStorageContext {
             write_timestamp: Some(timestamp),
             read_only: false,
             auto_commit: true,
-            // Record before-images so a failed statement (finalize(false)) can
-            // roll back partial writes (see `AutoCommitMutationRecorder`).
             mutation_recorder: Some(Arc::new(super::AutoCommitMutationRecorder {
                 undo: undo_log.clone(),
                 write_set: Arc::new(parking_lot::Mutex::new(
@@ -155,10 +121,9 @@ impl GraphStorageContext {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         };
 
-        // Register MVCC snapshots to prevent GC from cleaning data during the
-        // transaction (see `register_auto_commit_snapshots`).
         let (vertex_handles, edge_registered) = self.register_auto_commit_snapshots(timestamp)?;
         context.mvcc_vertex_snapshot_handles = vertex_handles;
         context.mvcc_edge_snapshot_registered = edge_registered;
@@ -174,12 +139,6 @@ impl GraphStorageContext {
         Ok(bound)
     }
 
-    /// Open an auto-commit batch window (P4).
-    ///
-    /// Acquires the auto-commit write gate for the whole window; MVCC
-    /// snapshots are registered lazily on the first statement bound via the
-    /// window and unregistered at `finalize` (or `Drop`). Must be called on
-    /// the pristine (unbound) base context.
     pub(crate) fn begin_auto_commit_batch(
         &self,
     ) -> StorageResult<Arc<super::AutoCommitBatchWindow>> {
@@ -198,6 +157,33 @@ impl GraphStorageContext {
             edge_snapshot_registered: std::sync::atomic::AtomicBool::new(false),
             statement_count: std::sync::atomic::AtomicU64::new(0),
             snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
+            group: std::sync::atomic::AtomicBool::new(false),
+            group_undo: None,
+        }))
+    }
+
+    pub(crate) fn begin_auto_commit_group(
+        &self,
+    ) -> StorageResult<Arc<super::AutoCommitBatchWindow>> {
+        let write_gate_lease = self.persistent.auto_commit_write_gate.acquire();
+        let mut clean = self.clone();
+        clean.operation_context = None;
+        clean.write_timestamp_lease = None;
+        clean.write_gate_lease = None;
+        clean.auto_commit_undo = None;
+        clean.auto_commit_window = None;
+        Ok(Arc::new(super::AutoCommitBatchWindow {
+            base_ctx: Arc::new(clean),
+            gate_lease: write_gate_lease,
+            first_ts: parking_lot::Mutex::new(None),
+            vertex_snapshot_handles: parking_lot::Mutex::new(Vec::new()),
+            edge_snapshot_registered: std::sync::atomic::AtomicBool::new(false),
+            statement_count: std::sync::atomic::AtomicU64::new(0),
+            snapshot_rounds: std::sync::atomic::AtomicU64::new(0),
+            group: std::sync::atomic::AtomicBool::new(true),
+            group_undo: Some(Arc::new(parking_lot::Mutex::new(
+                graphdb_transaction::transaction::UndoLogManager::new(),
+            ))),
         }))
     }
 
@@ -235,18 +221,43 @@ impl GraphStorageContext {
             return Ok(());
         }
 
-        // Window-bound statements (P4) share the batch window's MVCC
-        // snapshots; the window unregisters them once at `finalize`. Only
-        // per-statement contexts (registered by `with_auto_commit_context` /
-        // `with_read_operation_context`) unregister here.
         if self.auto_commit_window.is_none() {
             self.unregister_statement_snapshots(operation);
         }
 
         if operation.read_only {
-            // Read-only statement: nothing to commit or roll back; the pinned
-            // statement snapshots were unregistered above.
             return Ok(());
+        }
+
+        // Group mode: per-statement finalize — no-wait WAL append or segment
+        // rollback. Do NOT commit/abort the write timestamp, release the gate,
+        // or unregister snapshots — those are deferred to `finalize_group`.
+        if let Some(window) = &self.auto_commit_window {
+            if window.is_grouped() {
+                let timestamp = operation.write_timestamp.ok_or_else(|| {
+                    StorageError::db_error("Group operation has no write timestamp")
+                })?;
+                if committed {
+                    if let Some(txid) = operation.transaction_id {
+                        self.commit_staged_writes_grouped(txid, &[])?;
+                    }
+                } else {
+                    if let Some(undo) = &self.auto_commit_undo {
+                        let mut log = undo.lock();
+                        let start = operation.auto_commit_group_start.unwrap_or(0);
+                        if let Err(error) =
+                            log.execute_undo_from_index(self, timestamp, start)
+                        {
+                            log::error!("Group statement rollback failed: {}", error);
+                        }
+                    }
+                    if let Some(txid) = operation.transaction_id {
+                        self.abort_staged_writes(txid);
+                    }
+                }
+                self.maybe_run_index_gc();
+                return Ok(());
+            }
         }
 
         let timestamp = operation.write_timestamp.ok_or_else(|| {
@@ -257,10 +268,6 @@ impl GraphStorageContext {
         if committed {
             self.commit_write_timestamp(timestamp);
         } else {
-            // Roll back partial writes recorded during the statement before
-            // aborting the write timestamp. Without this, an in-place property
-            // overwrite from a failed statement would remain physically present
-            // while the timestamp is Aborted.
             if let Some(undo) = &self.auto_commit_undo {
                 let mut log = undo.lock();
                 if let Err(error) = log.execute_undo(self, timestamp) {
@@ -269,31 +276,21 @@ impl GraphStorageContext {
             }
             self.abort_write_timestamp(timestamp);
         }
-        // Release the auto-commit write gate so the next DML statement can run.
         if let Some(lease) = &self.write_gate_lease {
             lease.release();
         }
-        // P5.2: drop any residue staged-WAL for this auto-commit transaction
-        // (per-statement entries are normally committed by `commit_auto_if_needed`;
-        // this guarantees the staged map stays bounded even on error paths).
         if let Some(transaction_id) = transaction_id {
             self.persistent.staged_wal.remove(&transaction_id);
         }
-        // P5: keep index generation retirement bounded during long auto-commit
-        // loads (throttled; no-op when no GC manager is assembled).
         self.maybe_run_index_gc();
         Ok(())
     }
 
-    /// Unregister the MVCC snapshots a per-statement context registered
-    /// lazily (vertex labels and edge partitions), at the operation's
-    /// snapshot timestamp. Shared by write and read statement contexts.
     fn unregister_statement_snapshots(&self, operation: &StorageOperationContext) {
         let Some(timestamp) = operation.snapshot_timestamp() else {
             return;
         };
 
-        // Unregister lazily registered vertex snapshots
         let registered_labels: Vec<LabelId> = {
             let registered = operation.registered_vertex_labels.read();
             registered.iter().cloned().collect()
@@ -321,7 +318,6 @@ impl GraphStorageContext {
             }
         }
 
-        // Unregister lazily registered edge snapshots
         let registered_edge_keys: Vec<crate::storage::engine::data_store::EdgeTableKey> = {
             let registered = operation.registered_edge_partitions.read();
             registered.iter().cloned().collect()
@@ -345,7 +341,6 @@ impl GraphStorageContext {
         self.runtime.start_index_gc()
     }
 
-    /// P5: opportunistically run an index-GC pass (throttled).
     pub(crate) fn maybe_run_index_gc(&self) {
         self.runtime.maybe_run_index_gc();
     }
@@ -729,6 +724,41 @@ impl GraphStorageContext {
         Ok(commit_lsn)
     }
 
+    /// Append staged WAL with `DurabilityLevel::None` (no fsync). Barriers
+    /// are deferred to the group commit point (`finalize_group`).
+    pub(crate) fn commit_staged_writes_grouped(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        let entries = self
+            .persistent
+            .staged_wal
+            .get(&transaction_id)
+            .map(|entries| entries.clone())
+            .unwrap_or_default();
+        let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
+            let guard = persistence.read();
+            let wal_manager = guard.wal_manager().ok_or_else(|| {
+                crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
+            })?;
+            let result = wal_manager
+                .read()
+                .append_transaction_with_durability(
+                    transaction_id,
+                    entries,
+                    intents,
+                    crate::core::types::DurabilityLevel::None,
+                )?;
+            result
+        } else {
+            crate::core::types::CommitLsn::ZERO
+        };
+        // Deliberately no advance_barriers: deferred to finalize_group.
+        self.persistent.staged_wal.remove(&transaction_id);
+        Ok(commit_lsn)
+    }
+
     pub(crate) fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) {
         self.persistent.staged_wal.remove(&transaction_id);
     }
@@ -736,6 +766,14 @@ impl GraphStorageContext {
     /// Number of staged-WAL entries held for in-flight transactions.
     pub(crate) fn staged_wal_len(&self) -> usize {
         self.persistent.staged_wal.len()
+    }
+
+    /// Whether this context is bound inside a group-mode
+    /// [`AutoCommitBatchWindow`].
+    pub(crate) fn is_group_bound(&self) -> bool {
+        self.auto_commit_window
+            .as_ref()
+            .is_some_and(|w| w.is_grouped())
     }
 
     pub(crate) fn defer_edge_insert(

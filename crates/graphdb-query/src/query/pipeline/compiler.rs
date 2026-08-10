@@ -129,7 +129,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_text: &str,
         query_context: Arc<QueryContext>,
-        bound: &BoundStatement,
+        bound: Option<&BoundStatement>,
         stmt: &Stmt,
         ast: &Arc<crate::query::parser::ast::stmt::Ast>,
         dml_shape_cacheable: bool,
@@ -146,21 +146,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        // Precomputed so the memo put-path below does not touch `request`
-        // after `query_context` is moved into `compile_from_bound`.
         let dml_param_sig = if dml_shape_cacheable {
             Some(Self::dml_param_signature(&request.parameters))
         } else {
             None
         };
 
-        // P6 Level 2: a run of consecutive same-shape DML statements reuses
-        // the memoized physical plan, skipping parameter extraction and the
-        // plan-cache lookup. Keyed by (normalized text, schema version, param
-        // type signature) so DDL or a type change forces a miss.
         if let Some(sig) = dml_param_sig {
             if let Some(entry) = &*self.last_dml_plan.lock() {
                 if entry.normalized_text == query_text
+                    && entry.space_name == space_name
                     && entry.schema_version == schema_version
                     && entry.param_sig == sig
                 {
@@ -185,18 +180,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &param_positions,
             );
 
-        // Use the same planning config source as PhysicalPlanBuildContext
-        // to ensure cache key dimensions match what the builder embeds in plan metadata.
         let planning_config = crate::query::executor::streaming::plan::context::PlanningConfig {
             max_partitions: self
                 .optimizer_engine
                 .partitioning_config()
                 .max_workers
                 .max(1),
-            // Derive the config hash from the live partitioning configuration so
-            // the plan cache key changes whenever partitioning is toggled,
-            // resized, or re-ranged — forcing a replan instead of reusing a plan
-            // compiled under a different layout policy.
             config_hash: Self::partitioning_config_hash(
                 self.optimizer_engine.partitioning_config(),
             ),
@@ -222,6 +211,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(sig) = dml_param_sig {
                 *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
                     normalized_text: query_text.to_string(),
+                    space_name: space_name.clone(),
                     schema_version,
                     param_sig: sig,
                     plan: cached.plan.clone(),
@@ -230,9 +220,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok(cached.plan.clone());
         }
 
-        // Two-phase compile: bind + optimize first so a partitioned plan can
-        // be served from the cache under its layout fingerprint, skipping the
-        // expensive physical-plan build + validation on subsequent runs.
+        let owned_bound;
+        let bound: &BoundStatement = match bound {
+            Some(b) => b,
+            None => {
+                owned_bound = self
+                    .bind_parsed_statement(ast.clone(), query_context.clone())?
+                    .ok_or_else(|| {
+                        DBError::from(QueryError::execution("No bound statement".to_string()))
+                    })?;
+                &owned_bound
+            }
+        };
         let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
         if let Some(spec) = optimized_plan.partition_spec() {
             if let Some(cached) =
@@ -247,6 +246,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 if let Some(sig) = dml_param_sig {
                     *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
                         normalized_text: query_text.to_string(),
+                        space_name: space_name.clone(),
                         schema_version,
                         param_sig: sig,
                         plan: cached.plan.clone(),
@@ -262,15 +262,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(sig) = dml_param_sig {
                 *self.last_dml_plan.lock() = Some(super::LastDmlPlan {
                     normalized_text: query_text.to_string(),
+                    space_name: space_name.clone(),
                     schema_version,
                     param_sig: sig,
                     plan: plan.clone(),
                 });
             }
-            // Partitioned plans are layout-dependent: store them under their
-            // partition fingerprint so a changed layout (ranges, source, or
-            // layout version) yields a cache miss instead of reusing a stale
-            // physical plan. Single-tree plans keep the plain-text key.
             if let Some(spec) = plan.partition_spec() {
                 let dependent_tables = collect_dependent_tables(bound);
                 self.plan_cache.put_with_partition(
@@ -335,13 +332,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         hasher.finish()
     }
 
-    /// Type-only signature of the synthesized DML parameters (P6 Level 2).
-    ///
-    /// The P1 shape-normalization path injects exactly the `$__dml_N` values
-    /// into the request parameter map, so the signature can be computed by
-    /// hashing the data types of those entries — avoiding the regex-based
-    /// `extract_params` on the memo fast path.
-    fn dml_param_signature(params: &std::collections::HashMap<String, crate::core::Value>) -> u64 {
+    pub(crate) fn dml_param_signature(
+        params: &std::collections::HashMap<String, crate::core::Value>,
+    ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut names: Vec<&String> = params
             .keys()

@@ -33,6 +33,7 @@ pub(crate) mod vertex;
 mod test_mock;
 
 pub use batch_ops::AutoCommitBatchOps;
+pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
     CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
     StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,

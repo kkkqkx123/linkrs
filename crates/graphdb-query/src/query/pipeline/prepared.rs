@@ -275,11 +275,36 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(shape) =
                 crate::query::planning::dml_shape::normalize_shape(parser_result.ast.stmt())
             {
-                // The canonical template must re-parse faithfully. A failure here
-                // means the renderer emitted text that is not round-trippable; fall
-                // back to the non-cached path instead of failing the statement.
-                match self.parse_into_context(&shape.normalized_text) {
-                    Ok(normalized) => {
+                let cached_ast = self.dml_template_ast.lock().as_ref().and_then(
+                    |(text, ast)| {
+                        if text == &shape.normalized_text {
+                            Some(ast.clone())
+                        } else {
+                            None
+                        }
+                    },
+                );
+                let normalized = match cached_ast {
+                    Some(ast) => Some(crate::query::parser::parsing::ParserResult { ast }),
+                    None => match self.parse_into_context(&shape.normalized_text) {
+                        Ok(parsed) => {
+                            self.dml_template_ast_parse_count
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            *self.dml_template_ast.lock() =
+                                Some((shape.normalized_text.clone(), parsed.ast.clone()));
+                            Some(parsed)
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "DML shape template failed to re-parse, falling back to non-cached path: {}",
+                                shape.normalized_text
+                            );
+                            None
+                        }
+                    },
+                };
+                match normalized {
+                    Some(normalized) => {
                         let mut updated = (*rctx).clone();
                         updated.query = shape.normalized_text.clone();
                         for (index, value) in shape.values.iter().enumerate() {
@@ -295,13 +320,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         parser_result = normalized;
                         (shape.normalized_text, Arc::new(updated), true)
                     }
-                    Err(_) => {
-                        log::warn!(
-                            "DML shape template failed to re-parse, falling back to non-cached path: {}",
-                            shape.normalized_text
-                        );
-                        (query_text.to_string(), rctx, false)
-                    }
+                    None => (query_text.to_string(), rctx, false),
                 }
             } else {
                 (query_text.to_string(), rctx, false)
@@ -348,7 +367,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
-        let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
+        let memo_hit = if dml_shape_cacheable {
+            let sig =
+                Self::dml_param_signature(&query_context.request_context().parameters);
+            let schema_version = self.schema_generation.load(std::sync::atomic::Ordering::Relaxed);
+            let space_name = query_context
+                .space_name()
+                .or_else(|| query_context.request_context().space_name.clone());
+            matches!(
+                &*self.last_dml_plan.lock(),
+                Some(e)
+                    if e.normalized_text == effective_query
+                        && e.space_name == space_name
+                        && e.schema_version == Some(schema_version)
+                        && e.param_sig == sig
+            )
+        } else {
+            false
+        };
+        let bound = if memo_hit {
+            self.dml_bind_skipped_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        } else {
+            self.bind_parsed_statement(parser_result.ast, query_context.clone())?
+        };
         Self::finalize_prepare(
             &effective_query,
             query_context,
@@ -511,9 +554,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let physical_plan = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
-            request.bound_statement.as_ref().ok_or_else(|| {
-                DBError::from(QueryError::execution("No bound statement".to_string()))
-            })?,
+            request.bound_statement.as_ref(),
             &request.stmt,
             &request.ast,
             request.dml_shape_cacheable,

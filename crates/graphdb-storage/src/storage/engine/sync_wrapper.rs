@@ -110,6 +110,18 @@ impl<S: StorageClient + crate::storage::AutoCommitBatchOps> crate::storage::Auto
     }
 }
 
+impl<S: StorageClient + crate::storage::AutoCommitGroupOps> crate::storage::AutoCommitGroupOps
+    for SyncWrapper<S>
+{
+    fn begin_auto_commit_group(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_group()
+    }
+
+    fn finalize_auto_commit_group(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_group(window)
+    }
+}
+
 impl<S: StorageClient> SyncWrapper<S> {
     /// Get the current transaction ID from storage context.
     fn get_current_txn_id(&self) -> Option<crate::core::types::TransactionId> {

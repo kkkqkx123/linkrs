@@ -10,7 +10,7 @@ use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::{AutoCommitBatchOps, QueryStorage, StorageClient, StorageOperationContext};
+use crate::storage::{AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext};
 use crate::sync::SyncManager;
 use crate::transaction::TransactionExecution;
 use parking_lot::RwLock;
@@ -618,22 +618,6 @@ impl<S> QueryApi<S>
 where
     S: StorageClient + Clone + AutoCommitBatchOps + 'static,
 {
-    /// Execute a batch of auto-commit DML statements inside a single
-    /// [`AutoCommitBatchWindow`](crate::storage::AutoCommitBatchWindow) (P4/P6).
-    ///
-    /// Acquires the auto-commit write gate and registers MVCC snapshots once
-    /// for the whole batch instead of once per statement. Each statement still
-    /// executes independently: it allocates its own write timestamp /
-    /// transaction id / undo log, commits on success, and rolls back its own
-    /// partial writes on failure. Intended for auto-commit DML loads (e.g.
-    /// `load_gql_file`); mixed-in read statements are harmless but do not
-    /// share any batching benefit. **DDL statements must not be mixed in**:
-    /// they are not exercised through the auto-commit window and may leave
-    /// the window inconsistent.
-    ///
-    /// Errors do not abort the batch: every statement runs to completion and
-    /// the returned vector holds one `Ok`/`Err` per input statement, in order.
-    /// The window is always finalized before returning.
     pub fn execute_batch(
         &mut self,
         queries: &[String],
@@ -680,11 +664,76 @@ where
         results
     }
 
-    /// Number of P6 Level 2 same-shape DML plan-memo hits since pipeline
-    /// creation (observation for the batch-load regression test).
     pub fn dml_plan_memo_hits(&self) -> u64 {
         self.pipeline_manager
             .last_dml_plan_hits
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn dml_template_ast_parse_count(&self) -> u64 {
+        self.pipeline_manager.dml_template_ast_parse_count()
+    }
+}
+
+impl<S> QueryApi<S>
+where
+    S: StorageClient + Clone + AutoCommitBatchOps + AutoCommitGroupOps + 'static,
+{
+    /// Execute a batch of auto-commit DML statements in group-commit windows
+    /// (P0 C). Semantics: see docs/plan/plan_dml_batch_load_optimization.md §4.1.
+    /// `group_size` is clamped to >= 1; each consecutive group of statements
+    /// shares one write timestamp, one WAL fsync, and one commit point.
+    /// Statement results are returned per statement, in order, exactly like
+    /// `execute_batch`; failed statements roll back only their own writes.
+    /// DDL / transaction statements / USE must not be mixed in (same contract
+    /// as `execute_batch`).
+    pub fn execute_batch_grouped(
+        &mut self,
+        queries: &[String],
+        ctx: QueryRequest,
+        group_size: usize,
+    ) -> Vec<Result<QueryResult, CoreError>> {
+        let group_size = group_size.max(1);
+        let mut results = Vec::with_capacity(queries.len());
+        let base_storage = match self.pipeline_manager.storage() {
+            Some(storage) => storage,
+            None => {
+                for _ in queries {
+                    results.push(Err(CoreError::Internal("No storage binding".to_string())));
+                }
+                return results;
+            }
+        };
+
+        for chunk in queries.chunks(group_size) {
+            let window = match base_storage.read().begin_auto_commit_group() {
+                Ok(window) => window,
+                Err(error) => {
+                    for _ in chunk {
+                        results.push(Err(CoreError::StorageError(error.to_string())));
+                    }
+                    continue;
+                }
+            };
+
+            for query in chunk {
+                let stmt_storage = match base_storage.read().bind_auto_commit_statement(&window) {
+                    Ok(storage) => storage,
+                    Err(error) => {
+                        results.push(Err(CoreError::StorageError(error.to_string())));
+                        continue;
+                    }
+                };
+                let mut batch_ctx = ctx.clone();
+                batch_ctx.auto_commit = true;
+                batch_ctx.transaction_id = None;
+                results.push(self.execute_with_operation_storage(query, batch_ctx, stmt_storage));
+            }
+
+            if let Err(error) = base_storage.read().finalize_auto_commit_group(&window) {
+                results.push(Err(CoreError::StorageError(error.to_string())));
+            }
+        }
+        results
     }
 }

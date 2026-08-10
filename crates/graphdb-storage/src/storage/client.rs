@@ -565,6 +565,10 @@ pub struct StorageOperationContext {
     pub registered_edge_partitions: parking_lot::RwLock<
         std::collections::HashSet<crate::storage::engine::data_store::EdgeTableKey>,
     >,
+    /// Undo log entry count at the start of this statement's segment (group
+    /// mode only). Used by `finalize_operation` to roll back only the failed
+    /// statement's segment when a shared undo log is in use.
+    pub auto_commit_group_start: Option<usize>,
 }
 
 impl PartialEq for StorageOperationContext {
@@ -596,6 +600,7 @@ impl Clone for StorageOperationContext {
             registered_edge_partitions: parking_lot::RwLock::new(
                 self.registered_edge_partitions.read().clone(),
             ),
+            auto_commit_group_start: self.auto_commit_group_start,
         }
     }
 }
@@ -617,6 +622,7 @@ impl StorageOperationContext {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         }
     }
 
@@ -638,6 +644,7 @@ impl StorageOperationContext {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         }
     }
 

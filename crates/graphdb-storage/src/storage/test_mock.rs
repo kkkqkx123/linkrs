@@ -313,6 +313,7 @@ impl StorageOperationContextOps for MockStorage {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         }))
     }
 
@@ -334,6 +335,7 @@ impl StorageOperationContextOps for MockStorage {
             mvcc_edge_snapshot_registered: false,
             registered_vertex_labels: parking_lot::RwLock::new(std::collections::HashSet::new()),
             registered_edge_partitions: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            auto_commit_group_start: None,
         }))
     }
 
