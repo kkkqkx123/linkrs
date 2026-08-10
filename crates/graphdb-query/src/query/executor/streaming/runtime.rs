@@ -17,6 +17,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::pool::TaskScheduler;
+use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::query::query_manager::QueryManager;
 use crate::storage::QueryStorage;
 use crate::utils::Arena;
@@ -718,6 +719,12 @@ pub struct ExecutionRuntime {
     pub arena: Option<Arc<Mutex<Arena>>>,
     /// Columnar fast-path hit/miss counters shared with produced chunks (T5).
     columnar_stats: Arc<ColumnarStats>,
+    /// Shared query feedback history for collecting execution statistics.
+    ///
+    /// Injected by the materializer from the query bindings; when set, the
+    /// execution instance records estimated-vs-actual operator feedback here
+    /// after execution completes (stats feedback loop, phase 1).
+    pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
 }
 
 impl ExecutionRuntime {
@@ -760,6 +767,7 @@ impl ExecutionRuntime {
             parameter_values: None,
             arena: Some(Arc::new(Mutex::new(Arena::new()))),
             columnar_stats: Arc::new(ColumnarStats::new()),
+            feedback_history: None,
         }
     }
 

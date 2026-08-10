@@ -1255,7 +1255,11 @@ mod tests {
         assert_eq!(removed, 0);
 
         let capacity = csr.total_edge_capacity;
-        assert!(capacity <= 7 + 4, "capacity must stay bounded, got {}", capacity);
+        assert!(
+            capacity <= 7 + 4,
+            "capacity must stay bounded, got {}",
+            capacity
+        );
         assert_eq!(csr.edges_of(0u32, 3).len(), 6);
         assert_eq!(csr.edges_of(1u32, 3).len(), 1);
     }

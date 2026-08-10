@@ -3,8 +3,12 @@
 
 use std::collections::HashMap;
 
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    MultipleInputNode, SingleInputNode,
+};
 use crate::query::planning::plan::logical_plan::LogicalPlan;
 use crate::query::planning::plan::PlanNodeEnum;
+use crate::query::planning::planner::PlannerError;
 
 // The `PartitionSpec` / `PartitionSource` / `PartitionSpecError` types now
 // live in `partition_spec.rs`.  Re-export them here so the public
@@ -240,6 +244,79 @@ impl SubPlan {
 
         SubPlan::new(root, tail)
     }
+
+    /// Connect `upstream` as the input of `downstream`, returning a
+    /// structurally closed plan.
+    ///
+    /// The upstream root is attached as the downstream root's input, so the
+    /// resulting SubPlan is a complete tree that planners and executors
+    /// observe identically.  This replaces the previous pattern of creating
+    /// the downstream node first and manually injecting its input, which
+    /// left the connection outside the SubPlan structure.
+    ///
+    /// The returned plan's tail is the upstream tail (the data flows from
+    /// upstream into downstream).
+    pub fn connect_upstream(
+        mut downstream: SubPlan,
+        upstream: SubPlan,
+    ) -> Result<SubPlan, PlannerError> {
+        let down_root = downstream.root.take().ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("downstream has no root".to_string())
+        })?;
+        let up_root = upstream.root.ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("upstream has no root".to_string())
+        })?;
+
+        let mut connected = down_root;
+        connect_node_input(&mut connected, up_root)?;
+        downstream.root = Some(connected);
+        downstream.tail = upstream.tail;
+        Ok(downstream)
+    }
+}
+
+/// Attach `input` as the structural input of `node`.
+///
+/// Single-input nodes get their input slot and dependency list filled via
+/// [`SingleInputNode::set_input`]; multi-input expansion nodes (Expand /
+/// ExpandAll / AppendVertices) append to their dependency list via
+/// [`MultipleInputNode::add_input`], which is the storage their tree
+/// traversals read.  Binary and leaf nodes cannot host a unary upstream.
+fn connect_node_input(node: &mut PlanNodeEnum, input: PlanNodeEnum) -> Result<(), PlannerError> {
+    match node {
+        PlanNodeEnum::Project(n) => n.set_input(input),
+        PlanNodeEnum::Filter(n) => n.set_input(input),
+        PlanNodeEnum::Sort(n) => n.set_input(input),
+        PlanNodeEnum::Limit(n) => n.set_input(input),
+        PlanNodeEnum::TopN(n) => n.set_input(input),
+        PlanNodeEnum::Sample(n) => n.set_input(input),
+        PlanNodeEnum::Dedup(n) => n.set_input(input),
+        PlanNodeEnum::DataCollect(n) => n.set_input(input),
+        PlanNodeEnum::Aggregate(n) => n.set_input(input),
+        PlanNodeEnum::Window(n) => n.set_input(input),
+        PlanNodeEnum::Unwind(n) => n.set_input(input),
+        PlanNodeEnum::Assign(n) => n.set_input(input),
+        PlanNodeEnum::PatternApply(n) => n.set_input(input),
+        PlanNodeEnum::RollUpApply(n) => n.set_input(input),
+        PlanNodeEnum::Remove(n) => n.set_input(input),
+        PlanNodeEnum::Materialize(n) => n.set_input(input),
+        PlanNodeEnum::Traverse(n) => n.set_input(input),
+        PlanNodeEnum::PipeDeleteVertices(n) => n.set_input(input),
+        PlanNodeEnum::PipeDeleteEdges(n) => n.set_input(input),
+        PlanNodeEnum::Union(n) => n.set_input(input),
+        PlanNodeEnum::Minus(n) => n.set_input(input),
+        PlanNodeEnum::Intersect(n) => n.set_input(input),
+        PlanNodeEnum::Expand(n) => n.add_input(input),
+        PlanNodeEnum::ExpandAll(n) => n.add_input(input),
+        PlanNodeEnum::AppendVertices(n) => n.add_input(input),
+        _ => {
+            return Err(PlannerError::PlanGenerationFailed(format!(
+                "Cannot connect upstream to node of type {}",
+                node.name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -260,5 +337,55 @@ mod tests {
         plan.set_max_buffered_chunks(20);
         assert_eq!(plan.max_workers, 4);
         assert_eq!(plan.max_buffered_chunks, 20);
+    }
+
+    #[test]
+    fn connect_upstream_attaches_input_structurally() {
+        use crate::query::planning::plan::core::nodes::{ExpandAllNode, StartNode};
+
+        let downstream = SubPlan::from_single_node(PlanNodeEnum::ExpandAll(ExpandAllNode::new(
+            1,
+            vec![],
+            "out",
+        )));
+        let upstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+
+        let connected = SubPlan::connect_upstream(downstream, upstream)
+            .expect("connect_upstream should succeed");
+        let root = connected.root.expect("connected plan should have a root");
+        let children = root.children();
+        assert_eq!(children.len(), 1, "expand node must own exactly one input");
+        assert!(
+            matches!(children[0], PlanNodeEnum::Start(_)),
+            "expand node input should be the upstream root"
+        );
+        assert!(
+            connected.tail.is_some(),
+            "connected plan tail should carry the upstream tail"
+        );
+    }
+
+    #[test]
+    fn connect_upstream_requires_both_roots() {
+        use crate::query::planning::plan::core::nodes::StartNode;
+
+        let empty = SubPlan::new(None, None);
+        let populated = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+
+        assert!(SubPlan::connect_upstream(empty.clone(), populated.clone()).is_err());
+        assert!(SubPlan::connect_upstream(populated, empty).is_err());
+    }
+
+    #[test]
+    fn connect_upstream_rejects_leaf_downstream() {
+        use crate::query::planning::plan::core::nodes::StartNode;
+
+        let downstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+        let upstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+
+        assert!(
+            SubPlan::connect_upstream(downstream, upstream).is_err(),
+            "a leaf node cannot host a unary upstream"
+        );
     }
 }

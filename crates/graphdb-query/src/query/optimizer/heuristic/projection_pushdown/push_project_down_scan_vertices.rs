@@ -120,7 +120,9 @@ impl RewriteRule for PushProjectDownScanVerticesRule {
                 let mut new_scan =
                     self.create_scan_vertices_with_projection(&scan_node, project_node.columns());
                 for level in &chain {
-                    let PlanNodeEnum::Filter(f) = level else { unreachable!() };
+                    let PlanNodeEnum::Filter(f) = level else {
+                        unreachable!()
+                    };
                     let mut props = new_scan.projected_properties().to_vec();
                     props.extend(extract_property_refs(f.condition()));
                     props.sort();

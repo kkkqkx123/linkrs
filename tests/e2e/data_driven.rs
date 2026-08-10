@@ -284,12 +284,8 @@ fn test_batch_load_reuses_dml_plan() {
 #[test]
 fn test_batch_load_grouped_commit() {
     let mut db = create_test_db();
-    load_gql_file_grouped(
-        &mut db,
-        &format!("{}/optimizer_data.gql", DATA_DIR),
-        500,
-    )
-    .expect("Failed to load optimizer_data.gql (grouped)");
+    load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
+        .expect("Failed to load optimizer_data.gql (grouped)");
 
     let hits = db.query_api().dml_plan_memo_hits();
     assert!(

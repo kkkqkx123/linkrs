@@ -150,12 +150,8 @@ impl RewriteRule for EnrichScanSlotsWithFilterPropsRule {
                     chain.push(current.clone());
                     current = f.input().clone();
                 }
-                PlanNodeEnum::ScanVertices(s) => {
-                    break ScanWithProjection::ScanVertices(s.clone())
-                }
-                PlanNodeEnum::GetVertices(s) => {
-                    break ScanWithProjection::GetVertices(s.clone())
-                }
+                PlanNodeEnum::ScanVertices(s) => break ScanWithProjection::ScanVertices(s.clone()),
+                PlanNodeEnum::GetVertices(s) => break ScanWithProjection::GetVertices(s.clone()),
                 PlanNodeEnum::ScanEdges(s) => break ScanWithProjection::ScanEdges(s.clone()),
                 _ => return Ok(None),
             }
@@ -164,15 +160,16 @@ impl RewriteRule for EnrichScanSlotsWithFilterPropsRule {
         // Collect new predicate columns (preserving the existing order).
         let mut extra: Vec<String> = Vec::new();
         for level in &chain {
-            let PlanNodeEnum::Filter(f) = level else { unreachable!() };
+            let PlanNodeEnum::Filter(f) = level else {
+                unreachable!()
+            };
             let Some(meta) = f.condition().expression() else {
                 continue;
             };
             let mut collector = VariableObjectPropertyCollector::new();
             ExpressionVisitor::visit(&mut collector, meta.inner());
             for property in collector.properties {
-                if !scan.projected_properties().contains(&property) && !extra.contains(&property)
-                {
+                if !scan.projected_properties().contains(&property) && !extra.contains(&property) {
                     extra.push(property);
                 }
             }
@@ -226,13 +223,8 @@ mod tests {
         }
     }
 
-    fn filter_node(
-        condition: ContextualExpression,
-        input: PlanNodeEnum,
-    ) -> PlanNodeEnum {
-        PlanNodeEnum::Filter(
-            FilterNode::new(input, condition).expect("filter node"),
-        )
+    fn filter_node(condition: ContextualExpression, input: PlanNodeEnum) -> PlanNodeEnum {
+        PlanNodeEnum::Filter(FilterNode::new(input, condition).expect("filter node"))
     }
 
     #[test]
@@ -245,8 +237,7 @@ mod tests {
 
     #[test]
     fn test_enriches_scan_vertices_with_predicate_column() {
-        let scan =
-            PlanNodeEnum::ScanVertices(ScanVerticesNode::new(0, "default"));
+        let scan = PlanNodeEnum::ScanVertices(ScanVerticesNode::new(0, "default"));
         let condition = Expression::Binary {
             left: Box::new(prop("n", "value")),
             op: BinaryOperator::GreaterThan,
@@ -256,7 +247,10 @@ mod tests {
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed")
             .expect("some result");
         let new_node = result.new_nodes.first().expect("node");
@@ -288,7 +282,10 @@ mod tests {
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed")
             .expect("some result");
         let new_node = result.new_nodes.first().expect("node");
@@ -327,7 +324,10 @@ mod tests {
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed")
             .expect("some result");
         let new_node = result.new_nodes.first().expect("node");
@@ -361,7 +361,10 @@ mod tests {
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed")
             .expect("some result");
         let new_node = result.new_nodes.first().expect("node");
@@ -380,12 +383,14 @@ mod tests {
         let mut scan_node = ScanVerticesNode::new(0, "default");
         scan_node.set_projected_properties(vec!["value".to_string()]);
         let scan = PlanNodeEnum::ScanVertices(scan_node);
-        let node =
-            filter_node(contextual(prop("n", "value")), scan);
+        let node = filter_node(contextual(prop("n", "value")), scan);
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed");
         assert!(result.is_none());
     }
@@ -409,7 +414,10 @@ mod tests {
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed");
         assert!(result.is_none());
     }
@@ -423,14 +431,14 @@ mod tests {
             )
             .expect("project node"),
         );
-        let node = filter_node(
-            contextual(Expression::Variable("x".to_string())),
-            input,
-        );
+        let node = filter_node(contextual(Expression::Variable("x".to_string())), input);
 
         let rule = EnrichScanSlotsWithFilterPropsRule::new();
         let result = rule
-            .apply(&mut crate::query::optimizer::heuristic::context::RewriteContext::new(), &node)
+            .apply(
+                &mut crate::query::optimizer::heuristic::context::RewriteContext::new(),
+                &node,
+            )
             .expect("rewrite should succeed");
         assert!(result.is_none());
     }

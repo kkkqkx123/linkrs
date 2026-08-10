@@ -9,6 +9,7 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
+use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
@@ -30,6 +31,12 @@ pub struct ExecutionContext {
     #[cfg(feature = "qdrant")]
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    /// Snapshot handle pinned by the bound storage, when the storage was
+    /// bound to a read/auto-commit operation context (P2: storage boundary).
+    ///
+    /// Populated by the pipeline when it binds the per-query storage; lets
+    /// the execution layer observe which snapshot the query reads at.
+    pub bound_snapshot: Option<crate::storage::SnapshotHandle>,
     pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
     /// Per-query memory budget for blocking operators.
@@ -48,6 +55,11 @@ pub struct ExecutionContext {
     pub shared_scheduler: Option<Arc<SharedScheduler>>,
     /// Optional thread-safe bumpalo arena for executor temporary allocations.
     pub arena: Option<Arc<parking_lot::Mutex<Arena>>>,
+    /// Shared query feedback history for collecting execution statistics.
+    ///
+    /// Injected from the optimizer engine by the pipeline; the execution
+    /// instance records estimated-vs-actual feedback here after execution.
+    pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
 }
 
 impl ExecutionContext {
@@ -66,6 +78,7 @@ impl ExecutionContext {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             storage: None,
+            bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
@@ -76,6 +89,7 @@ impl ExecutionContext {
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
             arena: None,
+            feedback_history: None,
         }
     }
 
@@ -94,6 +108,7 @@ impl ExecutionContext {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             storage: None,
+            bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(parameters),
             memory_budget: MemoryBudget::default_budget(),
@@ -104,6 +119,7 @@ impl ExecutionContext {
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
             arena: None,
+            feedback_history: None,
         }
     }
 
@@ -121,6 +137,7 @@ impl ExecutionContext {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             storage: None,
+            bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
@@ -131,6 +148,7 @@ impl ExecutionContext {
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
             arena: None,
+            feedback_history: None,
         }
     }
 
@@ -158,6 +176,7 @@ impl ExecutionContext {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             storage: None,
+            bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: budget,
@@ -168,6 +187,7 @@ impl ExecutionContext {
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
             arena: None,
+            feedback_history: None,
         }
     }
 
@@ -230,6 +250,7 @@ impl Default for ExecutionContext {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             storage: None,
+            bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
@@ -240,6 +261,7 @@ impl Default for ExecutionContext {
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
             arena: None,
+            feedback_history: None,
         }
     }
 }

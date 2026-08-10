@@ -574,9 +574,11 @@ impl AutoCommitBatchWindow {
                 .fetch_add(1, Ordering::SeqCst),
         );
         let undo_log = if is_group {
-            Arc::clone(self.group_undo.as_ref().expect(
-                "group mode requires group_undo to be initialized",
-            ))
+            Arc::clone(
+                self.group_undo
+                    .as_ref()
+                    .expect("group mode requires group_undo to be initialized"),
+            )
         } else {
             Arc::new(Mutex::new(UndoLogManager::new()))
         };

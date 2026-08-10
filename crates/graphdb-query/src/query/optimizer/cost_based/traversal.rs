@@ -167,11 +167,18 @@ mod tests {
         assert_eq!(visited, 2, "both deps must be rewritten");
 
         let (deps_len, second_input_is_start) = match rewritten {
-            PlanNodeEnum::Union(n) => (n.dependencies().len(), matches!(n.union_input(), PlanNodeEnum::Start(_))),
-            PlanNodeEnum::Minus(n) => (n.dependencies().len(), matches!(n.minus_input(), PlanNodeEnum::Start(_))),
-            PlanNodeEnum::Intersect(n) => {
-                (n.dependencies().len(), matches!(n.intersect_input(), PlanNodeEnum::Start(_)))
-            }
+            PlanNodeEnum::Union(n) => (
+                n.dependencies().len(),
+                matches!(n.union_input(), PlanNodeEnum::Start(_)),
+            ),
+            PlanNodeEnum::Minus(n) => (
+                n.dependencies().len(),
+                matches!(n.minus_input(), PlanNodeEnum::Start(_)),
+            ),
+            PlanNodeEnum::Intersect(n) => (
+                n.dependencies().len(),
+                matches!(n.intersect_input(), PlanNodeEnum::Start(_)),
+            ),
             other => panic!("expected Union/Minus/Intersect, got {:?}", other),
         };
         assert_eq!(deps_len, 2, "deps must keep both subtrees");

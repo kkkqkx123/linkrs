@@ -2,6 +2,7 @@
 //!
 //! These rules are responsible for pushing the filtering conditions down to the lowest levels of the planning tree, in order to reduce the amount of data that needs to be processed.
 
+pub mod eliminate_redundant_tag_filter;
 pub mod push_efilter_down;
 pub mod push_filter_down_all_paths;
 pub mod push_filter_down_cross_join;
@@ -14,8 +15,8 @@ pub mod push_filter_down_node;
 pub mod push_filter_down_scan_vertices;
 pub mod push_filter_down_traverse;
 pub mod push_vfilter_down_scan_vertices;
-pub mod eliminate_redundant_tag_filter;
 
+pub use eliminate_redundant_tag_filter::EliminateRedundantTagFilterRule;
 pub use push_efilter_down::PushEFilterDownRule;
 pub use push_filter_down_all_paths::PushFilterDownAllPathsRule;
 pub use push_filter_down_cross_join::PushFilterDownCrossJoinRule;
@@ -28,4 +29,3 @@ pub use push_filter_down_node::PushFilterDownNodeRule;
 pub use push_filter_down_scan_vertices::PushFilterDownScanVerticesRule;
 pub use push_filter_down_traverse::PushFilterDownTraverseRule;
 pub use push_vfilter_down_scan_vertices::PushVFilterDownScanVerticesRule;
-pub use eliminate_redundant_tag_filter::EliminateRedundantTagFilterRule;

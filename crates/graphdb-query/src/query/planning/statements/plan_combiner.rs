@@ -1,6 +1,4 @@
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, PlanNode,
-};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::{CrossJoinNode, LeftJoinNode, UnionNode};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
@@ -77,14 +75,17 @@ pub fn connect_node_to_edge_expansion(
 
     if let Some(expand_all) = edge_root.as_expand_all() {
         let mut new_expand = expand_all.clone();
-        new_expand.add_input(node_root.clone());
         new_expand.set_input_var(node_alias.to_string());
         new_expand.set_output_var(format!("expand_{}", new_expand.id()));
 
-        Ok(SubPlan {
-            root: Some(new_expand.into_enum()),
-            tail: node_plan.tail.or(edge_plan.tail),
-        })
+        // Structurally close the plan: the node root becomes the expand
+        // node's input inside the SubPlan itself.
+        let mut connected = SubPlan::connect_upstream(
+            SubPlan::from_single_node(new_expand.into_enum()),
+            SubPlan::from_single_node(node_root.clone()),
+        )?;
+        connected.tail = node_plan.tail.or(edge_plan.tail);
+        Ok(connected)
     } else {
         cross_join_plans(node_plan, edge_plan)
     }
@@ -107,14 +108,17 @@ pub fn join_edge_expansions(
 
     if let Some(expand_all) = right_root.as_expand_all() {
         let mut new_expand = expand_all.clone();
-        new_expand.add_input(left_root.clone());
         new_expand.set_input_var(left_dst_alias.to_string());
         new_expand.set_output_var(format!("expand_{}", new_expand.id()));
 
-        Ok(SubPlan {
-            root: Some(new_expand.into_enum()),
-            tail: left_plan.tail.or(right_plan.tail),
-        })
+        // Structurally close the plan: the left root becomes the expand
+        // node's input inside the SubPlan itself.
+        let mut connected = SubPlan::connect_upstream(
+            SubPlan::from_single_node(new_expand.into_enum()),
+            SubPlan::from_single_node(left_root.clone()),
+        )?;
+        connected.tail = left_plan.tail.or(right_plan.tail);
+        Ok(connected)
     } else {
         cross_join_plans(left_plan, right_plan)
     }

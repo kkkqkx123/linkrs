@@ -196,7 +196,7 @@ impl UnaryOperator {
                                 return Ok(Some(chunk));
                             }
                             // Rollback mode: never hand a selection downstream.
-                            chunk.materialize_selection_by("Filter");  // rollback path
+                            chunk.materialize_selection_by("Filter"); // rollback path
                             return Ok(Some(chunk));
                         }
                         if !selection_propagation_enabled() {

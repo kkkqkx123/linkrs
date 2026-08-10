@@ -74,9 +74,9 @@ fn edge_statement_from_csv(
     headers: &csv::StringRecord,
     record: &csv::StringRecord,
 ) -> Result<String, HttpError> {
-    let src = record
-        .get(0)
-        .ok_or_else(|| HttpError::BadRequest("CSV edge rows must start with the source VID".into()))?;
+    let src = record.get(0).ok_or_else(|| {
+        HttpError::BadRequest("CSV edge rows must start with the source VID".into())
+    })?;
     let dst = record
         .get(1)
         .ok_or_else(|| HttpError::BadRequest("CSV edge rows must have a destination VID".into()))?;
@@ -216,36 +216,38 @@ fn parse_statements(
                     if line.is_empty() {
                         continue;
                     }
-                    let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(line)
-                        .map_err(|e| {
-                            HttpError::BadRequest(format!("JSONL line {} parse failed: {e}", idx + 1))
+                    let obj: serde_json::Map<String, serde_json::Value> =
+                        serde_json::from_str(line).map_err(|e| {
+                            HttpError::BadRequest(format!(
+                                "JSONL line {} parse failed: {e}",
+                                idx + 1
+                            ))
                         })?;
                     statements.push(statement_from_json_object(target_type, target_name, &obj)?);
                 }
             } else {
                 let value: serde_json::Value = serde_json::from_str(text)
                     .map_err(|e| HttpError::BadRequest(format!("JSON parse failed: {e}")))?;
-                let objects: Vec<&serde_json::Map<String, serde_json::Value>> =
-                    match &value {
-                        serde_json::Value::Array(items) => items
-                            .iter()
-                            .map(|item| {
-                                item.as_object().ok_or_else(|| {
-                                    HttpError::BadRequest(
-                                        "JSON array items must be objects".to_string(),
-                                    )
-                                })
+                let objects: Vec<&serde_json::Map<String, serde_json::Value>> = match &value {
+                    serde_json::Value::Array(items) => items
+                        .iter()
+                        .map(|item| {
+                            item.as_object().ok_or_else(|| {
+                                HttpError::BadRequest(
+                                    "JSON array items must be objects".to_string(),
+                                )
                             })
-                            .collect::<Result<_, _>>()?,
-                        serde_json::Value::Object(_) => {
-                            vec![value.as_object().expect("checked above")]
-                        }
-                        _ => {
-                            return Err(HttpError::BadRequest(
-                                "JSON import expects an object or an array of objects".to_string(),
-                            ))
-                        }
-                    };
+                        })
+                        .collect::<Result<_, _>>()?,
+                    serde_json::Value::Object(_) => {
+                        vec![value.as_object().expect("checked above")]
+                    }
+                    _ => {
+                        return Err(HttpError::BadRequest(
+                            "JSON import expects an object or an array of objects".to_string(),
+                        ))
+                    }
+                };
                 for obj in objects {
                     statements.push(statement_from_json_object(target_type, target_name, obj)?);
                 }
@@ -312,9 +314,10 @@ pub async fn import_file<
                 })?;
             }
             "batch_size" => {
-                let bs = field.text().await.map_err(|e| {
-                    HttpError::BadRequest(format!("Invalid batch_size field: {e}"))
-                })?;
+                let bs = field
+                    .text()
+                    .await
+                    .map_err(|e| HttpError::BadRequest(format!("Invalid batch_size field: {e}")))?;
                 batch_size = bs.parse().ok();
             }
             "file" => {
@@ -373,9 +376,7 @@ pub async fn import_file<
         message: if success {
             format!("Imported {rows_imported} rows into {target_type} '{target_name}'")
         } else {
-            format!(
-                "Imported {rows_imported} rows, {rows_failed} failed (group size {group_size})"
-            )
+            format!("Imported {rows_imported} rows, {rows_failed} failed (group size {group_size})")
         },
         rows_imported,
         rows_failed,

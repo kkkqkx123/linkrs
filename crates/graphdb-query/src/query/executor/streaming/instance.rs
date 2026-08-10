@@ -25,6 +25,8 @@ use super::stream_result::StreamingQueryResult;
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::{ExecutionResult, MemoryBudget};
+use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
+use crate::query::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
 use crate::storage::QueryStorage;
 use crate::utils::Arena;
 
@@ -55,6 +57,11 @@ pub struct QueryBindings {
     pub space_name: Option<String>,
     /// Storage client for this execution.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    /// Snapshot handle pinned by the bound storage (P2: storage boundary).
+    ///
+    /// Populated by the pipeline when the per-query storage is bound to a
+    /// read/auto-commit operation context. `None` for unbound storage.
+    pub bound_snapshot: Option<crate::storage::SnapshotHandle>,
     /// Per-query memory budget.
     pub memory_budget: MemoryBudget,
     /// Maximum intra-query worker threads (1 = serial only).
@@ -86,6 +93,12 @@ pub struct QueryBindings {
     pub partition_count: usize,
     /// Optional thread-safe bumpalo arena for executor temporary allocations.
     pub arena: Option<Arc<parking_lot::Mutex<Arena>>>,
+    /// Shared query feedback history for collecting execution statistics.
+    ///
+    /// When set, the execution instance records estimated-vs-actual operator
+    /// feedback here after execution completes (stats feedback loop, phase 1).
+    /// Injected by the pipeline from the optimizer engine.
+    pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
@@ -103,6 +116,7 @@ impl QueryBindings {
             parameter_frame: None,
             space_name: context.space_name.clone(),
             storage: context.storage.clone(),
+            bound_snapshot: context.bound_snapshot,
             memory_budget: context.memory_budget.clone(),
             max_workers: context.max_workers,
             chunk_size: context.chunk_size,
@@ -116,6 +130,7 @@ impl QueryBindings {
             shared_scheduler: context.shared_scheduler.clone(),
             partition_count: 0,
             arena: context.arena.clone(),
+            feedback_history: context.feedback_history.clone(),
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: context.fulltext_manager.clone(),
             #[cfg(feature = "qdrant")]
@@ -295,9 +310,61 @@ impl QueryExecutionInstance {
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
         let chunks = engine.execute_collected()?;
+        self.collect_execution_feedback();
         let dataset =
             convert_chunks_to_dataset(chunks, Some(self.plan.output.output_layout.names()))?;
         Ok(ExecutionResult::DataSet { data: dataset })
+    }
+
+    /// Collect estimated-vs-actual execution feedback into the shared
+    /// [`QueryFeedbackHistory`] after execution completes.
+    ///
+    /// Compares the optimizer's per-operator row estimates (written into the
+    /// physical operator specs as `estimated_cardinality`) with the runtime
+    /// profile counters, and stores one [`QueryExecutionFeedback`] entry
+    /// keyed by the plan fingerprint.  This is phase 1 of the statistics
+    /// feedback loop: it only records data, it does not yet correct
+    /// selectivity estimates.
+    fn collect_execution_feedback(&self) {
+        let Some(history) = self.runtime().feedback_history.clone() else {
+            return;
+        };
+        let profile = self.runtime().profile().flush_to_collector();
+        let fingerprint = &self.plan.compatibility.fingerprint;
+        let mut feedback =
+            QueryExecutionFeedback::new(format!("v{}:{}", fingerprint.version, fingerprint.hash));
+
+        // Query-level estimate: the root operator's estimated cardinality.
+        feedback.estimated_rows = self
+            .plan
+            .fragments
+            .get(self.plan.root_fragment)
+            .and_then(|fragment| self.plan.operator(fragment.root_operator))
+            .and_then(|operator| operator.estimated_cardinality)
+            .map(|rows| rows as u64)
+            .unwrap_or(0);
+        feedback.actual_rows = profile.total_rows;
+        feedback.actual_time_us = profile.total_time_us;
+
+        for (key, op_profile) in &profile.operators {
+            if let Some(operator) = self.plan.operator(key.physical_operator_id) {
+                if let Some(estimated) = operator.estimated_cardinality {
+                    feedback.add_operator_feedback(OperatorFeedback {
+                        operator_id: key.physical_operator_id.0.to_string(),
+                        operator_type: op_profile.name.clone(),
+                        estimated_rows: estimated as u64,
+                        actual_rows: op_profile.output_rows,
+                        estimated_time_us: 0,
+                        actual_time_us: op_profile.open_time_us
+                            + op_profile.next_time_us
+                            + op_profile.close_time_us,
+                        execution_loops: 1,
+                    });
+                }
+            }
+        }
+
+        history.add_feedback(feedback);
     }
 
     /// Convert to a streaming result handle.

@@ -112,7 +112,9 @@ fn main() {
     println!(
         "machine: {} ({} visible cores)",
         machine_name(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
     );
     println!(
         "batch sizes = {:?}, iterations = {} (median)",

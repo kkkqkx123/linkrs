@@ -1223,9 +1223,8 @@ pub(crate) fn scan_edges_by_type(
         // Scatter-gather: collect the matching partition handles under a brief
         // catalog read lock, then scan each partition in parallel under its own
         // read lock. Results preserve partition order (indexed rayon collect).
-        let matching: Vec<(EdgeTableKey, Arc<parking_lot::RwLock<EdgeStore>>)> = ctx
-            .data_store()
-            .with_edge_tables(|edge_tables| {
+        let matching: Vec<(EdgeTableKey, Arc<parking_lot::RwLock<EdgeStore>>)> =
+            ctx.data_store().with_edge_tables(|edge_tables| {
                 edge_tables
                     .iter()
                     .filter(|(_, arc)| arc.read().0.label() == edge_label_id)
@@ -1282,12 +1281,8 @@ pub(crate) fn scan_edges_by_type(
                                 .unwrap_or_else(|| format!("{}", record.dst_vid))
                         };
 
-                        let edge = edge_record_to_edge(
-                            &record,
-                            edge_type,
-                            &src_external,
-                            &dst_external,
-                        );
+                        let edge =
+                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
                         partition_edges.push(edge);
                     }
                 }

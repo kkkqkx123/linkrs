@@ -468,7 +468,10 @@ impl Accum {
             "typed_rate": typed_hit_rate,
             "d1_holds": d1_holds,
         });
-        println!("D1_STATUS {}", serde_json::to_string(&d1_status).expect("json"));
+        println!(
+            "D1_STATUS {}",
+            serde_json::to_string(&d1_status).expect("json")
+        );
 
         // Emit D2_PROXY line (memory proxy for D2 decision gate).
         let output_rows = self.output_rows.load(Ordering::Relaxed);
@@ -486,7 +489,10 @@ impl Accum {
             "spill_count": spill_count,
             "spill_rate": spill_rate,
         });
-        println!("D2_PROXY {}", serde_json::to_string(&d2_proxy).expect("json"));
+        println!(
+            "D2_PROXY {}",
+            serde_json::to_string(&d2_proxy).expect("json")
+        );
     }
 }
 

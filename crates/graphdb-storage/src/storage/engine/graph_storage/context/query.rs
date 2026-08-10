@@ -71,9 +71,7 @@ impl GraphStorageContext {
                 table
                     .scan(ts)
                     .into_iter()
-                    .map(|edge_record| {
-                        (key.src_label, key.dst_label, key.edge_label, edge_record)
-                    })
+                    .map(|edge_record| (key.src_label, key.dst_label, key.edge_label, edge_record))
                     .collect::<Vec<_>>()
             })
             .collect()

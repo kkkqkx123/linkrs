@@ -1309,10 +1309,10 @@ where
             parameters: None,
             query_id: None,
         };
-        let outcomes = self
-            .query_api
-            .write()
-            .execute_batch_grouped(&permitted, query_request, group_size);
+        let outcomes =
+            self.query_api
+                .write()
+                .execute_batch_grouped(&permitted, query_request, group_size);
 
         let mut results = Vec::with_capacity(statements.len());
         let mut permitted_outcomes = outcomes.into_iter();

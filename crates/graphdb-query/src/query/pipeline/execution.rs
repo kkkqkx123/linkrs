@@ -155,11 +155,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // cache.  Compilation is folded into the execute phase for profiling
         // (optimization happens inside the cache-compile step).
         let execute_start = Instant::now();
-        let result = match self.execute_prepared(
-            &request,
-            None,
-            ResultSink::Materialize,
-        ) {
+        let result = match self.execute_prepared(&request, None, ResultSink::Materialize) {
             Ok(super::prepared::PreparedOutcome::Materialized(result)) => result,
             Ok(_) => unreachable!("materialize sink cannot stream"),
             Err(e) => {
@@ -319,6 +315,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             } else {
                 storage.clone()
             };
+            // P2: surface the snapshot pinned by the per-query bound storage.
+            // Read-only statements bind a fixed read timestamp; DML binds its
+            // write timestamp. Unbound raw storage reports None.
+            context.bound_snapshot = dyn_storage.read().snapshot_handle();
             context.storage = Some(dyn_storage);
         }
         #[cfg(feature = "fulltext-search")]
@@ -341,6 +341,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 parking_lot::Mutex::new(crate::utils::Arena::new()),
             ));
         }
+        // Stats feedback loop (phase 1): share the engine's feedback history
+        // with every execution so estimated-vs-actual operator feedback is
+        // recorded after the query completes.
+        context.feedback_history = Some(self.optimizer_engine.feedback_history());
         context
     }
 }

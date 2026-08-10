@@ -554,3 +554,40 @@ impl StorageGcOps for MockStorage {
 
     fn stop_index_gc(&self) {}
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::storage::client::StorageOperationContextOps;
+    use crate::storage::QueryStorage;
+
+    #[test]
+    fn unbound_storage_reports_no_snapshot() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        assert!(storage.snapshot_handle().is_none());
+    }
+
+    #[test]
+    fn read_bound_storage_pins_snapshot_handle() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        let bound = storage
+            .bind_read_operation_context()
+            .expect("read binding should succeed");
+        let handle = bound
+            .snapshot_handle()
+            .expect("bound storage has a snapshot");
+        assert_eq!(handle.ts, 1);
+    }
+
+    #[test]
+    fn auto_commit_bound_storage_pins_snapshot_handle() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        let bound = storage
+            .bind_auto_commit_context()
+            .expect("auto-commit binding should succeed");
+        let handle = bound
+            .snapshot_handle()
+            .expect("auto-commit storage has a snapshot");
+        assert_eq!(handle.ts, 1);
+    }
+}

@@ -491,8 +491,7 @@ fn build_edge_column_chunk(
         let flat_values: Vec<Value> = flatten
             .iter()
             .map(|prop| {
-                edge
-                    .get_property(prop)
+                edge.get_property(prop)
                     .cloned()
                     .unwrap_or_else(|| Value::Null(crate::core::value::NullType::Null))
             })

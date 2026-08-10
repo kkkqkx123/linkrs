@@ -305,11 +305,26 @@ fn test_dml_shape_template_ast_cache() {
             .expect("vertex exists")
     };
     let p1 = read("p1");
-    assert_eq!(p1.properties.get("name"), Some(&graphdb_query::core::Value::string("A")));
-    assert_eq!(p1.properties.get("age"), Some(&graphdb_query::core::Value::BigInt(1)));
+    assert_eq!(
+        p1.properties.get("name"),
+        Some(&graphdb_query::core::Value::string("A"))
+    );
+    assert_eq!(
+        p1.properties.get("age"),
+        Some(&graphdb_query::core::Value::BigInt(1))
+    );
     let p2 = read("p2");
-    assert_eq!(p2.properties.get("name"), Some(&graphdb_query::core::Value::string("B")));
-    assert_eq!(p2.properties.get("age"), Some(&graphdb_query::core::Value::BigInt(2)));
+    assert_eq!(
+        p2.properties.get("name"),
+        Some(&graphdb_query::core::Value::string("B"))
+    );
+    assert_eq!(
+        p2.properties.get("age"),
+        Some(&graphdb_query::core::Value::BigInt(2))
+    );
     let p3 = read("p3");
-    assert_eq!(p3.properties.get("name"), Some(&graphdb_query::core::Value::string("C")));
+    assert_eq!(
+        p3.properties.get("name"),
+        Some(&graphdb_query::core::Value::string("C"))
+    );
 }

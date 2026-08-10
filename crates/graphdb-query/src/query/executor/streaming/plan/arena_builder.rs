@@ -241,6 +241,7 @@ mod tests {
             parameter_frame: None,
             space_name: None,
             storage: None,
+            bound_snapshot: None,
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             chunk_size: 1024,
@@ -254,6 +255,7 @@ mod tests {
             shared_scheduler: None,
             partition_count: 0,
             arena: None,
+            feedback_history: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]

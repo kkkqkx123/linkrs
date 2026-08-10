@@ -197,10 +197,8 @@ pub(super) fn expand_single_step(
     }
 
     let seed_width = seed_rows.first().map_or(0, |r| r.len());
-    let mut buf = ExpandOutputBuffer::new(
-        seed_width,
-        chunk.visible_count().saturating_mul(4).max(1),
-    );
+    let mut buf =
+        ExpandOutputBuffer::new(seed_width, chunk.visible_count().saturating_mul(4).max(1));
 
     if emit_raw_ids {
         // Raw-id path: one batched storage read for the whole chunk, no

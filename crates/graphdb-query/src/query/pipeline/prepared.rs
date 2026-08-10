@@ -275,15 +275,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             if let Some(shape) =
                 crate::query::planning::dml_shape::normalize_shape(parser_result.ast.stmt())
             {
-                let cached_ast = self.dml_template_ast.lock().as_ref().and_then(
-                    |(text, ast)| {
+                let cached_ast = self
+                    .dml_template_ast
+                    .lock()
+                    .as_ref()
+                    .and_then(|(text, ast)| {
                         if text == &shape.normalized_text {
                             Some(ast.clone())
                         } else {
                             None
                         }
-                    },
-                );
+                    });
                 let normalized = match cached_ast {
                     Some(ast) => Some(crate::query::parser::parsing::ParserResult { ast }),
                     None => match self.parse_into_context(&shape.normalized_text) {
@@ -368,9 +370,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
         let memo_hit = if dml_shape_cacheable {
-            let sig =
-                Self::dml_param_signature(&query_context.request_context().parameters);
-            let schema_version = self.schema_generation.load(std::sync::atomic::Ordering::Relaxed);
+            let sig = Self::dml_param_signature(&query_context.request_context().parameters);
+            let schema_version = self
+                .schema_generation
+                .load(std::sync::atomic::Ordering::Relaxed);
             let space_name = query_context
                 .space_name()
                 .or_else(|| query_context.request_context().space_name.clone());
@@ -549,7 +552,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             });
         }
         // DDL has no streaming semantics: materialize and wrap.
-        let stream_ddl = sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
+        let stream_ddl =
+            sink == ResultSink::Stream && request.statement_class == StatementClass::Ddl;
 
         let physical_plan = self.compile_or_get_cached(
             &request.query_text,

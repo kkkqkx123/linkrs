@@ -804,7 +804,32 @@ impl<T> CatalogStore for T where
 }
 
 /// Minimal combined capability required by the query crate.
-pub trait QueryStorage: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {}
+pub trait QueryStorage: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {
+    /// Snapshot handle bound to this storage handle, when the handle is
+    /// bound to an operation context with a pinned read/write snapshot.
+    ///
+    /// Read-only statement contexts pin a fixed read timestamp; auto-commit
+    /// write contexts pin their write timestamp. Unbound handles (raw global
+    /// storage) return `None`. This lets the query layer observe which
+    /// snapshot a per-query bound handle reads at, without reaching into the
+    /// storage internals.
+    ///
+    /// When the operation context already registered per-table MVCC snapshot
+    /// handles, the first one is preferred (it carries the storage's own
+    /// monotonically increasing handle id); otherwise a query-level handle
+    /// is synthesized from the pinned timestamp (`id = 0`).
+    fn snapshot_handle(&self) -> Option<SnapshotHandle> {
+        let context = self.operation_context()?;
+        let ts = context.snapshot_timestamp()?;
+        Some(
+            context
+                .mvcc_vertex_snapshot_handles
+                .first()
+                .map(|(_, handle)| *handle)
+                .unwrap_or_else(|| SnapshotHandle::new(ts, 0)),
+        )
+    }
+}
 impl<T> QueryStorage for T where T: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {}
 
 /// Maintenance-only capabilities used by server initialization and administration.

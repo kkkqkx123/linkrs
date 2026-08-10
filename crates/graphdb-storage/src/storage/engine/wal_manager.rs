@@ -350,10 +350,7 @@ mod tests {
                 crate::core::types::DurabilityLevel::Async,
             )
             .expect("async append must not wait");
-        assert!(
-            lsn.get() > 0,
-            "async append must still advance the WAL LSN"
-        );
+        assert!(lsn.get() > 0, "async append must still advance the WAL LSN");
 
         // A later explicit sync must make the async append durable: the
         // coordinator now knows about the appended LSN, so the sync's fsync

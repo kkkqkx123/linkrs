@@ -10,7 +10,9 @@ use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::{AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext};
+use crate::storage::{
+    AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
+};
 use crate::sync::SyncManager;
 use crate::transaction::TransactionExecution;
 use parking_lot::RwLock;

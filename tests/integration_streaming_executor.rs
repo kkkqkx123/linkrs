@@ -802,14 +802,16 @@ mod storage_backed {
         set_selection_propagation_enabled(true);
 
         // Assert equality
-        for (sql, (on, off)) in queries.iter().zip(on_results.iter().zip(off_results.iter())) {
+        for (sql, (on, off)) in queries
+            .iter()
+            .zip(on_results.iter().zip(off_results.iter()))
+        {
+            assert_eq!(on.len(), off.len(), "row count diverge for query: {}", sql);
             assert_eq!(
-                on.len(),
-                off.len(),
-                "row count diverge for query: {}",
+                on, off,
+                "selection propagation changes results for query: {}",
                 sql
             );
-            assert_eq!(on, off, "selection propagation changes results for query: {}", sql);
         }
     }
 }

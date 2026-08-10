@@ -179,11 +179,8 @@ fn enrich_scan_slots_rule_differential() {
     // Pipeline WITHOUT optimizer (enrich rule does not apply)
     let mut opt_off_engine = OptimizerEngine::default();
     opt_off_engine.set_enable_heuristic(false);
-    let mut pipeline_off = QueryPipelineManager::with_optimizer(
-        storage.clone(),
-        stats,
-        Arc::new(opt_off_engine),
-    );
+    let mut pipeline_off =
+        QueryPipelineManager::with_optimizer(storage.clone(), stats, Arc::new(opt_off_engine));
 
     // Queries that trigger the enrich rule: Filter(ScanVertices) where the
     // predicate column is NOT in the RETURN clause.

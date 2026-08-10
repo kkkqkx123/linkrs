@@ -1001,15 +1001,12 @@ mod tests {
         // Every snapshot registered lazily by the window's statements must be
         // released at window finalize; otherwise the table's GC watermark is
         // pinned forever (version data can never be reclaimed).
-        let active = storage
-            .ctx
-            .data_store()
-            .with_vertex_tables(|tables| {
-                tables
-                    .values()
-                    .map(|table| table.active_snapshot_count())
-                    .sum::<usize>()
-            });
+        let active = storage.ctx.data_store().with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.active_snapshot_count())
+                .sum::<usize>()
+        });
         assert_eq!(active, 0, "batch window leaked vertex snapshots");
     }
 
@@ -1040,15 +1037,12 @@ mod tests {
         }
         window.finalize_group().unwrap();
 
-        let active = storage
-            .ctx
-            .data_store()
-            .with_vertex_tables(|tables| {
-                tables
-                    .values()
-                    .map(|table| table.active_snapshot_count())
-                    .sum::<usize>()
-            });
+        let active = storage.ctx.data_store().with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.active_snapshot_count())
+                .sum::<usize>()
+        });
         assert_eq!(active, 0, "group window leaked vertex snapshots");
     }
 
@@ -1425,10 +1419,7 @@ mod tests {
             .get_vertex("test_space", &VertexId::from_int64(8002))
             .unwrap()
             .unwrap();
-        assert_eq!(
-            v2.properties.get("name"),
-            Some(&Value::string("also_keep"))
-        );
+        assert_eq!(v2.properties.get("name"), Some(&Value::string("also_keep")));
     }
 
     #[test]

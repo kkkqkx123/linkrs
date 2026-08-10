@@ -271,6 +271,49 @@ fn typed_eval_matches_value_path_semantics() {
 }
 
 #[test]
+fn typed_eval_property_predicate_hits_typed_batch_path() {
+    use std::sync::atomic::Ordering;
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "p".to_string(),
+        "p.age".to_string(),
+    ]));
+    let rows: Vec<Vec<Value>> = (0..100)
+        .map(|i| {
+            vec![
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(
+                    i as i64 + 1,
+                )))),
+                Value::BigInt((i as i64 % 50) + 1),
+            ]
+        })
+        .collect();
+    let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
+    let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+    chunk.build_typed_columns();
+    assert!(
+        matches!(chunk.typed_column(1), Some(TypedColumn::I64(_))),
+        "flat property column must be typed I64"
+    );
+
+    let expr = Expression::binary(
+        Expression::property(Expression::variable("p"), "age"),
+        BinaryOperator::GreaterThan,
+        Expression::literal(Value::BigInt(20)),
+    );
+    let results = chunk.evaluate_expression(&expr, None).expect("eval");
+    assert_eq!(results.len(), 100);
+    let expected: Vec<Value> = (0..100)
+        .map(|i| Value::Bool((i as i64 % 50) + 1 > 20))
+        .collect();
+    assert_eq!(results, expected);
+    assert_eq!(
+        stats.columnar_typed_hits.load(Ordering::Relaxed),
+        1,
+        "property predicate must be served by the typed batch path"
+    );
+}
+
+#[test]
 fn typed_eval_supports_arithmetic_and_cast() {
     let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
     let rows = vec![

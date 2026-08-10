@@ -44,6 +44,7 @@ pub mod topn_optimization;
 pub mod topn_wiring;
 pub mod traversal;
 pub mod traversal_direction;
+pub mod traversal_logical;
 pub mod traversal_start;
 
 pub use traversal_start::{

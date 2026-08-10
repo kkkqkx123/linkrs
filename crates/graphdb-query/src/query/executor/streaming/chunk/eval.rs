@@ -311,6 +311,21 @@ impl DataChunk {
                 };
                 Ok(self.typed_column(slot).and_then(typed_column_batch))
             }
+            Expression::Property { object, property } => {
+                // Flat property access (e.g. `p.age`) resolves to the
+                // compound slot `p.age` in the layout; when that column is
+                // typed (I64/F64/I32/Bool) the whole predicate can run on the
+                // raw batch instead of per-row Value evaluation.
+                let Expression::Variable(var_name) = object.as_ref() else {
+                    return Ok(None);
+                };
+                let compound = format!("{}.{}", var_name, property);
+                let slot = match self.layout.slot_id(&compound) {
+                    Some(slot) => slot,
+                    None => return Ok(None),
+                };
+                Ok(self.typed_column(slot).and_then(typed_column_batch))
+            }
             Expression::Unary { op, operand } => {
                 let Some(batch) = self.try_eval_typed_batch(operand, params)? else {
                     return Ok(None);

@@ -285,9 +285,9 @@ impl BatchOptimizer {
             | PushFilterDownAggregate(_) => OptimizationBatch::PredicatePushdown,
 
             // Property pruning batch
-            PushProjectDownScanVertices(_) | PushProjectDownScanEdges(_) | EnrichScanSlotsWithFilterProps(_) => {
-                OptimizationBatch::PropertyPruning
-            }
+            PushProjectDownScanVertices(_)
+            | PushProjectDownScanEdges(_)
+            | EnrichScanSlotsWithFilterProps(_) => OptimizationBatch::PropertyPruning,
 
             // Expand pushdown batch: whole-plan annotation of traversal hops.
             ExpandPushdownAnnotate(_) => OptimizationBatch::ExpandPushdown,
@@ -413,11 +413,18 @@ impl BatchOptimizer {
 
             log::debug!("Starting optimization chain pass {pass}");
             for batch in &enabled {
-                let rules = self.batch_rules.get(batch).expect("enabled batch has rules");
+                let rules = self
+                    .batch_rules
+                    .get(batch)
+                    .expect("enabled batch has rules");
                 log::debug!("Starting optimization batch: {}", batch.name());
 
-                let (optimized_plan, stats) =
-                    self.execute_batch(current_plan, rules, *batch, batch.default_max_iterations())?;
+                let (optimized_plan, stats) = self.execute_batch(
+                    current_plan,
+                    rules,
+                    *batch,
+                    batch.default_max_iterations(),
+                )?;
 
                 log::debug!(
                     "Batch {} completed: {} iterations, {} rules applied, converged={}",
@@ -666,10 +673,7 @@ mod tests {
     #[test]
     fn test_classify_boundary_repeat() {
         // A fresh fingerprint makes progress.
-        assert_eq!(
-            classify_boundary_repeat(&[], 1),
-            BoundaryOutcome::Progress
-        );
+        assert_eq!(classify_boundary_repeat(&[], 1), BoundaryOutcome::Progress);
         assert_eq!(
             classify_boundary_repeat(&[1, 2], 3),
             BoundaryOutcome::Progress

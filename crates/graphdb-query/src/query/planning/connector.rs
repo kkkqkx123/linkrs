@@ -91,6 +91,13 @@ impl SegmentsConnector {
     /// Add the input.
     ///
     /// Using one plan as input for another plan
+    ///
+    /// Deprecated: this helper only relabels the root/tail of the two plans
+    /// without structurally connecting them.  Use
+    /// [`SubPlan::connect_upstream`] instead, which attaches the upstream
+    /// root as the downstream root's input so the plan is structurally
+    /// closed.
+    #[deprecated(note = "use SubPlan::connect_upstream instead")]
     pub fn add_input(input_plan: SubPlan, dependent_plan: SubPlan, _is_left: bool) -> SubPlan {
         SubPlan {
             root: dependent_plan.root,
@@ -195,19 +202,6 @@ mod tests {
             .expect("Expected planner result to exist")
             .root
             .is_some());
-    }
-
-    #[test]
-    fn test_add_input() {
-        let input_plan = SubPlan::from_single_node(PlanNodeEnum::Start(
-            crate::query::planning::plan::core::nodes::StartNode::new(),
-        ));
-        let dependent_plan = SubPlan::from_single_node(PlanNodeEnum::Start(
-            crate::query::planning::plan::core::nodes::StartNode::new(),
-        ));
-
-        let result = SegmentsConnector::add_input(input_plan, dependent_plan, true);
-        assert!(result.root.is_some());
     }
 
     #[test]

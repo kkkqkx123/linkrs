@@ -193,8 +193,8 @@ mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::ContextualExpression;
-    use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+    use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::ScanVerticesNode;
     use std::sync::Arc;
 
@@ -213,9 +213,7 @@ mod tests {
     }
 
     fn filter(condition: Expression, input: PlanNodeEnum) -> PlanNodeEnum {
-        PlanNodeEnum::Filter(
-            FilterNode::new(input, contextual(condition)).expect("filter node"),
-        )
+        PlanNodeEnum::Filter(FilterNode::new(input, contextual(condition)).expect("filter node"))
     }
 
     fn labels_conjunct() -> Expression {
@@ -242,7 +240,10 @@ mod tests {
         }
     }
 
-    fn pushdown(rule: &EliminateRedundantTagFilterRule, node: &PlanNodeEnum) -> Option<TransformResult> {
+    fn pushdown(
+        rule: &EliminateRedundantTagFilterRule,
+        node: &PlanNodeEnum,
+    ) -> Option<TransformResult> {
         rule.apply(&mut RewriteContext::new(), node).expect("apply")
     }
 
@@ -281,12 +282,10 @@ mod tests {
         let rule = EliminateRedundantTagFilterRule::new();
         let node = filter(labels_conjunct(), scan_with_tag());
 
-        let result = rule.apply(
-            &mut RewriteContext::new(),
-            &node,
-        )
-        .expect("apply")
-        .expect("some result");
+        let result = rule
+            .apply(&mut RewriteContext::new(), &node)
+            .expect("apply")
+            .expect("some result");
         assert!(result.erase_curr);
         assert_eq!(result.new_nodes.len(), 1);
     }
@@ -299,10 +298,7 @@ mod tests {
         other.set_col_names(vec!["n".to_string()]);
         other.set_output_var("n".to_string());
         other.set_tag("Place");
-        let node = filter(
-            labels_conjunct(),
-            PlanNodeEnum::ScanVertices(other),
-        );
+        let node = filter(labels_conjunct(), PlanNodeEnum::ScanVertices(other));
         assert!(pushdown(&rule, &node).is_none());
     }
 

@@ -51,7 +51,8 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) dml_shape_cache_enabled: bool,
     pub(crate) last_dml_plan: parking_lot::Mutex<Option<LastDmlPlan>>,
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
-    pub(crate) dml_template_ast: parking_lot::Mutex<Option<(String, Arc<crate::query::parser::ast::stmt::Ast>)>>,
+    pub(crate) dml_template_ast:
+        parking_lot::Mutex<Option<(String, Arc<crate::query::parser::ast::stmt::Ast>)>>,
     pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_bind_skipped_count: std::sync::atomic::AtomicU64,
 }

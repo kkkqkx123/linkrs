@@ -146,7 +146,10 @@ fn measure_scan(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> u64 {
         .expect("build rayon pool");
     for _ in 0..2 {
         pool.install(|| {
-            let edges = storage.read().scan_edges_by_type(SPACE, EDGE).expect("scan");
+            let edges = storage
+                .read()
+                .scan_edges_by_type(SPACE, EDGE)
+                .expect("scan");
             black_box(edges.len());
         });
     }
@@ -154,7 +157,10 @@ fn measure_scan(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> u64 {
     for _ in 0..ITERATIONS {
         let start = Instant::now();
         pool.install(|| {
-            let edges = storage.read().scan_edges_by_type(SPACE, EDGE).expect("scan");
+            let edges = storage
+                .read()
+                .scan_edges_by_type(SPACE, EDGE)
+                .expect("scan");
             black_box(edges.len());
         });
         samples.push(start.elapsed().as_micros() as u64);
@@ -167,7 +173,9 @@ fn main() {
     println!(
         "machine: {} ({} visible cores)",
         machine_name(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
     );
     println!(
         "total edges = {TOTAL_EDGES}, iterations = {ITERATIONS}, partitions = {:?}, workers = {:?}",
@@ -194,7 +202,10 @@ fn main() {
             let tn = medians[idx] as f64;
             let e = t1 / tn;
             let eta = if workers > 1 { e / workers as f64 } else { 1.0 };
-            println!("{:>7} | {:>8} | {:>9.2} | {:>7.2}", workers, medians[idx], e, eta);
+            println!(
+                "{:>7} | {:>8} | {:>9.2} | {:>7.2}",
+                workers, medians[idx], e, eta
+            );
         }
     }
     println!(

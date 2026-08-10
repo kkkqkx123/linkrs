@@ -15,6 +15,7 @@ use crate::core::types::operators::BinaryOperator;
 use crate::core::types::Index;
 use crate::core::value::Value;
 use crate::query::optimizer::cost_based::traversal::rewrite_children;
+use crate::query::optimizer::cost_based::traversal_logical::rewrite_children_logical;
 use crate::query::optimizer::cost_based::{
     IndexSelection, IndexSelector, PredicateOperator, PropertyPredicate,
 };
@@ -24,6 +25,10 @@ use crate::query::planning::plan::core::nodes::access::index_scan::{
     IndexLimit, IndexScanNode, ScanType,
 };
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use crate::query::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Rewrite eligible `ScanVertices` scans into `IndexScan` nodes.
@@ -322,6 +327,109 @@ fn full_scan_cost(
     }
 }
 
+// =====================================================================
+// Logical-plan variant (P3: PlanNodeEnum logic/physical separation).
+//
+// The index selection decision is taken on the pure logical tree
+// (`LogicalNodeEnum`) and emits the same `index:` note as the physical
+// walker. The logical tree stays pure — the IndexScan rewrite is applied
+// by the physical walker on the executable root.
+// =====================================================================
+
+/// Walk a logical plan tree and record the cost-based index selection
+/// decision for every `Filter -> ScanVertices` pair as a CBO note.
+///
+/// The tree itself is returned unchanged (IndexScan is a physical operator
+/// and cannot appear in the logical tree); the physical rewriter consumes
+/// the same statistics to apply the structural rewrite.
+pub fn rewrite_index_scans_logical(
+    node: &LogicalNodeEnum,
+    selector: &IndexSelector,
+    stats_manager: &Arc<StatisticsManager>,
+    space_hint: Option<&str>,
+    notes: &mut Vec<String>,
+) -> LogicalNodeEnum {
+    use LogicalNodeEnum::*;
+
+    // Try index selection at this level first.
+    if let Filter(filter) = node {
+        let input = filter.input();
+        if let ScanVertices(scan) = input {
+            if let Some(note) =
+                try_decide_index_scan_logical(scan, filter, selector, stats_manager, space_hint)
+            {
+                notes.push(note);
+            }
+        }
+    }
+
+    // Recursively walk children (decision-only, tree unchanged).
+    let mut closure = |child: &LogicalNodeEnum| {
+        rewrite_index_scans_logical(child, selector, stats_manager, space_hint, notes)
+    };
+    rewrite_children_logical(node, &mut closure)
+}
+
+/// Decide whether a logical `Filter -> ScanVertices` pair would be rewritten
+/// to an index scan, returning the CBO note when an index wins.
+fn try_decide_index_scan_logical(
+    scan: &LogicalScanVerticesNode,
+    filter: &LogicalFilterNode,
+    selector: &IndexSelector,
+    stats_manager: &Arc<StatisticsManager>,
+    space_hint: Option<&str>,
+) -> Option<String> {
+    let tag = scan.tag.clone()?;
+    let space: String = if scan.space_name.is_empty() {
+        space_hint?.to_string()
+    } else {
+        scan.space_name.clone()
+    };
+
+    let predicates = filter
+        .condition
+        .expression()
+        .map(|meta| extract_property_predicates(meta.inner()))
+        .unwrap_or_default();
+    if predicates.is_empty() {
+        return None;
+    }
+
+    let (_tag_id, available_indexes) = stats_manager.get_tag_indexes(&space, &tag)?;
+    if available_indexes.is_empty() {
+        return None;
+    }
+
+    let selection = selector.select_index(&space, &tag, &predicates, &available_indexes);
+    let (index_name, selectivity, estimated_cost) = match selection {
+        IndexSelection::PropertyIndex {
+            index_name,
+            selectivity,
+            estimated_cost,
+            ..
+        } => (index_name, selectivity, estimated_cost),
+        IndexSelection::FullScan { .. } | IndexSelection::TagIndex { .. } => return None,
+    };
+
+    let index = available_indexes
+        .iter()
+        .find(|candidate| candidate.name == index_name)?;
+    let scan_limits = build_scan_limits(&predicates, &index.properties);
+    if scan_limits.is_empty() {
+        return None;
+    }
+
+    let full_scan = full_scan_cost(selector, &space, &tag, &available_indexes, &predicates);
+    Some(format!(
+        "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
+        tag,
+        index_name,
+        selectivity,
+        estimated_cost,
+        full_scan.unwrap_or(estimated_cost)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +597,81 @@ mod tests {
         let (_, indexes) = manager.get_tag_indexes("test", "person").expect("indexes");
         let cost = full_scan_cost(&selector, "test", "person", &indexes, &predicates);
         assert!(cost.is_some());
+    }
+
+    // ===================================================================
+    // Logical-plan walker tests (P3 step 1)
+    // ===================================================================
+
+    use crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+    use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+    use crate::query::planning::plan::logical::LogicalNodeEnum;
+
+    fn build_logical_scan_filter(tag: &str, property: &str, value: Value) -> LogicalNodeEnum {
+        use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
+
+        let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: 1,
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: Some(tag.to_string()),
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            output_var: Some("n".to_string()),
+            col_names: vec!["n".to_string()],
+            column_types: vec![],
+        });
+        let context = Arc::new(ExpressionAnalysisContext::new());
+        let expression = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: property.to_string(),
+            }),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expression::Literal(value)),
+        };
+        let id = context.register_expression(ExpressionMeta::new(expression));
+        let contextual = ContextualExpression::new(id, context);
+        LogicalNodeEnum::Filter(LogicalFilterNode {
+            id: 2,
+            input: Some(Box::new(scan.clone())),
+            deps: vec![scan],
+            condition: contextual,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    }
+
+    #[test]
+    fn logical_walk_emits_index_note_when_index_registered() {
+        let (selector, manager) = test_selector();
+        register_index(&manager, "person", "idx_name", "name");
+        let plan = build_logical_scan_filter("person", "name", Value::String("alice".into()));
+        let mut notes = Vec::new();
+        let rewritten =
+            rewrite_index_scans_logical(&plan, &selector, &manager, Some("test"), &mut notes);
+
+        // The logical tree stays pure — the ScanVertices input is preserved.
+        assert!(matches!(&rewritten, LogicalNodeEnum::Filter(_)));
+        let filter = match &rewritten {
+            LogicalNodeEnum::Filter(f) => f,
+            _ => panic!("expected logical filter"),
+        };
+        assert!(matches!(filter.input(), LogicalNodeEnum::ScanVertices(_)));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("index_scan('idx_name')"));
+    }
+
+    #[test]
+    fn logical_walk_keeps_silent_without_index() {
+        let (selector, manager) = test_selector();
+        let plan = build_logical_scan_filter("person", "name", Value::String("alice".into()));
+        let mut notes = Vec::new();
+        let rewritten =
+            rewrite_index_scans_logical(&plan, &selector, &manager, Some("test"), &mut notes);
+        assert!(matches!(rewritten, LogicalNodeEnum::Filter(_)));
+        assert!(notes.is_empty());
     }
 }

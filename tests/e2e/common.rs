@@ -376,7 +376,9 @@ impl TestDb {
             parameters: None,
             query_id: None,
         };
-        let outcomes = self.query_api.execute_batch_grouped(statements, ctx, group_size);
+        let outcomes = self
+            .query_api
+            .execute_batch_grouped(statements, ctx, group_size);
         let mut results = Vec::with_capacity(outcomes.len());
         for outcome in outcomes {
             let result = outcome?;
@@ -520,11 +522,7 @@ pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
 
 /// Load a GQL file, executing consecutive INSERT statements via group-commit
 /// windows (P0 C). Non-INSERT statements execute individually.
-pub fn load_gql_file_grouped(
-    db: &mut TestDb,
-    path: &str,
-    group_size: usize,
-) -> CoreResult<()> {
+pub fn load_gql_file_grouped(db: &mut TestDb, path: &str, group_size: usize) -> CoreResult<()> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         graphdb::api::core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
     })?;

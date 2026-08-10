@@ -245,9 +245,7 @@ impl GraphStorageContext {
                     if let Some(undo) = &self.auto_commit_undo {
                         let mut log = undo.lock();
                         let start = operation.auto_commit_group_start.unwrap_or(0);
-                        if let Err(error) =
-                            log.execute_undo_from_index(self, timestamp, start)
-                        {
+                        if let Err(error) = log.execute_undo_from_index(self, timestamp, start) {
                             log::error!("Group statement rollback failed: {}", error);
                         }
                     }
@@ -742,14 +740,12 @@ impl GraphStorageContext {
             let wal_manager = guard.wal_manager().ok_or_else(|| {
                 crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
             })?;
-            let result = wal_manager
-                .read()
-                .append_transaction_with_durability(
-                    transaction_id,
-                    entries,
-                    intents,
-                    crate::core::types::DurabilityLevel::None,
-                )?;
+            let result = wal_manager.read().append_transaction_with_durability(
+                transaction_id,
+                entries,
+                intents,
+                crate::core::types::DurabilityLevel::None,
+            )?;
             result
         } else {
             crate::core::types::CommitLsn::ZERO

@@ -420,6 +420,11 @@ impl PhysicalPlanMaterializer {
             runtime.set_worker_pool(Some(pool));
         }
 
+        // Stats feedback loop (phase 1): inject the shared query feedback
+        // history so the execution instance can record estimated-vs-actual
+        // operator feedback after execution completes.
+        runtime.feedback_history = bindings.feedback_history.clone();
+
         // Phase 1: size state_arenas for partitioned execution so each
         // partition gets its own arena, eliminating contention on arena 0.
         if bindings.partition_count > 0 {

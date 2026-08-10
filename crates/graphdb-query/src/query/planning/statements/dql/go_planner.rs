@@ -10,9 +10,7 @@
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, EdgeDirection};
 use crate::query::parser::ast::{GoStmt, Stmt};
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, PlanNode,
-};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
@@ -119,7 +117,6 @@ impl Planner for GoPlanner {
 
         // Create ExpandAllNode to traverse edges
         let mut expand_all_node = ExpandAllNode::new(space_id, edge_types.clone(), direction_str);
-        expand_all_node.add_input(tail_node);
 
         // Set step_limit based on GO statement steps
         let step_limit = match go_stmt.steps {
@@ -152,7 +149,16 @@ impl Planner for GoPlanner {
             }
         }
 
-        let input_for_join = PlanNodeEnum::ExpandAll(expand_all_node);
+        // Structurally close the plan: the tail node becomes the expand
+        // node's input inside the SubPlan itself.
+        let input_for_join = SubPlan::connect_upstream(
+            SubPlan::from_single_node(PlanNodeEnum::ExpandAll(expand_all_node)),
+            SubPlan::from_single_node(tail_node),
+        )?
+        .root
+        .ok_or_else(|| {
+            PlannerError::PlanGenerationFailed("GO expand sub-plan has no root node".to_string())
+        })?;
 
         let filter_node = if let Some(ref condition) = go_stmt.where_clause {
             match FilterNode::new(input_for_join, condition.clone()) {

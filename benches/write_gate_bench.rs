@@ -29,9 +29,7 @@ use std::time::{Duration, Instant};
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Value, Vertex};
-use graphdb::storage::{
-    GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter,
-};
+use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter};
 
 const SPACE: &str = "b2";
 const TAG: &str = "Node";
@@ -62,7 +60,11 @@ struct RunResult {
     total_statements: usize,
 }
 
-fn run_concurrent_writers(storage: &GraphStorage, threads: usize, next_id: &Arc<AtomicU64>) -> RunResult {
+fn run_concurrent_writers(
+    storage: &GraphStorage,
+    threads: usize,
+    next_id: &Arc<AtomicU64>,
+) -> RunResult {
     let before = storage.write_gate_stats();
     let barrier = Arc::new(Barrier::new(threads));
     let start = Instant::now();
@@ -116,7 +118,9 @@ fn main() {
     println!(
         "machine: {} ({} visible cores)",
         machine_name(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
     );
     println!(
         "statements per thread = {STATEMENTS_PER_THREAD}, threads = {:?}",

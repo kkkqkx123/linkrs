@@ -43,7 +43,9 @@ fn test_multiple_edge_types_same_vertices() {
         .assert_edge_exists(1, 2, "FRIENDS_WITH");
 }
 
-/// Test multiple edges of same type between same vertices (if supported)
+/// The storage model treats (src, edge_type, dst) as unique: at most one
+/// edge of a given type between the same vertex pair. Re-inserting the same
+/// pair must fail, while edges between different pairs coexist.
 #[test]
 fn test_multiple_same_type_edges() {
     TestScenario::new()
@@ -55,16 +57,21 @@ fn test_multiple_same_type_edges() {
         .assert_success()
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .assert_success()
-        // Create multiple messages between same people
+        // Edges between distinct vertex pairs of the same type coexist.
         .exec_dml(
             "INSERT EDGE MESSAGED(content, ts) VALUES \
             1->2:('Hello', 1000), \
-            1->2:('How are you?', 1001), \
             2->1:('Hi!', 1002)",
         )
         .assert_success()
         .assert_edge_exists(1, 2, "MESSAGED")
-        .assert_edge_exists(2, 1, "MESSAGED");
+        .assert_edge_exists(2, 1, "MESSAGED")
+        // Re-inserting the same pair is rejected (unique per type+pair).
+        .exec_dml(
+            "INSERT EDGE MESSAGED(content, ts) VALUES \
+            1->2:('How are you?', 1001)",
+        )
+        .assert_error();
 }
 
 /// Test edge with complex property types

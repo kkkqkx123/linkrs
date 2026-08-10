@@ -23,7 +23,9 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId};
+use graphdb::core::types::{
+    EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId,
+};
 use graphdb::core::vertex_edge_path::Tag;
 use graphdb::core::{DataType, Edge, Value, Vertex};
 use graphdb::storage::{
@@ -90,11 +92,7 @@ struct RunResult {
     abort_us: u64,
 }
 
-fn run_transaction(
-    storage: &GraphStorage,
-    edge_count: usize,
-    tx_seq: u64,
-) -> RunResult {
+fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> RunResult {
     // Explicit transaction: bind the storage handle with the transaction's
     // write timestamp (no auto-commit gate involved).
     let ts = storage
@@ -103,11 +101,8 @@ fn run_transaction(
         .expect("acquire timestamp");
     let txid = TransactionId::from(tx_seq);
 
-    let mut txn = storage.bind_operation_context(StorageOperationContext::transaction(
-        txid,
-        ts,
-        false,
-    ));
+    let mut txn =
+        storage.bind_operation_context(StorageOperationContext::transaction(txid, ts, false));
 
     let edges: Vec<Edge> = (0..edge_count)
         .map(|i| Edge {
@@ -160,7 +155,9 @@ fn main() {
     println!(
         "machine: {} ({} visible cores)",
         machine_name(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
     );
     println!(
         "vertex setup = {VERTEX_COUNT}, edge counts = {:?}, iterations = {} (median)",

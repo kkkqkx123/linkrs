@@ -17,7 +17,13 @@ use std::sync::Arc;
 
 use crate::core::types::ContextualExpression;
 use crate::query::optimizer::cost::CostCalculator;
+use crate::query::optimizer::cost::SelectivityEstimator;
+use crate::query::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
+use crate::query::optimizer::cost_based::traversal_logical::rewrite_children_logical;
 use crate::query::optimizer::decision::OptimizationDecision;
+use crate::query::optimizer::stats::StatsView;
+use crate::query::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 
 /// Aggregation policy type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -604,6 +610,53 @@ impl AggregateStrategySelector {
     }
 }
 
+// =====================================================================
+// Logical-plan variant (P3: PlanNodeEnum logic/physical separation).
+//
+// The aggregation strategy decision is taken on the pure logical tree
+// (`LogicalNodeEnum`) and emits the same `aggregate:` note as the physical
+// walker in the engine. The tree is returned unchanged — the strategy is a
+// decision note consumed by the physical planner.
+// =====================================================================
+
+/// Walk a logical plan tree and record the aggregation strategy decision
+/// for every aggregate node as a CBO note (cost-driven, observable in
+/// EXPLAIN). The tree itself is returned unchanged.
+pub fn walk_aggregate_strategies_logical(
+    node: &LogicalNodeEnum,
+    stats: &StatsView,
+    selector: &AggregateStrategySelector,
+    selectivity: &SelectivityEstimator,
+    notes: &mut Vec<String>,
+) -> LogicalNodeEnum {
+    use LogicalNodeEnum::*;
+
+    if let Aggregate(aggregate) = node {
+        let input_rows = estimate_node_output_rows_logical(aggregate.input(), stats, selectivity);
+        let context = AggregateContext {
+            input_rows,
+            group_keys: aggregate.group_keys.clone(),
+            agg_function_count: aggregate.aggregation_functions.len(),
+            memory_limit: 0,
+            input_is_sorted: false,
+            sort_keys_match_group_keys: false,
+            is_deterministic: true,
+            complexity_score: 0,
+            table_name: None,
+        };
+        let decision = selector.select_strategy(stats.space().unwrap_or(""), &context);
+        notes.push(format!(
+            "aggregate: strategy={:?} (reason={:?}, est_rows={})",
+            decision.strategy, decision.reason, decision.estimated_output_rows
+        ));
+    }
+
+    let mut closure = |child: &LogicalNodeEnum| {
+        walk_aggregate_strategies_logical(child, stats, selector, selectivity, notes)
+    };
+    rewrite_children_logical(node, &mut closure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,5 +832,62 @@ mod tests {
         let decision = selector.select_strategy_comprehensive("test", &context, &[]);
         assert!(decision.estimated_cost > 0.0);
         assert!(decision.estimated_memory_bytes > 0);
+    }
+
+    #[test]
+    fn logical_walk_emits_aggregate_strategy_note() {
+        use crate::core::types::operators::AggregateFunction;
+        use crate::query::optimizer::cost::SelectivityEstimator;
+        use crate::query::optimizer::stats::StatsView;
+        use crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+        use crate::query::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
+        use crate::query::planning::plan::logical::LogicalNodeEnum;
+
+        let stats_manager = Arc::new(StatisticsManager::new());
+        let cost_calculator = Arc::new(CostCalculator::new(stats_manager.clone()));
+        let selector = AggregateStrategySelector::new(cost_calculator);
+        let selectivity = SelectivityEstimator::new(stats_manager.clone());
+        let stats = StatsView::new(&stats_manager, Some("test"));
+
+        let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+            id: 1,
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: Some("person".to_string()),
+            expression: None,
+            limit: None,
+            projected_properties: vec![],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let aggregate = LogicalNodeEnum::Aggregate(LogicalAggregateNode {
+            id: 2,
+            input: Some(Box::new(scan.clone())),
+            deps: vec![scan],
+            group_keys: vec!["n.age".to_string()],
+            aggregation_functions: vec![AggregateFunction::Count(None)],
+            aggregation_distinct: vec![],
+            aggregation_filters: vec![],
+            grouping_sets: vec![],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+
+        let mut notes = Vec::new();
+        let rewritten = walk_aggregate_strategies_logical(
+            &aggregate,
+            &stats,
+            &selector,
+            &selectivity,
+            &mut notes,
+        );
+
+        // The logical tree is returned unchanged; the decision is a note.
+        assert!(matches!(rewritten, LogicalNodeEnum::Aggregate(_)));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("aggregate: strategy="));
+        assert!(notes[0].contains("est_rows="));
     }
 }
