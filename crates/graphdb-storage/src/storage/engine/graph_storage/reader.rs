@@ -6,7 +6,9 @@ use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cold::{ColdIndexEntry, ColdSnapshot};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::storage::edge::EdgeStore;
 use crate::storage::edge::Nbr;
+use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::params::EdgeOperationParams;
 
 use super::context::helpers;
@@ -1218,25 +1220,32 @@ pub(crate) fn scan_edges_by_type(
     // multiple edge tables. Use iter() directly instead of scan() to avoid
     // intermediate Vec<EdgeRecord> allocation per table.
     if src_label_id == 0 && dst_label_id == 0 {
-        // Lazily register the statement snapshots for every matching partition.
-        for key in ctx.data_store().with_edge_tables(|edge_tables| {
-            edge_tables
-                .keys()
-                .copied()
-                .filter(|key| key.edge_label == edge_label_id)
-                .collect::<Vec<_>>()
-        }) {
-            ctx.ensure_edge_snapshot_registered(key);
+        // Scatter-gather: collect the matching partition handles under a brief
+        // catalog read lock, then scan each partition in parallel under its own
+        // read lock. Results preserve partition order (indexed rayon collect).
+        let matching: Vec<(EdgeTableKey, Arc<parking_lot::RwLock<EdgeStore>>)> = ctx
+            .data_store()
+            .with_edge_tables(|edge_tables| {
+                edge_tables
+                    .iter()
+                    .filter(|(_, arc)| arc.read().0.label() == edge_label_id)
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+
+        // Lazily register the statement snapshots for every matching partition
+        // before scanning so GC cannot reclaim versions under this statement.
+        for (key, _) in &matching {
+            ctx.ensure_edge_snapshot_registered(*key);
         }
-        ctx.data_store().with_edge_tables(|edge_tables| {
-            let matching: Vec<_> = edge_tables
-                .values()
-                .filter(|arc| arc.read().0.label() == edge_label_id)
-                .cloned()
-                .collect();
-            for arc in matching {
+
+        use rayon::prelude::*;
+        let per_partition: Vec<Vec<Edge>> = matching
+            .par_iter()
+            .map(|(_key, arc)| {
                 let guard = arc.read();
                 let mut iter = guard.0.iter(ts);
+                let mut partition_edges = Vec::new();
                 loop {
                     let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
                     if batch.is_empty() {
@@ -1273,13 +1282,20 @@ pub(crate) fn scan_edges_by_type(
                                 .unwrap_or_else(|| format!("{}", record.dst_vid))
                         };
 
-                        let edge =
-                            edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
-                        edges.push(edge);
+                        let edge = edge_record_to_edge(
+                            &record,
+                            edge_type,
+                            &src_external,
+                            &dst_external,
+                        );
+                        partition_edges.push(edge);
                     }
                 }
-            }
-        });
+                partition_edges
+            })
+            .collect();
+
+        let mut edges: Vec<Edge> = per_partition.into_iter().flatten().collect();
         edges = append_cold_scan_edges(ctx, edges, edge_label_id, edge_type, 0, 0, ts);
         return Ok(edges);
     }
@@ -1287,7 +1303,6 @@ pub(crate) fn scan_edges_by_type(
     // Constrained path: access the specific edge table directly using iter()
     // instead of ctx.scan_edges() which collects into Vec.
     {
-        use crate::storage::engine::data_store::EdgeTableKey;
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
         // Lazily register the statement snapshot for this partition.
         ctx.ensure_edge_snapshot_registered(key);

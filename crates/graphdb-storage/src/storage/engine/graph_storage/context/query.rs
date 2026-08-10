@@ -48,27 +48,35 @@ impl GraphStorageContext {
         ts: Timestamp,
     ) -> Vec<(LabelId, LabelId, LabelId, crate::storage::edge::EdgeRecord)> {
         use crate::storage::engine::data_store::EdgeTableKey;
-        self.persistent
+        let arcs: Vec<(
+            EdgeTableKey,
+            std::sync::Arc<parking_lot::RwLock<crate::storage::edge::EdgeStore>>,
+        )> = self
+            .persistent
             .data_store
             .catalog_read_snapshot()
             .with_edge_tables(|tables| {
-                let mut records = Vec::new();
-                for (
-                    EdgeTableKey {
-                        src_label,
-                        dst_label,
-                        edge_label,
-                    },
-                    arc,
-                ) in tables
-                {
-                    let table = arc.read();
-                    for edge_record in table.scan(ts) {
-                        records.push((*src_label, *dst_label, *edge_label, edge_record));
-                    }
-                }
-                records
+                tables
+                    .iter()
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+        // Scatter-gather: collect the partition handles under a brief catalog
+        // read lock, then scan each partition in parallel under its own read
+        // lock. Results preserve partition order (indexed rayon collect).
+        use rayon::prelude::*;
+        arcs.par_iter()
+            .flat_map(|(key, arc)| {
+                let table = arc.read();
+                table
+                    .scan(ts)
+                    .into_iter()
+                    .map(|edge_record| {
+                        (key.src_label, key.dst_label, key.edge_label, edge_record)
+                    })
+                    .collect::<Vec<_>>()
             })
+            .collect()
     }
 
     // ── Edge Property Index ──

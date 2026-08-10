@@ -739,8 +739,15 @@ impl MutableCsr {
 
             let valid = new_edges.len() - new_offsets[vid];
             new_degrees.push(valid as u32);
+            // Guard against reserve_ratio >= 1.0 (division by zero would yield
+            // infinity, saturating the cast to u32::MAX and exploding the
+            // rebuilt CSR allocation). Treat it as "no reserve".
             let new_cap = if valid > 0 {
-                ((valid as f32 / (1.0 - reserve_ratio)).ceil() as u32).max(1)
+                if reserve_ratio < 1.0 {
+                    ((valid as f32 / (1.0 - reserve_ratio)).ceil() as u32).max(1)
+                } else {
+                    (valid as u32).max(1)
+                }
             } else {
                 0
             };
@@ -1229,6 +1236,41 @@ mod tests {
 
         let edges = csr.edges_of(0u32, 3);
         assert_eq!(edges.len(), 3);
+    }
+
+    #[test]
+    fn test_compact_with_ts_guards_reserve_ratio_ge_one() {
+        // reserve_ratio >= 1.0 used to produce valid / 0.0 = inf, saturating
+        // the cast to u32::MAX per vertex and exploding the rebuilt CSR
+        // allocation (OOM on ~800k+ edge partitions under background freeze).
+        let mut csr = MutableCsr::with_capacity(4, 100);
+        for i in 1..=6i64 {
+            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 0, 1)
+                .unwrap();
+        }
+        csr.insert_edge(1u32, VertexId::from_int64(1), EdgeId(7), 0, 1)
+            .unwrap();
+
+        let removed = csr.compact_with_ts(3, 1.0);
+        assert_eq!(removed, 0);
+
+        let capacity = csr.total_edge_capacity;
+        assert!(capacity <= 7 + 4, "capacity must stay bounded, got {}", capacity);
+        assert_eq!(csr.edges_of(0u32, 3).len(), 6);
+        assert_eq!(csr.edges_of(1u32, 3).len(), 1);
+    }
+
+    #[test]
+    fn test_compact_with_ts_zero_ratio_keeps_exact_degree() {
+        let mut csr = MutableCsr::with_capacity(4, 100);
+        for i in 1..=3i64 {
+            csr.insert_edge(0u32, VertexId::from_int64(i), EdgeId(i as u64), 0, 1)
+                .unwrap();
+        }
+        let removed = csr.compact_with_ts(3, 0.0);
+        assert_eq!(removed, 0);
+        assert_eq!(csr.total_edge_capacity, 3);
+        assert_eq!(csr.edges_of(0u32, 3).len(), 3);
     }
 
     #[test]

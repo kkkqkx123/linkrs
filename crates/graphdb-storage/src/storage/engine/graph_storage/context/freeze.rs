@@ -135,7 +135,10 @@ impl GraphStorageContext {
     }
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
-        let config = CompactConfig::with_fixed_ratio(true, 2.0).enable_segment_merge(1000);
+        // Reserve ratio 0.5 doubles the compacted capacity (matches the
+        // original 2.0 growth intent; 2.0 clamps to 1.0 inside
+        // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
+        let config = CompactConfig::with_fixed_ratio(true, 0.5).enable_segment_merge(1000);
         let ts = Timestamp::MAX;
 
         // Use FreezeGuard to manage freeze statistics

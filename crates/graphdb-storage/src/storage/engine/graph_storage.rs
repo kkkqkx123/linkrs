@@ -18,7 +18,7 @@ mod writer;
 #[cfg(test)]
 mod tests;
 
-pub use context::{AutoCommitBatchWindow, GraphStorageContext};
+pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +65,12 @@ impl GraphStorage {
     /// Return the MVCC manager used by this storage instance.
     pub fn version_manager(&self) -> Arc<crate::transaction::VersionManager> {
         self.ctx.version_manager().clone()
+    }
+
+    /// Cumulative auto-commit write-gate admission statistics (see
+    /// [`context::WriteGateStats`]).
+    pub fn write_gate_stats(&self) -> context::WriteGateStats {
+        self.ctx.write_gate_stats()
     }
 
     pub fn begin_auto_commit_batch(&self) -> StorageResult<Arc<context::AutoCommitBatchWindow>> {

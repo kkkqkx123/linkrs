@@ -48,7 +48,7 @@ pub use cursor::{
     VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
-pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage};
+pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};
 pub use engine::persistence_coordinator::{
     CatalogLockDiagnostic, CheckpointStats, PersistenceConfig, PersistenceDiagnostics,
     PersistenceFaultPoint, SnapshotStats,

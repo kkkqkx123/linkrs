@@ -390,11 +390,23 @@ impl WriteTimestampLease {
     }
 }
 
+/// Cumulative gate admission statistics (acquisitions and total wait time).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WriteGateStats {
+    /// Number of gate acquisitions (statements serialized).
+    pub acquisitions: u64,
+    /// Total time spent waiting for admission, in nanoseconds.
+    pub wait_nanos: u64,
+}
+
 /// Serializes auto-commit DML statements.
 struct AutoCommitWriteGate {
     locked: AtomicBool,
     mutex: Mutex<()>,
     condvar: parking_lot::Condvar,
+    /// Cumulative admission counters (see [`WriteGateStats`]).
+    acquisitions: AtomicU64,
+    wait_nanos: AtomicU64,
 }
 
 impl AutoCommitWriteGate {
@@ -403,19 +415,32 @@ impl AutoCommitWriteGate {
             locked: AtomicBool::new(false),
             mutex: Mutex::new(()),
             condvar: parking_lot::Condvar::new(),
+            acquisitions: AtomicU64::new(0),
+            wait_nanos: AtomicU64::new(0),
         })
     }
 
     fn acquire(self: &Arc<Self>) -> Arc<AutoCommitWriteLease> {
+        let start = std::time::Instant::now();
         let mut guard = self.mutex.lock();
         while self.locked.swap(true, Ordering::Acquire) {
             self.condvar.wait(&mut guard);
         }
         drop(guard);
+        self.acquisitions.fetch_add(1, Ordering::Relaxed);
+        self.wait_nanos
+            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
         Arc::new(AutoCommitWriteLease {
             gate: self.clone(),
             held: AtomicBool::new(true),
         })
+    }
+
+    fn stats(&self) -> WriteGateStats {
+        WriteGateStats {
+            acquisitions: self.acquisitions.load(Ordering::Relaxed),
+            wait_nanos: self.wait_nanos.load(Ordering::Relaxed),
+        }
     }
 
     fn release(&self) {
@@ -899,6 +924,12 @@ impl GraphStorageContext {
             auto_commit_window: None,
             cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// Cumulative auto-commit write-gate admission statistics. Used by
+    /// benchmarks (B2) to attribute write-path time to gate contention.
+    pub fn write_gate_stats(&self) -> WriteGateStats {
+        self.persistent.auto_commit_write_gate.stats()
     }
 
     /// Lazily register a vertex label snapshot if not already registered.
