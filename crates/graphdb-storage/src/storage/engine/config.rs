@@ -12,12 +12,12 @@ use crate::storage::compression::CompressionType;
 /// counts increase write concurrency but widen the internal ID space under
 /// imbalanced hash distribution (max ID <= num_shards * live_vertices).
 /// The default adapts to the available CPU parallelism, clamped within
-/// [1, 16] and rounded up to a power of two (required by shard-ID encoding).
+/// [1, 256] and rounded up to a power of two (required by shard-ID encoding).
 pub fn default_vertex_table_shards() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .clamp(1, 16)
+        .clamp(1, 256)
         .next_power_of_two()
 }
 
@@ -707,12 +707,12 @@ impl PropertyGraphConfig {
                 "auto_compact min_hole_ratio must be in [0.0, 1.0]",
             ));
         }
-        if !(1..=16).contains(&self.vertex_table_shards)
+        if !(1..=256).contains(&self.vertex_table_shards)
             || !self.vertex_table_shards.is_power_of_two()
         {
             return Err(StorageError::new(
                 StorageErrorKind::InvalidInput,
-                "vertex_table_shards must be a power of two in [1, 16]",
+                "vertex_table_shards must be a power of two in [1, 256]",
             ));
         }
         self.cold_tier.validate()?;

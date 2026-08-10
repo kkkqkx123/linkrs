@@ -204,10 +204,18 @@ impl WalManager {
                 })?
         };
 
+        // Record the append in the group-commit coordinator for every
+        // durability level when group commit is enabled. For Sync this is the
+        // waiting path below; for Async this lets the transaction's WAL bytes
+        // be covered by the next leader's fsync (free durability piggyback,
+        // amortizing fsyncs across Sync + Async writers).
+        let coordinator = writer.lock().group_commit_coordinator().cloned();
+        if let Some(ref coordinator) = coordinator {
+            coordinator.record_appended(lsn.get());
+        }
+
         if matches!(durability, crate::core::types::DurabilityLevel::Sync) {
-            let coordinator = writer.lock().group_commit_coordinator().cloned();
-            if let Some(coordinator) = coordinator {
-                coordinator.record_appended(lsn.get());
+            if let Some(ref coordinator) = coordinator {
                 coordinator.append_and_wait(lsn.get()).map_err(|error| {
                     StorageError::wal_error(format!(
                         "Failed to await durable WAL transaction: {}",
@@ -323,5 +331,56 @@ mod tests {
             Some(Lsn::new(80)),
             "WAL truncation must stop at the oldest active index barrier"
         );
+    }
+
+    #[test]
+    fn test_async_append_records_coordinator_for_piggyback_sync() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mut manager = WalManager::new();
+        manager
+            .open(temp_dir.path(), 0)
+            .expect("Failed to open WAL");
+
+        // Async append: recorded in the coordinator but must not block on fsync.
+        let lsn = manager
+            .append_transaction_with_durability(
+                crate::core::types::TransactionId::new(1),
+                Vec::new(),
+                &[],
+                crate::core::types::DurabilityLevel::Async,
+            )
+            .expect("async append must not wait");
+        assert!(
+            lsn.get() > 0,
+            "async append must still advance the WAL LSN"
+        );
+
+        // A later explicit sync must make the async append durable: the
+        // coordinator now knows about the appended LSN, so the sync's fsync
+        // covers it (this is the free-durability piggyback path).
+        manager.sync().expect("sync should succeed");
+        assert!(
+            manager.durable_lsn().as_u64() >= lsn.get(),
+            "sync after async append must cover the appended LSN"
+        );
+    }
+
+    #[test]
+    fn test_none_durability_does_not_block() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mut manager = WalManager::new();
+        manager
+            .open(temp_dir.path(), 0)
+            .expect("Failed to open WAL");
+
+        let lsn = manager
+            .append_transaction_with_durability(
+                crate::core::types::TransactionId::new(2),
+                Vec::new(),
+                &[],
+                crate::core::types::DurabilityLevel::None,
+            )
+            .expect("none durability append must not wait");
+        assert!(lsn.get() > 0);
     }
 }

@@ -972,6 +972,87 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_window_unregisters_lazily_registered_snapshots() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let window = storage.begin_auto_commit_batch().unwrap();
+        for i in 0..20 {
+            let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
+            let vertex = Vertex::new(
+                VertexId::from_int64(1000 + i),
+                vec![Tag::new(
+                    "Person".to_string(),
+                    vec![
+                        ("name".to_string(), Value::string(format!("leak_{i}"))),
+                        ("age".to_string(), Value::BigInt(i)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )],
+            );
+            bound.insert_vertex("test_space", vertex).unwrap();
+            bound.finalize_operation(true).unwrap();
+            drop(bound);
+        }
+        storage.finalize_auto_commit_batch(&window).unwrap();
+
+        // Every snapshot registered lazily by the window's statements must be
+        // released at window finalize; otherwise the table's GC watermark is
+        // pinned forever (version data can never be reclaimed).
+        let active = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.active_snapshot_count())
+                    .sum::<usize>()
+            });
+        assert_eq!(active, 0, "batch window leaked vertex snapshots");
+    }
+
+    #[test]
+    fn test_group_window_unregisters_lazily_registered_snapshots() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let window = storage.begin_auto_commit_group().unwrap();
+        for i in 0..20 {
+            let mut bound = storage.bind_auto_commit_statement(&window).unwrap();
+            let vertex = Vertex::new(
+                VertexId::from_int64(2000 + i),
+                vec![Tag::new(
+                    "Person".to_string(),
+                    vec![
+                        ("name".to_string(), Value::string(format!("gleak_{i}"))),
+                        ("age".to_string(), Value::BigInt(i)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )],
+            );
+            bound.insert_vertex("test_space", vertex).unwrap();
+            bound.finalize_operation(true).unwrap();
+            drop(bound);
+        }
+        window.finalize_group().unwrap();
+
+        let active = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.active_snapshot_count())
+                    .sum::<usize>()
+            });
+        assert_eq!(active, 0, "group window leaked vertex snapshots");
+    }
+
+    #[test]
     fn test_auto_commit_batch_window_failed_statement_rolls_back_itself() {
         let mut storage = create_test_storage();
         setup_space(&mut storage);

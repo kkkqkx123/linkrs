@@ -25,9 +25,9 @@ pub enum TransactionIsolationLevel {
     /// `TransactionManager`. Auto-commit DML statements run as single-statement
     /// transactions that bypass the manager and are serialized by the storage
     /// write gate; a failed auto-commit statement is rolled back via before-image
-    /// undo. Within a single auto-commit statement the read snapshot is stable,
-    /// but property updates are physically overwritten (no MVCC version chain),
-    /// so two statements racing on the same entity observe each other's writes.
+    /// undo. Property updates write a per-row before-image version chain
+    /// (see `ColumnStore::set_versioned`), so old values remain readable at
+    /// their snapshot timestamp until garbage collection reclaims them.
     #[default]
     RepeatableRead,
     /// Read Committed - each statement sees the latest committed snapshot.

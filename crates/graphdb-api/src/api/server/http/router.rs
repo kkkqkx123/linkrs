@@ -60,6 +60,7 @@ pub fn create_router<
         + StorageSyncContextOps
         + StorageOperationContextOps
         + crate::storage::AutoCommitBatchOps
+        + crate::storage::AutoCommitGroupOps
         + UndoTarget
         + Clone
         + Send

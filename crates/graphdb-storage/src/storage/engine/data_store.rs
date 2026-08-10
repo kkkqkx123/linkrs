@@ -621,12 +621,15 @@ impl GraphDataStore {
     ///
     /// Uses scatter-gather: all Arcs are collected under a brief catalog read lock,
     /// then each table is locked individually so different edge labels' partitions
-    /// can be mutated concurrently.
-    pub(crate) fn for_each_edge_partition_mut<R>(
+    /// can be mutated concurrently. Partitions run in parallel (rayon); the closure
+    /// must be `Sync` and its result `Send`, and results preserve partition order.
+    pub(crate) fn for_each_edge_partition_mut<R: Send>(
         &self,
         edge_label: LabelId,
-        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R>,
+        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R> + Sync,
     ) -> StorageResult<Vec<R>> {
+        use rayon::prelude::*;
+
         let keys = self.edge_partition_keys(edge_label)?;
         let arcs: Vec<(EdgeTableKey, Arc<RwLock<EdgeStore>>)> = {
             let guard = self.edge_tables.read();
@@ -634,10 +637,10 @@ impl GraphDataStore {
                 .filter_map(|key| guard.get(key).map(|arc| (*key, arc.clone())))
                 .collect()
         };
-        arcs.into_iter()
+        arcs.par_iter()
             .map(|(key, arc)| {
                 let mut table = arc.write();
-                operation(key, &mut table)
+                operation(*key, &mut table)
             })
             .collect()
     }
@@ -648,15 +651,23 @@ impl GraphDataStore {
     /// Uses scatter-gather: all EdgeTableKeys are collected from the edge_label_index
     /// under a brief catalog read lock, then each table is locked individually so
     /// partitions from different edge labels can be mutated concurrently.
-    pub(crate) fn for_all_edge_partitions_mut<R>(
+    ///
+    /// The operation runs in parallel over the partitions (rayon) because each
+    /// partition is an independent lock domain: different edge labels' tables
+    /// are never touched by the same call. The closure must be `Sync` and its
+    /// result `Send`; results preserve partition order.
+    pub(crate) fn for_all_edge_partitions_mut<R: Send>(
         &self,
-        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R>,
+        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R> + Sync,
     ) -> StorageResult<Vec<R>> {
+        use rayon::prelude::*;
+
         let keys: Vec<EdgeTableKey> = {
             let index = self.read_edge_label_index();
             index.values().flat_map(|v| v.iter()).copied().collect()
         };
-        keys.into_iter()
+        let arcs: Vec<(EdgeTableKey, Arc<RwLock<EdgeStore>>)> = keys
+            .into_iter()
             .filter_map(|key| {
                 let arc = {
                     let guard = self.edge_tables.read();
@@ -664,9 +675,11 @@ impl GraphDataStore {
                 };
                 arc.map(|arc| (key, arc))
             })
+            .collect();
+        arcs.par_iter()
             .map(|(key, arc)| {
                 let mut table = arc.write();
-                operation(key, &mut table)
+                operation(*key, &mut table)
             })
             .collect()
     }

@@ -11,7 +11,11 @@ use crate::storage::schema::ChangeDetails;
 use crate::storage::types::StoragePropertyDef;
 use crate::storage::vertex::{IdKey, VertexRecord};
 
-const MAX_SHARDS: usize = 16;
+/// Maximum shard count per vertex table. Lifted from 16 to 256 so a single
+/// vertex label's write concurrency is no longer pinned to 16 on large
+/// machines; the interleaved ID encoding supports any power-of-two count up
+/// to this value within the u32 ID space (~16.7M vertices per shard).
+const MAX_SHARDS: usize = 256;
 
 /// Adapt the default shard count to the available CPU parallelism, clamped to
 /// `MAX_SHARDS` and rounded down to a power of two (required by the shard-ID
@@ -23,7 +27,6 @@ fn default_num_shards() -> usize {
         .clamp(1, MAX_SHARDS)
         .next_power_of_two()
 }
-
 // Internal ID layout: `internal_id = (segment << K) | slot`.
 // A shard's i-th segment is `shard + i * num_shards`, so segments are
 // interleaved across shards and unique per shard, and the shard is recovered
@@ -268,15 +271,30 @@ impl ShardedVertexTable {
     }
 
     pub fn scan(&self, ts: Timestamp) -> Vec<VertexRecord> {
-        let mut all = Vec::new();
-        for (shard_idx, shard) in self.shards.iter().enumerate() {
-            let table = shard.read();
-            for mut record in table.scan(ts) {
-                record.internal_id = self.encode_id(shard_idx, record.internal_id);
-                all.push(record);
-            }
+        use rayon::prelude::*;
+        let per_shard: Vec<(usize, Vec<VertexRecord>)> = self
+            .shards
+            .par_iter()
+            .enumerate()
+            .map(|(shard_idx, shard)| {
+                let table = shard.read();
+                let records: Vec<VertexRecord> = table
+                    .scan(ts)
+                    .map(|mut record| {
+                        record.internal_id = self.encode_id(shard_idx, record.internal_id);
+                        record
+                    })
+                    .collect();
+                (shard_idx, records)
+            })
+            .collect();
+        // Shards are independent read domains: parallel scan is safe, and
+        // results are reassembled in shard order for stable pagination.
+        let mut ordered = vec![Vec::new(); per_shard.len()];
+        for (shard_idx, records) in per_shard {
+            ordered[shard_idx] = records;
         }
-        all
+        ordered.into_iter().flatten().collect()
     }
 
     /// Live global internal IDs (shard-encoded), in shard order.
@@ -769,7 +787,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_id() {
-        for num_shards in [1usize, 2, 4, 8, 16] {
+        for num_shards in [1usize, 2, 4, 8, 16, 32, 64, 128, 256] {
             for shard in 0..num_shards {
                 for local in [
                     0,
@@ -992,7 +1010,7 @@ mod tests {
 
     #[test]
     fn test_internal_id_upper_bound_across_shard_counts() {
-        for num_shards in [1usize, 2, 4, 8] {
+        for num_shards in [1usize, 2, 4, 8, 32, 128, 256] {
             let table =
                 ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), num_shards);
             let ts = TEST_TS;

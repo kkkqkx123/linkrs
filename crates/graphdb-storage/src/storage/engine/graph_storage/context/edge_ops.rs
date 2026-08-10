@@ -90,26 +90,14 @@ impl GraphStorageContext {
                 Ok(table)
             },
             |edge_table| {
-                let mut rank = params.rank;
-                loop {
-                    match edge_table.insert_edge(
-                        src_internal,
-                        dst_internal,
-                        rank,
-                        params.properties,
-                        params.ts,
-                    ) {
-                        Ok(()) => return Ok(edge_table.needs_background_freeze()),
-                        Err(ref error)
-                            if error.kind()
-                                == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists
-                                && rank == params.rank =>
-                        {
-                            rank += 1;
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
+                edge_table.insert_edge(
+                    src_internal,
+                    dst_internal,
+                    params.rank,
+                    params.properties,
+                    params.ts,
+                )?;
+                Ok(edge_table.needs_background_freeze())
             },
         )?;
         if freeze_requested {

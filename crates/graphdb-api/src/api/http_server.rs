@@ -23,6 +23,7 @@ pub async fn start_http_server<
         + StorageSyncContextOps
         + StorageOperationContextOps
         + crate::storage::AutoCommitBatchOps
+        + crate::storage::AutoCommitGroupOps
         + UndoTarget
         + Clone
         + Send
@@ -74,6 +75,7 @@ pub async fn start_http_and_grpc_servers<
         + StorageSyncContextOps
         + StorageOperationContextOps
         + crate::storage::AutoCommitBatchOps
+        + crate::storage::AutoCommitGroupOps
         + Clone
         + Send
         + Sync

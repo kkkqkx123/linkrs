@@ -14,7 +14,7 @@ use crate::storage::cold::ColdSnapshot;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
 use crate::storage::engine::config::PropertyGraphConfig;
-use crate::storage::engine::data_store::GraphDataStore;
+use crate::storage::engine::data_store::{EdgeTableKey, GraphDataStore};
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
@@ -501,8 +501,13 @@ pub struct AutoCommitBatchWindow {
     base_ctx: Arc<GraphStorageContext>,
     gate_lease: Arc<AutoCommitWriteLease>,
     first_ts: Mutex<Option<Timestamp>>,
-    vertex_snapshot_handles: Mutex<Vec<(LabelId, SnapshotHandle)>>,
-    edge_snapshot_registered: AtomicBool,
+    /// Lazily registered vertex snapshots as (label, handle) pairs. One
+    /// entry per registration; the per-timestamp refcount stays balanced when
+    /// the same label is registered by several statements (group mode shares
+    /// one timestamp).
+    registered_vertex_snapshots: Mutex<Vec<(LabelId, SnapshotHandle)>>,
+    /// Lazily registered edge-partition snapshots as (key, timestamp) pairs.
+    registered_edge_snapshots: Mutex<Vec<(EdgeTableKey, Timestamp)>>,
     statement_count: AtomicU64,
     snapshot_rounds: AtomicU64,
     /// Group mode (P0 C): statements share one write timestamp (first_ts),
@@ -532,12 +537,6 @@ impl AutoCommitBatchWindow {
                         .try_next_write_timestamp()
                         .map_err(|error| StorageError::db_error(error.to_string()))?;
                     *first = Some(ts);
-                    let (vertex_handles, edge_registered) =
-                        base.register_auto_commit_snapshots(ts)?;
-                    self.vertex_snapshot_handles.lock().extend(vertex_handles);
-                    if edge_registered {
-                        self.edge_snapshot_registered.store(true, Ordering::SeqCst);
-                    }
                     self.snapshot_rounds.fetch_add(1, Ordering::SeqCst);
                     ts
                 }
@@ -641,38 +640,35 @@ impl AutoCommitBatchWindow {
     }
 
     fn unregister_snapshots(&self) {
-        let vertex_handles = std::mem::take(&mut *self.vertex_snapshot_handles.lock());
-        if !vertex_handles.is_empty() {
+        // Unregister every vertex snapshot registered lazily by the window's
+        // statements. Each entry matches one registration (handle), so the
+        // per-timestamp refcounts return to zero exactly.
+        let vertex_registrations = std::mem::take(&mut *self.registered_vertex_snapshots.lock());
+        if !vertex_registrations.is_empty() {
             let tables = self
                 .base_ctx
                 .persistent
                 .data_store
-                .with_vertex_tables(|tables| {
-                    vertex_handles
-                        .iter()
-                        .filter_map(|(label_id, _)| {
-                            tables.get(label_id).map(|table| (*label_id, table.clone()))
-                        })
-                        .collect::<Vec<_>>()
-                });
-            for (label_id, vertex_table) in tables {
-                for (handle_label, handle) in &vertex_handles {
-                    if *handle_label == label_id {
-                        let _ = vertex_table.unregister_snapshot(*handle);
+                .with_vertex_tables(|tables| tables.values().cloned().collect::<Vec<_>>());
+            for (label_id, handle) in vertex_registrations {
+                for table in &tables {
+                    if table.label() == label_id {
+                        let _ = table.unregister_snapshot(handle);
+                        break;
                     }
                 }
             }
         }
 
-        if self.edge_snapshot_registered.swap(false, Ordering::SeqCst) {
-            let first_ts = *self.first_ts.lock();
-            if let Some(ts) = first_ts {
-                let edge_tables = self
-                    .base_ctx
-                    .persistent
-                    .data_store
-                    .with_edge_tables(|tables| tables.values().cloned().collect::<Vec<_>>());
-                for edge_table in edge_tables {
+        let edge_registrations = std::mem::take(&mut *self.registered_edge_snapshots.lock());
+        if !edge_registrations.is_empty() {
+            let edge_tables = self
+                .base_ctx
+                .persistent
+                .data_store
+                .with_edge_tables(|tables| tables.clone());
+            for (key, ts) in edge_registrations {
+                if let Some(edge_table) = edge_tables.get(&key) {
                     edge_table.write().unregister_snapshot(ts);
                 }
             }
@@ -944,6 +940,17 @@ impl GraphStorageContext {
             registered.insert(label);
         }
 
+        // Batch windows own the snapshot lifecycle: record the registration so
+        // the window can unregister it (once per entry) at finalize. Without
+        // this the lazily registered snapshot would pin the table's GC
+        // watermark forever.
+        if let Some(window) = &self.auto_commit_window {
+            window
+                .registered_vertex_snapshots
+                .lock()
+                .push((label, handle));
+        }
+
         Some(handle)
     }
 
@@ -985,6 +992,15 @@ impl GraphStorageContext {
             {
                 let mut registered = operation.registered_edge_partitions.write();
                 registered.insert(edge_key);
+            }
+
+            // Batch windows own the snapshot lifecycle: record the
+            // registration for window-level unregistration at finalize.
+            if let Some(window) = &self.auto_commit_window {
+                window
+                    .registered_edge_snapshots
+                    .lock()
+                    .push((edge_key, timestamp));
             }
 
             true

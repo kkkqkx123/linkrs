@@ -40,12 +40,9 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .unwrap_or(0);
     let mut blocked_outputs = Vec::new();
     for generation in (max_gen + 1)..=(max_gen + 2) {
-        let blocked = gen_root
-            .join(format!("generation-{generation}"))
-            .join("forward_index.bin");
-        let _ = std::fs::remove_dir_all(&blocked);
-        std::fs::create_dir_all(&blocked).expect("failure fixture should be created");
-        blocked_outputs.push(blocked);
+        let gen_dir = gen_root.join(format!("generation-{generation}"));
+        std::fs::write(&gen_dir, b"blocked").expect("failure fixture should be created");
+        blocked_outputs.push(gen_dir);
     }
 
     let result = storage.rebuild_tag_index("test_space", "person_name_idx");
@@ -55,7 +52,7 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
     );
     drop(storage);
     for blocked in &blocked_outputs {
-        std::fs::remove_dir_all(blocked).expect("failure fixture should be removed");
+        std::fs::remove_file(blocked).expect("failure fixture should be removed");
     }
 
     let mut reopened = common::open_persistent_storage(&work_dir);
