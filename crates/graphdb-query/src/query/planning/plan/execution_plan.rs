@@ -58,6 +58,14 @@ pub struct ExecutionPlan {
     /// specs (`estimated_cardinality`) by the `estimated_rows` metadata pass.
     pub row_estimates: HashMap<i64, u64>,
 
+    /// Cost-based join algorithm decisions keyed by planner node id.
+    ///
+    /// Produced by the join-order rewriter when it reorders a join chain;
+    /// consumed by the arena builder to pick `HashJoin` vs nested-loop
+    /// execution for each `InnerJoin`/`LeftJoin` node. Absent keys fall
+    /// back to the default heuristic (hash join for valid equi keys).
+    pub join_algorithms: HashMap<i64, crate::query::optimizer::JoinAlgorithm>,
+
     /// The pure logical plan (if conversion succeeded).
     /// Used by cost-based optimization to make physical decisions.
     pub logical_plan: Option<LogicalPlan>,
@@ -77,6 +85,7 @@ impl ExecutionPlan {
             parallel_fallback_reason: String::new(),
             cbo_notes: Vec::new(),
             row_estimates: HashMap::new(),
+            join_algorithms: HashMap::new(),
             logical_plan: None,
         }
     }

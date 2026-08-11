@@ -528,7 +528,15 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = build_inner_join_spec(join_node)?;
+                let spec = match exec_ctx.join_algorithms.get(&node.id()) {
+                    Some(crate::query::optimizer::JoinAlgorithm::NestedLoopJoin { .. }) => {
+                        build_inner_join_nested_loop_spec(join_node)?
+                    }
+                    Some(crate::query::optimizer::JoinAlgorithm::HashJoin { .. }) => {
+                        build_inner_join_hash_spec(join_node)?
+                    }
+                    _ => build_inner_join_spec(join_node)?,
+                };
                 Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
@@ -559,7 +567,15 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = build_left_join_spec(join_node)?;
+                let spec = match exec_ctx.join_algorithms.get(&node.id()) {
+                    Some(crate::query::optimizer::JoinAlgorithm::NestedLoopJoin { .. }) => {
+                        build_left_join_nested_loop_spec(join_node)?
+                    }
+                    Some(crate::query::optimizer::JoinAlgorithm::HashJoin { .. }) => {
+                        build_left_join_hash_spec(join_node)?
+                    }
+                    _ => build_left_join_spec(join_node)?,
+                };
                 Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,

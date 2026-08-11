@@ -861,10 +861,10 @@ fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::graph_schema::EdgeDirection;
     use crate::core::types::Span;
     use crate::query::binder::validation::ValidationInfo;
     use crate::query::metadata::MetadataContext;
-    use crate::core::types::graph_schema::EdgeDirection;
     use crate::query::parser::ast::pattern::PathPattern;
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;
@@ -888,12 +888,7 @@ mod tests {
         let metadata_context: Option<MetadataContext> = None;
         let expr_context: Option<Arc<ExpressionAnalysisContext>> =
             Some(Arc::new(ExpressionAnalysisContext::new()));
-        (
-            qctx,
-            validation_info,
-            metadata_context,
-            expr_context,
-        )
+        (qctx, validation_info, metadata_context, expr_context)
     }
 
     fn create_test_ctx<'a>(
@@ -962,10 +957,7 @@ mod tests {
             LogicalNodeEnum::ExpandAll(expand) => {
                 assert_eq!(expand.input_var.as_deref(), Some("a"));
                 assert_eq!(expand.deps.len(), 1);
-                assert!(matches!(
-                    &expand.deps[0],
-                    LogicalNodeEnum::ScanVertices(_)
-                ));
+                assert!(matches!(&expand.deps[0], LogicalNodeEnum::ScanVertices(_)));
             }
             other => panic!("unexpected logical root: {:?}", other),
         }

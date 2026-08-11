@@ -10,6 +10,7 @@ use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
+use crate::query::optimizer::JoinAlgorithm;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
@@ -65,6 +66,14 @@ pub struct ExecutionContext {
     /// Injected from the optimizer engine by the pipeline; each query merges
     /// its columnar hit/miss counts back into the policy at completion.
     pub columnar_policy: Option<Arc<crate::query::executor::streaming::chunk::ColumnarPolicy>>,
+    /// Cost-based join algorithm decisions keyed by planner node id
+    /// (CBO join-order decision channel).
+    ///
+    /// Populated by the optimizer from the join reorder walker and consumed
+    /// by the arena builder when converting `InnerJoin`/`LeftJoin` nodes.
+    /// Absent keys fall back to the default heuristic (hash join for valid
+    /// equi keys).
+    pub join_algorithms: HashMap<i64, JoinAlgorithm>,
 }
 
 impl ExecutionContext {
@@ -96,6 +105,7 @@ impl ExecutionContext {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            join_algorithms: HashMap::new(),
         }
     }
 
@@ -127,6 +137,7 @@ impl ExecutionContext {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            join_algorithms: HashMap::new(),
         }
     }
 
@@ -157,6 +168,7 @@ impl ExecutionContext {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            join_algorithms: HashMap::new(),
         }
     }
 
@@ -197,6 +209,7 @@ impl ExecutionContext {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            join_algorithms: HashMap::new(),
         }
     }
 
@@ -272,6 +285,7 @@ impl Default for ExecutionContext {
             arena: None,
             feedback_history: None,
             columnar_policy: None,
+            join_algorithms: HashMap::new(),
         }
     }
 }

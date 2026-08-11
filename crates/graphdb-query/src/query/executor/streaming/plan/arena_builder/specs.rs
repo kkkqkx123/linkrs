@@ -872,10 +872,41 @@ pub(super) fn build_all_paths_spec(
 pub(super) fn build_inner_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
+    // Default path: a valid equi-condition produces the condition
+    // (nested-loop) form; a join without usable keys keeps the default.
+    build_join_with_condition(
+        node.hash_keys(),
+        node.probe_keys(),
+        JoinSpec::InnerJoin {
+            join_condition: None,
+        },
+    )
+}
+
+/// Force the condition (nested-loop) form for an inner join, regardless of
+/// hash keys.  Selected by the cost-based `JoinAlgorithm` decision when both
+/// operands are small enough that building a hash table is not worth it.
+pub(super) fn build_inner_join_nested_loop_spec(
+    node: &crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode,
+) -> Result<JoinSpec, PlanBuildError> {
+    build_join_with_condition(
+        node.hash_keys(),
+        node.probe_keys(),
+        JoinSpec::InnerJoin {
+            join_condition: None,
+        },
+    )
+}
+
+/// Force the hash-join form for an inner join when valid equi keys exist.
+/// Selected by the cost-based `JoinAlgorithm::HashJoin` decision; falls back
+/// to the condition form when the keys do not form a valid equi join.
+pub(super) fn build_inner_join_hash_spec(
+    node: &crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode,
+) -> Result<JoinSpec, PlanBuildError> {
     build_join_with_keys(
         node.hash_keys(),
         node.probe_keys(),
-        node.right_input().col_names(),
         JoinSpec::InnerJoin {
             join_condition: None,
         },
@@ -885,10 +916,37 @@ pub(super) fn build_inner_join_spec(
 pub(super) fn build_left_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
+    build_join_with_condition(
+        node.hash_keys(),
+        node.probe_keys(),
+        JoinSpec::LeftJoin {
+            join_condition: None,
+        },
+    )
+}
+
+/// Force the condition (nested-loop) form for a left join (see the inner
+/// variant for the rationale).
+pub(super) fn build_left_join_nested_loop_spec(
+    node: &crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode,
+) -> Result<JoinSpec, PlanBuildError> {
+    build_join_with_condition(
+        node.hash_keys(),
+        node.probe_keys(),
+        JoinSpec::LeftJoin {
+            join_condition: None,
+        },
+    )
+}
+
+/// Force the hash-join form for a left join when valid equi keys exist (see
+/// the inner variant for the rationale).
+pub(super) fn build_left_join_hash_spec(
+    node: &crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode,
+) -> Result<JoinSpec, PlanBuildError> {
     build_join_with_keys(
         node.hash_keys(),
         node.probe_keys(),
-        node.right_input().col_names(),
         JoinSpec::LeftJoin {
             join_condition: None,
         },
@@ -898,10 +956,9 @@ pub(super) fn build_left_join_spec(
 pub(super) fn build_right_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::RightJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_keys(
+    build_join_with_condition(
         node.hash_keys(),
         node.probe_keys(),
-        node.right_input().col_names(),
         JoinSpec::RightJoin {
             join_condition: None,
         },
@@ -911,10 +968,9 @@ pub(super) fn build_right_join_spec(
 pub(super) fn build_full_outer_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::FullOuterJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_keys(
+    build_join_with_condition(
         node.hash_keys(),
         node.probe_keys(),
-        node.right_input().col_names(),
         JoinSpec::FullOuterJoin {
             join_condition: None,
         },
@@ -924,24 +980,25 @@ pub(super) fn build_full_outer_join_spec(
 pub(super) fn build_semi_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_keys(
+    build_join_with_condition(
         node.hash_keys(),
         node.probe_keys(),
-        node.right_input().col_names(),
         JoinSpec::SemiJoin {
             join_condition: None,
         },
     )
 }
 
-pub(super) fn build_join_with_keys(
+/// Build an equi-condition from the hash/probe key pairs.
+///
+/// Returns `Ok(None)` when the keys do not form a valid equi join (missing,
+/// empty or unequal-length key lists).
+fn equi_condition_from_keys(
     hash_keys: &[crate::core::types::expr::ContextualExpression],
     probe_keys: &[crate::core::types::expr::ContextualExpression],
-    _right_col_names: &[String],
-    default: JoinSpec,
-) -> Result<JoinSpec, PlanBuildError> {
+) -> Result<Option<Expression>, PlanBuildError> {
     if hash_keys.is_empty() || probe_keys.is_empty() || hash_keys.len() != probe_keys.len() {
-        return Ok(default);
+        return Ok(None);
     }
     let left_first = hash_keys[0].get_expression().ok_or_else(|| {
         PlanBuildError::expression(
@@ -992,6 +1049,50 @@ pub(super) fn build_join_with_keys(
             right: Box::new(eq),
         };
     }
+    Ok(Some(condition))
+}
+
+fn hash_key_expressions(
+    keys: &[crate::core::types::expr::ContextualExpression],
+) -> Result<Vec<Expression>, PlanBuildError> {
+    keys.iter().map(contextual_to_expression).collect()
+}
+
+/// Default join spec builder: valid equi keys produce the hash join form
+/// (`HashJoin`/`HashLeftJoin`), invalid keys fall back to `default`.
+pub(super) fn build_join_with_keys(
+    hash_keys: &[crate::core::types::expr::ContextualExpression],
+    probe_keys: &[crate::core::types::expr::ContextualExpression],
+    default: JoinSpec,
+) -> Result<JoinSpec, PlanBuildError> {
+    match equi_condition_from_keys(hash_keys, probe_keys)? {
+        Some(_condition) => match default {
+            JoinSpec::InnerJoin { .. } => Ok(JoinSpec::HashJoin {
+                join_condition: None,
+                hash_keys: hash_key_expressions(hash_keys)?,
+                probe_keys: hash_key_expressions(probe_keys)?,
+            }),
+            JoinSpec::LeftJoin { .. } => Ok(JoinSpec::HashLeftJoin {
+                join_condition: None,
+                hash_keys: hash_key_expressions(hash_keys)?,
+                probe_keys: hash_key_expressions(probe_keys)?,
+            }),
+            _ => build_join_with_condition(hash_keys, probe_keys, default),
+        },
+        None => Ok(default),
+    }
+}
+
+/// Condition (nested-loop) join spec builder: the equi-condition is attached
+/// to `default` but no hash table is requested.
+fn build_join_with_condition(
+    hash_keys: &[crate::core::types::expr::ContextualExpression],
+    probe_keys: &[crate::core::types::expr::ContextualExpression],
+    default: JoinSpec,
+) -> Result<JoinSpec, PlanBuildError> {
+    let Some(condition) = equi_condition_from_keys(hash_keys, probe_keys)? else {
+        return Ok(default);
+    };
     match default {
         JoinSpec::InnerJoin { .. } => Ok(JoinSpec::InnerJoin {
             join_condition: Some(condition),

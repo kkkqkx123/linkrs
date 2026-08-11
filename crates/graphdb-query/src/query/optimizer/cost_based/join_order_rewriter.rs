@@ -7,6 +7,7 @@ use crate::query::optimizer::cost_based::join_order::{
     JoinCondition, JoinOrderOptimizer, JoinOrderResult, TableInfo,
 };
 use crate::query::optimizer::stats::StatsView;
+use crate::query::optimizer::JoinAlgorithm;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::query::planning::plan::logical::LogicalNodeEnum;
@@ -285,6 +286,24 @@ pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatsView) {
         }
         *count += 1;
     }
+
+    // Resolve predicate table ids now that the leaf ids are assigned. At
+    // flatten time the leaves are still unnamed, so the ids resolved there
+    // would be empty and the join-key resolution in
+    // `reconstruct_join_tree_with_decisions` could not map a predicate back
+    // to its operand pair.
+    for pred in &mut chain.predicates {
+        if pred.left_table.is_empty() {
+            if let Some(id) = match_key_to_leaf(&pred.left_key, &chain.leaves) {
+                pred.left_table = id;
+            }
+        }
+        if pred.right_table.is_empty() {
+            if let Some(id) = match_key_to_leaf(&pred.right_key, &chain.leaves) {
+                pred.right_table = id;
+            }
+        }
+    }
 }
 
 fn has_index_scan(node: &PlanNodeEnum) -> bool {
@@ -355,6 +374,29 @@ pub fn reconstruct_join_tree(
     chain: &FlattenedJoinChain,
     result: &JoinOrderResult,
 ) -> PlanNodeEnum {
+    reconstruct_join_tree_with_decisions(original_root, chain, result, &mut None)
+}
+
+/// Rebuild the reordered join tree, recording the per-join `JoinAlgorithm`
+/// decision (from `result.algorithms`) keyed by the newly created
+/// `InnerJoin` node id.
+///
+/// The decision channel is the first cost-based physical choice that takes
+/// effect downstream: the arena builder consults
+/// `ExecutionContext::join_algorithms` when converting the join node.
+/// Decisions are only recorded when they are executable and safe:
+///
+/// - `HashJoin` requires valid equi keys (`has_hash_keys`);
+/// - `NestedLoopJoin` requires trusted row estimates (both operands > 0) so
+///   that a missing-statistics plan (0-row estimates) does not silently turn
+///   every keyed join into an O(N*M) scan;
+/// - `IndexJoin` has no executor yet and is left to the default heuristic.
+fn reconstruct_join_tree_with_decisions(
+    original_root: &PlanNodeEnum,
+    chain: &FlattenedJoinChain,
+    result: &JoinOrderResult,
+    decisions: &mut Option<&mut HashMap<i64, JoinAlgorithm>>,
+) -> PlanNodeEnum {
     let original_type = classify_join(original_root);
     if original_type != JoinNodeType::Inner && original_type != JoinNodeType::Cross {
         return original_root.clone();
@@ -364,6 +406,12 @@ pub fn reconstruct_join_tree(
         .leaves
         .iter()
         .map(|l| (l.id.as_str(), &l.physical_node))
+        .collect();
+
+    let leaf_rows: HashMap<&str, u64> = chain
+        .leaves
+        .iter()
+        .map(|l| (l.id.as_str(), l.estimated_rows))
         .collect();
 
     let mut pred_map: PredMap = HashMap::new();
@@ -380,6 +428,8 @@ pub fn reconstruct_join_tree(
     }
 
     let mut current: Option<PlanNodeEnum> = None;
+    let mut accumulated_rows: u64 = 0;
+    let mut step: usize = 0;
 
     for table_id in &result.order {
         let right_node = match leaf_map.get(table_id.as_str()) {
@@ -389,6 +439,7 @@ pub fn reconstruct_join_tree(
                 continue;
             }
         };
+        let right_rows = leaf_rows.get(table_id.as_str()).copied().unwrap_or(0);
 
         current = match current.take() {
             Some(left) => {
@@ -397,17 +448,80 @@ pub fn reconstruct_join_tree(
                 let pair_key = if lid <= rid {
                     (lid.clone(), rid.clone())
                 } else {
-                    (rid, lid)
+                    (rid.clone(), lid.clone())
                 };
                 let (hash_keys, probe_keys) =
                     resolve_keys_for_pair(&pair_key, &pred_map, &left, &right_node);
-                Some(build_inner_join(left, right_node, hash_keys, probe_keys))
+                let has_hash_keys = !hash_keys.is_empty();
+                let joined = build_inner_join(left, right_node, hash_keys, probe_keys);
+                if let Some(decisions) = decisions.as_deref_mut() {
+                    let algorithm = result.algorithms.get(step);
+                    record_join_algorithm(
+                        decisions,
+                        &joined,
+                        algorithm,
+                        has_hash_keys,
+                        accumulated_rows,
+                        right_rows,
+                    );
+                }
+                step += 1;
+                // Output estimate mirrors the join-order cost model's
+                // `calculate_join_cost` (default selectivity 0.3).
+                let selectivity = chain
+                    .predicates
+                    .iter()
+                    .find(|p| {
+                        let a = p.left_table.as_str();
+                        let b = p.right_table.as_str();
+                        (a == lid && b == rid) || (a == rid && b == lid)
+                    })
+                    .map(|p| p.selectivity)
+                    .unwrap_or(0.3);
+                accumulated_rows =
+                    ((accumulated_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);
+                Some(joined)
             }
-            None => Some(right_node),
+            None => {
+                accumulated_rows = right_rows;
+                Some(right_node)
+            }
         };
     }
 
     current.unwrap_or_else(|| original_root.clone())
+}
+
+/// Normalize a cost-based join algorithm decision and record it for the
+/// arena builder.  See [`reconstruct_join_tree_with_decisions`] for the
+/// safety gates.
+fn record_join_algorithm(
+    decisions: &mut HashMap<i64, JoinAlgorithm>,
+    node: &PlanNodeEnum,
+    algorithm: Option<&JoinAlgorithm>,
+    has_hash_keys: bool,
+    left_rows: u64,
+    right_rows: u64,
+) {
+    let Some(algorithm) = algorithm else {
+        return;
+    };
+    match algorithm {
+        JoinAlgorithm::NestedLoopJoin { .. } => {
+            if left_rows > 0 && right_rows > 0 {
+                decisions.insert(node.id(), algorithm.clone());
+            }
+        }
+        JoinAlgorithm::HashJoin { .. } => {
+            if has_hash_keys {
+                decisions.insert(node.id(), algorithm.clone());
+            }
+        }
+        JoinAlgorithm::IndexJoin { .. } => {
+            // No index-join executor: the default heuristic (hash join)
+            // applies.
+        }
+    }
 }
 
 fn resolve_keys_for_pair(
@@ -470,6 +584,7 @@ fn try_optimize_join_tree(
     root: &PlanNodeEnum,
     stats: &StatsView,
     cost_calculator: &CostCalculator,
+    decisions: &mut Option<&mut HashMap<i64, JoinAlgorithm>>,
 ) -> OptResult {
     let Some(mut chain) = flatten_join_chain(root) else {
         return OptResult::Unchanged;
@@ -500,7 +615,12 @@ fn try_optimize_join_tree(
         result.optimization_method,
         result.order.join(", ")
     );
-    OptResult::Changed(Box::new(reconstruct_join_tree(root, &chain, &result)), note)
+    OptResult::Changed(
+        Box::new(reconstruct_join_tree_with_decisions(
+            root, &chain, &result, decisions,
+        )),
+        note,
+    )
 }
 
 pub fn walk_and_optimize_joins(
@@ -509,8 +629,21 @@ pub fn walk_and_optimize_joins(
     cost_calculator: &CostCalculator,
     notes: &mut Vec<String>,
 ) -> PlanNodeEnum {
+    walk_and_optimize_joins_with_decisions(root, stats, cost_calculator, notes, &mut None)
+}
+
+/// Recursively rewrite reorderable join chains, recording the cost-based
+/// `JoinAlgorithm` decisions (keyed by the rebuilt join node ids) into
+/// `decisions` for the arena builder.
+pub fn walk_and_optimize_joins_with_decisions(
+    root: &PlanNodeEnum,
+    stats: &StatsView,
+    cost_calculator: &CostCalculator,
+    notes: &mut Vec<String>,
+    decisions: &mut Option<&mut HashMap<i64, JoinAlgorithm>>,
+) -> PlanNodeEnum {
     if let OptResult::Changed(optimized, note) =
-        try_optimize_join_tree(root, stats, cost_calculator)
+        try_optimize_join_tree(root, stats, cost_calculator, decisions)
     {
         notes.push(note);
         return *optimized;
@@ -518,92 +651,200 @@ pub fn walk_and_optimize_joins(
 
     match root {
         PlanNodeEnum::Project(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Project(cloned)
         }
         PlanNodeEnum::Filter(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Filter(cloned)
         }
         PlanNodeEnum::Sort(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Sort(cloned)
         }
         PlanNodeEnum::Limit(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Limit(cloned)
         }
         PlanNodeEnum::TopN(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::TopN(cloned)
         }
         PlanNodeEnum::Sample(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Sample(cloned)
         }
         PlanNodeEnum::Dedup(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Dedup(cloned)
         }
         PlanNodeEnum::Aggregate(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Aggregate(cloned)
         }
         PlanNodeEnum::Window(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Window(cloned)
         }
         PlanNodeEnum::Traverse(n) => {
-            let new_input = walk_and_optimize_joins(n.input(), stats, cost_calculator, notes);
+            let new_input = walk_and_optimize_joins_with_decisions(
+                n.input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_input(new_input);
             PlanNodeEnum::Traverse(cloned)
         }
         PlanNodeEnum::LeftJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
+            let new_left = walk_and_optimize_joins_with_decisions(
+                n.left_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
+            let new_right = walk_and_optimize_joins_with_decisions(
+                n.right_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::LeftJoin(cloned)
         }
         PlanNodeEnum::RightJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
+            let new_left = walk_and_optimize_joins_with_decisions(
+                n.left_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
+            let new_right = walk_and_optimize_joins_with_decisions(
+                n.right_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::RightJoin(cloned)
         }
         PlanNodeEnum::FullOuterJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
+            let new_left = walk_and_optimize_joins_with_decisions(
+                n.left_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
+            let new_right = walk_and_optimize_joins_with_decisions(
+                n.right_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
             PlanNodeEnum::FullOuterJoin(cloned)
         }
         PlanNodeEnum::SemiJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
+            let new_left = walk_and_optimize_joins_with_decisions(
+                n.left_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
+            let new_right = walk_and_optimize_joins_with_decisions(
+                n.right_input(),
+                stats,
+                cost_calculator,
+                notes,
+                decisions,
+            );
             let mut cloned = n.clone();
             cloned.set_left_input(new_left);
             cloned.set_right_input(new_right);
@@ -920,6 +1161,22 @@ pub fn assign_leaf_info_logical(chain: &mut FlattenedJoinChainLogical, stats: &S
             leaf.id = format!("{}_{}", key, count);
         }
         *count += 1;
+    }
+
+    // Resolve predicate table ids now that the leaf ids are assigned (see
+    // `assign_leaf_info` for the rationale).
+    let leaf_ids: Vec<String> = chain.leaves.iter().map(|l| l.id.clone()).collect();
+    for pred in &mut chain.predicates {
+        if pred.left_table.is_empty() {
+            if let Some(id) = match_key_to_leaf_ids(&pred.left_key, &leaf_ids) {
+                pred.left_table = id;
+            }
+        }
+        if pred.right_table.is_empty() {
+            if let Some(id) = match_key_to_leaf_ids(&pred.right_key, &leaf_ids) {
+                pred.right_table = id;
+            }
+        }
     }
 }
 
@@ -1369,6 +1626,91 @@ mod tests {
         assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
         // Verify it's still a valid join tree
         assert!(optimized.children().len() >= 2);
+    }
+
+    #[test]
+    fn test_keyed_chain_records_join_decision() {
+        let a = make_scan("a", 1000);
+        let b = make_scan("b", 10);
+        let join = make_hash_join(a, b, vec!["a.id"], vec!["b.id"]);
+
+        let stats = StatisticsManager::new();
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let stats_view = StatsView::new(&stats, None);
+        let mut notes = Vec::new();
+        let mut decisions = HashMap::new();
+        let optimized = walk_and_optimize_joins_with_decisions(
+            &join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut Some(&mut decisions),
+        );
+
+        // The reordered tree is a join and the rebuild records exactly one
+        // decision, keyed by the rebuilt root node id.
+        assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
+        assert_eq!(decisions.len(), 1);
+        let algorithm = decisions
+            .get(&optimized.id())
+            .expect("decision for the rebuilt join node");
+        assert!(
+            matches!(
+                algorithm,
+                JoinAlgorithm::HashJoin { .. } | JoinAlgorithm::NestedLoopJoin { .. }
+            ),
+            "expected an executable join algorithm, got {:?}",
+            algorithm
+        );
+    }
+
+    #[test]
+    fn test_unchanged_tree_records_no_decisions() {
+        let a = make_scan("a", 1000);
+        let stats = StatisticsManager::new();
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let stats_view = StatsView::new(&stats, None);
+        let mut notes = Vec::new();
+        let mut decisions = HashMap::new();
+        let result = walk_and_optimize_joins_with_decisions(
+            &a,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut Some(&mut decisions),
+        );
+        assert!(matches!(result, PlanNodeEnum::Start(_)));
+        assert!(decisions.is_empty());
+    }
+
+    #[test]
+    fn test_cross_join_never_records_hash_decision() {
+        // A join without keyed predicates has no hash keys: the HashJoin
+        // decision must never be recorded for it even when the cost model
+        // selects the hash algorithm.
+        let a = make_scan("a", 1000);
+        let b = make_scan("b", 10);
+        let join = make_hash_join(a, b, vec![], vec![]);
+
+        let stats = StatisticsManager::new();
+        let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
+        let stats_view = StatsView::new(&stats, None);
+        let mut notes = Vec::new();
+        let mut decisions = HashMap::new();
+        let optimized = walk_and_optimize_joins_with_decisions(
+            &join,
+            &stats_view,
+            &cost_calc,
+            &mut notes,
+            &mut Some(&mut decisions),
+        );
+        assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
+        assert!(
+            !decisions
+                .values()
+                .any(|a| matches!(a, JoinAlgorithm::HashJoin { .. })),
+            "keyless join must not record a HashJoin decision"
+        );
     }
 
     #[test]

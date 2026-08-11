@@ -583,7 +583,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))
         })?;
 
-        let exec_ctx = self.build_execution_context(query_context);
+        let mut exec_ctx = self.build_execution_context(query_context);
+        exec_ctx.join_algorithms = plan.join_algorithms.clone();
         let mut build_ctx = PhysicalPlanBuildContext::from_execution_context(&exec_ctx);
         if let Some(schema) = build_ctx.schema.as_mut() {
             schema.layout_version = self

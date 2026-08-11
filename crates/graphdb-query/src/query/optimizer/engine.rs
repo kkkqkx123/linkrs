@@ -601,14 +601,17 @@ impl OptimizerEngine {
         // Phase 2: Join order optimization
         if let Some(ref root) = plan.root.clone() {
             let mut notes = Vec::new();
-            let rewritten =
-                crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
+            let mut decisions = std::collections::HashMap::new();
+            let rewritten = crate::query::optimizer::cost_based::join_order_rewriter::
+                walk_and_optimize_joins_with_decisions(
                     root,
                     stats,
                     &self.cost_calculator,
                     &mut notes,
+                    &mut Some(&mut decisions),
                 );
             plan.set_root(rewritten);
+            plan.join_algorithms = decisions;
             plan.cbo_notes.extend(notes);
         }
 
@@ -692,14 +695,17 @@ impl OptimizerEngine {
         // the logical walker is the note source.
         if let Some(ref root) = plan.root.clone() {
             let mut scratch = Vec::new();
-            let rewritten =
-                crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
+            let mut decisions = std::collections::HashMap::new();
+            let rewritten = crate::query::optimizer::cost_based::join_order_rewriter::
+                walk_and_optimize_joins_with_decisions(
                     root,
                     stats,
                     &self.cost_calculator,
                     &mut scratch,
+                    &mut Some(&mut decisions),
                 );
             plan.set_root(rewritten);
+            plan.join_algorithms = decisions;
         }
     }
 
