@@ -60,6 +60,11 @@ pub struct ExecutionContext {
     /// Injected from the optimizer engine by the pipeline; the execution
     /// instance records estimated-vs-actual feedback here after execution.
     pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
+    /// Shared cross-query policy for the typed columnar chunk layout.
+    ///
+    /// Injected from the optimizer engine by the pipeline; each query merges
+    /// its columnar hit/miss counts back into the policy at completion.
+    pub columnar_policy: Option<Arc<crate::query::executor::streaming::chunk::ColumnarPolicy>>,
 }
 
 impl ExecutionContext {
@@ -90,6 +95,7 @@ impl ExecutionContext {
             shared_scheduler: None,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
         }
     }
 
@@ -120,6 +126,7 @@ impl ExecutionContext {
             shared_scheduler: None,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
         }
     }
 
@@ -149,6 +156,7 @@ impl ExecutionContext {
             shared_scheduler: None,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
         }
     }
 
@@ -188,6 +196,7 @@ impl ExecutionContext {
             shared_scheduler: None,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
         }
     }
 
@@ -262,6 +271,7 @@ impl Default for ExecutionContext {
             shared_scheduler: None,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
         }
     }
 }

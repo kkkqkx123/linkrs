@@ -9,7 +9,7 @@
 //! ## Case 1: JOIN with always-true condition
 //! Before:
 //! ```text
-//!   HashInnerJoin(ON true) → Left → Right
+//!   InnerJoin(ON true) → Left → Right
 //! ```
 //! After:
 //! ```text
@@ -19,7 +19,7 @@
 //! ## Case 2: JOIN with self (redundant)
 //! Before:
 //! ```text
-//!   HashInnerJoin(ON a.id = a.id) → ScanVertices(a) → ScanVertices(a)
+//!   InnerJoin(ON a.id = a.id) → ScanVertices(a) → ScanVertices(a)
 //! ```
 //! After:
 //! ```text
@@ -32,7 +32,7 @@ use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
 use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, HashInnerJoinNode, HashLeftJoinNode,
+    CrossJoinNode, InnerJoinNode, LeftJoinNode,
 };
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -68,10 +68,7 @@ impl JoinEliminationRule {
         }
     }
 
-    fn apply_to_hash_inner_join(
-        &self,
-        join: &HashInnerJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
+    fn apply_to_inner_join(&self, join: &InnerJoinNode) -> RewriteResult<Option<TransformResult>> {
         let left = join.left_input();
         let right = join.right_input();
 
@@ -97,10 +94,7 @@ impl JoinEliminationRule {
         Ok(None)
     }
 
-    fn apply_to_hash_left_join(
-        &self,
-        join: &HashLeftJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
+    fn apply_to_left_join(&self, join: &LeftJoinNode) -> RewriteResult<Option<TransformResult>> {
         let _left = join.left_input();
         let _right = join.right_input();
 
@@ -129,8 +123,8 @@ impl RewriteRule for JoinEliminationRule {
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
         match node {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(join),
-            PlanNodeEnum::HashLeftJoin(join) => self.apply_to_hash_left_join(join),
+            PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(join),
+            PlanNodeEnum::LeftJoin(join) => self.apply_to_left_join(join),
             _ => Ok(None),
         }
     }

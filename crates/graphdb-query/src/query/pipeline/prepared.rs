@@ -759,6 +759,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.optimizer_engine
             .stats_manager()
             .invalidate_space(space_name);
+        self.optimizer_engine.invalidate_space_feedback(space_name);
         if let Some(space_name) = space_name {
             let removed = self.plan_cache.invalidate_space(space_name);
             if removed > 0 {

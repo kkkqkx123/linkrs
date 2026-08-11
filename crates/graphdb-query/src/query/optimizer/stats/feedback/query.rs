@@ -50,6 +50,12 @@ pub struct OperatorFeedback {
     pub actual_time_us: u64,
     /// Number of executions (for example, the number of times the inner loop of a nested loop is executed)
     pub execution_loops: u64,
+    /// Normalized predicate key for filter operators.
+    ///
+    /// Populated only for operators whose spec carries a predicate (e.g.
+    /// `UnarySpec::Filter`); used by the statistics feedback loop (phase 2)
+    /// to attach estimated-vs-actual row ratios to a specific predicate.
+    pub condition_key: Option<String>,
 }
 
 impl OperatorFeedback {
@@ -68,6 +74,7 @@ impl OperatorFeedback {
             estimated_time_us: 0,
             actual_time_us: 0,
             execution_loops: 1,
+            condition_key: None,
         }
     }
 
@@ -136,6 +143,8 @@ impl OperatorFeedback {
 pub struct QueryExecutionFeedback {
     /// Querying fingerprints
     pub query_fingerprint: String,
+    /// Target space name (if any), used to scope selectivity corrections.
+    pub space: Option<String>,
     /// Estimated number of output lines
     pub estimated_rows: u64,
     /// Actual number of output lines
@@ -155,6 +164,7 @@ impl QueryExecutionFeedback {
     pub fn new(query_fingerprint: String) -> Self {
         Self {
             query_fingerprint,
+            space: None,
             estimated_rows: 0,
             actual_rows: 0,
             estimated_time_us: 0,
@@ -242,6 +252,7 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 1200,
             execution_loops: 1,
+            condition_key: None,
         };
 
         assert_eq!(feedback.row_estimation_error(), 0.5); // (150-100)/100
@@ -258,6 +269,7 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 5000,
             execution_loops: 10,
+            condition_key: None,
         };
 
         assert_eq!(feedback.avg_rows_per_loop(), 50.0); // 500/10
@@ -295,6 +307,7 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 1100,
             execution_loops: 1,
+            condition_key: None,
         });
 
         feedback.add_operator_feedback(OperatorFeedback {
@@ -305,6 +318,7 @@ mod tests {
             estimated_time_us: 500,
             actual_time_us: 450,
             execution_loops: 1,
+            condition_key: None,
         });
 
         let avg_row_error = feedback.avg_operator_row_error();

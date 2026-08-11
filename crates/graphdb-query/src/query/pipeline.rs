@@ -130,6 +130,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .load(std::sync::atomic::Ordering::Relaxed);
         if force {
             stats_manager.mark_space_dirty(space);
+            self.optimizer_engine.invalidate_space_feedback(Some(space));
         }
         let storage: Arc<RwLock<dyn QueryStorage>> = self
             .storage

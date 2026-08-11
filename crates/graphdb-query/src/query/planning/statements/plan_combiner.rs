@@ -1,7 +1,25 @@
+use crate::query::planning::plan::core::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::{CrossJoinNode, LeftJoinNode, UnionNode};
+use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnionNode;
+use crate::query::planning::plan::logical::logical_nodes::join::{
+    LogicalCrossJoinNode, LogicalLeftJoinNode,
+};
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+
+/// Wrap the attached logical mirror (if any) of `input` with `wrap`.
+///
+/// Clause planners stack a node on top of the physical root; the mirror is
+/// wrapped in lock-step so the compiler keeps consuming a native logical
+/// tree.
+pub(crate) fn wrap_logical(
+    input: &SubPlan,
+    wrap: impl FnOnce(LogicalNodeEnum) -> LogicalNodeEnum,
+) -> Option<LogicalNodeEnum> {
+    input.logical_root().cloned().map(wrap)
+}
 
 pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerError> {
     let left_root = match left.root {
@@ -52,9 +70,45 @@ pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planne
         join_node.set_output_var(var);
     }
 
+    // Logical mirror: replicate the same structure on the logical roots —
+    // an input-less expand on the right side receives the join id as its
+    // input variable (matching the physical marker wiring).
+    let logical_root = {
+        let left_logical = left.logical_root().cloned();
+        let right_logical = right.logical_root().cloned();
+        match (left_logical, right_logical) {
+            (Some(left), Some(mut right)) => {
+                if let LogicalNodeEnum::ExpandAll(expand) = &mut right {
+                    if expand.input_var.is_none() {
+                        if let Some(var) = join_node
+                            .right_input()
+                            .as_expand_all()
+                            .and_then(|e| e.get_input_var())
+                        {
+                            expand.input_var = Some(var.to_string());
+                        }
+                    }
+                }
+                Some(LogicalNodeEnum::CrossJoin(LogicalCrossJoinNode {
+                    id: next_node_id(),
+                    left: Box::new(left.clone()),
+                    right: Box::new(right.clone()),
+                    hash_keys: vec![],
+                    probe_keys: vec![],
+                    deps: vec![left, right],
+                    output_var: join_node.output_var().map(|s| s.to_string()),
+                    col_names: vec![],
+                    column_types: vec![],
+                }))
+            }
+            _ => None,
+        }
+    };
+
     Ok(SubPlan {
         root: Some(join_node.into_enum()),
         tail: left.tail.or(right.tail),
+        logical_root,
     })
 }
 
@@ -78,6 +132,10 @@ pub fn connect_node_to_edge_expansion(
         new_expand.set_input_var(node_alias.to_string());
         new_expand.set_output_var(format!("expand_{}", new_expand.id()));
 
+        // Capture the logical mirrors before the physical tails move.
+        let node_logical = node_plan.logical_root().cloned();
+        let edge_logical = edge_plan.logical_root().cloned();
+
         // Structurally close the plan: the node root becomes the expand
         // node's input inside the SubPlan itself.
         let mut connected = SubPlan::connect_upstream(
@@ -85,6 +143,19 @@ pub fn connect_node_to_edge_expansion(
             SubPlan::from_single_node(node_root.clone()),
         )?;
         connected.tail = node_plan.tail.or(edge_plan.tail);
+
+        // Logical mirror: the expand node depends on the node root (the
+        // converter wires deps into physical inputs).
+        if let (Some(node_logical), Some(edge_logical)) = (node_logical, edge_logical) {
+            if let LogicalNodeEnum::ExpandAll(mut expand) = edge_logical {
+                expand.input_var = Some(node_alias.to_string());
+                expand.output_var = Some(format!("expand_{}", expand.id()));
+                expand.deps = vec![node_logical.clone()];
+                connected.logical_root = Some(LogicalNodeEnum::ExpandAll(expand));
+            } else {
+                connected.logical_root = None;
+            }
+        }
         Ok(connected)
     } else {
         cross_join_plans(node_plan, edge_plan)
@@ -111,6 +182,10 @@ pub fn join_edge_expansions(
         new_expand.set_input_var(left_dst_alias.to_string());
         new_expand.set_output_var(format!("expand_{}", new_expand.id()));
 
+        // Capture the logical mirrors before the physical tails move.
+        let left_logical = left_plan.logical_root().cloned();
+        let right_logical = right_plan.logical_root().cloned();
+
         // Structurally close the plan: the left root becomes the expand
         // node's input inside the SubPlan itself.
         let mut connected = SubPlan::connect_upstream(
@@ -118,6 +193,18 @@ pub fn join_edge_expansions(
             SubPlan::from_single_node(left_root.clone()),
         )?;
         connected.tail = left_plan.tail.or(right_plan.tail);
+
+        // Logical mirror: the expand node depends on the left root.
+        if let (Some(left_logical), Some(right_logical)) = (left_logical, right_logical) {
+            if let LogicalNodeEnum::ExpandAll(mut expand) = right_logical {
+                expand.input_var = Some(left_dst_alias.to_string());
+                expand.output_var = Some(format!("expand_{}", expand.id()));
+                expand.deps = vec![left_logical.clone()];
+                connected.logical_root = Some(LogicalNodeEnum::ExpandAll(expand));
+            } else {
+                connected.logical_root = None;
+            }
+        }
         Ok(connected)
     } else {
         cross_join_plans(left_plan, right_plan)
@@ -138,9 +225,25 @@ pub fn left_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planner
     let join_node = LeftJoinNode::new(left_root.clone(), right_root.clone(), vec![], vec![])
         .map_err(|e| PlannerError::JoinFailed(format!("Left connection failed: {}", e)))?;
 
+    let logical_root = match (left.logical_root().cloned(), right.logical_root().cloned()) {
+        (Some(left), Some(right)) => Some(LogicalNodeEnum::LeftJoin(LogicalLeftJoinNode {
+            id: next_node_id(),
+            left: Box::new(left.clone()),
+            right: Box::new(right.clone()),
+            hash_keys: vec![],
+            probe_keys: vec![],
+            deps: vec![left, right],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })),
+        _ => None,
+    };
+
     Ok(SubPlan {
         root: Some(join_node.into_enum()),
         tail: left.tail.or(right.tail),
+        logical_root,
     })
 }
 
@@ -159,8 +262,24 @@ pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerErro
         PlannerError::PlanGenerationFailed(format!("Concatenation operation failed: {}", e))
     })?;
 
+    // Logical mirror: the left chain is the single input, the right branch
+    // rides in deps[1] (matching the physical converter).
+    let logical_root = match (left.logical_root().cloned(), right.logical_root().cloned()) {
+        (Some(left), Some(right)) => Some(LogicalNodeEnum::Union(LogicalUnionNode {
+            id: next_node_id(),
+            input: Some(Box::new(left.clone())),
+            deps: vec![left.clone(), right.clone()],
+            distinct: true,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })),
+        _ => None,
+    };
+
     Ok(SubPlan {
         root: Some(union_node.into_enum()),
         tail: left.tail.or(right.tail),
+        logical_root,
     })
 }

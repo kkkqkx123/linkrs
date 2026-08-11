@@ -4,11 +4,15 @@
 
 use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::core::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::LogicalLimitNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::match_statement_planner::PaginationInfo;
+use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
 use std::sync::Arc;
@@ -61,7 +65,23 @@ impl ClausePlanner for PaginationPlanner {
             pagination.skip as i64,
             pagination.limit as i64,
         )?;
-        Ok(SubPlan::new(Some(limit_node.into_enum()), input_plan.tail))
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Limit(LogicalLimitNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                offset: pagination.skip as i64,
+                count: pagination.limit as i64,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
+        Ok(SubPlan {
+            root: Some(limit_node.into_enum()),
+            tail: input_plan.tail,
+            logical_root,
+        })
     }
 }
 
@@ -174,6 +194,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = PaginationPlanner::new();
@@ -219,6 +240,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = PaginationPlanner::new();
@@ -262,6 +284,7 @@ mod tests {
         let input_plan = SubPlan {
             root: None,
             tail: None,
+            logical_root: None,
         };
 
         let planner = PaginationPlanner::new();

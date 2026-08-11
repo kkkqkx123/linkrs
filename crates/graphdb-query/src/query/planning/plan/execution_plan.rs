@@ -173,12 +173,48 @@ pub struct SubPlan {
     /// The end node of the sub-plan
     /// Used to connect multiple sub-plans
     pub tail: Option<PlanNodeEnum>,
+
+    /// Native logical tree, when the planner produced one directly.
+    ///
+    /// Migrated planners build the pure [`LogicalNodeEnum`] tree first and
+    /// convert it to the physical root exactly once at the plan exit; the
+    /// logical tree is attached here so the compiler can build the
+    /// [`crate::query::planning::plan::logical_plan::LogicalPlan`] natively
+    /// instead of stripping it back out of the physical tree.
+    pub logical_root: Option<crate::query::planning::plan::logical::LogicalNodeEnum>,
 }
 
 impl SubPlan {
     /// Create a new SubPlan.
     pub fn new(root: Option<PlanNodeEnum>, tail: Option<PlanNodeEnum>) -> Self {
-        Self { root, tail }
+        Self {
+            root,
+            tail,
+            logical_root: None,
+        }
+    }
+
+    /// Create a SubPlan from a native logical tree.
+    ///
+    /// Converts the logical root to the physical root exactly once
+    /// (via `convert_logical_to_physical`) and retains the logical tree for
+    /// the compiler.
+    pub fn from_logical_root(
+        logical_root: crate::query::planning::plan::logical::LogicalNodeEnum,
+    ) -> Self {
+        let physical_root = crate::query::planning::physical_planner::convert_logical_to_physical(
+            logical_root.clone(),
+        );
+        Self {
+            root: Some(physical_root),
+            tail: None,
+            logical_root: Some(logical_root),
+        }
+    }
+
+    /// Obtain the native logical tree, if the planner produced one.
+    pub fn logical_root(&self) -> Option<&crate::query::planning::plan::logical::LogicalNodeEnum> {
+        self.logical_root.as_ref()
     }
 
     /// Create a SubPlan that contains only the root node.
@@ -186,6 +222,7 @@ impl SubPlan {
         Self {
             root: Some(root.clone()),
             tail: Some(root),
+            logical_root: None,
         }
     }
 
@@ -194,6 +231,7 @@ impl SubPlan {
         Self {
             root: Some(node.clone()),
             tail: Some(node),
+            logical_root: None,
         }
     }
 

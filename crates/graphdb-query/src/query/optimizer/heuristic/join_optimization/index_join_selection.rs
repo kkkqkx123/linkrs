@@ -8,7 +8,7 @@
 //! ## Case 1: Index JOIN for vertex ID lookup
 //! Before:
 //! ```text
-//!   HashInnerJoin(ON v.id = e._src) → ScanVertices(v) → ScanEdges(e)
+//!   InnerJoin(ON v.id = e._src) → ScanVertices(v) → ScanEdges(e)
 //! ```
 //! After (if index exists on e._src):
 //! ```text
@@ -18,7 +18,7 @@
 //! ## Case 2: Index JOIN for edge properties
 //! Before:
 //! ```text
-//!   HashInnerJoin(ON v.prop = e.prop) → ScanVertices(v) → ScanEdges(e)
+//!   InnerJoin(ON v.prop = e.prop) → ScanVertices(v) → ScanEdges(e)
 //! ```
 //! After (if indexes exist):
 //! ```text
@@ -32,7 +32,7 @@ use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
-use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Rules for index-based JOIN selection
@@ -61,10 +61,7 @@ impl IndexJoinSelectionRule {
             || key.contains("id")
     }
 
-    fn apply_to_hash_inner_join(
-        &self,
-        join: &HashInnerJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
+    fn apply_to_inner_join(&self, join: &InnerJoinNode) -> RewriteResult<Option<TransformResult>> {
         let hash_keys = join.hash_keys();
         let probe_keys = join.probe_keys();
 
@@ -102,7 +99,7 @@ impl RewriteRule for IndexJoinSelectionRule {
     }
 
     fn pattern(&self) -> Pattern {
-        Pattern::new_with_name("HashInnerJoin")
+        Pattern::new_with_name("InnerJoin")
     }
 
     fn apply(
@@ -111,7 +108,7 @@ impl RewriteRule for IndexJoinSelectionRule {
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
         match node {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(join),
+            PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(join),
             _ => Ok(None),
         }
     }

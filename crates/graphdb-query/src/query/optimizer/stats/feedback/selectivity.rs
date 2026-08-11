@@ -172,6 +172,35 @@ impl FeedbackDrivenSelectivity {
         self.feedback_count += 1;
     }
 
+    /// Update the correction factor from an observed estimated-vs-actual row
+    /// ratio (actual_rows / estimated_rows).
+    ///
+    /// Unlike [`update_with_feedback`], which receives an absolute
+    /// selectivity, this receives the correction ratio directly so the
+    /// feedback loop does not need to know the operator's input cardinality.
+    pub fn update_with_ratio(&mut self, ratio: f64) {
+        if self.estimated_selectivity <= 0.0 || !ratio.is_finite() {
+            return;
+        }
+
+        let error = (ratio - self.correction_factor).abs();
+        self.cumulative_estimation_error += error;
+        self.error_sum_squares += error * error;
+
+        // Use the EWMA to update the correction factor.
+        self.correction_factor = (1.0 - self.alpha) * self.correction_factor + self.alpha * ratio;
+
+        // Limit the range of the correction factors to avoid excessive correction.
+        self.correction_factor = self
+            .correction_factor
+            .clamp(self.min_correction, self.max_correction);
+
+        // Keep the smoothed absolute selectivity consistent with the factor.
+        self.actual_selectivity_ewma = self.estimated_selectivity * self.correction_factor;
+
+        self.feedback_count += 1;
+    }
+
     /// Batch update of feedback
     pub fn update_with_batch(&mut self, actual_selectivities: &[f64]) {
         for &selectivity in actual_selectivities {
@@ -259,6 +288,10 @@ impl SelectivityFeedbackManager {
     }
 
     /// Selective estimation of registration requirements
+    ///
+    /// Registers the condition only when the key is not present yet, so
+    /// repeated estimation of the same predicate does not reset previously
+    /// learned corrections.
     pub fn register_condition(&self, key: String, estimated_selectivity: f64) {
         let feedback = FeedbackDrivenSelectivity::with_params(
             estimated_selectivity,
@@ -266,7 +299,7 @@ impl SelectivityFeedbackManager {
             self.default_min_correction,
             self.default_max_correction,
         );
-        self.feedbacks.write().insert(key, feedback);
+        self.feedbacks.write().entry(key).or_insert(feedback);
     }
 
     /// Getting corrected selectivity
@@ -286,6 +319,35 @@ impl SelectivityFeedbackManager {
         } else {
             false
         }
+    }
+
+    /// Update feedback from an estimated-vs-actual row ratio.
+    ///
+    /// The ratio is the correction factor `actual_rows / estimated_rows`;
+    /// returns `false` when the key has not been registered.
+    pub fn update_feedback_ratio(&self, key: &str, ratio: f64) -> bool {
+        let mut feedbacks = self.feedbacks.write();
+        if let Some(feedback) = feedbacks.get_mut(key) {
+            feedback.update_with_ratio(ratio);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove all feedback whose key starts with `space_prefix` (e.g.
+    /// `"myspace:"`), returning the number of removed entries.
+    pub fn remove_feedback_by_space(&self, space_prefix: &str) -> usize {
+        let mut feedbacks = self.feedbacks.write();
+        let mut removed = 0;
+        feedbacks.retain(|key, _| {
+            let keep = !key.starts_with(space_prefix);
+            if !keep {
+                removed += 1;
+            }
+            keep
+        });
+        removed
     }
 
     /// Batch Update Feedback

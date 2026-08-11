@@ -441,6 +441,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = YieldClausePlanner::new();
@@ -493,6 +494,7 @@ mod tests {
         let input_plan = SubPlan {
             root: None,
             tail: None,
+            logical_root: None,
         };
 
         let planner = YieldClausePlanner::new();

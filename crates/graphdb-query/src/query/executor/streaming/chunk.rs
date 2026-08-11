@@ -29,8 +29,10 @@
 //! - `from_rows(rows)` / `from_rows_with_col_names(rows, col_names)` — Convenience
 //!   constructors for tests and legacy code. Always produce a layout (auto-created).
 
+mod columnar_batch;
 mod core;
 mod eval;
+mod policy;
 mod pool;
 mod schema;
 mod selection;
@@ -41,7 +43,9 @@ mod view;
 mod tests;
 
 // Re-export public API
+pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
+pub use policy::ColumnarPolicy;
 pub use pool::RowPool;
 pub use schema::{ColumnInfo, Schema};
 pub use typed::{TypedColumn, TypedKind};

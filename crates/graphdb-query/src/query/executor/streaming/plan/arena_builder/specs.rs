@@ -895,32 +895,6 @@ pub(super) fn build_left_join_spec(
     )
 }
 
-pub(super) fn build_hash_inner_join_spec(
-    node: &crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode,
-) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_keys(
-        node.hash_keys(),
-        node.probe_keys(),
-        node.right_input().col_names(),
-        JoinSpec::InnerJoin {
-            join_condition: None,
-        },
-    )
-}
-
-pub(super) fn build_hash_left_join_spec(
-    node: &crate::query::planning::plan::core::nodes::join::join_node::HashLeftJoinNode,
-) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_keys(
-        node.hash_keys(),
-        node.probe_keys(),
-        node.right_input().col_names(),
-        JoinSpec::LeftJoin {
-            join_condition: None,
-        },
-    )
-}
-
 pub(super) fn build_right_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::RightJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {

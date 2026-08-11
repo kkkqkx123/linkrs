@@ -194,9 +194,7 @@ impl CostAssigner {
             }
 
             // Connection operation
-            PlanNodeEnum::HashInnerJoin(_)
-            | PlanNodeEnum::HashLeftJoin(_)
-            | PlanNodeEnum::InnerJoin(_)
+            PlanNodeEnum::InnerJoin(_)
             | PlanNodeEnum::LeftJoin(_)
             | PlanNodeEnum::CrossJoin(_)
             | PlanNodeEnum::FullOuterJoin(_) => {

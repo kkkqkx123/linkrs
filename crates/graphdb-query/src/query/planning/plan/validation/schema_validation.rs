@@ -357,8 +357,6 @@ impl SchemaValidator {
             | PlanNodeEnum::LeftJoin(_)
             | PlanNodeEnum::RightJoin(_)
             | PlanNodeEnum::CrossJoin(_)
-            | PlanNodeEnum::HashInnerJoin(_)
-            | PlanNodeEnum::HashLeftJoin(_)
             | PlanNodeEnum::SemiJoin(_) => {
                 if children.len() >= 2 {
                     let left_schema = schemas.get(&children[0].id());

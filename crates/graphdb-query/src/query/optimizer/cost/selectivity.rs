@@ -7,7 +7,26 @@ use std::sync::Arc;
 use crate::core::types::BinaryOperator;
 use crate::core::types::Expression;
 use crate::core::value::Value;
+use crate::query::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
 use crate::query::optimizer::stats::{RangeCondition, StatisticsManager};
+
+/// Build the normalized condition key for a predicate expression.
+///
+/// The key is used by the statistics feedback loop (phase 2) to attach
+/// estimated-vs-actual row ratios to a specific predicate. Literals and
+/// numbers are replaced with placeholders so that structurally identical
+/// predicates with different constants aggregate to the same key. When a
+/// space is present the key is prefixed with `"{space}:"` so corrections are
+/// scoped to a space and can be invalidated per space.
+pub fn condition_key(space: Option<&str>, expr: &Expression) -> String {
+    let normalized = crate::query::optimizer::stats::feedback::fingerprint::normalize_query(
+        &format!("{:?}", expr),
+    );
+    match space {
+        Some(space) => format!("{}:{}", space, normalized),
+        None => normalized,
+    }
+}
 
 /// Selective Estimator
 ///
@@ -15,6 +34,11 @@ use crate::query::optimizer::stats::{RangeCondition, StatisticsManager};
 #[derive(Debug)]
 pub struct SelectivityEstimator {
     stats_manager: Arc<StatisticsManager>,
+    /// Optional feedback-driven correction source (phase 2 of the stats
+    /// feedback loop). When present, `estimate_from_expression` prefers the
+    /// corrected selectivity for a known condition key over the histogram /
+    /// heuristic estimate and registers newly estimated conditions.
+    feedback: Option<Arc<SelectivityFeedbackManager>>,
 }
 
 /// Default selective constants
@@ -44,7 +68,30 @@ pub mod defaults {
 impl SelectivityEstimator {
     /// Create a new selective estimator.
     pub fn new(stats_manager: Arc<StatisticsManager>) -> Self {
-        Self { stats_manager }
+        Self {
+            stats_manager,
+            feedback: None,
+        }
+    }
+
+    /// Create a selective estimator wired to a feedback correction manager.
+    ///
+    /// When feedback is enabled, `estimate_from_expression` consults the
+    /// corrected selectivity for the normalized condition key first and
+    /// registers newly estimated conditions for later correction.
+    pub fn with_feedback(
+        stats_manager: Arc<StatisticsManager>,
+        feedback: Arc<SelectivityFeedbackManager>,
+    ) -> Self {
+        Self {
+            stats_manager,
+            feedback: Some(feedback),
+        }
+    }
+
+    /// Return the underlying feedback correction manager, if any.
+    pub fn feedback_manager(&self) -> Option<&Arc<SelectivityFeedbackManager>> {
+        self.feedback.as_ref()
     }
 
     /// Estimated Equivalence Condition Selectivity
@@ -234,13 +281,25 @@ impl SelectivityEstimator {
     /// Estimating selectivity from expressions
     ///
     /// This is the main entry method, which distributes the data to the specific estimation methods based on the type of the expression.
+    ///
+    /// When a feedback correction manager is attached, the normalized
+    /// condition key is looked up first: a registered correction overrides
+    /// the histogram / heuristic estimate. Otherwise the estimate is
+    /// computed and registered so later executions can correct it.
     pub fn estimate_from_expression(
         &self,
         space: Option<&str>,
         expr: &Expression,
         tag_name: Option<&str>,
     ) -> f64 {
-        match expr {
+        let key = condition_key(space, expr);
+        if let Some(feedback) = &self.feedback {
+            if let Some(corrected) = feedback.get_corrected_selectivity(&key) {
+                return corrected;
+            }
+        }
+
+        let estimated = match expr {
             Expression::Binary { op, left, right } => {
                 self.estimate_binary_expression(space, op, left, right, tag_name)
             }
@@ -258,7 +317,12 @@ impl SelectivityEstimator {
                 0.5
             }
             _ => defaults::EQUALITY,
+        };
+
+        if let Some(feedback) = &self.feedback {
+            feedback.register_condition(key, estimated);
         }
+        estimated
     }
 
     /// Estimating the selectivity of binary expressions
@@ -421,6 +485,7 @@ impl Clone for SelectivityEstimator {
     fn clone(&self) -> Self {
         Self {
             stats_manager: self.stats_manager.clone(),
+            feedback: self.feedback.clone(),
         }
     }
 }

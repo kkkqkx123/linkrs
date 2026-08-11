@@ -55,8 +55,7 @@ pub use crate::query::planning::plan::core::nodes::graph_operations::window_node
     WindowFunctionSpec, WindowNode,
 };
 pub use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode,
-    LeftJoinNode, RightJoinNode, SemiJoinNode,
+    CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
 pub use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -155,8 +154,6 @@ pub enum PlanNodeEnum {
     LeftJoin(LeftJoinNode),
     RightJoin(RightJoinNode),
     CrossJoin(CrossJoinNode),
-    HashInnerJoin(HashInnerJoinNode),
-    HashLeftJoin(HashLeftJoinNode),
     FullOuterJoin(FullOuterJoinNode),
     SemiJoin(SemiJoinNode),
 
@@ -274,8 +271,6 @@ crate::define_enum_is_methods! {
     (LeftJoin, is_left_join),
     (RightJoin, is_right_join),
     (CrossJoin, is_cross_join),
-    (HashInnerJoin, is_hash_inner_join),
-    (HashLeftJoin, is_hash_left_join),
     (FullOuterJoin, is_full_outer_join),
     (SemiJoin, is_semi_join),
     // Traverse the nodes
@@ -372,8 +367,6 @@ crate::define_enum_as_methods! {
     (InnerJoin, as_inner_join, InnerJoinNode),
     (LeftJoin, as_left_join, LeftJoinNode),
     (CrossJoin, as_cross_join, CrossJoinNode),
-    (HashInnerJoin, as_hash_inner_join, HashInnerJoinNode),
-    (HashLeftJoin, as_hash_left_join, HashLeftJoinNode),
     (FullOuterJoin, as_full_outer_join, FullOuterJoinNode),
     // Traverse the nodes
     (Expand, as_expand, ExpandNode),
@@ -470,8 +463,6 @@ crate::define_enum_as_mut_methods! {
     (InnerJoin, as_inner_join_mut, InnerJoinNode),
     (LeftJoin, as_left_join_mut, LeftJoinNode),
     (CrossJoin, as_cross_join_mut, CrossJoinNode),
-    (HashInnerJoin, as_hash_inner_join_mut, HashInnerJoinNode),
-    (HashLeftJoin, as_hash_left_join_mut, HashLeftJoinNode),
     (FullOuterJoin, as_full_outer_join_mut, FullOuterJoinNode),
     // Traverse the nodes
     (Expand, as_expand_mut, ExpandNode),
@@ -569,8 +560,6 @@ crate::define_enum_type_name! {
     (LeftJoin, "LeftJoin"),
     (RightJoin, "RightJoin"),
     (CrossJoin, "CrossJoin"),
-    (HashInnerJoin, "HashInnerJoin"),
-    (HashLeftJoin, "HashLeftJoin"),
     (FullOuterJoin, "FullOuterJoin"),
     (SemiJoin, "SemiJoin"),
     // Traverse the nodes
@@ -670,8 +659,6 @@ crate::define_enum_category! {
     (LeftJoin, PlanNodeCategory::Join),
     (RightJoin, PlanNodeCategory::Join),
     (CrossJoin, PlanNodeCategory::Join),
-    (HashInnerJoin, PlanNodeCategory::Join),
-    (HashLeftJoin, PlanNodeCategory::Join),
     (FullOuterJoin, PlanNodeCategory::Join),
     (SemiJoin, PlanNodeCategory::Join),
     // Traverse the nodes
@@ -771,8 +758,6 @@ crate::define_enum_describe! {
     (LeftJoin, "LeftJoin"),
     (RightJoin, "RightJoin"),
     (CrossJoin, "CrossJoin"),
-    (HashInnerJoin, "HashInnerJoin"),
-    (HashLeftJoin, "HashLeftJoin"),
     (FullOuterJoin, "FullOuterJoin"),
     (SemiJoin, "SemiJoin"),
     // Traverse the nodes

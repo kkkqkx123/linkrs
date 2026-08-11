@@ -248,7 +248,7 @@ where
             // and index-based access stay available across selection
             // boundaries.
             let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
-            let typed_bytes = chunk.build_typed_columns();
+            let typed_bytes = chunk.build_typed_columns(use_columnar_path(base));
             let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
             let chunk = attach_columnar_stats(base, chunk);
             let chunk = if let Some(r) = reservation {
@@ -261,6 +261,23 @@ where
         }
         *cursor = Some(cur);
     }
+}
+
+/// Whether the typed columnar layout should be used for this operator's
+/// chunks.
+///
+/// The global runtime switch remains a forced override; the shared
+/// [`ColumnarPolicy`] provides the adaptive decision.  The policy is only
+/// mutated between queries (stats merge at query completion), so the
+/// decision is stable for the whole query even though it is read per chunk.
+fn use_columnar_path(base: &OperatorBase) -> bool {
+    if !crate::query::executor::streaming::chunk::typed_columns_enabled() {
+        return false;
+    }
+    base.runtime
+        .as_ref()
+        .and_then(|runtime| runtime.columnar_policy())
+        .map_or(true, |policy| policy.should_use_columnar())
 }
 
 /// Column-block pull loop over a storage cursor (A1).
@@ -356,7 +373,7 @@ fn build_column_chunk(
     }
 
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    if crate::query::executor::streaming::chunk::typed_columns_enabled() {
+    if use_columnar_path(base) {
         let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
         typed.push(TypedColumn::Fallback(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
@@ -406,6 +423,31 @@ fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) 
         }
         crate::storage::ColumnValues::I32 { values: v, .. } if values.all_valid() => {
             TypedColumn::I32(v.clone())
+        }
+        // General columns that happen to be uniform Date/String values are
+        // promoted to the typed layout so filtering stays vectorized.
+        crate::storage::ColumnValues::General { .. } => {
+            let mut dates = Vec::with_capacity(fallback.len());
+            let mut strings = Vec::with_capacity(fallback.len());
+            let mut is_date = true;
+            let mut is_string = true;
+            for v in fallback {
+                match v {
+                    Value::Date(d) => dates.push(d.to_days()),
+                    _ => is_date = false,
+                }
+                match v {
+                    Value::String(s) => strings.push(Arc::from(s.as_str())),
+                    _ => is_string = false,
+                }
+            }
+            if is_date {
+                TypedColumn::Date(dates)
+            } else if is_string {
+                TypedColumn::Utf8(strings)
+            } else {
+                TypedColumn::Fallback(fallback.to_vec())
+            }
         }
         _ => TypedColumn::Fallback(fallback.to_vec()),
     }
@@ -503,7 +545,7 @@ fn build_edge_column_chunk(
     }
 
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    if crate::query::executor::streaming::chunk::typed_columns_enabled() {
+    if use_columnar_path(base) {
         let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
         typed.push(TypedColumn::Fallback(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),

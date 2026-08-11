@@ -283,22 +283,6 @@ impl BatchPlanAnalyzer {
                     context.analyze_expression(key);
                 }
             }
-            PlanNodeEnum::HashInnerJoin(n) => {
-                for key in n.hash_keys() {
-                    context.analyze_expression(key);
-                }
-                for key in n.probe_keys() {
-                    context.analyze_expression(key);
-                }
-            }
-            PlanNodeEnum::HashLeftJoin(n) => {
-                for key in n.hash_keys() {
-                    context.analyze_expression(key);
-                }
-                for key in n.probe_keys() {
-                    context.analyze_expression(key);
-                }
-            }
             PlanNodeEnum::Loop(n) => {
                 context.analyze_expression(n.condition());
             }
@@ -363,16 +347,6 @@ impl BatchPlanAnalyzer {
                 left_count + right_count
             }
             PlanNodeEnum::CrossJoin(n) => {
-                let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
-                let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
-                left_count + right_count
-            }
-            PlanNodeEnum::HashInnerJoin(n) => {
-                let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
-                let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
-                left_count + right_count
-            }
-            PlanNodeEnum::HashLeftJoin(n) => {
                 let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
                 let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
                 left_count + right_count

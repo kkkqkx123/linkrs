@@ -2,7 +2,7 @@
 //!
 //! This module provides the pure logical operator tree (`LogicalNodeEnum`)
 //! and the `LogicalPlan` wrapper.  Physical execution choices (IndexScan,
-//! HashInnerJoin, etc.) are excluded — they are introduced later by the
+//! InnerJoin, etc.) are excluded — they are introduced later by the
 //! physical converter.
 
 pub mod conversion;

@@ -20,6 +20,13 @@ use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNod
 use crate::query::planning::plan::core::nodes::{
     ArgumentNode, ExpandAllNode, LoopNode, ScanVerticesNode,
 };
+use crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::query::planning::plan::logical::logical_nodes::control_flow::{
+    LogicalArgumentNode, LogicalLoopNode,
+};
+use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+use crate::query::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::QueryContext;
@@ -38,6 +45,84 @@ pub struct PlanningContext<'a> {
 use super::expression_helpers;
 use super::index_scan_planner;
 use super::plan_combiner;
+
+/// Logical mirror helpers. The physical plan stays the execution artifact;
+/// a parallel pure-logical tree is attached to each SubPlan so the compiler
+/// can build the `LogicalPlan` natively (instead of stripping it back out of
+/// the physical tree).
+
+fn logical_scan_vertices(
+    space_id: u64,
+    space_name: &str,
+    tag: Option<&str>,
+    var_name: &str,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+        id: next_node_id(),
+        space_id,
+        space_name: space_name.to_string(),
+        tag: tag.map(|s| s.to_string()),
+        expression: None,
+        limit: None,
+        projected_properties: vec![],
+        output_var: Some(var_name.to_string()),
+        col_names: vec![var_name.to_string()],
+        column_types: vec![],
+    })
+}
+
+fn logical_filter(input: LogicalNodeEnum, condition: ContextualExpression) -> LogicalNodeEnum {
+    LogicalNodeEnum::Filter(LogicalFilterNode {
+        id: next_node_id(),
+        input: Some(Box::new(input.clone())),
+        deps: vec![input],
+        condition,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    })
+}
+
+fn logical_expand_all(
+    space_id: u64,
+    edge_types: Vec<String>,
+    direction: &str,
+    any_edge_type: bool,
+    input_var: Option<String>,
+    col_names: Vec<String>,
+) -> LogicalNodeEnum {
+    LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
+        id: next_node_id(),
+        deps: vec![],
+        space_id,
+        edge_types,
+        direction: direction.to_string(),
+        any_edge_type,
+        step_limit: Some(1),
+        step_limits: None,
+        join_input: false,
+        sample: false,
+        edge_props: vec![],
+        vertex_props: vec![],
+        filter: None,
+        src_vids: vec![],
+        include_empty_paths: false,
+        input_var,
+        output_var: None,
+        col_names,
+        column_types: vec![],
+    })
+}
+
+fn logical_argument(var_name: &str) -> LogicalNodeEnum {
+    LogicalNodeEnum::Argument(LogicalArgumentNode {
+        id: next_node_id(),
+        var: var_name.to_string(),
+        output_var: Some(var_name.to_string()),
+        col_names: vec![var_name.to_string()],
+        column_types: vec![],
+    })
+}
 
 pub fn plan_path_pattern(
     pattern: &Pattern,
@@ -74,7 +159,11 @@ pub fn plan_path_pattern(
                             )?;
                             plan = if let Some(existing_root) = plan.root.take() {
                                 plan_combiner::cross_join_plans(
-                                    SubPlan::new(Some(existing_root), plan.tail),
+                                    SubPlan {
+                                        root: Some(existing_root),
+                                        tail: plan.tail,
+                                        logical_root: plan.logical_root.take(),
+                                    },
                                     node_plan,
                                 )?
                             } else {
@@ -121,13 +210,21 @@ pub fn plan_path_pattern(
                         plan = if let Some(existing_root) = plan.root.take() {
                             if is_first_edge {
                                 plan_combiner::connect_node_to_edge_expansion(
-                                    SubPlan::new(Some(existing_root), plan.tail),
+                                    SubPlan {
+                                        root: Some(existing_root),
+                                        tail: plan.tail,
+                                        logical_root: plan.logical_root.take(),
+                                    },
                                     edge_plan,
                                     input_alias,
                                 )?
                             } else {
                                 plan_combiner::join_edge_expansions(
-                                    SubPlan::new(Some(existing_root), plan.tail),
+                                    SubPlan {
+                                        root: Some(existing_root),
+                                        tail: plan.tail,
+                                        logical_root: plan.logical_root.take(),
+                                    },
                                     edge_plan,
                                     input_alias,
                                 )?
@@ -145,23 +242,33 @@ pub fn plan_path_pattern(
                         let alt_plan = plan_alternative_patterns(patterns, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
-                                SubPlan::new(Some(existing_root), plan.tail),
+                                SubPlan {
+                                    root: Some(existing_root),
+                                    tail: plan.tail,
+                                    logical_root: plan.logical_root.take(),
+                                },
                                 alt_plan,
                             )?
                         } else {
                             alt_plan
                         };
+                        i += 1;
                     }
                     PathElement::Optional(elem) => {
                         let opt_plan = plan_optional_element(elem, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::left_join_plans(
-                                SubPlan::new(Some(existing_root), plan.tail),
+                                SubPlan {
+                                    root: Some(existing_root),
+                                    tail: plan.tail,
+                                    logical_root: plan.logical_root.take(),
+                                },
                                 opt_plan,
                             )?
                         } else {
                             opt_plan
                         };
+                        i += 1;
                     }
                     PathElement::Repeated(elem, rep_type) => {
                         let rep_plan = plan_repeated_element(
@@ -175,12 +282,17 @@ pub fn plan_path_pattern(
                         )?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
-                                SubPlan::new(Some(existing_root), plan.tail),
+                                SubPlan {
+                                    root: Some(existing_root),
+                                    tail: plan.tail,
+                                    logical_root: plan.logical_root.take(),
+                                },
                                 rep_plan,
                             )?
                         } else {
                             rep_plan
                         };
+                        i += 1;
                     }
                 }
             }
@@ -212,7 +324,19 @@ pub fn plan_pattern_node(
             metadata_context.as_ref(),
             where_expression,
         )? {
-            return Ok(index_plan);
+            // Index scans are a physical choice; the logical mirror is a
+            // tagged vertex scan (matching the physical→logical converter).
+            let logical_root = logical_scan_vertices(
+                space_id,
+                space_name,
+                node.labels.first().map(|s| s.as_str()),
+                &var_name,
+            );
+            return Ok(SubPlan {
+                root: index_plan.root,
+                tail: index_plan.tail,
+                logical_root: Some(logical_root),
+            });
         }
     }
 
@@ -222,7 +346,18 @@ pub fn plan_pattern_node(
     if let Some(label) = node.labels.first() {
         scan_node.set_tag(label);
     }
-    let mut plan = SubPlan::from_root(scan_node.into_enum());
+    let scan_root = scan_node.into_enum();
+    let mut logical_root = logical_scan_vertices(
+        space_id,
+        space_name,
+        node.labels.first().map(|s| s.as_str()),
+        &var_name,
+    );
+    let mut plan = SubPlan {
+        root: Some(scan_root.clone()),
+        tail: Some(scan_root),
+        logical_root: Some(logical_root.clone()),
+    };
 
     if !node.labels.is_empty() {
         let expr_ctx = expr_context.as_ref().expect("expr_context should be set");
@@ -232,9 +367,14 @@ pub fn plan_pattern_node(
             expr_ctx,
         );
         let root_node = plan.root.as_ref().expect("The root of plan should exist");
-        let filter_node = FilterNode::new(root_node.clone(), label_filter)
+        let filter_node = FilterNode::new(root_node.clone(), label_filter.clone())
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+        logical_root = logical_filter(logical_root, label_filter);
+        plan = SubPlan {
+            root: Some(filter_node.into_enum()),
+            tail: plan.tail,
+            logical_root: Some(logical_root.clone()),
+        };
     }
 
     if let Some(ref props) = node.properties {
@@ -254,10 +394,15 @@ pub fn plan_pattern_node(
                 .as_ref()
                 .expect("The root of plan should exist")
                 .clone(),
-            filter_expr,
+            filter_expr.clone(),
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+        logical_root = logical_filter(logical_root, filter_expr);
+        plan = SubPlan {
+            root: Some(filter_node.into_enum()),
+            tail: plan.tail,
+            logical_root: Some(logical_root.clone()),
+        };
     }
 
     if !node.predicates.is_empty() {
@@ -270,7 +415,12 @@ pub fn plan_pattern_node(
                 pred.clone(),
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-            plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+            logical_root = logical_filter(logical_root, pred.clone());
+            plan = SubPlan {
+                root: Some(filter_node.into_enum()),
+                tail: plan.tail,
+                logical_root: Some(logical_root.clone()),
+            };
         }
     }
 
@@ -305,7 +455,20 @@ pub fn plan_pattern_edge(
     let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
     expand_node.set_col_names(vec![edge_var.clone()]);
 
-    let mut plan = SubPlan::from_root(expand_node.into_enum());
+    let expand_root = expand_node.into_enum();
+    let mut logical_root = logical_expand_all(
+        space_id,
+        edge.edge_types.clone(),
+        direction,
+        edge.edge_types.is_empty(),
+        None,
+        vec![edge_var.clone()],
+    );
+    let mut plan = SubPlan {
+        root: Some(expand_root.clone()),
+        tail: Some(expand_root),
+        logical_root: Some(logical_root.clone()),
+    };
 
     if let Some(ref props) = edge.properties {
         let filter_expr = if let Some(ref expr_ctx) = expr_context {
@@ -324,10 +487,15 @@ pub fn plan_pattern_edge(
                 .as_ref()
                 .expect("The root of plan should exist")
                 .clone(),
-            filter_expr,
+            filter_expr.clone(),
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+        logical_root = logical_filter(logical_root, filter_expr);
+        plan = SubPlan {
+            root: Some(filter_node.into_enum()),
+            tail: plan.tail,
+            logical_root: Some(logical_root.clone()),
+        };
     }
 
     if !edge.predicates.is_empty() {
@@ -340,7 +508,12 @@ pub fn plan_pattern_edge(
                 pred.clone(),
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-            plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+            logical_root = logical_filter(logical_root, pred.clone());
+            plan = SubPlan {
+                root: Some(filter_node.into_enum()),
+                tail: plan.tail,
+                logical_root: Some(logical_root.clone()),
+            };
         }
     }
 
@@ -378,11 +551,28 @@ pub fn plan_pattern_edge_with_input(
     let src_col_name = input_var.to_string();
     let edge_col_name = edge.variable.clone().unwrap_or_else(|| "edge".to_string());
     let dst_col_name = dst_var.unwrap_or("dst").to_string();
-    expand_node.set_col_names(vec![src_col_name, edge_col_name, dst_col_name]);
+    expand_node.set_col_names(vec![
+        src_col_name.clone(),
+        edge_col_name.clone(),
+        dst_col_name.clone(),
+    ]);
 
     expand_node.set_include_empty_paths(false);
 
-    let mut plan = SubPlan::from_root(expand_node.into_enum());
+    let expand_root = expand_node.into_enum();
+    let mut logical_root = logical_expand_all(
+        space_id,
+        edge.edge_types.clone(),
+        direction,
+        edge.edge_types.is_empty(),
+        Some(input_var.to_string()),
+        vec![src_col_name, edge_col_name, dst_col_name],
+    );
+    let mut plan = SubPlan {
+        root: Some(expand_root.clone()),
+        tail: Some(expand_root),
+        logical_root: Some(logical_root.clone()),
+    };
 
     if let Some(ref props) = edge.properties {
         let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
@@ -402,10 +592,15 @@ pub fn plan_pattern_edge_with_input(
                 .as_ref()
                 .expect("The root of plan should exist")
                 .clone(),
-            filter_expr,
+            filter_expr.clone(),
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+        logical_root = logical_filter(logical_root, filter_expr);
+        plan = SubPlan {
+            root: Some(filter_node.into_enum()),
+            tail: plan.tail,
+            logical_root: Some(logical_root.clone()),
+        };
     }
 
     if !edge.predicates.is_empty() {
@@ -418,7 +613,12 @@ pub fn plan_pattern_edge_with_input(
                 pred.clone(),
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-            plan = SubPlan::new(Some(filter_node.into_enum()), plan.tail);
+            logical_root = logical_filter(logical_root, pred.clone());
+            plan = SubPlan {
+                root: Some(filter_node.into_enum()),
+                tail: plan.tail,
+                logical_root: Some(logical_root.clone()),
+            };
         }
     }
 
@@ -427,7 +627,13 @@ pub fn plan_pattern_edge_with_input(
 
 pub fn plan_node_pattern(space_id: u64, space_name: &str) -> Result<SubPlan, PlannerError> {
     let scan_node = ScanVerticesNode::new(space_id, space_name);
-    Ok(SubPlan::from_root(scan_node.into_enum()))
+    let scan_root = scan_node.into_enum();
+    let logical_root = logical_scan_vertices(space_id, space_name, None, "n");
+    Ok(SubPlan {
+        root: Some(scan_root.clone()),
+        tail: Some(scan_root),
+        logical_root: Some(logical_root),
+    })
 }
 
 pub fn plan_match_delete(
@@ -514,7 +720,13 @@ pub fn plan_variable_pattern(
     }
 
     let argument_node = ArgumentNode::new(0, &var.name);
-    let sub_plan = SubPlan::from_root(argument_node.into_enum());
+    let arg_root = argument_node.into_enum();
+    let logical_root = logical_argument(&var.name);
+    let sub_plan = SubPlan {
+        root: Some(arg_root.clone()),
+        tail: Some(arg_root),
+        logical_root: Some(logical_root),
+    };
     Ok(sub_plan)
 }
 
@@ -611,15 +823,22 @@ pub fn plan_repeated_element(
     let id = expr_ctx.register_expression(expr_meta);
     let ctx_expr = crate::core::types::ContextualExpression::new(id, expr_ctx.clone());
 
-    let mut loop_node = LoopNode::new(-1, ctx_expr);
+    let mut loop_node = LoopNode::new(-1, ctx_expr.clone());
 
-    if let Some(base_root) = base_plan.root {
-        loop_node.set_body(base_root);
+    if let Some(base_root) = &base_plan.root {
+        loop_node.set_body(base_root.clone());
     }
+
+    // Logical mirror: the loop body carries the base plan's logical root.
+    let logical_root = base_plan
+        .logical_root()
+        .cloned()
+        .map(|body| LogicalNodeEnum::Loop(LogicalLoopNode::new_with_body(ctx_expr, body)));
 
     Ok(SubPlan {
         root: Some(loop_node.into_enum()),
         tail: base_plan.tail,
+        logical_root,
     })
 }
 
@@ -636,4 +855,241 @@ fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::Span;
+    use crate::query::binder::validation::ValidationInfo;
+    use crate::query::metadata::MetadataContext;
+    use crate::core::types::graph_schema::EdgeDirection;
+    use crate::query::parser::ast::pattern::PathPattern;
+    use crate::query::QueryRequestContext;
+    use std::collections::HashMap;
+
+    fn create_test_components() -> (
+        Arc<QueryContext>,
+        ValidationInfo,
+        Option<MetadataContext>,
+        Option<Arc<ExpressionAnalysisContext>>,
+    ) {
+        let rctx = Arc::new(QueryRequestContext {
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query: String::new(),
+            parameters: HashMap::new(),
+            ..Default::default()
+        });
+        let qctx = Arc::new(QueryContext::new(rctx));
+        let validation_info = ValidationInfo::default();
+        let metadata_context: Option<MetadataContext> = None;
+        let expr_context: Option<Arc<ExpressionAnalysisContext>> =
+            Some(Arc::new(ExpressionAnalysisContext::new()));
+        (
+            qctx,
+            validation_info,
+            metadata_context,
+            expr_context,
+        )
+    }
+
+    fn create_test_ctx<'a>(
+        qctx: &'a Arc<QueryContext>,
+        validation_info: &'a ValidationInfo,
+        metadata_context: &'a Option<MetadataContext>,
+        expr_context: &'a Option<Arc<ExpressionAnalysisContext>>,
+    ) -> PlanningContext<'a> {
+        PlanningContext {
+            space_id: 1,
+            space_name: "test",
+            validation_info,
+            qctx,
+            enable_index_optimization: false,
+            metadata_context,
+            expr_context,
+            where_expression: None,
+        }
+    }
+
+    fn node_pattern(var: &str) -> PathElement {
+        PathElement::Node(NodePattern::new(
+            Some(var.to_string()),
+            vec![],
+            None,
+            vec![],
+            Span::default(),
+        ))
+    }
+
+    fn edge_pattern(var: &str, direction: EdgeDirection) -> PathElement {
+        PathElement::Edge(EdgePattern::new(
+            Some(var.to_string()),
+            vec!["KNOWS".to_string()],
+            None,
+            vec![],
+            direction,
+            None,
+            Span::default(),
+        ))
+    }
+
+    fn node_path(var: &str) -> Pattern {
+        Pattern::Path(PathPattern::new(vec![node_pattern(var)], Span::default()))
+    }
+
+    #[test]
+    fn test_plan_path_pattern_keeps_logical_root() {
+        let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
+        let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+        let pattern = Pattern::Path(PathPattern::new(
+            vec![
+                node_pattern("a"),
+                edge_pattern("e", EdgeDirection::Out),
+                node_pattern("b"),
+            ],
+            Span::default(),
+        ));
+
+        let plan = plan_path_pattern(&pattern, &ctx).expect("planning should succeed");
+        let logical_root = plan
+            .logical_root()
+            .expect("logical root should be attached");
+
+        match logical_root {
+            LogicalNodeEnum::ExpandAll(expand) => {
+                assert_eq!(expand.input_var.as_deref(), Some("a"));
+                assert_eq!(expand.deps.len(), 1);
+                assert!(matches!(
+                    &expand.deps[0],
+                    LogicalNodeEnum::ScanVertices(_)
+                ));
+            }
+            other => panic!("unexpected logical root: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_path_pattern_multi_edge_logical_chain() {
+        let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
+        let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+        let pattern = Pattern::Path(PathPattern::new(
+            vec![
+                node_pattern("a"),
+                edge_pattern("e1", EdgeDirection::Out),
+                node_pattern("b"),
+                edge_pattern("e2", EdgeDirection::Out),
+                node_pattern("c"),
+            ],
+            Span::default(),
+        ));
+
+        let plan = plan_path_pattern(&pattern, &ctx).expect("planning should succeed");
+        let logical_root = plan
+            .logical_root()
+            .expect("logical root should be attached");
+
+        match logical_root {
+            LogicalNodeEnum::ExpandAll(second_expand) => {
+                assert_eq!(second_expand.input_var.as_deref(), Some("b"));
+                assert_eq!(second_expand.deps.len(), 1);
+                match &second_expand.deps[0] {
+                    LogicalNodeEnum::ExpandAll(first_expand) => {
+                        assert_eq!(first_expand.input_var.as_deref(), Some("a"));
+                        assert_eq!(first_expand.deps.len(), 1);
+                        assert!(matches!(
+                            &first_expand.deps[0],
+                            LogicalNodeEnum::ScanVertices(_)
+                        ));
+                    }
+                    other => panic!("unexpected middle logical node: {:?}", other),
+                }
+            }
+            other => panic!("unexpected logical root: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_path_pattern_optional_keeps_logical_root() {
+        let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
+        let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+        let pattern = Pattern::Path(PathPattern::new(
+            vec![
+                node_pattern("a"),
+                PathElement::Optional(Box::new(edge_pattern("e", EdgeDirection::Out))),
+                node_pattern("b"),
+            ],
+            Span::default(),
+        ));
+
+        let plan = plan_path_pattern(&pattern, &ctx).expect("planning should succeed");
+        assert!(
+            plan.logical_root().is_some(),
+            "logical root should survive optional element combination"
+        );
+    }
+
+    #[test]
+    fn test_plan_path_pattern_alternative_keeps_logical_root() {
+        let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
+        let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+        let pattern = Pattern::Path(PathPattern::new(
+            vec![
+                node_pattern("a"),
+                PathElement::Alternative(vec![node_path("x"), node_path("y")]),
+            ],
+            Span::default(),
+        ));
+
+        let plan = plan_path_pattern(&pattern, &ctx).expect("planning should succeed");
+        let logical_root = plan
+            .logical_root()
+            .expect("logical root should be attached");
+
+        match logical_root {
+            LogicalNodeEnum::CrossJoin(join) => {
+                assert_eq!(join.deps.len(), 2);
+            }
+            other => panic!("unexpected logical root: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_path_pattern_repeated_keeps_logical_root() {
+        let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
+        let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+        let pattern = Pattern::Path(PathPattern::new(
+            vec![
+                node_pattern("a"),
+                PathElement::Repeated(
+                    Box::new(edge_pattern("e", EdgeDirection::Out)),
+                    RepetitionType::OneOrMore,
+                ),
+            ],
+            Span::default(),
+        ));
+
+        let plan = plan_path_pattern(&pattern, &ctx).expect("planning should succeed");
+        let logical_root = plan
+            .logical_root()
+            .expect("logical root should be attached");
+
+        match logical_root {
+            LogicalNodeEnum::CrossJoin(join) => {
+                assert_eq!(join.deps.len(), 2);
+                match &join.deps[1] {
+                    LogicalNodeEnum::Loop(loop_node) => {
+                        assert!(matches!(
+                            loop_node.body(),
+                            Some(LogicalNodeEnum::ExpandAll(_))
+                        ));
+                    }
+                    other => panic!("unexpected loop node in join: {:?}", other),
+                }
+            }
+            other => panic!("unexpected logical root: {:?}", other),
+        }
+    }
 }

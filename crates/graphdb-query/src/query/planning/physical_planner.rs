@@ -288,34 +288,26 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         // ==================== Join Nodes ====================
+        //
+        // The converter produces only the logical join variants
+        // (InnerJoin/LeftJoin); hash keys remain attached to them and the
+        // arena builder decides the physical hash vs nested-loop algorithm.
         LogicalNodeEnum::InnerJoin(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
             let hash_keys = n.hash_keys;
             let probe_keys = n.probe_keys;
-            if hash_keys.is_empty() {
-                let mut node =
-                    crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode::new(
-                        left, right, hash_keys, probe_keys,
-                    )
-                    .expect("Failed to construct InnerJoinNode");
-                if let Some(var) = n.output_var {
-                    node.set_output_var(var);
-                }
-                node.set_col_names(n.col_names);
-                node.set_column_types(n.column_types);
-                PlanNodeEnum::InnerJoin(node)
-            } else {
-                let mut node = crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode::new(
+            let mut node =
+                crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode::new(
                     left, right, hash_keys, probe_keys,
-                ).expect("Failed to construct HashInnerJoinNode");
-                if let Some(var) = n.output_var {
-                    node.set_output_var(var);
-                }
-                node.set_col_names(n.col_names);
-                node.set_column_types(n.column_types);
-                PlanNodeEnum::HashInnerJoin(node)
+                )
+                .expect("Failed to construct InnerJoinNode");
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
             }
+            node.set_col_names(n.col_names);
+            node.set_column_types(n.column_types);
+            PlanNodeEnum::InnerJoin(node)
         }
 
         LogicalNodeEnum::LeftJoin(n) => {
@@ -323,29 +315,17 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             let right = convert_logical_to_physical(*n.right);
             let hash_keys = n.hash_keys;
             let probe_keys = n.probe_keys;
-            if hash_keys.is_empty() {
-                let mut node =
-                    crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode::new(
-                        left, right, hash_keys, probe_keys,
-                    )
-                    .expect("Failed to construct LeftJoinNode");
-                if let Some(var) = n.output_var {
-                    node.set_output_var(var);
-                }
-                node.set_col_names(n.col_names);
-                node.set_column_types(n.column_types);
-                PlanNodeEnum::LeftJoin(node)
-            } else {
-                let mut node = crate::query::planning::plan::core::nodes::join::join_node::HashLeftJoinNode::new(
+            let mut node =
+                crate::query::planning::plan::core::nodes::join::join_node::LeftJoinNode::new(
                     left, right, hash_keys, probe_keys,
-                ).expect("Failed to construct HashLeftJoinNode");
-                if let Some(var) = n.output_var {
-                    node.set_output_var(var);
-                }
-                node.set_col_names(n.col_names);
-                node.set_column_types(n.column_types);
-                PlanNodeEnum::HashLeftJoin(node)
+                )
+                .expect("Failed to construct LeftJoinNode");
+            if let Some(var) = n.output_var {
+                node.set_output_var(var);
             }
+            node.set_col_names(n.col_names);
+            node.set_column_types(n.column_types);
+            PlanNodeEnum::LeftJoin(node)
         }
 
         LogicalNodeEnum::RightJoin(n) => {
@@ -456,6 +436,9 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 n.space_id, n.edge_types, &n.direction,
             );
             node.set_any_edge_type(n.any_edge_type);
+            if let Some(limit) = n.step_limit {
+                node.set_step_limit(limit);
+            }
             if let Some(limits) = n.step_limits {
                 node.set_step_limits(limits);
             }

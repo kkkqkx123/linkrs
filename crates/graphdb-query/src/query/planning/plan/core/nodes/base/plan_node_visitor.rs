@@ -41,8 +41,7 @@ pub use crate::query::planning::plan::core::nodes::graph_operations::set_operati
 };
 pub use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 pub use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode,
-    LeftJoinNode, RightJoinNode, SemiJoinNode,
+    CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
 pub use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 pub use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -87,8 +86,6 @@ pub trait PlanNodeVisitor {
         LeftJoin, LeftJoinNode, visit_left_join;
         RightJoin, RightJoinNode, visit_right_join;
         CrossJoin, CrossJoinNode, visit_cross_join;
-        HashInnerJoin, HashInnerJoinNode, visit_hash_inner_join;
-        HashLeftJoin, HashLeftJoinNode, visit_hash_left_join;
         FullOuterJoin, FullOuterJoinNode, visit_full_outer_join;
         SemiJoin, SemiJoinNode, visit_semi_join;
     );
@@ -228,8 +225,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::GetNeighbors(node) => visitor.visit_get_neighbors(node),
             PlanNodeEnum::ScanVertices(node) => visitor.visit_scan_vertices(node),
             PlanNodeEnum::ScanEdges(node) => visitor.visit_scan_edges(node),
-            PlanNodeEnum::HashInnerJoin(node) => visitor.visit_hash_inner_join(node),
-            PlanNodeEnum::HashLeftJoin(node) => visitor.visit_hash_left_join(node),
             PlanNodeEnum::FullOuterJoin(node) => visitor.visit_full_outer_join(node),
             PlanNodeEnum::Expand(node) => visitor.visit_expand(node),
             PlanNodeEnum::ExpandAll(node) => visitor.visit_expand_all(node),

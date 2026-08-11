@@ -8,7 +8,7 @@
 //! ```text
 //!   Project(col1, col2, col3)
 //!           |
-//!   HashInnerJoin
+//!   InnerJoin
 //!   /          \
 //! Left        Right
 //! (col1-col5) (col2-col6)
@@ -16,7 +16,7 @@
 //!
 //! After:
 //! ```text
-//!   HashInnerJoin
+//!   InnerJoin
 //!   /          \
 //! Project     Project
 //! (col1)      (col2, col3)
@@ -41,9 +41,7 @@ use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::query::planning::plan::core::nodes::join::join_node::{
-    HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode, LeftJoinNode,
-};
+use crate::query::planning::plan::core::nodes::join::join_node::{InnerJoinNode, LeftJoinNode};
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::PlanNodeEnum;
 use std::sync::Arc;
@@ -153,116 +151,6 @@ impl PushProjectDownJoinRule {
         }
 
         (left_needed, right_needed)
-    }
-
-    fn apply_to_hash_inner_join(
-        &self,
-        project: &ProjectNode,
-        join: &HashInnerJoinNode,
-        ctx: &RewriteContext,
-    ) -> RewriteResult<Option<TransformResult>> {
-        let left_col_names = join.left_input().col_names().to_vec();
-        let right_col_names = join.right_input().col_names().to_vec();
-
-        let (left_needed, right_needed) = self.split_columns_for_join(
-            project.columns(),
-            &left_col_names,
-            &right_col_names,
-            join.hash_keys(),
-            join.probe_keys(),
-        );
-
-        if left_needed.is_empty() && right_needed.is_empty() {
-            return Ok(None);
-        }
-
-        if left_needed.len() == left_col_names.len() && right_needed.len() == right_col_names.len()
-        {
-            return Ok(None);
-        }
-
-        let expr_ctx = ctx.expr_context();
-        let mut new_left = join.left_input().clone();
-        let mut new_right = join.right_input().clone();
-
-        if !left_needed.is_empty() && left_needed.len() < left_col_names.len() {
-            new_left = self.create_project_node(new_left, left_needed, expr_ctx.clone())?;
-        }
-
-        if !right_needed.is_empty() && right_needed.len() < right_col_names.len() {
-            new_right = self.create_project_node(new_right, right_needed, expr_ctx)?;
-        }
-
-        let new_join = HashInnerJoinNode::new(
-            new_left,
-            new_right,
-            join.hash_keys().to_vec(),
-            join.probe_keys().to_vec(),
-        )
-        .map_err(|e| {
-            RewriteError::rewrite_failed(format!("Failed to create HashInnerJoinNode: {:?}", e))
-        })?;
-
-        let mut result = TransformResult::new();
-        result.erase_curr = true;
-        result.add_new_node(PlanNodeEnum::HashInnerJoin(new_join));
-
-        Ok(Some(result))
-    }
-
-    fn apply_to_hash_left_join(
-        &self,
-        project: &ProjectNode,
-        join: &HashLeftJoinNode,
-        ctx: &RewriteContext,
-    ) -> RewriteResult<Option<TransformResult>> {
-        let left_col_names = join.left_input().col_names().to_vec();
-        let right_col_names = join.right_input().col_names().to_vec();
-
-        let (left_needed, right_needed) = self.split_columns_for_join(
-            project.columns(),
-            &left_col_names,
-            &right_col_names,
-            join.hash_keys(),
-            join.probe_keys(),
-        );
-
-        if left_needed.is_empty() && right_needed.is_empty() {
-            return Ok(None);
-        }
-
-        if left_needed.len() == left_col_names.len() && right_needed.len() == right_col_names.len()
-        {
-            return Ok(None);
-        }
-
-        let expr_ctx = ctx.expr_context();
-        let mut new_left = join.left_input().clone();
-        let mut new_right = join.right_input().clone();
-
-        if !left_needed.is_empty() && left_needed.len() < left_col_names.len() {
-            new_left = self.create_project_node(new_left, left_needed, expr_ctx.clone())?;
-        }
-
-        if !right_needed.is_empty() && right_needed.len() < right_col_names.len() {
-            new_right = self.create_project_node(new_right, right_needed, expr_ctx)?;
-        }
-
-        let new_join = HashLeftJoinNode::new(
-            new_left,
-            new_right,
-            join.hash_keys().to_vec(),
-            join.probe_keys().to_vec(),
-        )
-        .map_err(|e| {
-            RewriteError::rewrite_failed(format!("Failed to create HashLeftJoinNode: {:?}", e))
-        })?;
-
-        let mut result = TransformResult::new();
-        result.erase_curr = true;
-        result.add_new_node(PlanNodeEnum::HashLeftJoin(new_join));
-
-        Ok(Some(result))
     }
 
     fn apply_to_inner_join(
@@ -404,8 +292,6 @@ impl RewriteRule for PushProjectDownJoinRule {
         let input = project.input();
 
         match input {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(project, join, ctx),
-            PlanNodeEnum::HashLeftJoin(join) => self.apply_to_hash_left_join(project, join, ctx),
             PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(project, join, ctx),
             PlanNodeEnum::LeftJoin(join) => self.apply_to_left_join(project, join, ctx),
             _ => Ok(None),
@@ -418,10 +304,7 @@ impl PushDownRule for PushProjectDownJoinRule {
         matches!(node, PlanNodeEnum::Project(_))
             && matches!(
                 target,
-                PlanNodeEnum::HashInnerJoin(_)
-                    | PlanNodeEnum::HashLeftJoin(_)
-                    | PlanNodeEnum::InnerJoin(_)
-                    | PlanNodeEnum::LeftJoin(_)
+                PlanNodeEnum::InnerJoin(_) | PlanNodeEnum::LeftJoin(_)
             )
     }
 

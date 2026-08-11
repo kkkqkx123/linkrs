@@ -1,12 +1,12 @@
 //! LogicalNodeEnum: pure logical operator tree.
 //!
 //! This enum contains only logical operators — no physical execution choices
-//! (no IndexScan, HashInnerJoin, etc.).  It is the single logical fact source
+//! (no IndexScan, InnerJoin, etc.).  It is the single logical fact source
 //! consumed by the optimizer and the physical converter.
 //!
 //! Type invariant: physical algorithms cannot appear in this enum.  The
 //! physical converter is the only component that may introduce physical
-//! operators (IndexScan, HashInnerJoin, etc.) when producing a PhysicalPlan.
+//! operators (IndexScan, InnerJoin, etc.) when producing a PhysicalPlan.
 
 use super::logical_nodes::access::{
     LogicalGetEdgesNode, LogicalGetNeighborsNode, LogicalGetVerticesNode, LogicalScanEdgesNode,

@@ -23,9 +23,9 @@ use super::assembler::{
 };
 use super::specs::{
     build_aggregate_spec, build_expand_all_spec_with_flags, build_filter_spec,
-    build_hash_inner_join_spec, build_inner_join_spec, build_limit_spec, build_project_spec,
-    build_sort_spec, build_source_spec, build_topn_spec, build_window_spec,
-    count_only_expand_below, is_count_only_aggregate, COUNT_ONLY_COLUMN,
+    build_inner_join_spec, build_limit_spec, build_project_spec, build_sort_spec,
+    build_source_spec, build_topn_spec, build_window_spec, count_only_expand_below,
+    is_count_only_aggregate, COUNT_ONLY_COLUMN,
 };
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
@@ -355,19 +355,6 @@ fn split_independent_branches(
                 None
             }
         }
-        PlanNodeEnum::HashInnerJoin(join) => {
-            // E1b: real keyed-join queries lower to a HashInnerJoin node; it is
-            // partitioned the same way as the plain InnerJoin variant.
-            if equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
-                Some((
-                    join.left_input(),
-                    join.right_input(),
-                    IndependentBranchOp::InnerJoin,
-                ))
-            } else {
-                None
-            }
-        }
         _ => None,
     }
 }
@@ -412,12 +399,6 @@ fn equality_join_keys_reference_vid(node: &PlanNodeEnum) -> bool {
                 && !join.probe_keys().is_empty()
                 && join.probe_keys().iter().all(key_references_vid)
         }
-        PlanNodeEnum::HashInnerJoin(join) => {
-            !join.hash_keys().is_empty()
-                && join.hash_keys().iter().all(key_references_vid)
-                && !join.probe_keys().is_empty()
-                && join.probe_keys().iter().all(key_references_vid)
-        }
         _ => false,
     }
 }
@@ -454,7 +435,6 @@ fn build_partitioned_multi(
     // condition is None).
     let join_spec: Option<JoinSpec> = match node {
         PlanNodeEnum::InnerJoin(join) => Some(build_inner_join_spec(join)?),
-        PlanNodeEnum::HashInnerJoin(join) => Some(build_hash_inner_join_spec(join)?),
         _ => None,
     };
 
@@ -775,7 +755,6 @@ fn build_hash_exchange_join(
 fn hash_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
     match node {
         PlanNodeEnum::InnerJoin(join) => join.hash_keys(),
-        PlanNodeEnum::HashInnerJoin(join) => join.hash_keys(),
         _ => &[],
     }
 }
@@ -784,7 +763,6 @@ fn hash_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
 fn probe_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
     match node {
         PlanNodeEnum::InnerJoin(join) => join.probe_keys(),
-        PlanNodeEnum::HashInnerJoin(join) => join.probe_keys(),
         _ => &[],
     }
 }
@@ -793,11 +771,6 @@ fn probe_keys_of(node: &PlanNodeEnum) -> &[ContextualExpression] {
 fn extract_join_key_expressions(node: &PlanNodeEnum) -> Vec<Expression> {
     match node {
         PlanNodeEnum::InnerJoin(join) => join
-            .hash_keys()
-            .iter()
-            .filter_map(|k| k.get_expression())
-            .collect(),
-        PlanNodeEnum::HashInnerJoin(join) => join
             .hash_keys()
             .iter()
             .filter_map(|k| k.get_expression())

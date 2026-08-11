@@ -256,12 +256,6 @@ impl FingerprintCalculator {
             PlanNodeEnum::CrossJoin(n) => {
                 self.hash_binary_input(n, hasher);
             }
-            PlanNodeEnum::HashInnerJoin(n) => {
-                self.hash_binary_input(n, hasher);
-            }
-            PlanNodeEnum::HashLeftJoin(n) => {
-                self.hash_binary_input(n, hasher);
-            }
             PlanNodeEnum::FullOuterJoin(n) => {
                 self.hash_binary_input(n, hasher);
             }

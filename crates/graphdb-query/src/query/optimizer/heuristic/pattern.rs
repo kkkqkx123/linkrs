@@ -130,8 +130,8 @@ impl Pattern {
     /// Create a pattern that matches the Join nodes (matching any type of connection).
     pub fn with_join_matcher() -> Self {
         Self::multi(vec![
-            "HashInnerJoin",
-            "HashLeftJoin",
+            "InnerJoin",
+            "LeftJoin",
             "InnerJoin",
             "LeftJoin",
             "CrossJoin",

@@ -1,10 +1,10 @@
 //! Subquery de-association optimization module
 //!
-//! "Analysis-based subquery deserialization optimization strategy" – This strategy converts simple PatternApply subqueries into HashInnerJoin operations.
+//! "Analysis-based subquery deserialization optimization strategy" – This strategy converts simple PatternApply subqueries into InnerJoin operations.
 //!
 //! ## Optimization Strategies
 //!
-//! Convert the eligible PatternApply subquery into a HashInnerJoin.
+//! Convert the eligible PatternApply subquery into a InnerJoin.
 //! Avoid executing subqueries repeatedly.
 //!
 //! ## Applicable Conditions
@@ -32,12 +32,12 @@ use crate::core::Expression;
 use crate::query::optimizer::analysis::BatchPlanAnalysis;
 use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::{HashInnerJoinNode, PatternApplyNode};
+use crate::query::planning::plan::core::nodes::{InnerJoinNode, PatternApplyNode};
 
 /// Decentralized decision-making using subqueries
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnnestDecision {
-    /// Convert to HashInnerJoin
+    /// Convert to InnerJoin
     ShouldUnnest {
         /// Reason for the decision
         reason: UnnestReason,
@@ -77,7 +77,7 @@ pub enum KeepReason {
 
 /// Subquery desaggregation optimizer
 ///
-/// Based on batch plan analysis and statistical information, a decision is made as to whether to convert PatternApply to HashInnerJoin.
+/// Based on batch plan analysis and statistical information, a decision is made as to whether to convert PatternApply to InnerJoin.
 #[derive(Debug, Clone)]
 pub struct SubqueryUnnestingOptimizer {
     /// The maximum number of estimated rows allowed for a subquery
@@ -290,7 +290,7 @@ impl SubqueryUnnestingOptimizer {
     /// - `pattern_apply`: PatternApply node
     ///
     /// # Returns
-    /// The transformed HashInnerJoin node
+    /// The transformed InnerJoin node
     pub fn unnest(
         &self,
         pattern_apply: PatternApplyNode,
@@ -332,15 +332,14 @@ impl SubqueryUnnestingOptimizer {
         let left_input = pattern_apply.left_input().clone();
         let right_input = pattern_apply.right_input().clone();
 
-        let hash_join_node =
-            HashInnerJoinNode::new(left_input, right_input, hash_keys, probe_keys)?;
+        let hash_join_node = InnerJoinNode::new(left_input, right_input, hash_keys, probe_keys)?;
 
-        Ok(PlanNodeEnum::HashInnerJoin(hash_join_node))
+        Ok(PlanNodeEnum::InnerJoin(hash_join_node))
     }
 
     /// Replace all variable references in the expression with the specified variables.
     /// This method recursively traverses the expression tree and replaces all Variable nodes with the specified variable name.
-    /// This is used to convert the variables in the original expression when transforming PatternApply to HashInnerJoin.
+    /// This is used to convert the variables in the original expression when transforming PatternApply to InnerJoin.
     /// The placeholders (usually “_”) should be replaced with the variable names provided on the left and on the right.
     ///
     /// # Parameter

@@ -151,12 +151,6 @@ fn walk(node: &PlanNodeEnum, registry: &mut ExpressionRegistry) {
         LeftJoin(join) => {
             record_join_keys(join.hash_keys(), join.probe_keys(), registry);
         }
-        HashInnerJoin(join) => {
-            record_join_keys(join.hash_keys(), join.probe_keys(), registry);
-        }
-        HashLeftJoin(join) => {
-            record_join_keys(join.hash_keys(), join.probe_keys(), registry);
-        }
         FullOuterJoin(join) => {
             record_join_keys(join.hash_keys(), join.probe_keys(), registry);
         }

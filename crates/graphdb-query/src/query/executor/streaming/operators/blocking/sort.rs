@@ -8,6 +8,7 @@ use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::streaming::chunk::ColumnarBatch;
 use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::helpers::compare_values;
@@ -18,6 +19,11 @@ use crate::query::executor::streaming::spill::{RunReader, SpillManager, SpilledF
 pub struct SortState {
     pub col_names: Vec<String>,
     pub input_layout: Option<Arc<SlotLayout>>,
+    /// Columnar accumulation of the in-memory prefix (below the spill
+    /// boundary). Once spilled, remaining rows are materialized and handed
+    /// to the row-based `spill_sorted_run`/merge machinery.
+    pub columnar_batch: Option<ColumnarBatch>,
+    /// Row-mode fallback buffer (used once a spill occurred).
     pub all_rows: Vec<Vec<Value>>,
     pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
@@ -41,7 +47,9 @@ pub struct RunBuffer {
 
 #[derive(Debug)]
 pub struct TopNState {
-    pub all_rows: Vec<Vec<Value>>,
+    /// Bounded columnar accumulation (kept at most `n` rows after each
+    /// chunk append).
+    pub columnar_batch: Option<ColumnarBatch>,
     pub col_names: Vec<String>,
     pub input_layout: Option<Arc<SlotLayout>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
@@ -134,6 +142,113 @@ pub(crate) fn sort_rows(
         sorted.push(std::mem::take(&mut buffer[i]));
     }
     buffer.clone_from_slice(&sorted);
+}
+
+/// Resolve a sort expression that references a bare column (a `Variable` or
+/// a flat `Property` access) to its column index in `col_names`.
+///
+/// Bare column references compare directly on the typed raw values of a
+/// [`ColumnarBatch`]; anything else needs per-row expression evaluation.
+fn bare_column_index(expr: &Expression, col_names: &[String]) -> Option<usize> {
+    match expr {
+        Expression::Variable(name) => col_names.iter().position(|c| c == name),
+        Expression::Property { object, property } => {
+            if let Expression::Variable(var) = object.as_ref() {
+                let compound = format!("{}.{}", var, property);
+                col_names.iter().position(|c| c == &compound)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Precompute per-row sort keys for expressions that are not bare column
+/// references (evaluated once per row, matching `sort_rows`).
+fn eval_row_sort_keys(
+    rows: &[Vec<Value>],
+    col_names: &[String],
+    sort_expressions: &[Expression],
+) -> Vec<Vec<Value>> {
+    let layout = Arc::new(SlotLayout::from_names(col_names));
+    let mut ctx = BorrowedRowContext::new(
+        rows.first().map_or(&[], |r| r.as_slice()),
+        Arc::clone(&layout),
+    );
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| {
+            if i > 0 {
+                ctx.set_row(row);
+            }
+            sort_expressions
+                .iter()
+                .map(|expr| {
+                    ExpressionEvaluator::evaluate(expr, &mut ctx)
+                        .unwrap_or(Value::Null(NullType::Null))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Columnar in-place sort of a [`ColumnarBatch`].
+///
+/// Sort keys that are bare column references compare directly on the typed
+/// raw column values (no per-row `Value` construction); remaining
+/// expressions are evaluated once per row (same semantics as `sort_rows`).
+/// The batch is reordered in place via a permutation.
+pub(crate) fn sort_columnar_batch(
+    batch: &mut ColumnarBatch,
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) {
+    if sort_expressions.is_empty() || batch.num_rows() <= 1 {
+        return;
+    }
+
+    let key_cols: Vec<Option<usize>> = sort_expressions
+        .iter()
+        .map(|expr| bare_column_index(expr, col_names))
+        .collect();
+    let needs_row_keys = key_cols.iter().any(Option::is_none);
+
+    // Expressions that are not bare column references are evaluated once per
+    // row and compared as `Value`s.
+    let row_keys: Vec<Vec<Value>> = if needs_row_keys {
+        let rows = batch.to_rows();
+        eval_row_sort_keys(&rows, col_names, sort_expressions)
+    } else {
+        Vec::new()
+    };
+
+    let mut indices: Vec<usize> = (0..batch.num_rows()).collect();
+    indices.sort_by(|&i, &j| {
+        for (k, _) in sort_expressions.iter().enumerate() {
+            let direction = sort_directions
+                .get(k)
+                .copied()
+                .unwrap_or(SortDirection::Ascending);
+
+            let cmp = match key_cols[k] {
+                Some(col) => batch.compare_rows_at(col, i, j),
+                None => compare_values(&row_keys[i][k], &row_keys[j][k]),
+            };
+            let final_cmp = match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            };
+
+            if final_cmp != std::cmp::Ordering::Equal {
+                return final_cmp;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+
+    batch.permute(&indices);
 }
 
 fn compute_schema_fingerprint(col_names: &[String]) -> u64 {
@@ -243,44 +358,4 @@ pub(crate) fn refill_run_buffer(buf: &mut RunBuffer, batch_size: usize) -> Resul
         }
     }
     Ok(())
-}
-
-pub(crate) fn compare_rows_for_topn(
-    a: &[Value],
-    b: &[Value],
-    layout: &Arc<SlotLayout>,
-    sort_expressions: &[Expression],
-    sort_directions: &[SortDirection],
-) -> std::cmp::Ordering {
-    let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
-    let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
-
-    for (idx, expr) in sort_expressions.iter().enumerate() {
-        let direction = sort_directions
-            .get(idx)
-            .copied()
-            .unwrap_or(SortDirection::Ascending);
-
-        if idx > 0 {
-            ctx_a.set_row(a);
-            ctx_b.set_row(b);
-        }
-
-        let val_a =
-            ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
-        let val_b =
-            ExpressionEvaluator::evaluate(expr, &mut ctx_b).unwrap_or(Value::Null(NullType::Null));
-
-        let cmp = compare_values(&val_a, &val_b);
-
-        let final_cmp = match direction {
-            SortDirection::Ascending => cmp,
-            SortDirection::Descending => cmp.reverse(),
-        };
-
-        if final_cmp != std::cmp::Ordering::Equal {
-            return final_cmp;
-        }
-    }
-    std::cmp::Ordering::Equal
 }

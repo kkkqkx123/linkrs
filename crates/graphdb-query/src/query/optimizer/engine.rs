@@ -47,6 +47,8 @@ use crate::query::optimizer::heuristic::batch::{
 use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
+use crate::query::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
+use crate::query::optimizer::stats::feedback::trigger::AutoFeedbackTrigger;
 use crate::query::optimizer::stats::StatsView;
 use crate::query::optimizer::{
     BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager, SelectivityEstimator,
@@ -93,8 +95,26 @@ pub struct OptimizerEngine {
     ///
     /// The pipeline injects this history into every execution instance so
     /// that estimated-vs-actual operator feedback is recorded after each
-    /// query; phase 2 (selectivity auto-correction) will consume it.
+    /// query; phase 2 (selectivity auto-correction) consumes it.
     feedback_history: Arc<QueryFeedbackHistory>,
+    /// Shared selectivity correction manager (stats feedback loop, phase 2).
+    ///
+    /// `maybe_apply_feedback` folds the estimated-vs-actual ratios recorded
+    /// in `feedback_history` into per-predicate EWMA corrections; the
+    /// `SelectivityEstimator` consults these corrections before falling back
+    /// to histogram / heuristic estimates.
+    selectivity_feedback: Arc<SelectivityFeedbackManager>,
+    /// Trigger for when the feedback history should be folded into
+    /// `selectivity_feedback` (cooldown + error threshold).
+    feedback_trigger: AutoFeedbackTrigger,
+    /// Master switch for the feedback correction loop (phase 2).
+    enable_feedback: bool,
+    /// Cross-query adaptive policy for the typed columnar chunk layout.
+    ///
+    /// Injected into every execution runtime; each query merges its columnar
+    /// hit/miss counts back into this policy at completion, so the typed
+    /// columnar path is gated by learned hit rate instead of a static switch.
+    columnar_policy: Arc<crate::query::executor::streaming::chunk::ColumnarPolicy>,
 }
 
 impl OptimizerEngine {
@@ -144,7 +164,11 @@ impl OptimizerEngine {
             stats_manager.clone(),
             cost_config,
         ));
-        let selectivity_estimator = Arc::new(SelectivityEstimator::new(stats_manager.clone()));
+        let selectivity_feedback = Arc::new(SelectivityFeedbackManager::new());
+        let selectivity_estimator = Arc::new(SelectivityEstimator::with_feedback(
+            stats_manager.clone(),
+            selectivity_feedback.clone(),
+        ));
 
         // Create batch plan analyzer (unified analysis)
         let batch_plan_analyzer = BatchPlanAnalyzer::new();
@@ -170,6 +194,12 @@ impl OptimizerEngine {
             enable_heuristic: true,
             max_heuristic_iterations: 100,
             feedback_history: Arc::new(QueryFeedbackHistory::default()),
+            selectivity_feedback,
+            feedback_trigger: AutoFeedbackTrigger::default(),
+            enable_feedback: true,
+            columnar_policy: Arc::new(
+                crate::query::executor::streaming::chunk::ColumnarPolicy::default(),
+            ),
         }
     }
 
@@ -215,6 +245,106 @@ impl OptimizerEngine {
     /// queries running through this engine.
     pub fn feedback_history(&self) -> Arc<QueryFeedbackHistory> {
         Arc::clone(&self.feedback_history)
+    }
+
+    /// Obtain the shared selectivity correction manager (feedback loop, phase 2).
+    pub fn selectivity_feedback(&self) -> &Arc<SelectivityFeedbackManager> {
+        &self.selectivity_feedback
+    }
+
+    /// Enable / disable the feedback-driven selectivity correction loop.
+    pub fn set_enable_feedback(&mut self, enable: bool) {
+        self.enable_feedback = enable;
+        log::info!(
+            "Feedback-driven selectivity correction has been {}",
+            if enable { "enabled" } else { "disabled" }
+        );
+    }
+
+    /// Whether the feedback-driven selectivity correction loop is enabled.
+    pub fn feedback_enabled(&self) -> bool {
+        self.enable_feedback
+    }
+
+    /// Obtain the shared columnar layout policy.
+    ///
+    /// The policy is injected into every execution runtime; per-query
+    /// columnar hit/miss counts are merged back at query completion.
+    pub fn columnar_policy(&self) -> Arc<crate::query::executor::streaming::chunk::ColumnarPolicy> {
+        Arc::clone(&self.columnar_policy)
+    }
+
+    /// Fold recorded execution feedback into the selectivity corrections.
+    ///
+    /// Iterates every fingerprint with feedback history; when the average
+    /// row-estimation error passes the trigger threshold, the per-operator
+    /// estimated-vs-actual ratios of filter operators are smoothed into the
+    /// shared [`SelectivityFeedbackManager`] under their normalized
+    /// condition keys (phase 2 of the statistics feedback loop).
+    ///
+    /// This is called at the start of [`OptimizeEngine::optimize`] and is
+    /// gated by `enable_feedback`, so the hot path only pays for the RwLock
+    /// reads of the history.
+    pub fn maybe_apply_feedback(&self) {
+        if !self.enable_feedback {
+            return;
+        }
+        let history = self.feedback_history();
+        let mut applied = 0usize;
+        for fingerprint in history.get_all_fingerprints() {
+            let Some(avg_error) = history.get_avg_row_error(&fingerprint) else {
+                continue;
+            };
+            if !self.feedback_trigger.should_trigger(avg_error) {
+                continue;
+            }
+            for feedback in history.get_feedback_for_query(&fingerprint) {
+                for op in &feedback.operator_feedbacks {
+                    if let Some(key) = &op.condition_key {
+                        // Correction factor = actual_rows / estimated_rows.
+                        let ratio = op.actual_rows as f64 / op.estimated_rows.max(1) as f64;
+                        if self.selectivity_feedback.update_feedback_ratio(key, ratio) {
+                            applied += 1;
+                        }
+                    }
+                }
+            }
+            self.feedback_trigger.mark_updated();
+        }
+        if applied > 0 {
+            log::debug!(
+                "Feedback loop: applied {} selectivity corrections from {} fingerprints",
+                applied,
+                history.query_count()
+            );
+        }
+    }
+
+    /// Drop all feedback corrections scoped to `space` (`None` clears all).
+    ///
+    /// Called when a space's statistics are invalidated (ANALYZE force or
+    /// DDL commit) so stale corrections cannot mislead estimates after a
+    /// schema or data change.
+    pub fn invalidate_space_feedback(&self, space: Option<&str>) {
+        let removed = match space {
+            Some(space) => self
+                .selectivity_feedback
+                .remove_feedback_by_space(&format!("{}:", space)),
+            None => {
+                let keys = self.selectivity_feedback.get_all_keys();
+                for key in &keys {
+                    self.selectivity_feedback.remove_feedback(key);
+                }
+                keys.len()
+            }
+        };
+        if removed > 0 {
+            log::info!(
+                "Invalidated {} selectivity feedback corrections for space {:?}",
+                removed,
+                space
+            );
+        }
     }
 
     /// Obtain batch plan analyzer
@@ -299,6 +429,11 @@ impl OptimizerEngine {
         space: Option<&str>,
     ) -> OptimizeResult<ExecutionPlan> {
         let mut current_plan = plan;
+
+        // Phase 0: fold recorded execution feedback into the selectivity
+        // corrections (stats feedback loop, phase 2).  Gated by
+        // `enable_feedback`; cheap when no history is present.
+        self.maybe_apply_feedback();
 
         // Phase 1: Heuristic Optimization (Always Executed)
         if self.enable_heuristic {
@@ -407,7 +542,7 @@ impl OptimizerEngine {
     /// rewrites) is the decision fact source for join order, index
     /// selection, and aggregate strategy. Decision notes are recorded from
     /// the logical walkers; the structural rewrites (join reorder →
-    /// HashInnerJoin, ScanVertices → IndexScan, Sort+Limit → TopN) are
+    /// InnerJoin, ScanVertices → IndexScan, Sort+Limit → TopN) are
     /// applied to the physical root, which is what the physical planner
     /// executes.
     fn optimize_logical(
@@ -460,7 +595,7 @@ impl OptimizerEngine {
         space: Option<&str>,
         plan: &mut ExecutionPlan,
     ) -> OptimizeResult<()> {
-        // Phase 1: Subquery unnesting (PatternApply → HashInnerJoin)
+        // Phase 1: Subquery unnesting (PatternApply → InnerJoin)
         self.apply_unnesting(plan, stats);
 
         // Phase 2: Join order optimization
@@ -517,7 +652,7 @@ impl OptimizerEngine {
         Ok(())
     }
 
-    /// Subquery unnesting: PatternApply → HashInnerJoin when cost-beneficial.
+    /// Subquery unnesting: PatternApply → InnerJoin when cost-beneficial.
     fn apply_unnesting(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
         if let Some(ref root) = plan.root.clone() {
             let mut notes = Vec::new();
@@ -715,7 +850,7 @@ impl OptimizerEngine {
         crate::query::optimizer::cost_based::traversal::rewrite_children(node, &mut closure)
     }
 
-    /// Recursively walk the plan tree and rewrite PatternApply → HashInnerJoin
+    /// Recursively walk the plan tree and rewrite PatternApply → InnerJoin
     /// when the subquery unnesting optimizer determines it is beneficial.
     fn unnest_subqueries(
         &self,
@@ -732,10 +867,7 @@ impl OptimizerEngine {
                 .subquery_unnesting_optimizer
                 .should_unnest(apply, &analysis, stats)
             {
-                log::debug!(
-                    "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
-                    reason
-                );
+                log::debug!("CBO: unnesting PatternApply -> InnerJoin ({:?})", reason);
                 notes.push(format!("unnest pattern_apply -> hash_join ({:?})", reason));
                 if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
                     return self.unnest_subqueries(&join, stats, notes);
@@ -785,8 +917,6 @@ impl OptimizerEngine {
             CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
             FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
             SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
-            HashInnerJoin(n) => HashInnerJoin(rewrite_binary!(n)),
-            HashLeftJoin(n) => HashLeftJoin(rewrite_binary!(n)),
 
             // PatternApply: unnesting was attempted above; if we reach here
             // the decision was to keep it, so rewrite the left child (the
@@ -846,6 +976,109 @@ mod tests {
 
         engine.set_enable_heuristic(true);
         assert!(engine.enable_heuristic);
+    }
+
+    #[test]
+    fn test_feedback_loop_corrects_selectivity() {
+        use crate::core::types::Expression;
+        use crate::query::optimizer::cost::selectivity::condition_key;
+        use crate::query::optimizer::stats::feedback::query::{
+            OperatorFeedback, QueryExecutionFeedback,
+        };
+
+        let engine = OptimizerEngine::default();
+
+        // Register the condition through the estimator (as optimization does).
+        let expr = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("v".to_string())),
+                property: "age".to_string(),
+            }),
+            op: crate::core::types::BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(crate::core::Value::Int(30))),
+        };
+        let original =
+            engine
+                .selectivity_estimator
+                .estimate_from_expression(Some("test_space"), &expr, None);
+        let key = condition_key(Some("test_space"), &expr);
+        assert!(engine
+            .selectivity_feedback
+            .get_corrected_selectivity(&key)
+            .is_some());
+
+        // Simulate history: filter estimated 100 rows, actually produced 10.
+        // Repeat several times so the EWMA correction converges toward 0.1.
+        for _ in 0..8 {
+            let mut feedback = QueryExecutionFeedback::new("fp".to_string());
+            feedback.space = Some("test_space".to_string());
+            feedback.add_operator_feedback(OperatorFeedback {
+                operator_id: "op1".to_string(),
+                operator_type: "Filter".to_string(),
+                estimated_rows: 100,
+                actual_rows: 10,
+                estimated_time_us: 0,
+                actual_time_us: 0,
+                execution_loops: 1,
+                condition_key: Some(key.clone()),
+            });
+            engine.feedback_history.add_feedback(feedback);
+        }
+
+        engine.maybe_apply_feedback();
+
+        let corrected = engine
+            .selectivity_feedback
+            .get_corrected_selectivity(&key)
+            .expect("condition should remain registered");
+        // actual/estimated = 0.1, so the corrected selectivity must converge
+        // toward 10% of the original estimate.
+        assert!(
+            corrected < original * 0.35,
+            "corrected={} should be far below original={}",
+            corrected,
+            original
+        );
+
+        // Invalidation: corrections for the space are dropped.
+        engine.invalidate_space_feedback(Some("test_space"));
+        assert!(engine
+            .selectivity_feedback
+            .get_corrected_selectivity(&key)
+            .is_none());
+    }
+
+    #[test]
+    fn test_feedback_loop_respects_enable_switch() {
+        use crate::query::optimizer::stats::feedback::query::{
+            OperatorFeedback, QueryExecutionFeedback,
+        };
+
+        let mut engine = OptimizerEngine::default();
+        engine.set_enable_feedback(false);
+
+        let mut feedback = QueryExecutionFeedback::new("fp".to_string());
+        feedback.add_operator_feedback(OperatorFeedback {
+            operator_id: "op1".to_string(),
+            operator_type: "Filter".to_string(),
+            estimated_rows: 100,
+            actual_rows: 10,
+            estimated_time_us: 0,
+            actual_time_us: 0,
+            execution_loops: 1,
+            condition_key: Some("space:v.age > 30".to_string()),
+        });
+        engine.feedback_history.add_feedback(feedback);
+
+        engine.maybe_apply_feedback();
+        // No correction applied: the key was never registered by an estimate.
+        assert!(engine
+            .selectivity_feedback
+            .get_corrected_selectivity("space:v.age > 30")
+            .is_none());
+        // Nothing was applied because the switch is off; enabling it and
+        // triggering with a registered key would apply corrections.
+        assert!(!engine.feedback_enabled());
     }
 
     #[test]

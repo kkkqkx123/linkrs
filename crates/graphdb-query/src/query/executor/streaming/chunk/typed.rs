@@ -5,8 +5,10 @@
 //! constructing one `Value` per row.
 
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+use crate::core::value::date_time::DateValue;
 use crate::core::Value;
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 /// Kind of a typed fixed-size scalar column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,20 +17,27 @@ pub enum TypedKind {
     F64,
     I32,
     Bool,
+    /// Date stored as days since epoch (i64), reusing the numeric eval path.
+    Date,
+    /// String column stored as `Vec<Arc<str>>`, avoiding per-row `Value` boxing.
+    Utf8,
 }
 
 /// Typed column representation for fixed-size scalar columns.
 ///
-/// `I64`/`F64`/`I32`/`Bool` columns are stored as dense raw `Vec`s so that batch
-/// evaluation operates on scalars (auto-vectorizable) instead of constructing
-/// one `Value` per row. Columns that contain NULLs, mixed types, or
-/// non-scalar values fall back to [`TypedColumn::Fallback`].
+/// `I64`/`F64`/`I32`/`Bool`/`Date`/`Utf8` columns are stored as dense raw
+/// `Vec`s so that batch evaluation operates on scalars (auto-vectorizable)
+/// instead of constructing one `Value` per row. Columns that contain NULLs,
+/// mixed types, or non-scalar values fall back to [`TypedColumn::Fallback`].
 #[derive(Debug, Clone)]
 pub enum TypedColumn {
     I64(Vec<i64>),
     F64(Vec<f64>),
     I32(Vec<i32>),
     Bool(Vec<bool>),
+    /// Days since epoch per row (see [`DateValue::to_days`]).
+    Date(Vec<i64>),
+    Utf8(Vec<Arc<str>>),
     Fallback(Vec<Value>),
 }
 
@@ -39,6 +48,8 @@ impl TypedColumn {
             TypedColumn::F64(v) => v.len(),
             TypedColumn::I32(v) => v.len(),
             TypedColumn::Bool(v) => v.len(),
+            TypedColumn::Date(v) => v.len(),
+            TypedColumn::Utf8(v) => v.len(),
             TypedColumn::Fallback(v) => v.len(),
         }
     }
@@ -59,6 +70,8 @@ impl TypedColumn {
             TypedColumn::F64(v) => v.get(idx).map(|&x| Value::Double(x)),
             TypedColumn::I32(v) => v.get(idx).map(|&x| Value::Int(x)),
             TypedColumn::Bool(v) => v.get(idx).map(|&x| Value::Bool(x)),
+            TypedColumn::Date(v) => v.get(idx).map(|&x| Value::Date(DateValue::from_days(x))),
+            TypedColumn::Utf8(v) => v.get(idx).map(|x| Value::String(x.as_ref().into())),
             TypedColumn::Fallback(v) => v.get(idx).cloned(),
         }
     }
@@ -70,6 +83,11 @@ impl TypedColumn {
             TypedColumn::F64(v) => v.iter().map(|&x| Value::Double(x)).collect(),
             TypedColumn::I32(v) => v.iter().map(|&x| Value::Int(x)).collect(),
             TypedColumn::Bool(v) => v.iter().map(|&x| Value::Bool(x)).collect(),
+            TypedColumn::Date(v) => v
+                .iter()
+                .map(|&x| Value::Date(DateValue::from_days(x)))
+                .collect(),
+            TypedColumn::Utf8(v) => v.iter().map(|x| Value::String(x.as_ref().into())).collect(),
             TypedColumn::Fallback(v) => v.clone(),
         }
     }
@@ -81,6 +99,8 @@ impl TypedColumn {
             TypedColumn::F64(v) => v.capacity() * std::mem::size_of::<f64>(),
             TypedColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
             TypedColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
+            TypedColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
+            TypedColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
             TypedColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
     }
@@ -90,14 +110,18 @@ impl TypedColumn {
 
 /// A batch of raw typed values produced by the typed evaluator.
 ///
-/// Mirrors `Value::BigInt`/`Value::Double`/`Value::Int`/`Value::Bool` in
-/// raw space; converted to `Vec<Value>` once at the end of evaluation.
+/// Mirrors `Value::BigInt`/`Value::Double`/`Value::Int`/`Value::Bool`/
+/// `Value::Date`/`Value::String` in raw space; converted to `Vec<Value>`
+/// once at the end of evaluation.
 #[derive(Debug, Clone)]
 pub(super) enum TypedBatch {
     I64(Vec<i64>),
     F64(Vec<f64>),
     I32(Vec<i32>),
     Bool(Vec<bool>),
+    /// Days since epoch per row (see [`DateValue::to_days`]).
+    Date(Vec<i64>),
+    Utf8(Vec<Arc<str>>),
 }
 
 impl TypedBatch {
@@ -107,6 +131,14 @@ impl TypedBatch {
             TypedBatch::F64(v) => v.into_iter().map(Value::Double).collect(),
             TypedBatch::I32(v) => v.into_iter().map(Value::Int).collect(),
             TypedBatch::Bool(v) => v.into_iter().map(Value::Bool).collect(),
+            TypedBatch::Date(v) => v
+                .into_iter()
+                .map(|d| Value::Date(DateValue::from_days(d)))
+                .collect(),
+            TypedBatch::Utf8(v) => v
+                .into_iter()
+                .map(|s| Value::String(s.as_ref().into()))
+                .collect(),
         }
     }
 }
@@ -120,18 +152,22 @@ pub(super) fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
         TypedColumn::F64(v) => Some(TypedBatch::F64(v.clone())),
         TypedColumn::I32(v) => Some(TypedBatch::I32(v.clone())),
         TypedColumn::Bool(v) => Some(TypedBatch::Bool(v.clone())),
+        TypedColumn::Date(v) => Some(TypedBatch::Date(v.clone())),
+        TypedColumn::Utf8(v) => Some(TypedBatch::Utf8(v.clone())),
         TypedColumn::Fallback(_) => None,
     }
 }
 
 /// Replicate a literal into a raw batch of `n` rows, when the literal has a
-/// typed scalar kind (BigInt/Double/Int/Bool).
+/// typed scalar kind (BigInt/Double/Int/Bool/Date/String).
 pub(super) fn typed_literal_batch(value: &Value, n: usize) -> Option<TypedBatch> {
     match value {
         Value::BigInt(v) => Some(TypedBatch::I64(vec![*v; n])),
         Value::Double(v) => Some(TypedBatch::F64(vec![*v; n])),
         Value::Int(v) => Some(TypedBatch::I32(vec![*v; n])),
         Value::Bool(v) => Some(TypedBatch::Bool(vec![*v; n])),
+        Value::Date(v) => Some(TypedBatch::Date(vec![v.to_days(); n])),
+        Value::String(v) => Some(TypedBatch::Utf8(vec![Arc::from(v.as_str()); n])),
         _ => None,
     }
 }
@@ -152,6 +188,7 @@ pub(super) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option
                 v.into_iter().map(i32::wrapping_neg).collect(),
             )),
             TypedBatch::Bool(_) => None,
+            TypedBatch::Date(_) | TypedBatch::Utf8(_) => None,
         },
         UnaryOperator::Not => match batch {
             TypedBatch::Bool(v) => Some(TypedBatch::Bool(v.into_iter().map(|b| !b).collect())),
@@ -256,6 +293,44 @@ fn compare_typed_batches(
             GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
             _ => return None,
         }),
+        // Date values compare by days-since-epoch, which matches the
+        // year/month/day ordering of `Value` exactly.
+        (TypedBatch::Date(l), TypedBatch::Date(r)) => TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
+            LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        }),
+        // Strings compare lexicographically (bytewise), mirroring the
+        // `Value::String` ordering used by the per-row path.
+        (TypedBatch::Utf8(l), TypedBatch::Utf8(r)) => TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(a, b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(a, b)| a != b).collect(),
+            LessThan => l
+                .iter()
+                .zip(r)
+                .map(|(a, b)| a.as_ref() < b.as_ref())
+                .collect(),
+            LessThanOrEqual => l
+                .iter()
+                .zip(r)
+                .map(|(a, b)| a.as_ref() <= b.as_ref())
+                .collect(),
+            GreaterThan => l
+                .iter()
+                .zip(r)
+                .map(|(a, b)| a.as_ref() > b.as_ref())
+                .collect(),
+            GreaterThanOrEqual => l
+                .iter()
+                .zip(r)
+                .map(|(a, b)| a.as_ref() >= b.as_ref())
+                .collect(),
+            _ => return None,
+        }),
         (TypedBatch::Bool(l), TypedBatch::Bool(r)) if matches!(op, Equal | NotEqual) => {
             TypedBatch::Bool(match op {
                 Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
@@ -353,6 +428,7 @@ pub(super) fn typed_cast_batch(
             TypedBatch::F64(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0.0).collect())),
             TypedBatch::I32(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0).collect())),
             TypedBatch::Bool(v) => Some(TypedBatch::Bool(v)),
+            _ => None,
         },
         _ => None,
     }
@@ -365,6 +441,8 @@ pub(super) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> Ty
         TypedColumn::F64(v) => TypedColumn::F64(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::I32(v) => TypedColumn::I32(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Bool(v) => TypedColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::Date(v) => TypedColumn::Date(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::Utf8(v) => TypedColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect()),
         TypedColumn::Fallback(v) => {
             TypedColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
         }

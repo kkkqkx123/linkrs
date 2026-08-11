@@ -9,38 +9,38 @@
 //! ## Case 1: Reorder for smaller intermediate results
 //! Before:
 //! ```text
-//!   HashInnerJoin(ON a.id = c.id)
-//!     → HashInnerJoin(ON a.id = b.id) → A → B
+//!   InnerJoin(ON a.id = c.id)
+//!     → InnerJoin(ON a.id = b.id) → A → B
 //!     → C
 //! ```
 //! After (if |A×B| > |B×C|):
 //! ```text
-//!   HashInnerJoin(ON b.id = c.id)
-//!     → HashInnerJoin(ON a.id = b.id) → A → B
+//!   InnerJoin(ON b.id = c.id)
+//!     → InnerJoin(ON a.id = b.id) → A → B
 //!     → C
 //! ```
 //!
 //! ## Case 2: Bushy tree optimization
 //! Before:
 //! ```text
-//!   HashInnerJoin
-//!     → HashInnerJoin
-//!       → HashInnerJoin → A → B
+//!   InnerJoin
+//!     → InnerJoin
+//!       → InnerJoin → A → B
 //!       → C
 //!     → D
 //! ```
 //! After:
 //! ```text
-//!   HashInnerJoin
-//!     → HashInnerJoin → A → B
-//!     → HashInnerJoin → C → D
+//!   InnerJoin
+//!     → InnerJoin → A → B
+//!     → InnerJoin → C → D
 //! ```
 
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
-use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::query::planning::plan::PlanNodeEnum;
 use std::collections::HashSet;
 
@@ -77,7 +77,7 @@ impl JoinReorderRule {
                     estimated_rows: 50000.0,
                 });
             }
-            PlanNodeEnum::HashInnerJoin(join) => {
+            PlanNodeEnum::InnerJoin(join) => {
                 self.collect_tables_recursive(join.left_input(), tables);
                 self.collect_tables_recursive(join.right_input(), tables);
             }
@@ -199,11 +199,8 @@ impl JoinReorderRule {
         total_cost
     }
 
-    fn apply_to_hash_inner_join(
-        &self,
-        join: &HashInnerJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
-        let tables = self.collect_tables(&PlanNodeEnum::HashInnerJoin(join.clone()));
+    fn apply_to_inner_join(&self, join: &InnerJoinNode) -> RewriteResult<Option<TransformResult>> {
+        let tables = self.collect_tables(&PlanNodeEnum::InnerJoin(join.clone()));
 
         if tables.len() < 3 {
             return Ok(None);
@@ -230,7 +227,7 @@ impl RewriteRule for JoinReorderRule {
     }
 
     fn pattern(&self) -> Pattern {
-        Pattern::new_with_name("HashInnerJoin")
+        Pattern::new_with_name("InnerJoin")
     }
 
     fn apply(
@@ -239,7 +236,7 @@ impl RewriteRule for JoinReorderRule {
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
         match node {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(join),
+            PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(join),
             _ => Ok(None),
         }
     }

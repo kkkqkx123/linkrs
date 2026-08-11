@@ -99,6 +99,12 @@ pub struct QueryBindings {
     /// feedback here after execution completes (stats feedback loop, phase 1).
     /// Injected by the pipeline from the optimizer engine.
     pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
+    /// Shared cross-query policy for the typed columnar chunk layout.
+    ///
+    /// When set, the per-query columnar hit/miss counts are merged back into
+    /// the policy when the query finishes (columnar auto-detection, phase 2).
+    /// Injected by the pipeline from the optimizer engine.
+    pub columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
@@ -131,6 +137,7 @@ impl QueryBindings {
             partition_count: 0,
             arena: context.arena.clone(),
             feedback_history: context.feedback_history.clone(),
+            columnar_policy: context.columnar_policy.clone(),
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: context.fulltext_manager.clone(),
             #[cfg(feature = "qdrant")]
@@ -311,6 +318,9 @@ impl QueryExecutionInstance {
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
         let chunks = engine.execute_collected()?;
         self.collect_execution_feedback();
+        // Columnar auto-detection: merge this query's hit/miss counts into
+        // the shared policy so later queries can adapt.
+        self.runtime.flush_columnar_stats_to_policy();
         let dataset =
             convert_chunks_to_dataset(chunks, Some(self.plan.output.output_layout.names()))?;
         Ok(ExecutionResult::DataSet { data: dataset })
@@ -322,9 +332,10 @@ impl QueryExecutionInstance {
     /// Compares the optimizer's per-operator row estimates (written into the
     /// physical operator specs as `estimated_cardinality`) with the runtime
     /// profile counters, and stores one [`QueryExecutionFeedback`] entry
-    /// keyed by the plan fingerprint.  This is phase 1 of the statistics
-    /// feedback loop: it only records data, it does not yet correct
-    /// selectivity estimates.
+    /// keyed by the plan fingerprint.  Filter operators additionally carry
+    /// the normalized predicate key (`condition_key`) so phase 2 of the
+    /// statistics feedback loop can correct the selectivity of the specific
+    /// condition.
     fn collect_execution_feedback(&self) {
         let Some(history) = self.runtime().feedback_history.clone() else {
             return;
@@ -333,6 +344,7 @@ impl QueryExecutionInstance {
         let fingerprint = &self.plan.compatibility.fingerprint;
         let mut feedback =
             QueryExecutionFeedback::new(format!("v{}:{}", fingerprint.version, fingerprint.hash));
+        feedback.space = self._bindings.space_name.clone();
 
         // Query-level estimate: the root operator's estimated cardinality.
         feedback.estimated_rows = self
@@ -349,6 +361,18 @@ impl QueryExecutionInstance {
         for (key, op_profile) in &profile.operators {
             if let Some(operator) = self.plan.operator(key.physical_operator_id) {
                 if let Some(estimated) = operator.estimated_cardinality {
+                    // For filter operators, attach the normalized predicate
+                    // key so the feedback loop (phase 2) can correct the
+                    // selectivity of the specific condition.
+                    let condition_key = match &operator.spec {
+                        super::plan::types::OperatorKindSpec::Unary(
+                            super::operators::spec::UnarySpec::Filter { predicate },
+                        ) => Some(crate::query::optimizer::cost::selectivity::condition_key(
+                            feedback.space.as_deref(),
+                            predicate,
+                        )),
+                        _ => None,
+                    };
                     feedback.add_operator_feedback(OperatorFeedback {
                         operator_id: key.physical_operator_id.0.to_string(),
                         operator_type: op_profile.name.clone(),
@@ -359,6 +383,7 @@ impl QueryExecutionInstance {
                             + op_profile.next_time_us
                             + op_profile.close_time_us,
                         execution_loops: 1,
+                        condition_key,
                     });
                 }
             }
@@ -382,11 +407,16 @@ impl QueryExecutionInstance {
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
         let stream = engine.execute()?;
-        Ok(StreamingQueryResult::new_with_schema(
+        let result = StreamingQueryResult::new_with_schema(
             stream,
             self.runtime.clone(),
             self.plan.output.output_layout.names(),
-        ))
+        );
+        // Columnar auto-detection: merge this query's hit/miss counts into
+        // the shared policy when the last streaming handle is dropped.
+        let runtime = self.runtime.clone();
+        result.set_on_drop(Box::new(move || runtime.flush_columnar_stats_to_policy()));
+        Ok(result)
     }
 
     /// Execute with a discard sink (for side-effect-only commands).
@@ -405,6 +435,7 @@ impl QueryExecutionInstance {
         let mut stream = engine.execute()?;
         while stream.next_chunk()?.is_some() {}
         stream.close()?;
+        self.runtime.flush_columnar_stats_to_policy();
         Ok(())
     }
 

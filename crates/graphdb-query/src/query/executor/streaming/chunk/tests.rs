@@ -2,6 +2,7 @@ use super::{set_typed_columns_enabled, DataChunk, RowPool, TypedColumn, TypedKin
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::BinaryOperator;
 use crate::core::types::storage_ids::VertexId;
+use crate::core::value::DateValue;
 use crate::core::Value;
 use crate::core::Vertex;
 use crate::query::executor::streaming::slot::SlotLayout;
@@ -190,7 +191,7 @@ fn typed_columns_build_pure_bigint_column() {
         .map(|i| vec![Value::BigInt((i % 1000) as i64)])
         .collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    let bytes = chunk.build_typed_columns();
+    let bytes = chunk.build_typed_columns(true);
     let typed = chunk.typed_column(0).expect("typed column built");
     assert!(matches!(typed, TypedColumn::I64(_)), "expected I64 layout");
     assert!(bytes > 0, "typed allocation must be accounted");
@@ -202,22 +203,20 @@ fn typed_columns_build_pure_bigint_column() {
 }
 
 #[test]
-fn typed_columns_fallback_on_null_and_mixed_and_string() {
+fn typed_columns_fallback_on_null_and_mixed() {
     let layout = Arc::new(SlotLayout::from_names(&[
         "n".to_string(),
         "mixed".to_string(),
-        "s".to_string(),
     ]));
     let rows = vec![
         vec![
             Value::Null(crate::core::value::NullType::Null),
             Value::BigInt(1),
-            Value::string("a"),
         ],
-        vec![Value::BigInt(2), Value::Double(2.0), Value::string("b")],
+        vec![Value::BigInt(2), Value::Double(2.0)],
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
     assert!(matches!(
         chunk.typed_column(0),
         Some(TypedColumn::Fallback(_))
@@ -226,10 +225,49 @@ fn typed_columns_fallback_on_null_and_mixed_and_string() {
         chunk.typed_column(1),
         Some(TypedColumn::Fallback(_))
     ));
-    assert!(matches!(
-        chunk.typed_column(2),
-        Some(TypedColumn::Fallback(_))
-    ));
+}
+
+#[test]
+fn typed_columns_build_date_and_string_columns() {
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "d".to_string(),
+        "s".to_string(),
+        "mixed_str".to_string(),
+    ]));
+    let mut rows: Vec<Vec<Value>> = (0..10)
+        .map(|i| {
+            vec![
+                Value::Date(DateValue {
+                    year: 2024,
+                    month: 1,
+                    day: i as u32 + 1,
+                }),
+                Value::string(&format!("s{i}")),
+                Value::string("constant"),
+            ]
+        })
+        .collect();
+    rows[3][2] = Value::BigInt(1);
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    let date = chunk.typed_column(0).expect("date column typed");
+    assert!(matches!(date, TypedColumn::Date(_)), "expected Date layout");
+    assert_eq!(
+        date.value_at(1),
+        Some(Value::Date(DateValue {
+            year: 2024,
+            month: 1,
+            day: 2
+        })),
+        "O(1) indexed materialization"
+    );
+    let str = chunk.typed_column(1).expect("string column typed");
+    assert!(matches!(str, TypedColumn::Utf8(_)), "expected Utf8 layout");
+    assert_eq!(str.value_at(2), Some(Value::string("s2")));
+    assert!(
+        matches!(chunk.typed_column(2), Some(TypedColumn::Fallback(_)),),
+        "mixed string column falls back"
+    );
 }
 
 #[test]
@@ -237,7 +275,7 @@ fn typed_columns_survive_take_indices() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i as i64)]).collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
     let mut selected = chunk.take_indices(&[0, 2, 4]);
     assert!(matches!(
         selected.typed_column(0),
@@ -256,7 +294,7 @@ fn typed_eval_matches_value_path_semantics() {
         .map(|i| vec![Value::BigInt((i % 1000) as i64)])
         .collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
 
     let expr = Expression::binary(
         Expression::variable("k0"),
@@ -268,6 +306,52 @@ fn typed_eval_matches_value_path_semantics() {
 
     let expected: Vec<Value> = (0..100).map(|i| Value::Bool((i % 1000) > 500)).collect();
     assert_eq!(typed_result, expected);
+}
+
+#[test]
+fn typed_eval_matches_value_path_for_date_and_string() {
+    let layout = Arc::new(SlotLayout::from_names(&["d".to_string(), "s".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..100)
+        .map(|i| {
+            vec![
+                Value::Date(DateValue {
+                    year: 2024,
+                    month: 1,
+                    day: (i % 28) as u32 + 1,
+                }),
+                Value::string(&format!("v{:03}", i)),
+            ]
+        })
+        .collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    assert!(matches!(chunk.typed_column(0), Some(TypedColumn::Date(_))));
+    assert!(matches!(chunk.typed_column(1), Some(TypedColumn::Utf8(_))));
+
+    let pivot = DateValue {
+        year: 2024,
+        month: 1,
+        day: 15,
+    };
+    let date_expr = Expression::binary(
+        Expression::variable("d"),
+        BinaryOperator::LessThan,
+        Expression::literal(Value::Date(pivot)),
+    );
+    let typed = chunk.evaluate_expression(&date_expr, None).expect("eval");
+    let expected: Vec<Value> = (0..100)
+        .map(|i| Value::Bool(((i % 28) as u32) + 1 < 15))
+        .collect();
+    assert_eq!(typed, expected);
+
+    let str_expr = Expression::binary(
+        Expression::variable("s"),
+        BinaryOperator::GreaterThanOrEqual,
+        Expression::literal(Value::string("v050")),
+    );
+    let typed = chunk.evaluate_expression(&str_expr, None).expect("eval");
+    let expected: Vec<Value> = (0..100).map(|i| Value::Bool(i >= 50)).collect();
+    assert_eq!(typed, expected);
 }
 
 #[test]
@@ -289,7 +373,7 @@ fn typed_eval_property_predicate_hits_typed_batch_path() {
         .collect();
     let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
     let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
     assert!(
         matches!(chunk.typed_column(1), Some(TypedColumn::I64(_))),
         "flat property column must be typed I64"
@@ -321,7 +405,7 @@ fn typed_eval_supports_arithmetic_and_cast() {
         vec![Value::BigInt(10), Value::BigInt(5)],
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
 
     let add = Expression::binary(
         Expression::variable("a"),
@@ -349,7 +433,7 @@ fn typed_columns_disabled_falls_back() {
     let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i as i64)]).collect();
     set_typed_columns_enabled(false);
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    let bytes = chunk.build_typed_columns();
+    let bytes = chunk.build_typed_columns(true);
     assert_eq!(bytes, 0);
     assert!(chunk.typed_column(0).is_none());
     set_typed_columns_enabled(true);
@@ -372,7 +456,7 @@ fn selection_attachment_and_materialization() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i as i64)]).collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
 
     let chunk = chunk.with_selection(vec![0, 2, 4]);
     assert_eq!(chunk.visible_count(), 3);
@@ -397,7 +481,7 @@ fn selection_preserves_typed_columns_until_materialized() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..6).map(|i| vec![Value::BigInt(i as i64)]).collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
     let mut chunk = chunk.with_selection(vec![1, 3]);
     assert!(chunk.typed_column(0).is_some(), "typed layout kept");
     chunk.materialize_selection();
@@ -422,7 +506,7 @@ fn typed_eval_differential_random() {
         .collect();
 
     let mut chunk_typed = DataChunk::new_with_layout(rows.clone(), Arc::clone(&layout));
-    chunk_typed.build_typed_columns();
+    chunk_typed.build_typed_columns(true);
 
     let mut chunk_row = DataChunk::new_with_layout(rows, layout);
 
@@ -474,7 +558,7 @@ fn typed_bool_column_and_or() {
         vec![Value::Bool(false), Value::Bool(false)],
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
 
     assert!(
         matches!(chunk.typed_column(0), Some(TypedColumn::Bool(_))),

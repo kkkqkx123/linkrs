@@ -425,6 +425,11 @@ impl PhysicalPlanMaterializer {
         // operator feedback after execution completes.
         runtime.feedback_history = bindings.feedback_history.clone();
 
+        // Columnar auto-detection (phase 2): inject the shared policy so the
+        // scan gates can adapt the typed columnar layout to learned hit rate,
+        // and the per-query stats are merged back at query completion.
+        runtime.set_columnar_policy(bindings.columnar_policy.clone());
+
         // Phase 1: size state_arenas for partitioned execution so each
         // partition gets its own arena, eliminating contention on arena 0.
         if bindings.partition_count > 0 {

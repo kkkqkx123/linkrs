@@ -171,9 +171,7 @@ fn known_reference_ancestor(anc: &PlanNodeEnum) -> bool {
             | PlanNodeEnum::Aggregate(_)
             | PlanNodeEnum::ExpandAll(_)
             | PlanNodeEnum::InnerJoin(_)
-            | PlanNodeEnum::HashInnerJoin(_)
             | PlanNodeEnum::LeftJoin(_)
-            | PlanNodeEnum::HashLeftJoin(_)
             | PlanNodeEnum::RightJoin(_)
             | PlanNodeEnum::FullOuterJoin(_)
             | PlanNodeEnum::SemiJoin(_)
@@ -268,13 +266,7 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
         PlanNodeEnum::InnerJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
         }
-        PlanNodeEnum::HashInnerJoin(join) => {
-            join_references_var(join.hash_keys(), join.probe_keys(), var)
-        }
         PlanNodeEnum::LeftJoin(join) => {
-            join_references_var(join.hash_keys(), join.probe_keys(), var)
-        }
-        PlanNodeEnum::HashLeftJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
         }
         PlanNodeEnum::RightJoin(join) => {
@@ -427,14 +419,6 @@ fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool
             changed |= apply_decisions(n.right_input_mut(), decisions);
         }
         CrossJoin(n) => {
-            changed |= apply_decisions(n.left_input_mut(), decisions);
-            changed |= apply_decisions(n.right_input_mut(), decisions);
-        }
-        HashInnerJoin(n) => {
-            changed |= apply_decisions(n.left_input_mut(), decisions);
-            changed |= apply_decisions(n.right_input_mut(), decisions);
-        }
-        HashLeftJoin(n) => {
             changed |= apply_decisions(n.left_input_mut(), decisions);
             changed |= apply_decisions(n.right_input_mut(), decisions);
         }

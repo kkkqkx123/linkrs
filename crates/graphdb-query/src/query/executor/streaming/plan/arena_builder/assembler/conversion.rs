@@ -542,37 +542,6 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
-            PlanNodeEnum::HashInnerJoin(join_node) => {
-                let (left_fid, _) = Self::convert_node(
-                    join_node.left_input(),
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    exec_ctx,
-                )?;
-                let (right_fid, _) = Self::convert_node(
-                    join_node.right_input(),
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    exec_ctx,
-                )?;
-                let spec = build_hash_inner_join_spec(join_node)?;
-                Self::push_binary_op(
-                    &mut FragmentCtx {
-                        operators,
-                        fragments,
-                        op_alloc,
-                    },
-                    frag_alloc,
-                    left_fid,
-                    right_fid,
-                    node.id(),
-                    spec,
-                )
-            }
             PlanNodeEnum::LeftJoin(join_node) => {
                 let (left_fid, _) = Self::convert_node(
                     join_node.left_input(),
@@ -591,37 +560,6 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_left_join_spec(join_node)?;
-                Self::push_binary_op(
-                    &mut FragmentCtx {
-                        operators,
-                        fragments,
-                        op_alloc,
-                    },
-                    frag_alloc,
-                    left_fid,
-                    right_fid,
-                    node.id(),
-                    spec,
-                )
-            }
-            PlanNodeEnum::HashLeftJoin(join_node) => {
-                let (left_fid, _) = Self::convert_node(
-                    join_node.left_input(),
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    exec_ctx,
-                )?;
-                let (right_fid, _) = Self::convert_node(
-                    join_node.right_input(),
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    exec_ctx,
-                )?;
-                let spec = build_hash_left_join_spec(join_node)?;
                 Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,

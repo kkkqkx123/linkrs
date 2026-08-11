@@ -151,8 +151,7 @@ define_rewrite_rules! {
         PushFilterDownScanVertices(predicate_pushdown::PushFilterDownScanVerticesRule),
         EliminateRedundantTagFilter(predicate_pushdown::EliminateRedundantTagFilterRule),
         PushFilterDownInnerJoin(predicate_pushdown::PushFilterDownInnerJoinRule),
-        PushFilterDownHashInnerJoin(predicate_pushdown::PushFilterDownHashInnerJoinRule),
-        PushFilterDownHashLeftJoin(predicate_pushdown::PushFilterDownHashLeftJoinRule),
+        PushFilterDownLeftJoin(predicate_pushdown::PushFilterDownLeftJoinRule),
         PushFilterDownCrossJoin(predicate_pushdown::PushFilterDownCrossJoinRule),
         PushFilterDownGetNbrs(predicate_pushdown::PushFilterDownGetNbrsRule),
         PushFilterDownAllPaths(predicate_pushdown::PushFilterDownAllPathsRule),
@@ -306,11 +305,8 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushFilterDownInnerJoin(
             predicate_pushdown::PushFilterDownInnerJoinRule::new(),
         ));
-        registry.add(RewriteRule::PushFilterDownHashInnerJoin(
-            predicate_pushdown::PushFilterDownHashInnerJoinRule::new(),
-        ));
-        registry.add(RewriteRule::PushFilterDownHashLeftJoin(
-            predicate_pushdown::PushFilterDownHashLeftJoinRule::new(),
+        registry.add(RewriteRule::PushFilterDownLeftJoin(
+            predicate_pushdown::PushFilterDownLeftJoinRule::new(),
         ));
         registry.add(RewriteRule::PushFilterDownCrossJoin(
             predicate_pushdown::PushFilterDownCrossJoinRule::new(),
@@ -395,7 +391,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 49);
+        assert_eq!(registry.len(), 48);
     }
 
     #[test]

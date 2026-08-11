@@ -390,15 +390,6 @@ impl PartitioningPlanner {
                     None
                 }
             }
-            PlanNodeEnum::HashInnerJoin(join) => {
-                // E1b: real keyed-join queries lower to a HashInnerJoin node after
-                // cost-based rewrite; it is partitioned like the plain InnerJoin.
-                if Self::equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
-                    Some((join.left_input(), join.right_input(), "equality join"))
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
@@ -913,9 +904,9 @@ mod tests {
     fn hash_inner_join_with_variable_key_selects_partition_layout() {
         use crate::core::types::expr::contextual::ContextualExpression;
         use crate::core::types::expr::ExpressionMeta;
-        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
-        // Real keyed-join queries lower to a HashInnerJoin node; the partition
+        // Real keyed-join queries lower to a InnerJoin node; the partition
         // decision must treat it the same as the plain InnerJoin variant.
         let stats = make_stats();
         let mut left_scan = ScanVerticesNode::new(1, "space");
@@ -932,14 +923,14 @@ mod tests {
         let right_key_id = expr_ctx.register_expression(ExpressionMeta::new(right_key_expr));
         let probe_key = ContextualExpression::new(right_key_id, expr_ctx.clone());
 
-        let join = HashInnerJoinNode::new(
+        let join = InnerJoinNode::new(
             PlanNodeEnum::ScanVertices(left_scan),
             PlanNodeEnum::ScanVertices(right_scan),
             vec![hash_key],
             vec![probe_key],
         )
         .expect("join plan should build");
-        let plan = PlanNodeEnum::HashInnerJoin(join);
+        let plan = PlanNodeEnum::InnerJoin(join);
 
         let decision = make_planner().decide(&plan, &view_of(&stats));
         let spec = decision
@@ -954,7 +945,7 @@ mod tests {
     fn hash_inner_join_with_composite_key_is_rejected() {
         use crate::core::types::expr::contextual::ContextualExpression;
         use crate::core::types::expr::ExpressionMeta;
-        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
         let stats = make_stats();
         let mut left_scan = ScanVerticesNode::new(1, "space");
@@ -970,14 +961,14 @@ mod tests {
         };
         // Two keys per side: the partitioned path only accepts a single simple
         // variable key and must fall back.
-        let join = HashInnerJoinNode::new(
+        let join = InnerJoinNode::new(
             PlanNodeEnum::ScanVertices(left_scan),
             PlanNodeEnum::ScanVertices(right_scan),
             vec![make_key("a.vid"), make_key("a.value")],
             vec![make_key("b.vid"), make_key("b.value")],
         )
         .expect("join plan should build");
-        let plan = PlanNodeEnum::HashInnerJoin(join);
+        let plan = PlanNodeEnum::InnerJoin(join);
 
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());

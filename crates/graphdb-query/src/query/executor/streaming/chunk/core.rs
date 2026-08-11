@@ -339,8 +339,14 @@ impl DataChunk {
 
     // ── Typed column layout ──
 
-    pub fn build_typed_columns(&mut self) -> usize {
-        if !super::typed_columns_enabled() || self.typed_columns.is_some() {
+    /// Build the typed column layout for this chunk.
+    ///
+    /// `use_columnar` carries the adaptive [`ColumnarPolicy`] decision from
+    /// the producing operator: when the learned hit rate falls below the
+    /// threshold (or the global switch is off), the chunk stays row-based.
+    /// Returns the number of extra typed bytes allocated.
+    pub fn build_typed_columns(&mut self, use_columnar: bool) -> usize {
+        if !use_columnar || !super::typed_columns_enabled() || self.typed_columns.is_some() {
             return 0;
         }
         let num_cols = self.num_columns();
@@ -357,6 +363,8 @@ impl DataChunk {
                 Value::Double(_) => Some(TypedKind::F64),
                 Value::Int(_) => Some(TypedKind::I32),
                 Value::Bool(_) => Some(TypedKind::Bool),
+                Value::Date(_) => Some(TypedKind::Date),
+                Value::String(_) => Some(TypedKind::Utf8),
                 _ => None,
             };
             let Some(kind) = kind else {
@@ -441,6 +449,49 @@ impl DataChunk {
                     if ok {
                         extra_bytes += buf.capacity() * std::mem::size_of::<bool>();
                         TypedColumn::Bool(buf)
+                    } else {
+                        TypedColumn::Fallback(
+                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                        )
+                    }
+                }
+                TypedKind::Date => {
+                    let mut buf = Vec::with_capacity(num_rows);
+                    for row in &self.rows {
+                        match row[col_idx] {
+                            Value::Date(ref v) => buf.push(v.to_days()),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        extra_bytes += buf.capacity() * std::mem::size_of::<i64>();
+                        TypedColumn::Date(buf)
+                    } else {
+                        TypedColumn::Fallback(
+                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                        )
+                    }
+                }
+                TypedKind::Utf8 => {
+                    let mut buf = Vec::with_capacity(num_rows);
+                    for row in &self.rows {
+                        match row[col_idx] {
+                            Value::String(ref v) => buf.push(Arc::from(v.as_str())),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        extra_bytes += buf
+                            .iter()
+                            .map(|s: &Arc<str>| s.len() + std::mem::size_of::<Arc<str>>())
+                            .sum::<usize>();
+                        TypedColumn::Utf8(buf)
                     } else {
                         TypedColumn::Fallback(
                             self.rows.iter().map(|row| row[col_idx].clone()).collect(),

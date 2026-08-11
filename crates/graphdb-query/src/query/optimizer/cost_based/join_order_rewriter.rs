@@ -51,10 +51,9 @@ enum JoinNodeType {
 
 fn classify_join(node: &PlanNodeEnum) -> JoinNodeType {
     match node {
-        PlanNodeEnum::InnerJoin(_) | PlanNodeEnum::HashInnerJoin(_) => JoinNodeType::Inner,
+        PlanNodeEnum::InnerJoin(_) => JoinNodeType::Inner,
         PlanNodeEnum::CrossJoin(_) => JoinNodeType::Cross,
         PlanNodeEnum::LeftJoin(_)
-        | PlanNodeEnum::HashLeftJoin(_)
         | PlanNodeEnum::RightJoin(_)
         | PlanNodeEnum::SemiJoin(_)
         | PlanNodeEnum::FullOuterJoin(_) => JoinNodeType::NonReorderable,
@@ -223,12 +222,6 @@ fn flatten_recursive(
         JoinNodeType::Inner => {
             let (left, right, hash_keys, probe_keys) = match node {
                 PlanNodeEnum::InnerJoin(n) => (
-                    n.left_input(),
-                    n.right_input(),
-                    n.hash_keys().to_vec(),
-                    n.probe_keys().to_vec(),
-                ),
-                PlanNodeEnum::HashInnerJoin(n) => (
                     n.left_input(),
                     n.right_input(),
                     n.hash_keys().to_vec(),
@@ -408,9 +401,7 @@ pub fn reconstruct_join_tree(
                 };
                 let (hash_keys, probe_keys) =
                     resolve_keys_for_pair(&pair_key, &pred_map, &left, &right_node);
-                Some(build_hash_inner_join(
-                    left, right_node, hash_keys, probe_keys,
-                ))
+                Some(build_inner_join(left, right_node, hash_keys, probe_keys))
             }
             None => Some(right_node),
         };
@@ -455,17 +446,17 @@ fn collect_variables_from_slice(keys: &[ContextualExpression]) -> Vec<String> {
     vars
 }
 
-fn build_hash_inner_join(
+fn build_inner_join(
     left: PlanNodeEnum,
     right: PlanNodeEnum,
     hash_keys: Vec<ContextualExpression>,
     probe_keys: Vec<ContextualExpression>,
 ) -> PlanNodeEnum {
-    use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
-    match HashInnerJoinNode::new(left, right, hash_keys, probe_keys) {
-        Ok(node) => PlanNodeEnum::HashInnerJoin(node),
+    use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+    match InnerJoinNode::new(left, right, hash_keys, probe_keys) {
+        Ok(node) => PlanNodeEnum::InnerJoin(node),
         Err(e) => {
-            panic!("HashInnerJoin construction failed: {}", e);
+            panic!("InnerJoin construction failed: {}", e);
         }
     }
 }
@@ -602,14 +593,6 @@ pub fn walk_and_optimize_joins(
             cloned.set_right_input(new_right);
             PlanNodeEnum::RightJoin(cloned)
         }
-        PlanNodeEnum::HashLeftJoin(n) => {
-            let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
-            let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
-            let mut cloned = n.clone();
-            cloned.set_left_input(new_left);
-            cloned.set_right_input(new_right);
-            PlanNodeEnum::HashLeftJoin(cloned)
-        }
         PlanNodeEnum::FullOuterJoin(n) => {
             let new_left = walk_and_optimize_joins(n.left_input(), stats, cost_calculator, notes);
             let new_right = walk_and_optimize_joins(n.right_input(), stats, cost_calculator, notes);
@@ -655,7 +638,7 @@ pub struct FlattenedJoinChainLogical {
 }
 
 /// Logical join classification. The logical tree is pure — it never
-/// carries physical variants (HashInnerJoin), so only InnerJoin/CrossJoin
+/// carries physical variants (InnerJoin), so only InnerJoin/CrossJoin
 /// are reorderable.
 fn classify_join_logical(node: &LogicalNodeEnum) -> JoinNodeType {
     match node {
@@ -1283,7 +1266,7 @@ mod tests {
     use super::*;
     use crate::query::optimizer::cost::CostCalculator;
     use crate::query::optimizer::stats::StatisticsManager;
-    use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+    use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 
     fn make_scan(id: &str, _rows: u64) -> PlanNodeEnum {
         // Use a StartNode as a stand-in leaf for testing
@@ -1323,9 +1306,7 @@ mod tests {
                 crate::core::types::expr::contextual::ContextualExpression::new(id, ctx.clone())
             })
             .collect();
-        PlanNodeEnum::HashInnerJoin(
-            HashInnerJoinNode::new(left, right, hash_keys, probe_keys).unwrap(),
-        )
+        PlanNodeEnum::InnerJoin(InnerJoinNode::new(left, right, hash_keys, probe_keys).unwrap())
     }
 
     #[test]
@@ -1385,7 +1366,7 @@ mod tests {
         let optimized = walk_and_optimize_joins(&join2, &stats_view, &cost_calc, &mut notes);
 
         // The smallest table (b, 10 rows) should be first in the new tree
-        assert!(matches!(optimized, PlanNodeEnum::HashInnerJoin(_)));
+        assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
         // Verify it's still a valid join tree
         assert!(optimized.children().len() >= 2);
     }
@@ -1433,7 +1414,7 @@ mod tests {
         let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
 
         // Should complete without panic (greedy path)
-        assert!(matches!(result, PlanNodeEnum::HashInnerJoin(_)));
+        assert!(matches!(result, PlanNodeEnum::InnerJoin(_)));
     }
 
     // ===================================================================
@@ -1524,7 +1505,7 @@ mod tests {
             walk_and_optimize_joins_logical(&join2, &stats_view, &cost_calc, &mut notes);
 
         // The reordered logical tree is a logical InnerJoin (no physical
-        // HashInnerJoin can appear in the logical tree).
+        // InnerJoin can appear in the logical tree).
         assert!(matches!(optimized, LogicalNodeEnum::InnerJoin(_)));
         assert_eq!(notes.len(), 1);
         assert!(notes[0].starts_with("join_order:"));

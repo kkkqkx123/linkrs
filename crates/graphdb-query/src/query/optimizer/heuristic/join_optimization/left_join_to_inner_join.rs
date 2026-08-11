@@ -31,9 +31,7 @@ use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::{PushDownRule, RewriteRule};
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::query::planning::plan::core::nodes::join::join_node::{
-    HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode, LeftJoinNode,
-};
+use crate::query::planning::plan::core::nodes::join::join_node::{InnerJoinNode, LeftJoinNode};
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -161,60 +159,6 @@ impl LeftJoinToInnerJoinRule {
         }
     }
 
-    fn apply_to_hash_left_join(
-        &self,
-        filter: &FilterNode,
-        join: &HashLeftJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
-        let right_col_names = join.right_input().col_names().to_vec();
-        let filter_condition = filter.condition();
-
-        if !self.has_not_null_on_right(filter_condition, &right_col_names) {
-            return Ok(None);
-        }
-
-        let new_join = HashInnerJoinNode::new(
-            join.left_input().clone(),
-            join.right_input().clone(),
-            join.hash_keys().to_vec(),
-            join.probe_keys().to_vec(),
-        )
-        .map_err(|e| {
-            RewriteError::rewrite_failed(format!("Failed to create HashInnerJoinNode: {:?}", e))
-        })?;
-
-        if let Some(expr_meta) = filter_condition.expression() {
-            let remaining = self.remove_not_null_conditions(expr_meta.inner(), &right_col_names);
-
-            let mut result = TransformResult::new();
-
-            if let Some(rem_expr) = remaining {
-                let ctx = filter_condition.context().clone();
-                let meta = crate::core::types::expr::ExpressionMeta::new(rem_expr);
-                let id = ctx.register_expression(meta);
-                let new_ctx_expr = ContextualExpression::new(id, ctx);
-
-                let new_filter = FilterNode::new(
-                    PlanNodeEnum::HashInnerJoin(new_join),
-                    new_ctx_expr,
-                )
-                .map_err(|e| {
-                    RewriteError::rewrite_failed(format!("Failed to create FilterNode: {:?}", e))
-                })?;
-
-                result.erase_curr = true;
-                result.add_new_node(PlanNodeEnum::Filter(new_filter));
-            } else {
-                result.erase_curr = true;
-                result.add_new_node(PlanNodeEnum::HashInnerJoin(new_join));
-            }
-
-            return Ok(Some(result));
-        }
-
-        Ok(None)
-    }
-
     fn apply_to_left_join(
         &self,
         filter: &FilterNode,
@@ -295,7 +239,6 @@ impl RewriteRule for LeftJoinToInnerJoinRule {
         let input = filter.input();
 
         match input {
-            PlanNodeEnum::HashLeftJoin(join) => self.apply_to_hash_left_join(filter, join),
             PlanNodeEnum::LeftJoin(join) => self.apply_to_left_join(filter, join),
             _ => Ok(None),
         }
@@ -304,11 +247,7 @@ impl RewriteRule for LeftJoinToInnerJoinRule {
 
 impl PushDownRule for LeftJoinToInnerJoinRule {
     fn can_push_down(&self, node: &PlanNodeEnum, target: &PlanNodeEnum) -> bool {
-        matches!(node, PlanNodeEnum::Filter(_))
-            && matches!(
-                target,
-                PlanNodeEnum::HashLeftJoin(_) | PlanNodeEnum::LeftJoin(_)
-            )
+        matches!(node, PlanNodeEnum::Filter(_)) && matches!(target, PlanNodeEnum::LeftJoin(_))
     }
 
     fn push_down(

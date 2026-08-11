@@ -118,8 +118,7 @@ pub fn estimate_node_output_rows(
 
         // ── Binary operators ──
         // Joins multiply their inputs (semi-join keeps the left side).
-        InnerJoin(_) | HashInnerJoin(_) | LeftJoin(_) | HashLeftJoin(_) | RightJoin(_)
-        | CrossJoin(_) => {
+        InnerJoin(_) | LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
             let children = node.children();
             if children.len() >= 2 {
                 let left = estimate_node_output_rows(children[0], stats, selectivity);

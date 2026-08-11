@@ -14,15 +14,23 @@ use crate::core::Expression;
 use crate::core::Value;
 use crate::query::metadata::{IndexMetadata, MetadataContext};
 use crate::query::parser::ast::{LookupStmt, Stmt};
+use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::access::{IndexLimit, IndexScanNode, ScanType};
+use crate::query::planning::plan::logical::logical_nodes::access::{
+    LogicalScanEdgesNode, LogicalScanVerticesNode,
+};
+use crate::query::planning::plan::logical::logical_nodes::operation::{
+    LogicalFilterNode, LogicalProjectNode,
+};
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
 use std::sync::Arc;
 
 pub use crate::query::planning::plan::core::nodes::{
-    ArgumentNode, DedupNode, FilterNode, GetEdgesNode, GetVerticesNode, HashInnerJoinNode,
-    ProjectNode, ScanEdgesNode, ScanVerticesNode,
+    ArgumentNode, DedupNode, FilterNode, GetEdgesNode, GetVerticesNode, InnerJoinNode, ProjectNode,
+    ScanEdgesNode, ScanVerticesNode,
 };
 pub use crate::query::planning::plan::core::PlanNodeEnum;
 
@@ -221,6 +229,11 @@ impl LookupPlanner {
         // 3. Create the appropriate scan node. With an index the lookup uses
         // a unified IndexScan node; otherwise it falls back to a full scan of
         // the tag/edge, with WHERE filtering applied by a Filter node above.
+        //
+        // A parallel pure logical tree is built alongside (the index scan is
+        // a physical choice that the logical representation drops); it is
+        // attached to the SubPlan so the compiler can construct the
+        // LogicalPlan natively.
         let mut current_node: PlanNodeEnum = match selected_index {
             Some(index) => {
                 let mut index_scan_node = IndexScanNode::new(
@@ -275,25 +288,85 @@ impl LookupPlanner {
             }
         };
 
+        // Pure logical mirror of the scan (index scans are a physical choice
+        // and map to a tagged vertex scan in the logical representation).
+        let limit_from_yield = lookup_stmt
+            .yield_clause
+            .as_ref()
+            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
+        let mut logical_root = if is_edge {
+            LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
+                id: next_node_id(),
+                space_id,
+                edge_type: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: vec![],
+            })
+        } else {
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id: next_node_id(),
+                space_id,
+                space_name: space_name.clone(),
+                tag: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: vec![],
+            })
+        };
+
         if let Some(ref condition) = lookup_stmt.where_clause {
             let filter_node = FilterNode::new(current_node, condition.clone()).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
             })?;
             current_node = PlanNodeEnum::Filter(filter_node);
+
+            let logical_filter = LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                condition: condition.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Filter(logical_filter);
         }
 
         if lookup_stmt.yield_clause.is_some() {
             let yield_columns = Self::build_yield_columns(lookup_stmt, validated)?;
-            let project_node = ProjectNode::new(current_node, yield_columns).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
+            let project_node =
+                ProjectNode::new(current_node, yield_columns.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create ProjectNode: {}",
+                        e
+                    ))
+                })?;
             current_node = PlanNodeEnum::Project(project_node);
+
+            let logical_project = LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                columns: yield_columns,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Project(logical_project);
         }
 
         let arg_node = ArgumentNode::new(0, "lookup_input");
         let sub_plan = SubPlan {
             root: Some(current_node),
             tail: Some(PlanNodeEnum::Argument(arg_node)),
+            logical_root: Some(logical_root),
         };
 
         Ok(sub_plan)

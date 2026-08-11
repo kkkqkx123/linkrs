@@ -48,6 +48,7 @@ impl SegmentsConnector {
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
+            logical_root: None,
         })
     }
 
@@ -85,6 +86,7 @@ impl SegmentsConnector {
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
+            logical_root: None,
         })
     }
 
@@ -102,6 +104,7 @@ impl SegmentsConnector {
         SubPlan {
             root: dependent_plan.root,
             tail: input_plan.tail,
+            logical_root: None,
         }
     }
 
@@ -132,6 +135,7 @@ impl SegmentsConnector {
         Ok(SubPlan {
             root: Some(join_node),
             tail: left.tail.or(right.tail),
+            logical_root: None,
         })
     }
 }

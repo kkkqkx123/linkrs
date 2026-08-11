@@ -41,16 +41,6 @@ impl ChildAccessor for PlanNodeEnum {
                 1 => Some(n.right_input_mut()),
                 _ => None,
             },
-            PlanNodeEnum::HashInnerJoin(n) => match index {
-                0 => Some(n.left_input_mut()),
-                1 => Some(n.right_input_mut()),
-                _ => None,
-            },
-            PlanNodeEnum::HashLeftJoin(n) => match index {
-                0 => Some(n.left_input_mut()),
-                1 => Some(n.right_input_mut()),
-                _ => None,
-            },
             PlanNodeEnum::FullOuterJoin(n) => match index {
                 0 => Some(n.left_input_mut()),
                 1 => Some(n.right_input_mut()),

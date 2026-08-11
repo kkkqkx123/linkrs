@@ -91,6 +91,7 @@ impl Planner for PathPlanner {
         let sub_plan = SubPlan {
             root: Some(root_node),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         Ok(sub_plan)

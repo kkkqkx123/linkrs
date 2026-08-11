@@ -7,6 +7,9 @@ use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
 
 /// Sort the rows of a single window partition by the ORDER BY expressions.
+///
+/// Order keys are precomputed once per row (previously re-evaluated on
+/// every comparison); the sort is stable so ties keep the input order.
 pub(crate) fn sort_partition_rows(
     partition_rows: &mut [(usize, Vec<Value>)],
     col_names: &[String],
@@ -16,19 +19,27 @@ pub(crate) fn sort_partition_rows(
     if order_by_exprs.is_empty() {
         return;
     }
-    partition_rows.sort_by(|a, b| {
-        for (idx, expr) in order_by_exprs.iter().enumerate() {
+    let keys: Vec<Vec<Value>> = partition_rows
+        .iter()
+        .map(|(_, row)| {
+            order_by_exprs
+                .iter()
+                .map(|expr| {
+                    let mut ctx = ValueRowContext::from_names(row.clone(), col_names.to_vec());
+                    ExpressionEvaluator::evaluate(expr, &mut ctx)
+                        .unwrap_or(Value::Null(NullType::Null))
+                })
+                .collect()
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..partition_rows.len()).collect();
+    order.sort_by(|&i, &j| {
+        for (idx, _) in order_by_exprs.iter().enumerate() {
             let direction = order_by_directions
                 .get(idx)
                 .copied()
                 .unwrap_or(SortDirection::Ascending);
-            let mut ctx_a = ValueRowContext::from_names(a.1.clone(), col_names.to_vec());
-            let mut ctx_b = ValueRowContext::from_names(b.1.clone(), col_names.to_vec());
-            let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                .unwrap_or(Value::Null(NullType::Null));
-            let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                .unwrap_or(Value::Null(NullType::Null));
-            let cmp = compare_values(&val_a, &val_b);
+            let cmp = compare_values(&keys[i][idx], &keys[j][idx]);
             let final_cmp = match direction {
                 SortDirection::Ascending => cmp,
                 SortDirection::Descending => cmp.reverse(),
@@ -39,6 +50,11 @@ pub(crate) fn sort_partition_rows(
         }
         std::cmp::Ordering::Equal
     });
+    let mut sorted = Vec::with_capacity(partition_rows.len());
+    for &i in &order {
+        sorted.push(std::mem::take(&mut partition_rows[i]));
+    }
+    partition_rows.clone_from_slice(&sorted);
 }
 
 #[derive(Debug)]

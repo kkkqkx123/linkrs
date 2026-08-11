@@ -82,6 +82,7 @@ mod tests {
             Ok(SubPlan {
                 root: Some(start_node_enum.clone()),
                 tail: Some(start_node_enum),
+                logical_root: None,
             })
         }
 
@@ -213,6 +214,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let result = planner.transform_clause(qctx, &ast.stmt, input_plan);

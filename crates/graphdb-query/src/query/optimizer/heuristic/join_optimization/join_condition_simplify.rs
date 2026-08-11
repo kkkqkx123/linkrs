@@ -38,9 +38,7 @@ use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteError, RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
-use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, HashInnerJoinNode, InnerJoinNode,
-};
+use crate::query::planning::plan::core::nodes::join::join_node::{CrossJoinNode, InnerJoinNode};
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Rules for simplifying JOIN conditions
@@ -56,45 +54,6 @@ impl JoinConditionSimplifyRule {
 
     fn is_true_expression(&self, expr: &Expression) -> bool {
         matches!(expr, Expression::Literal(Value::Bool(true)))
-    }
-
-    fn apply_to_hash_inner_join(
-        &self,
-        join: &HashInnerJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
-        let hash_keys = join.hash_keys();
-        let probe_keys = join.probe_keys();
-
-        if hash_keys.len() != probe_keys.len() || hash_keys.is_empty() {
-            return Ok(None);
-        }
-
-        let all_true = hash_keys.iter().all(|k| {
-            k.expression()
-                .map(|m| self.is_true_expression(m.inner()))
-                .unwrap_or(false)
-        }) && probe_keys.iter().all(|k| {
-            k.expression()
-                .map(|m| self.is_true_expression(m.inner()))
-                .unwrap_or(false)
-        });
-
-        if all_true {
-            let cross_join = CrossJoinNode::new(
-                join.left_input().clone(),
-                join.right_input().clone(),
-            )
-            .map_err(|e| {
-                RewriteError::rewrite_failed(format!("Failed to create CrossJoinNode: {:?}", e))
-            })?;
-
-            let mut result = TransformResult::new();
-            result.erase_curr = true;
-            result.add_new_node(PlanNodeEnum::CrossJoin(cross_join));
-            return Ok(Some(result));
-        }
-
-        Ok(None)
     }
 
     fn apply_to_inner_join(&self, join: &InnerJoinNode) -> RewriteResult<Option<TransformResult>> {
@@ -146,7 +105,7 @@ impl RewriteRule for JoinConditionSimplifyRule {
     }
 
     fn pattern(&self) -> Pattern {
-        Pattern::multi(vec!["HashInnerJoin", "InnerJoin"])
+        Pattern::multi(vec!["InnerJoin", "InnerJoin"])
     }
 
     fn apply(
@@ -155,7 +114,6 @@ impl RewriteRule for JoinConditionSimplifyRule {
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
         match node {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(join),
             PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(join),
             _ => Ok(None),
         }

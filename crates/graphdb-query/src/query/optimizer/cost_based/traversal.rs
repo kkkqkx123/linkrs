@@ -73,8 +73,6 @@ pub fn rewrite_children(
         LeftJoin(n) => LeftJoin(rewrite_binary!(n)),
         RightJoin(n) => RightJoin(rewrite_binary!(n)),
         CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
-        HashInnerJoin(n) => HashInnerJoin(rewrite_binary!(n)),
-        HashLeftJoin(n) => HashLeftJoin(rewrite_binary!(n)),
         FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
         SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
         Apply(n) => Apply(rewrite_binary!(n)),

@@ -719,6 +719,13 @@ pub struct ExecutionRuntime {
     pub arena: Option<Arc<Mutex<Arena>>>,
     /// Columnar fast-path hit/miss counters shared with produced chunks (T5).
     columnar_stats: Arc<ColumnarStats>,
+    /// Cross-query adaptive policy for the typed columnar chunk layout.
+    ///
+    /// Injected by the materializer from the query bindings (owned by the
+    /// optimizer engine).  The policy is read at chunk-production time by
+    /// the scan gates; when the runtime finishes, the per-query columnar
+    /// stats are merged back into the policy so later queries can adapt.
+    columnar_policy: Option<Arc<super::chunk::ColumnarPolicy>>,
     /// Shared query feedback history for collecting execution statistics.
     ///
     /// Injected by the materializer from the query bindings; when set, the
@@ -767,6 +774,7 @@ impl ExecutionRuntime {
             parameter_values: None,
             arena: Some(Arc::new(Mutex::new(Arena::new()))),
             columnar_stats: Arc::new(ColumnarStats::new()),
+            columnar_policy: None,
             feedback_history: None,
         }
     }
@@ -1088,6 +1096,28 @@ impl ExecutionRuntime {
         Arc::clone(&self.columnar_stats)
     }
 
+    /// Return the shared columnar layout policy, if injected.
+    pub fn columnar_policy(&self) -> Option<Arc<super::chunk::ColumnarPolicy>> {
+        self.columnar_policy.clone()
+    }
+
+    /// Inject the shared columnar layout policy (owned by the optimizer
+    /// engine; set by the materializer from the query bindings).
+    pub fn set_columnar_policy(&mut self, policy: Option<Arc<super::chunk::ColumnarPolicy>>) {
+        self.columnar_policy = policy;
+    }
+
+    /// Merge this query's columnar hit/miss counts into the shared policy.
+    ///
+    /// Called once when the query finishes (materialized, streaming, and
+    /// discard paths) so the adaptive gate learns across queries.
+    pub fn flush_columnar_stats_to_policy(&self) {
+        if let Some(policy) = &self.columnar_policy {
+            let snapshot = ColumnarStatsSnapshot::from_stats(&self.columnar_stats);
+            policy.merge(snapshot.columnar_hits, snapshot.columnar_misses);
+        }
+    }
+
     /// Reset the bumpalo arena, freeing all temporary allocations.
     pub fn reset_arena(&self) {
         if let Some(arena) = &self.arena {
@@ -1208,6 +1238,71 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             30
         );
+    }
+
+    #[test]
+    fn test_columnar_policy_flush_merges_into_shared_policy() {
+        use crate::query::executor::streaming::chunk::ColumnarPolicy;
+
+        let policy = Arc::new(ColumnarPolicy::new(0.8, 100));
+        let mut rt = ExecutionRuntime::default_budget();
+        rt.set_columnar_policy(Some(policy.clone()));
+
+        // Simulate a query: 10 columnar hits, 5 misses recorded on the
+        // per-query counters.
+        rt.columnar_stats().record_hit();
+        for _ in 0..9 {
+            rt.columnar_stats().record_hit();
+        }
+        for _ in 0..5 {
+            rt.columnar_stats().record_miss();
+        }
+        assert_eq!(rt.columnar_stats().hit_rate(), 10.0 / 15.0);
+
+        // Flushing merges the deltas into the shared policy.
+        rt.flush_columnar_stats_to_policy();
+        assert_eq!(policy.snapshot(), (10, 5));
+
+        // Without an injected policy the flush is a no-op.
+        let rt2 = ExecutionRuntime::default_budget();
+        rt2.flush_columnar_stats_to_policy();
+    }
+
+    #[test]
+    fn test_columnar_policy_gates_typed_columns() {
+        use crate::query::executor::streaming::chunk::{set_typed_columns_enabled, ColumnarPolicy};
+
+        let policy = Arc::new(ColumnarPolicy::new(0.8, 100));
+        let mut rt = ExecutionRuntime::default_budget();
+        rt.set_columnar_policy(Some(policy.clone()));
+
+        // Below the sample floor the columnar path is chosen.
+        set_typed_columns_enabled(true);
+        let decide = || {
+            rt.columnar_policy()
+                .map_or(true, |p| p.should_use_columnar())
+                && crate::query::executor::streaming::chunk::typed_columns_enabled()
+        };
+        assert!(decide());
+
+        // Simulate a fallback-heavy workload: merge 90% misses across
+        // queries; once the sample floor is crossed the decision flips.
+        for _ in 0..4 {
+            rt.flush_columnar_stats_to_policy();
+            policy.merge(3, 30);
+        }
+        assert!(!decide());
+
+        // The global switch remains a forced override.
+        set_typed_columns_enabled(false);
+        assert!(!decide());
+        set_typed_columns_enabled(true);
+
+        // Recovery: sustained hits flip the decision back.
+        for _ in 0..10 {
+            policy.merge(100, 0);
+        }
+        assert!(decide());
     }
 
     #[test]

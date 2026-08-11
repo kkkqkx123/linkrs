@@ -345,6 +345,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // with every execution so estimated-vs-actual operator feedback is
         // recorded after the query completes.
         context.feedback_history = Some(self.optimizer_engine.feedback_history());
+        // Columnar auto-detection (phase 2): share the engine's policy so the
+        // typed columnar layout adapts to the learned hit rate; each query
+        // merges its columnar stats back at completion.
+        context.columnar_policy = Some(self.optimizer_engine.columnar_policy());
         context
     }
 }

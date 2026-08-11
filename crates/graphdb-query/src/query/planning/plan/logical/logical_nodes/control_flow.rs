@@ -152,6 +152,19 @@ impl LogicalLoopNode {
     pub fn body(&self) -> Option<&LogicalNodeEnum> {
         self.body.as_deref()
     }
+
+    /// Create a loop node with its body pre-attached.
+    pub fn new_with_body(condition: ContextualExpression, body: LogicalNodeEnum) -> Self {
+        use crate::query::planning::plan::core::node_id_generator::next_node_id;
+        Self {
+            id: next_node_id(),
+            condition,
+            body: Some(Box::new(body)),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        }
+    }
 }
 
 impl crate::query::planning::plan::logical::logical_node_traits::LogicalNode for LogicalLoopNode {

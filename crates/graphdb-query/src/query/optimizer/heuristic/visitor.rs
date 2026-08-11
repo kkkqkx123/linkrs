@@ -32,8 +32,7 @@ use crate::query::planning::plan::core::nodes::graph_operations::set_operations_
 };
 use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode,
-    LeftJoinNode, RightJoinNode, SemiJoinNode,
+    CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
 };
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -228,8 +227,6 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 
     // Binary-input nodes (joins)
     impl_binary_input_rewrite!(
-        visit_hash_inner_join => HashInnerJoinNode, HashInnerJoin,
-        visit_hash_left_join => HashLeftJoinNode, HashLeftJoin,
         visit_inner_join => InnerJoinNode, InnerJoin,
         visit_left_join => LeftJoinNode, LeftJoin,
         visit_cross_join => CrossJoinNode, CrossJoin,

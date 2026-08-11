@@ -10,23 +10,29 @@ use crate::core::Expression;
 use crate::core::YieldColumn;
 use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::core::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::query::planning::plan::core::nodes::graph_operations::window_node::{
     WindowFunctionSpec, WindowNode,
 };
+use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::query::planning::plan::core::nodes::AggregateNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::{
+    LogicalAggregateNode, LogicalDedupNode, LogicalFilterNode, LogicalProjectNode,
+    LogicalSampleNode, LogicalWindowNode,
+};
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
 pub use crate::query::planning::plan::core::PlanNodeEnum;
-
-use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 
 /// RETURN Statement Planner
 ///
@@ -200,36 +206,90 @@ impl ClausePlanner for ReturnClausePlanner {
                 }
             }
 
-            let project_node = ProjectNode::new(input_node.clone(), project_columns)?;
-            let project_plan = SubPlan::new(Some(project_node.into_enum()), input_plan.tail);
+            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?;
+            let project_logical = wrap_logical(&input_plan, |input| {
+                LogicalNodeEnum::Project(LogicalProjectNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    columns: project_columns,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
+            let project_plan = SubPlan {
+                root: Some(project_node.into_enum()),
+                tail: input_plan.tail,
+                logical_root: project_logical,
+            };
 
             let mut aggregate_node = AggregateNode::with_agg_aliases(
                 project_plan.root.clone().unwrap(),
-                group_keys,
-                agg_functions,
+                group_keys.clone(),
+                agg_functions.clone(),
                 agg_aliases,
             )?;
-            aggregate_node.set_aggregation_distinct(agg_distinct);
-            aggregate_node.set_aggregation_filters(agg_filters);
+            aggregate_node.set_aggregation_distinct(agg_distinct.clone());
+            aggregate_node.set_aggregation_filters(agg_filters.clone());
 
             let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
 
+            // Logical mirror: project → aggregate → [having filter] →
+            // [dedup] → [sample].
+            let mut logical_root = wrap_logical(&project_plan, |input| {
+                LogicalNodeEnum::Aggregate(LogicalAggregateNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    group_keys,
+                    aggregation_functions: agg_functions,
+                    aggregation_distinct: agg_distinct,
+                    aggregation_filters: agg_filters,
+                    grouping_sets: vec![],
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
+
             // Apply HAVING clause filter if present
             if let Some(having_expr) = extract_having_clause(stmt) {
-                let filter_node =
-                    FilterNode::new(final_node.clone(), having_expr).map_err(|e| {
+                let filter_node = FilterNode::new(final_node.clone(), having_expr.clone())
+                    .map_err(|e| {
                         PlannerError::PlanGenerationFailed(format!(
                             "Failed to create FilterNode for HAVING: {}",
                             e
                         ))
                     })?;
                 final_node = PlanNodeEnum::Filter(filter_node);
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Filter(LogicalFilterNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        condition: having_expr,
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
             if self.distinct {
                 if let Ok(dedup) = DedupNode::new(final_node.clone()) {
                     final_node = dedup.into_enum();
                 }
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Dedup(LogicalDedupNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
             // Apply SAMPLE clause if present
@@ -237,9 +297,24 @@ impl ClausePlanner for ReturnClausePlanner {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Sample(LogicalSampleNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        count: sample_count as i64,
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
-            Ok(SubPlan::new(Some(final_node), project_plan.tail))
+            Ok(SubPlan {
+                root: Some(final_node),
+                tail: project_plan.tail,
+                logical_root,
+            })
         } else if has_window {
             let window_specs = extract_window_function_info(&yield_columns)?;
 
@@ -279,32 +354,81 @@ impl ClausePlanner for ReturnClausePlanner {
                 }
             }
 
-            let project_node = ProjectNode::new(input_node.clone(), project_columns)?;
-            let window_node = WindowNode::new(project_node.clone().into_enum(), window_specs)
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create WindowNode: {}",
-                        e
-                    ))
-                })?;
+            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?;
+            let window_node = WindowNode::new(
+                project_node.clone().into_enum(),
+                window_specs.clone(),
+            )
+            .map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create WindowNode: {}", e))
+            })?;
 
             let mut final_node = window_node.into_enum();
+
+            // Logical mirror: project → window → [dedup] → [sample].
+            let project_logical = wrap_logical(&input_plan, |input| {
+                LogicalNodeEnum::Project(LogicalProjectNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    columns: project_columns,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
+            let mut logical_root = project_logical.map(|input| {
+                LogicalNodeEnum::Window(LogicalWindowNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    window_functions: window_specs,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
 
             if self.distinct {
                 if let Ok(dedup) = DedupNode::new(final_node.clone()) {
                     final_node = dedup.into_enum();
                 }
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Dedup(LogicalDedupNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
             if let Some(sample_count) = extract_sample_clause(stmt) {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Sample(LogicalSampleNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        count: sample_count as i64,
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
-            Ok(SubPlan::new(Some(final_node), None))
+            Ok(SubPlan {
+                root: Some(final_node),
+                tail: None,
+                logical_root,
+            })
         } else {
-            let project_node = ProjectNode::new(input_node.clone(), yield_columns)?;
+            let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?;
 
             let mut final_node = if self.distinct {
                 match DedupNode::new(project_node.clone().into_enum()) {
@@ -315,14 +439,55 @@ impl ClausePlanner for ReturnClausePlanner {
                 project_node.into_enum()
             };
 
+            // Logical mirror: project → [dedup] → [sample].
+            let mut logical_root = wrap_logical(&input_plan, |input| {
+                LogicalNodeEnum::Project(LogicalProjectNode {
+                    id: next_node_id(),
+                    input: Some(Box::new(input.clone())),
+                    deps: vec![input],
+                    columns: yield_columns,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                })
+            });
+
+            if self.distinct {
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Dedup(LogicalDedupNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
+            }
+
             // Apply SAMPLE clause if present
             if let Some(sample_count) = extract_sample_clause(stmt) {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
+                logical_root = logical_root.map(|input| {
+                    LogicalNodeEnum::Sample(LogicalSampleNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input.clone())),
+                        deps: vec![input],
+                        count: sample_count as i64,
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
             }
 
-            Ok(SubPlan::new(Some(final_node), input_plan.tail))
+            Ok(SubPlan {
+                root: Some(final_node),
+                tail: input_plan.tail,
+                logical_root,
+            })
         }
     }
 }
@@ -634,6 +799,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = ReturnClausePlanner::new();
@@ -698,6 +864,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = ReturnClausePlanner::with_distinct(true);
@@ -759,6 +926,7 @@ mod tests {
         let input_plan = SubPlan {
             root: None,
             tail: None,
+            logical_root: None,
         };
 
         let planner = ReturnClausePlanner::new();

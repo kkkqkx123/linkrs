@@ -6,10 +6,14 @@
 use crate::core::types::ContextualExpression;
 use crate::query::binder::validation::CypherClauseKind;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::core::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
 use std::sync::Arc;
@@ -51,8 +55,23 @@ impl ClausePlanner for WhereClausePlanner {
             )
         })?;
 
-        let filter_node = FilterNode::new(input_node.clone(), condition)?;
-        Ok(SubPlan::new(Some(filter_node.into_enum()), input_plan.tail))
+        let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
+        let logical_root = wrap_logical(&input_plan, |input| {
+            LogicalNodeEnum::Filter(LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(input.clone())),
+                deps: vec![input],
+                condition,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
+        });
+        Ok(SubPlan {
+            root: Some(filter_node.into_enum()),
+            tail: input_plan.tail,
+            logical_root,
+        })
     }
 }
 
@@ -151,6 +170,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = WhereClausePlanner::new();
@@ -196,6 +216,7 @@ mod tests {
         let input_plan = SubPlan {
             root: Some(start_node_enum.clone()),
             tail: Some(start_node_enum),
+            logical_root: None,
         };
 
         let planner = WhereClausePlanner::new();

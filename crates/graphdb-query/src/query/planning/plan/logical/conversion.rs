@@ -1,7 +1,7 @@
 //! Conversion from `PlanNodeEnum` to `LogicalNodeEnum`.
 //!
 //! This module implements the physical-to-logical stripping pass:
-//! - Physical operators (IndexScan, HashInnerJoin, HashLeftJoin)
+//! - Physical operators (IndexScan, InnerJoin, LeftJoin)
 //!   are mapped to their logical equivalents.
 //! - All other operators are recursively converted.
 
@@ -32,8 +32,8 @@ impl std::error::Error for ConversionError {}
 ///
 /// # Physical-to-Logical Mapping
 /// - `IndexScan` → `ScanVertices`
-/// - `HashInnerJoin` → `InnerJoin`
-/// - `HashLeftJoin` → `LeftJoin`
+/// - `InnerJoin` → `InnerJoin`
+/// - `LeftJoin` → `LeftJoin`
 /// - All other logical operators are preserved with recursive child conversion.
 ///
 /// # Limitations
@@ -389,41 +389,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         }
 
         // Physical join nodes → logical equivalents
-        PlanNodeEnum::HashInnerJoin(n) => {
-            let logical_left = convert_plan(n.left_input())?;
-            let logical_right = convert_plan(n.right_input())?;
-            Ok(LogicalNodeEnum::InnerJoin(
-                crate::query::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
-                    id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
-                    hash_keys: n.hash_keys().to_vec(),
-                    probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
-                    output_var: n.output_var().map(|s| s.to_string()),
-                    col_names: n.col_names().to_vec(),
-                    column_types: n.column_types().to_vec(),
-                },
-            ))
-        }
-
-        PlanNodeEnum::HashLeftJoin(n) => {
-            let logical_left = convert_plan(n.left_input())?;
-            let logical_right = convert_plan(n.right_input())?;
-            Ok(LogicalNodeEnum::LeftJoin(
-                crate::query::planning::plan::logical::logical_nodes::join::LogicalLeftJoinNode {
-                    id: n.id(),
-                    left: Box::new(logical_left.clone()),
-                    right: Box::new(logical_right.clone()),
-                    hash_keys: n.hash_keys().to_vec(),
-                    probe_keys: n.probe_keys().to_vec(),
-                    deps: vec![logical_left, logical_right],
-                    output_var: n.output_var().map(|s| s.to_string()),
-                    col_names: n.col_names().to_vec(),
-                    column_types: n.column_types().to_vec(),
-                },
-            ))
-        }
 
         // === Fallback for unsupported nodes ===
         _ => Err(ConversionError::NotYetImplemented(

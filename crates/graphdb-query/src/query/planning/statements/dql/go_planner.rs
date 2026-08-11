@@ -10,17 +10,18 @@
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, EdgeDirection};
 use crate::query::parser::ast::{GoStmt, Stmt};
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::query::planning::plan::core::node_id_generator::next_node_id;
+use crate::query::planning::plan::logical::logical_nodes::access::LogicalStartNode;
+use crate::query::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::{
+    LogicalDedupNode, LogicalFilterNode, LogicalProjectNode,
+};
+use crate::query::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNode;
+use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
 use std::sync::Arc;
-
-pub use crate::query::planning::plan::core::nodes::{
-    ArgumentNode, DedupNode, ExpandAllNode, FilterNode, GetNeighborsNode, HashInnerJoinNode,
-    ProjectNode, StartNode,
-};
-pub use crate::query::planning::plan::core::PlanNodeEnum;
 
 /// GO Query Planner
 /// Responsible for converting GO statements into execution plans.
@@ -98,10 +99,16 @@ impl Planner for GoPlanner {
         };
 
         // Create the tail node — this becomes the input to ExpandAllNode.
-        let tail_node = if use_start_node {
-            PlanNodeEnum::Start(StartNode::new())
+        let tail_logical = if use_start_node {
+            LogicalNodeEnum::Start(LogicalStartNode::new())
         } else {
-            PlanNodeEnum::Argument(ArgumentNode::new(0, &from_var))
+            LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: from_var.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            })
         };
 
         let (direction_str, edge_types) = if let Some(over_clause) = &go_stmt.over {
@@ -115,98 +122,90 @@ impl Planner for GoPlanner {
             ("both", vec![])
         };
 
-        // Create ExpandAllNode to traverse edges
-        let mut expand_all_node = ExpandAllNode::new(space_id, edge_types.clone(), direction_str);
-
         // Set step_limit based on GO statement steps
         let step_limit = match go_stmt.steps {
             crate::query::parser::ast::Steps::Fixed(n) => n as u32,
             crate::query::parser::ast::Steps::Range { min: _, max } => max as u32,
             crate::query::parser::ast::Steps::Variable(_) => 1,
         };
-        expand_all_node.set_step_limit(step_limit);
-
-        // Don't include empty paths for GO FROM queries
-        expand_all_node.set_include_empty_paths(false);
 
         // Set column names to match ExpandAll's output format: [src, edge, dst]
         // Also add edge type name as variable for accessing edge properties
         let mut col_names = vec!["src".to_string(), "edge".to_string(), "dst".to_string()];
-        // Add edge type as alias for "edge" column to support friend.name syntax
         if edge_types.len() == 1 {
             col_names.push(edge_types[0].clone());
         }
-        expand_all_node.set_col_names(col_names);
 
         // Set src_vids from FROM clause if they are literals
-        if use_start_node {
-            let src_vids: Vec<crate::core::Value> = from_vertices
+        let src_vids: Vec<crate::core::Value> = if use_start_node {
+            from_vertices
                 .iter()
                 .filter_map(|expr| expr.as_literal())
-                .collect();
-            if !src_vids.is_empty() {
-                expand_all_node.set_src_vids(src_vids);
-            }
+                .collect()
+        } else {
+            vec![]
+        };
+
+        // Build a pure logical tree natively (GO statements have no
+        // planner-level physical choices) and convert it to the physical plan
+        // exactly once at the plan exit via `SubPlan::from_logical_root`.
+        let mut logical_root = LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
+            id: next_node_id(),
+            deps: vec![tail_logical],
+            space_id,
+            edge_types: edge_types.clone(),
+            direction: direction_str.to_string(),
+            any_edge_type: false,
+            step_limit: Some(step_limit),
+            step_limits: None,
+            join_input: false,
+            sample: false,
+            edge_props: vec![],
+            vertex_props: vec![],
+            filter: None,
+            src_vids,
+            include_empty_paths: false,
+            input_var: None,
+            output_var: None,
+            col_names,
+            column_types: vec![],
+        });
+
+        if let Some(ref condition) = go_stmt.where_clause {
+            logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                condition: condition.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
         }
 
-        // Structurally close the plan: the tail node becomes the expand
-        // node's input inside the SubPlan itself.
-        let input_for_join = SubPlan::connect_upstream(
-            SubPlan::from_single_node(PlanNodeEnum::ExpandAll(expand_all_node)),
-            SubPlan::from_single_node(tail_node),
-        )?
-        .root
-        .ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("GO expand sub-plan has no root node".to_string())
-        })?;
-
-        let filter_node = if let Some(ref condition) = go_stmt.where_clause {
-            match FilterNode::new(input_for_join, condition.clone()) {
-                Ok(filter) => PlanNodeEnum::Filter(filter),
-                Err(e) => {
-                    return Err(PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create filter node: {}",
-                        e
-                    )));
-                }
-            }
-        } else {
-            input_for_join
-        };
-
         let project_columns = Self::build_yield_columns(go_stmt, validated.expr_context())?;
-        let project_node = match ProjectNode::new(filter_node, project_columns) {
-            Ok(project) => PlanNodeEnum::Project(project),
-            Err(e) => {
-                return Err(PlannerError::PlanGenerationFailed(format!(
-                    "Failed to create project node: {}",
-                    e
-                )));
-            }
-        };
+        logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(logical_root)),
+            deps: vec![],
+            columns: project_columns,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
 
-        let root_node = if step_limit > 1 {
-            let dedup_node = match DedupNode::new(project_node) {
-                Ok(dedup) => dedup,
-                Err(e) => {
-                    return Err(PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create dedup node: {}",
-                        e
-                    )));
-                }
-            };
-            PlanNodeEnum::Dedup(dedup_node)
-        } else {
-            project_node
-        };
+        if step_limit > 1 {
+            logical_root = LogicalNodeEnum::Dedup(LogicalDedupNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                deps: vec![],
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+        }
 
-        // tail_node was already set as ExpandAllNode's input above.
-        let sub_plan = SubPlan {
-            root: Some(root_node),
-            tail: None,
-        };
-
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

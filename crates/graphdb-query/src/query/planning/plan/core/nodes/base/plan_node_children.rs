@@ -116,14 +116,6 @@ impl PlanNodeEnum {
                 super::plan_node_traits::BinaryInputNode::left_input(node),
                 super::plan_node_traits::BinaryInputNode::right_input(node),
             ],
-            PlanNodeEnum::HashInnerJoin(node) => vec![
-                super::plan_node_traits::BinaryInputNode::left_input(node),
-                super::plan_node_traits::BinaryInputNode::right_input(node),
-            ],
-            PlanNodeEnum::HashLeftJoin(node) => vec![
-                super::plan_node_traits::BinaryInputNode::left_input(node),
-                super::plan_node_traits::BinaryInputNode::right_input(node),
-            ],
             PlanNodeEnum::FullOuterJoin(node) => vec![
                 super::plan_node_traits::BinaryInputNode::left_input(node),
                 super::plan_node_traits::BinaryInputNode::right_input(node),

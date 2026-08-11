@@ -412,16 +412,6 @@ impl ReferenceCountAnalyzer {
                 let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
                 1 + left_count + right_count
             }
-            PlanNodeEnum::HashInnerJoin(n) => {
-                let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
-                let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
-                1 + left_count + right_count
-            }
-            PlanNodeEnum::HashLeftJoin(n) => {
-                let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
-                let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
-                1 + left_count + right_count
-            }
             PlanNodeEnum::FullOuterJoin(n) => {
                 let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
                 let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));

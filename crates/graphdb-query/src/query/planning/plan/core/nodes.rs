@@ -33,8 +33,8 @@ pub use graph_operations::{
     UnwindNode, WindowFunctionSpec, WindowNode,
 };
 pub use join::{
-    AntiJoinNode, CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode,
-    InnerJoinNode, LeftJoinNode, RightJoinNode, SemiJoinNode,
+    AntiJoinNode, CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode,
+    SemiJoinNode,
 };
 pub use management::{
     AlterEdgeNode, AlterSpaceNode, AlterTagNode, AlterUserNode, ChangePasswordNode, ClearSpaceNode,

@@ -150,7 +150,7 @@ impl MemoryBudgetAllocator {
                 let memory = rows * self.default_row_size;
                 (memory, 100) // High priority - sorting is memory-intensive
             }
-            PlanNodeEnum::HashInnerJoin(_) | PlanNodeEnum::HashLeftJoin(_) => {
+            PlanNodeEnum::InnerJoin(_) | PlanNodeEnum::LeftJoin(_) => {
                 // Hash join needs hash table for left input
                 let rows = self.estimate_input_rows(plan);
                 let memory = rows * self.default_row_size * 2; // Hash table overhead

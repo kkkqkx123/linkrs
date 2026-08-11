@@ -1,7 +1,7 @@
 //! LogicalPlan: pure logical plan representation.
 //!
 //! Wraps a `LogicalNodeEnum` tree — pure logical operators with no
-//! physical execution choices (IndexScan, HashInnerJoin, etc.).
+//! physical execution choices (IndexScan, InnerJoin, etc.).
 
 use crate::query::planning::plan::logical::conversion::{convert_plan, ConversionError};
 use crate::query::planning::plan::logical::LogicalNodeEnum;

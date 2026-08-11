@@ -20,8 +20,6 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::LeftJoin(node) => node.$method(),
             PlanNodeEnum::RightJoin(node) => node.$method(),
             PlanNodeEnum::CrossJoin(node) => node.$method(),
-            PlanNodeEnum::HashInnerJoin(node) => node.$method(),
-            PlanNodeEnum::HashLeftJoin(node) => node.$method(),
             PlanNodeEnum::FullOuterJoin(node) => node.$method(),
             PlanNodeEnum::SemiJoin(node) => node.$method(),
             PlanNodeEnum::IndexScan(node) => node.$method(),
@@ -88,8 +86,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::LeftJoin(_) => "LeftJoin",
             PlanNodeEnum::RightJoin(_) => "RightJoin",
             PlanNodeEnum::CrossJoin(_) => "CrossJoin",
-            PlanNodeEnum::HashInnerJoin(_) => "HashInnerJoin",
-            PlanNodeEnum::HashLeftJoin(_) => "HashLeftJoin",
             PlanNodeEnum::FullOuterJoin(_) => "FullOuterJoin",
             PlanNodeEnum::SemiJoin(_) => "SemiJoin",
             PlanNodeEnum::IndexScan(_) => "IndexScan",
@@ -177,8 +173,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::InnerJoin(node) => node.output_var(),
             PlanNodeEnum::LeftJoin(node) => node.output_var(),
             PlanNodeEnum::CrossJoin(node) => node.output_var(),
-            PlanNodeEnum::HashInnerJoin(node) => node.output_var(),
-            PlanNodeEnum::HashLeftJoin(node) => node.output_var(),
             PlanNodeEnum::IndexScan(node) => node.output_var(),
             PlanNodeEnum::GetVertices(node) => node.output_var(),
             PlanNodeEnum::GetEdges(node) => node.output_var(),
@@ -286,12 +280,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::CrossJoin(node) => {
                 Cow::Owned(vec![node.left_input(), node.right_input()])
             }
-            PlanNodeEnum::HashInnerJoin(node) => {
-                Cow::Owned(vec![node.left_input(), node.right_input()])
-            }
-            PlanNodeEnum::HashLeftJoin(node) => {
-                Cow::Owned(vec![node.left_input(), node.right_input()])
-            }
             PlanNodeEnum::FullOuterJoin(node) => {
                 Cow::Owned(vec![node.left_input(), node.right_input()])
             }
@@ -349,8 +337,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::InnerJoin(node) => node.set_output_var(var),
             PlanNodeEnum::LeftJoin(node) => node.set_output_var(var),
             PlanNodeEnum::CrossJoin(node) => node.set_output_var(var),
-            PlanNodeEnum::HashInnerJoin(node) => node.set_output_var(var),
-            PlanNodeEnum::HashLeftJoin(node) => node.set_output_var(var),
             PlanNodeEnum::IndexScan(node) => node.set_output_var(var),
             PlanNodeEnum::GetVertices(node) => node.set_output_var(var),
             PlanNodeEnum::GetEdges(node) => node.set_output_var(var),

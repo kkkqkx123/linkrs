@@ -100,7 +100,9 @@ impl DateValue {
         day + (153 * m + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045
     }
 
-    fn from_days(days: i64) -> Self {
+    /// Convert a day count (days since 0000-03-01 in the proleptic Gregorian
+    /// calendar, as produced by [`DateValue::to_days`]) back into a date.
+    pub fn from_days(days: i64) -> Self {
         let a = days + 32044;
         let b = (4 * a + 3) / 146097;
         let c = a - (146097 * b) / 4;

@@ -256,6 +256,7 @@ mod tests {
             partition_count: 0,
             arena: None,
             feedback_history: None,
+            columnar_policy: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]

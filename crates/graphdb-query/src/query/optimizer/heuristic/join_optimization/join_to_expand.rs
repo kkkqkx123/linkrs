@@ -7,7 +7,7 @@
 //!
 //! Before:
 //! ```text
-//!   ScanVertices(v) → HashInnerJoin(ON v.id = e._src) → ScanEdges(e)
+//!   ScanVertices(v) → InnerJoin(ON v.id = e._src) → ScanEdges(e)
 //! ```
 //!
 //! After:
@@ -29,7 +29,7 @@ use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
-use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -70,10 +70,7 @@ impl JoinToExpandRule {
         }
     }
 
-    fn apply_to_hash_inner_join(
-        &self,
-        join: &HashInnerJoinNode,
-    ) -> RewriteResult<Option<TransformResult>> {
+    fn apply_to_inner_join(&self, join: &InnerJoinNode) -> RewriteResult<Option<TransformResult>> {
         let left = join.left_input();
         let right = join.right_input();
 
@@ -129,7 +126,7 @@ impl RewriteRule for JoinToExpandRule {
     }
 
     fn pattern(&self) -> Pattern {
-        Pattern::new_with_name("HashInnerJoin")
+        Pattern::new_with_name("InnerJoin")
     }
 
     fn apply(
@@ -138,7 +135,7 @@ impl RewriteRule for JoinToExpandRule {
         node: &PlanNodeEnum,
     ) -> RewriteResult<Option<TransformResult>> {
         match node {
-            PlanNodeEnum::HashInnerJoin(join) => self.apply_to_hash_inner_join(join),
+            PlanNodeEnum::InnerJoin(join) => self.apply_to_inner_join(join),
             _ => Ok(None),
         }
     }

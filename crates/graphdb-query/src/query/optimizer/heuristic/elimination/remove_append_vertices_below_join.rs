@@ -1,14 +1,14 @@
 //! Remove the rule that adds a vertex at the bottom of the connection.
 //!
 //! According to the reference implementation of nebula-graph, this rule matches the following patterns:
-//! HashInnerJoin/HashLeftJoin -> ... -> Project -> AppendVertices -> Traverse
+//! InnerJoin/LeftJoin -> ... -> Project -> AppendVertices -> Traverse
 //! The AppendVertices node can be removed when certain conditions are met.
 //!
 //! # Conversion example
 //!
 //! Before:
 //! ```text
-//!   HashInnerJoin({id(v)}, {id(v)})
+//!   InnerJoin({id(v)}, {id(v)})
 //!    /         \
 //!   /           Project
 //!  /               \
@@ -19,7 +19,7 @@
 //!
 //! After:
 //! ```text
-//!   HashInnerJoin({id(v)}, {$-.v})
+//!   InnerJoin({id(v)}, {$-.v})
 //!    /         \
 //!   /     Project(..., none_direct_dst(e) AS v)
 //!  /               \
@@ -47,9 +47,7 @@ use crate::query::optimizer::heuristic::rule::RewriteRule;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
-use crate::query::planning::plan::core::nodes::join::join_node::{
-    HashInnerJoinNode, HashLeftJoinNode,
-};
+use crate::query::planning::plan::core::nodes::join::join_node::{InnerJoinNode, LeftJoinNode};
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::PlanNodeEnum;
 use std::sync::Arc;
@@ -205,8 +203,8 @@ impl RewriteRule for RemoveAppendVerticesBelowJoinRule {
     }
 
     fn pattern(&self) -> Pattern {
-        // Match either HashInnerJoin or HashLeftJoin.
-        Pattern::multi(vec!["HashInnerJoin", "HashLeftJoin"])
+        // Match either InnerJoin or LeftJoin.
+        Pattern::multi(vec!["InnerJoin", "LeftJoin"])
     }
 
     fn apply(
@@ -216,13 +214,13 @@ impl RewriteRule for RemoveAppendVerticesBelowJoinRule {
     ) -> RewriteResult<Option<TransformResult>> {
         // Check whether it is a hash-linked node.
         let (hash_keys, probe_keys, left_input, right_input) = match node {
-            PlanNodeEnum::HashInnerJoin(n) => (
+            PlanNodeEnum::InnerJoin(n) => (
                 n.hash_keys().to_vec(),
                 n.probe_keys().to_vec(),
                 n.left_input().clone(),
                 n.right_input().clone(),
             ),
-            PlanNodeEnum::HashLeftJoin(n) => (
+            PlanNodeEnum::LeftJoin(n) => (
                 n.hash_keys().to_vec(),
                 n.probe_keys().to_vec(),
                 n.left_input().clone(),
@@ -329,8 +327,8 @@ impl RewriteRule for RemoveAppendVerticesBelowJoinRule {
 
         // Create a new Join node.
         let new_join: PlanNodeEnum = match node {
-            PlanNodeEnum::HashInnerJoin(_) => PlanNodeEnum::HashInnerJoin(
-                HashInnerJoinNode::new(
+            PlanNodeEnum::InnerJoin(_) => PlanNodeEnum::InnerJoin(
+                InnerJoinNode::new(
                     left_input.clone(),
                     PlanNodeEnum::Project(new_project),
                     hash_keys.to_vec(),
@@ -338,8 +336,8 @@ impl RewriteRule for RemoveAppendVerticesBelowJoinRule {
                 )
                 .map_err(|e| RewriteError::InvalidPlanStructure(e.to_string()))?,
             ),
-            PlanNodeEnum::HashLeftJoin(_) => PlanNodeEnum::HashLeftJoin(
-                HashLeftJoinNode::new(
+            PlanNodeEnum::LeftJoin(_) => PlanNodeEnum::LeftJoin(
+                LeftJoinNode::new(
                     left_input.clone(),
                     PlanNodeEnum::Project(new_project),
                     hash_keys.to_vec(),

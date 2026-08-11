@@ -28,8 +28,7 @@ use crate::query::planning::plan::core::nodes::graph_operations::set_operations_
     IntersectNode, MinusNode,
 };
 use crate::query::planning::plan::core::nodes::join::join_node::{
-    CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode, InnerJoinNode,
-    LeftJoinNode,
+    CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode,
 };
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
@@ -319,8 +318,6 @@ impl PlanNodeVisitor for DescribeVisitor {
     impl_join_visit!(
         visit_inner_join => "InnerJoin", InnerJoinNode,
         visit_left_join => "LeftJoin", LeftJoinNode,
-        visit_hash_inner_join => "HashInnerJoin", HashInnerJoinNode,
-        visit_hash_left_join => "HashLeftJoin", HashLeftJoinNode,
     );
 
     // ==========================================

@@ -30,9 +30,9 @@ pub use materialize::{DataCollectState, DistinctState, MaterializeState, RollUpA
 pub use sort::{MergeState, RunBuffer, SortState, TopNState};
 pub use window::{WindowFunctionState, WindowState};
 
-use crate::query::executor::streaming::slot::SlotLayout;
-use aggregate::{extract_field_value, value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES};
-use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
+use crate::query::executor::streaming::chunk::ColumnarBatch;
+use aggregate::{value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES};
+use sort::{find_min_run, refill_run_buffer, sort_columnar_batch, spill_sorted_run};
 use window::{compute_window_partition_result, sort_partition_rows};
 
 /// Reject spill for operators that do not support disk-based overflow.
@@ -301,6 +301,7 @@ impl BlockingOperator {
                 *state = Some(SortState {
                     col_names: vec![],
                     input_layout: None,
+                    columnar_batch: None,
                     all_rows: vec![],
                     row_iter: None,
                     spill_files: vec![],
@@ -368,7 +369,7 @@ impl BlockingOperator {
             }
             Self::TopN { state, .. } => {
                 *state = Some(TopNState {
-                    all_rows: vec![],
+                    columnar_batch: None,
                     col_names: vec![],
                     input_layout: None,
                     result_iter: None,
@@ -457,11 +458,22 @@ impl BlockingOperator {
                             st.col_names = chunk.col_names();
                             st.input_layout = Some(chunk.get_layout());
                         }
-                        for row in chunk.rows {
-                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                        // Column-major accumulation below the spill
+                        // boundary. Memory is accounted per appended row
+                        // (same model as the legacy row path); once the
+                        // budget is exhausted the batch is materialized and
+                        // spilled row-wise, keeping the spill machinery
+                        // unchanged.
+                        let batch = st
+                            .columnar_batch
+                            .get_or_insert_with(|| ColumnarBatch::new(chunk.num_columns()));
+                        for idx in chunk.visible_indices() {
+                            let row = &chunk.rows[idx];
+                            if let Err(e) = memory_tracker.try_reserve_row(row) {
                                 if let Some(sm) = base.spill_manager() {
+                                    let mut rows = batch.to_rows();
                                     spill_sorted_run(
-                                        &mut st.all_rows,
+                                        &mut rows,
                                         &st.col_names,
                                         sort_expressions,
                                         sort_directions,
@@ -470,12 +482,14 @@ impl BlockingOperator {
                                         &mut st.runs,
                                     )?;
                                     st.has_spilled = true;
-                                    memory_tracker.try_reserve_row(&row)?;
+                                    batch.clear();
+                                    memory_tracker.reset();
+                                    memory_tracker.try_reserve_row(row)?;
                                 } else {
                                     return Err(e);
                                 }
                             }
-                            st.all_rows.push(row);
+                            batch.append_chunk_row(&chunk, idx);
                         }
                     }
 
@@ -484,17 +498,20 @@ impl BlockingOperator {
                     }
 
                     if st.has_spilled {
-                        if !st.all_rows.is_empty() {
-                            if let Some(sm) = base.spill_manager() {
-                                spill_sorted_run(
-                                    &mut st.all_rows,
-                                    &st.col_names,
-                                    sort_expressions,
-                                    sort_directions,
-                                    &sm,
-                                    memory_tracker,
-                                    &mut st.runs,
-                                )?;
+                        if let Some(batch) = st.columnar_batch.take() {
+                            if batch.num_rows() > 0 {
+                                if let Some(sm) = base.spill_manager() {
+                                    let mut rows = batch.to_rows();
+                                    spill_sorted_run(
+                                        &mut rows,
+                                        &st.col_names,
+                                        sort_expressions,
+                                        sort_directions,
+                                        &sm,
+                                        memory_tracker,
+                                        &mut st.runs,
+                                    )?;
+                                }
                             }
                         }
 
@@ -518,16 +535,17 @@ impl BlockingOperator {
                             col_names: st.col_names.clone(),
                         });
                     } else {
-                        if !sort_expressions.is_empty() {
-                            sort_rows(
-                                &mut st.all_rows,
-                                &st.col_names,
-                                sort_expressions,
-                                sort_directions,
-                            );
+                        if let Some(mut batch) = st.columnar_batch.take() {
+                            if !sort_expressions.is_empty() {
+                                sort_columnar_batch(
+                                    &mut batch,
+                                    &st.col_names,
+                                    sort_expressions,
+                                    sort_directions,
+                                );
+                            }
+                            st.row_iter = Some(batch.to_rows().into_iter());
                         }
-                        let taken = std::mem::take(&mut st.all_rows);
-                        st.row_iter = Some(taken.into_iter());
                     }
                 }
 
@@ -604,7 +622,8 @@ impl BlockingOperator {
                     // with many small keys would under-report memory usage.
                     let group_overhead = state.accumulator_overhead;
 
-                    // Evaluate group key expressions on a single input row.
+                    // Evaluate group key expressions on a single input row
+                    // (fallback path for selection-bearing chunks).
                     let eval_group_key = |row: &[Value], col_names: &[String]| -> Vec<Value> {
                         if !has_group_keys {
                             return Vec::new();
@@ -619,25 +638,6 @@ impl BlockingOperator {
                             }
                         }
                         key
-                    };
-
-                    // Encode a single input row as a partial-accumulator row
-                    // [group_key..., accumulator_to_value(acc)...] for the spill path.
-                    let partial_row_of = |row: &[Value], col_names: &[String]| -> Vec<Value> {
-                        let mut partial_row = eval_group_key(row, col_names);
-                        for (func, expr) in aggregate_functions.iter() {
-                            let mut ctx =
-                                ValueRowContext::from_names(row.to_vec(), col_names.to_vec());
-                            let value = match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                Ok(v) => v,
-                                Err(_) => Value::Null(NullType::Null),
-                            };
-                            let mut acc = AggregateAccumulator::for_function(func)
-                                .expect("every aggregate function has an accumulator");
-                            acc.accumulate(&value);
-                            partial_row.push(accumulator_to_value(&acc));
-                        }
-                        partial_row
                     };
 
                     // Output phase: drain result iterator
@@ -749,16 +749,102 @@ impl BlockingOperator {
                     let mut accumulating = true;
                     while accumulating {
                         match input.advance()? {
-                            Some(chunk) => {
+                            Some(mut chunk) => {
                                 base.ensure_not_cancelled()?;
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
                                 }
                                 let sm = base.spill_manager();
+                                // Columnar fast path: batch-evaluate the
+                                // group keys and aggregate arguments once
+                                // per chunk on the typed columns (no per-row
+                                // `ValueRowContext` construction). Chunks
+                                // with a selection vector fall back to
+                                // per-row evaluation.
+                                let batch_eval: Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)> =
+                                    if chunk.selection.is_none() && !chunk.rows.is_empty() {
+                                        match chunk.evaluate_expressions(group_by_expressions, None)
+                                        {
+                                            Ok(keys) => {
+                                                let mut args =
+                                                    Vec::with_capacity(aggregate_functions.len());
+                                                let mut ok = true;
+                                                for (_func, expr) in aggregate_functions.iter() {
+                                                    match chunk.evaluate_expression(expr, None) {
+                                                        Ok(col) => args.push(col),
+                                                        Err(_) => {
+                                                            ok = false;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if ok {
+                                                    Some((keys, args))
+                                                } else {
+                                                    None
+                                                }
+                                            }
+                                            Err(_) => None,
+                                        }
+                                    } else {
+                                        None
+                                    };
+
                                 // Consume the child's selection vector — only
                                 // visible rows are aggregated (no row moves).
                                 for idx in chunk.visible_indices() {
                                     let row = &chunk.rows[idx];
+                                    let group_key: Vec<Value> = match &batch_eval {
+                                        Some((keys, _)) => {
+                                            keys.iter().map(|c| c[idx].clone()).collect()
+                                        }
+                                        None => eval_group_key(row, &state.col_names),
+                                    };
+                                    let arg_values: Vec<Value> = match &batch_eval {
+                                        Some((_, args)) => {
+                                            args.iter().map(|c| c[idx].clone()).collect()
+                                        }
+                                        None => {
+                                            let mut values =
+                                                Vec::with_capacity(aggregate_functions.len());
+                                            for (_func, expr) in aggregate_functions.iter() {
+                                                let mut ctx = ValueRowContext::from_names(
+                                                    row.to_vec(),
+                                                    state.col_names.clone(),
+                                                );
+                                                values.push(
+                                                    match ExpressionEvaluator::evaluate(
+                                                        expr, &mut ctx,
+                                                    ) {
+                                                        Ok(v) => v,
+                                                        Err(_) => Value::Null(NullType::Null),
+                                                    },
+                                                );
+                                            }
+                                            values
+                                        }
+                                    };
+                                    let partial_row_of =
+                                        |group_key: &[Value], arg_values: &[Value]| -> Vec<Value> {
+                                            let mut partial_row = group_key.to_vec();
+                                            for (i, (func, _)) in
+                                                aggregate_functions.iter().enumerate()
+                                            {
+                                                let value = arg_values
+                                                    .get(i)
+                                                    .cloned()
+                                                    .unwrap_or_else(|| Value::Null(NullType::Null));
+                                                let mut acc = AggregateAccumulator::for_function(
+                                                    func,
+                                                )
+                                                .expect(
+                                                    "every aggregate function has an accumulator",
+                                                );
+                                                acc.accumulate(&value);
+                                                partial_row.push(accumulator_to_value(&acc));
+                                            }
+                                            partial_row
+                                        };
                                     if let Some(ref mut spiller) = state.partition_spiller {
                                         // Spill mode: route row directly, keeping
                                         // the remainder of this chunk intact.
@@ -767,13 +853,12 @@ impl BlockingOperator {
                                                 "Spill manager not available".to_string(),
                                             )
                                         })?;
-                                        let group_key = eval_group_key(row, &state.col_names);
                                         let p =
                                         crate::query::executor::streaming::spill::hash_row_partition(
                                             &group_key,
                                             spiller.num_partitions(),
                                         ) as usize;
-                                        let partial_row = partial_row_of(row, &state.col_names);
+                                        let partial_row = partial_row_of(&group_key, &arg_values);
                                         spiller.insert_row_to_partition(
                                             &partial_row,
                                             p,
@@ -781,7 +866,6 @@ impl BlockingOperator {
                                         )?;
                                         continue;
                                     }
-                                    let group_key = eval_group_key(row, &state.col_names);
                                     if !state.group_map.contains_key(&group_key) {
                                         if let Err(e) = memory_tracker.try_reserve(
                                             MemoryBudget::estimate_row_memory(&group_key)
@@ -822,7 +906,7 @@ impl BlockingOperator {
                                             num_partitions,
                                         ) as usize;
                                                 let partial_row =
-                                                    partial_row_of(row, &state.col_names);
+                                                    partial_row_of(&group_key, &arg_values);
                                                 spiller.insert_row_to_partition(
                                                     &partial_row,
                                                     p,
@@ -850,19 +934,14 @@ impl BlockingOperator {
                                                 })
                                                 .collect()
                                         });
-                                    for (i, (_func, expr)) in aggregate_functions.iter().enumerate()
+                                    for (i, (_func, _expr)) in
+                                        aggregate_functions.iter().enumerate()
                                     {
                                         if let Some(acc) = accs.get_mut(i) {
-                                            let mut ctx = ValueRowContext::from_names(
-                                                row.clone(),
-                                                state.col_names.clone(),
-                                            );
-                                            let value =
-                                                match ExpressionEvaluator::evaluate(expr, &mut ctx)
-                                                {
-                                                    Ok(v) => v,
-                                                    Err(_) => Value::Null(NullType::Null),
-                                                };
+                                            let value = arg_values
+                                                .get(i)
+                                                .cloned()
+                                                .unwrap_or_else(|| Value::Null(NullType::Null));
                                             acc.accumulate(&value);
                                         }
                                     }
@@ -1664,59 +1743,43 @@ impl BlockingOperator {
                             state.col_names = chunk.col_names();
                             state.input_layout = Some(chunk.get_layout());
                         }
-                        let layout = Arc::new(SlotLayout::from_names(&state.col_names));
-                        for row in chunk.rows {
-                            memory_tracker.try_reserve_row(&row)?;
-                            if state.all_rows.len() < limit {
-                                state.all_rows.push(row);
-                            } else {
-                                if state.all_rows.len() == limit {
-                                    state.all_rows.sort_by(|a, b| {
-                                        compare_rows_for_topn(
-                                            a,
-                                            b,
-                                            &layout,
-                                            sort_expressions,
-                                            sort_directions,
-                                        )
-                                    });
-                                }
-                                let cmp_last = compare_rows_for_topn(
-                                    &row,
-                                    state.all_rows.last().unwrap(),
-                                    &layout,
+                        // Bounded columnar accumulation: account each row
+                        // against the budget (error propagates, as before),
+                        // append the chunk, then sort + truncate back to
+                        // `limit`.
+                        let batch = state
+                            .columnar_batch
+                            .get_or_insert_with(|| ColumnarBatch::new(chunk.num_columns()));
+                        for idx in chunk.visible_indices() {
+                            memory_tracker.try_reserve_row(&chunk.rows[idx])?;
+                            batch.append_chunk_row(&chunk, idx);
+                        }
+                        if batch.num_rows() > limit {
+                            if !sort_expressions.is_empty() {
+                                sort_columnar_batch(
+                                    batch,
+                                    &state.col_names,
                                     sort_expressions,
                                     sort_directions,
                                 );
-                                if cmp_last == std::cmp::Ordering::Less {
-                                    state.all_rows.pop();
-                                    let pos = state.all_rows.binary_search_by(|existing| {
-                                        compare_rows_for_topn(
-                                            existing,
-                                            &row,
-                                            &layout,
-                                            sort_expressions,
-                                            sort_directions,
-                                        )
-                                    });
-                                    let pos = match pos {
-                                        Ok(p) | Err(p) => p,
-                                    };
-                                    state.all_rows.insert(pos, row);
-                                }
                             }
+                            batch.truncate(limit);
                         }
                     }
 
-                    if state.all_rows.len() > 1 {
-                        let layout = Arc::new(SlotLayout::from_names(&state.col_names));
-                        state.all_rows.sort_by(|a, b| {
-                            compare_rows_for_topn(a, b, &layout, sort_expressions, sort_directions)
-                        });
+                    if let Some(mut batch) = state.columnar_batch.take() {
+                        if !sort_expressions.is_empty() && batch.num_rows() > 1 {
+                            sort_columnar_batch(
+                                &mut batch,
+                                &state.col_names,
+                                sort_expressions,
+                                sort_directions,
+                            );
+                        }
+                        state.result_iter = Some(batch.to_rows().into_iter());
+                    } else {
+                        state.result_iter = Some(Vec::new().into_iter());
                     }
-
-                    state.all_rows.truncate(limit);
-                    state.result_iter = Some(std::mem::take(&mut state.all_rows).into_iter());
                 }
 
                 if let Some(iter) = &mut state.result_iter {
@@ -2084,7 +2147,7 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
-                    while let Some(chunk) = input.advance()? {
+                    while let Some(mut chunk) = input.advance()? {
                         base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
@@ -2094,18 +2157,56 @@ impl BlockingOperator {
                         for idx in &visible {
                             memory_tracker.try_reserve_row(&chunk.rows[*idx])?;
                         }
+                        // Columnar fast path: batch-evaluate group keys once
+                        // per chunk (typed columns, no per-row
+                        // `ValueRowContext`); selection-bearing chunks fall
+                        // back to per-row evaluation. Aggregate argument
+                        // fields are resolved to column indices once per
+                        // function.
+                        let batch_keys: Option<Vec<Vec<Value>>> =
+                            if chunk.selection.is_none() && !chunk.rows.is_empty() {
+                                chunk.evaluate_expressions(group_by_expressions, None).ok()
+                            } else {
+                                None
+                            };
+                        let field_indices: Vec<Option<usize>> = aggregate_functions
+                            .iter()
+                            .map(|func| match func {
+                                // count(*) is a constant 1 (no field access).
+                                AggregateFunction::Count(None) => None,
+                                AggregateFunction::Count(Some(f))
+                                | AggregateFunction::Sum(f)
+                                | AggregateFunction::Avg(f)
+                                | AggregateFunction::Min(f)
+                                | AggregateFunction::Max(f) => {
+                                    col_names.iter().position(|c| c == f)
+                                }
+                                _ => None,
+                            })
+                            .collect();
                         for idx in visible {
                             let row = &chunk.rows[idx];
                             let mut group_key = Vec::new();
                             if group_by_expressions.is_empty() {
                                 group_key.push(Value::Null(NullType::Null));
                             } else {
-                                for expr in group_by_expressions.iter() {
-                                    let mut ctx =
-                                        ValueRowContext::from_names(row.clone(), col_names.clone());
-                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                        Ok(value) => group_key.push(value),
-                                        Err(_) => group_key.push(Value::Null(NullType::Null)),
+                                match &batch_keys {
+                                    Some(keys) => {
+                                        group_key = keys.iter().map(|c| c[idx].clone()).collect();
+                                    }
+                                    None => {
+                                        for expr in group_by_expressions.iter() {
+                                            let mut ctx = ValueRowContext::from_names(
+                                                row.clone(),
+                                                col_names.clone(),
+                                            );
+                                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                                Ok(value) => group_key.push(value),
+                                                Err(_) => {
+                                                    group_key.push(Value::Null(NullType::Null))
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2120,7 +2221,16 @@ impl BlockingOperator {
 
                             for (i, func) in aggregate_functions.iter().enumerate() {
                                 if let Some(acc) = group_accs.get_mut(i) {
-                                    let value = extract_field_value(row, &col_names, func);
+                                    let value = match &field_indices[i] {
+                                        Some(j) => row
+                                            .get(*j)
+                                            .cloned()
+                                            .unwrap_or_else(|| Value::Null(NullType::Null)),
+                                        None => match func {
+                                            AggregateFunction::Count(None) => Value::Int(1),
+                                            _ => Value::Null(NullType::Null),
+                                        },
+                                    };
                                     acc.accumulate(&value);
                                 }
                             }

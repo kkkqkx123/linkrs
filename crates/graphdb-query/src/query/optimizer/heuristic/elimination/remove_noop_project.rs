@@ -66,8 +66,8 @@ impl RemoveNoopProjectRule {
         allowed_child_types.insert("Aggregate");
         allowed_child_types.insert("Assign");
         allowed_child_types.insert("InnerJoin");
-        allowed_child_types.insert("HashInnerJoin");
-        allowed_child_types.insert("HashLeftJoin");
+        allowed_child_types.insert("InnerJoin");
+        allowed_child_types.insert("LeftJoin");
         allowed_child_types.insert("CrossJoin");
         allowed_child_types.insert("DataCollect");
         allowed_child_types.insert("Argument");
