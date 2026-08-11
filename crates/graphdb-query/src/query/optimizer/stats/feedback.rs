@@ -1,7 +1,7 @@
 //! Runtime statistics feedback module
 //!
 //! Provide a lightweight mechanism for collecting execution feedback, which can be used to dynamically adjust selective estimation models.
-//! 使用指数加权移动平均(EWMA)算法校正选择性估计。
+//! Uses an exponentially weighted moving average (EWMA) algorithm to correct selectivity estimates.
 //!
 //! ## Module Structure
 //!

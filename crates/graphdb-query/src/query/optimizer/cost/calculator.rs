@@ -86,7 +86,7 @@ impl CostCalculator {
     /// # Parameters
     /// `tag_name`: The name of the tag
     /// `property_name`: The name of the property.
-    /// - `selectivity`: 选择性（0.0 ~ 1.0）
+    /// - `selectivity`: The selectivity (0.0 ~ 1.0)
     pub fn calculate_index_scan_cost(
         &self,
         space: &str,
@@ -344,13 +344,13 @@ impl CostCalculator {
     /// Calculating the cost of sorting
     ///
     /// Based on the actual implementation of SortExecutor:
-    /// - 小数据量：单线程标准排序 O(n log n)
+    /// - Small data volume: single-threaded standard sort O(n log n)
     /// - Large amounts of data: Scatter-Gather parallel sorting
-    /// - 有 LIMIT 且数据量大：使用 Top-N 算法 O(n log k)
+    /// - With LIMIT and large data volume: Top-N algorithm O(n log k)
     /// - Exceeding the memory threshold: External sorting
     ///
     /// # Parameters
-    /// - `input_rows`: 输入行数
+    /// - `input_rows`: The number of input rows
     /// - `sort_columns`: The columns to be sorted.
     /// - `limit`: An optional LIMIT value (used for Top-N optimization)
     pub fn calculate_sort_cost(
@@ -370,7 +370,7 @@ impl CostCalculator {
         if let Some(limit_val) = limit {
             let limit_u = limit_val.max(0) as u64;
             if limit_u > 0 && input_rows > limit_u * 10 {
-                // Top-N 算法：使用堆排序，复杂度 O(n log k)
+                // Top-N algorithm: uses a heap sort, complexity O(n log k)
                 let k = limit_u as f64;
                 return rows
                     * k.log2().max(1.0)
@@ -380,7 +380,7 @@ impl CostCalculator {
             }
         }
 
-        // 标准排序：O(n log n)
+        // Standard sort: O(n log n)
         let comparisons = rows * rows.log2().max(1.0);
         let cpu_cost = comparisons
             * sort_columns as f64
@@ -401,7 +401,7 @@ impl CostCalculator {
     /// Calculating the cost of implementing the “Limit” feature
     ///
     /// Formula: Number of rows actually processed × Cost of CPU operations
-    /// Limit 只需要处理前 N 行，代价与 min(limit, input_rows) 成正比
+    /// LIMIT only needs to process the first N rows; the cost is proportional to min(limit, input_rows)
     pub fn calculate_limit_cost(&self, input_rows: u64, limit: i64) -> f64 {
         let rows_to_process = (limit.max(0) as u64).min(input_rows);
         rows_to_process as f64 * self.config.cpu_operator_cost * 0.5
@@ -413,7 +413,7 @@ impl CostCalculator {
     pub fn calculate_topn_cost(&self, input_rows: u64, limit: i64) -> f64 {
         let n = input_rows as f64;
         let k = limit as f64;
-        // 使用堆的复杂度：n × log(k)
+        // Heap complexity: n × log(k)
         n * k.log2().max(1.0) * self.config.cpu_operator_cost
     }
 
@@ -425,7 +425,7 @@ impl CostCalculator {
     /// Each aggregate function requires an update of its status.
     ///
     /// # Parameters
-    /// - `input_rows`: 输入行数
+    /// - `input_rows`: The number of input rows
     /// - `agg_functions`: The number of aggregate functions
     /// - `group_by_keys`: The number of keys used in the GROUP BY clause (used to estimate the cost of hash operations)
     pub fn calculate_aggregate_cost(

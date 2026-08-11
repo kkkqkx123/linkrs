@@ -245,7 +245,7 @@ impl ReferenceCountAnalyzer {
 
         // Recursively analyze the child nodes and calculate the total number of nodes.
         let child_count = match node {
-            // 单输入节点 - 使用 dependencies() 访问子节点
+            // Single-input node - access child nodes via dependencies()
             PlanNodeEnum::Filter(n) => {
                 let mut total = 1;
                 for dep in n.dependencies() {
@@ -327,7 +327,7 @@ impl ReferenceCountAnalyzer {
                 total
             }
             PlanNodeEnum::Traverse(n) => {
-                // TraverseNode 使用 SingleInputNode trait，input() 方法在 input 为 None 时会 panic
+                // TraverseNode uses the SingleInputNode trait; input() panics when input is None
                 // Here, we directly access the `deps` field to traverse the child nodes.
                 let mut total = 1;
                 for dep in n.dependencies() {
@@ -337,7 +337,7 @@ impl ReferenceCountAnalyzer {
                 total
             }
             PlanNodeEnum::Expand(n) => {
-                // ExpandNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // ExpandNode uses MultipleInputNode; access child nodes via inputs()
                 let mut total = 1;
                 for dep in n.inputs() {
                     let count = self.analyze_recursive(dep, context, Some(node_id));
@@ -346,7 +346,7 @@ impl ReferenceCountAnalyzer {
                 total
             }
             PlanNodeEnum::ExpandAll(n) => {
-                // ExpandAllNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // ExpandAllNode uses MultipleInputNode; access child nodes via inputs()
                 let mut total = 1;
                 for dep in n.inputs() {
                     let count = self.analyze_recursive(dep, context, Some(node_id));
@@ -355,7 +355,7 @@ impl ReferenceCountAnalyzer {
                 total
             }
             PlanNodeEnum::AppendVertices(n) => {
-                // AppendVerticesNode 使用 MultipleInputNode，通过 inputs() 访问子节点
+                // AppendVerticesNode uses MultipleInputNode; access child nodes via inputs()
                 let mut total = 1;
                 for dep in n.inputs() {
                     let count = self.analyze_recursive(dep, context, Some(node_id));

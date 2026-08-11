@@ -342,7 +342,7 @@ impl TraversalStartSelector {
     /// - {id: value}
     fn has_vid_condition(&self, expr: &Expression) -> bool {
         match expr {
-            // 检查是否包含 id() 函数调用
+            // Check whether it contains an id() function call
             Expression::Function { name, args } => {
                 let name_upper = name.to_uppercase();
                 if name_upper == "ID" && !args.is_empty() {
@@ -383,7 +383,7 @@ impl TraversalStartSelector {
 
     /// Determine whether the expression is a VID expression.
     ///
-    /// 识别 id() 函数调用或 .id 属性访问
+    /// Detect an id() function call or a .id property access
     fn is_vid_expression(&self, expr: &Expression) -> bool {
         match expr {
             Expression::Function { name, args } => {

@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_parse_create_user_unicode_username() {
-        let query = "CREATE USER 用户 WITH PASSWORD 'password'";
+        let query = "CREATE USER ユーザー WITH PASSWORD 'password'";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_parse_create_user_unicode_password() {
-        let query = "CREATE USER testuser WITH PASSWORD '密码123'";
+        let query = "CREATE USER testuser WITH PASSWORD 'パスワード123'";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_parse_alter_user_unicode() {
-        let query = "ALTER USER 用户 WITH PASSWORD '新密码'";
+        let query = "ALTER USER ユーザー WITH PASSWORD 'ニューパスワード'";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_parse_drop_user_unicode() {
-        let query = "DROP USER 用户";
+        let query = "DROP USER ユーザー";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_parse_change_password_unicode() {
-        let query = "CHANGE PASSWORD 用户 '旧密码' TO '新密码'";
+        let query = "CHANGE PASSWORD ユーザー 'オールドパスワード' TO 'ニューパスワード'";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_parse_grant_unicode() {
-        let query = "GRANT ADMIN ON 空间 TO 用户";
+        let query = "GRANT ADMIN ON スペース TO ユーザー";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn test_parse_revoke_unicode() {
-        let query = "REVOKE ADMIN ON 空间 FROM 用户";
+        let query = "REVOKE ADMIN ON スペース FROM ユーザー";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_parse_describe_user_unicode() {
-        let query = "DESCRIBE USER 用户";
+        let query = "DESCRIBE USER ユーザー";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_parse_show_roles_with_unicode_space() {
-        let query = "SHOW ROLES IN 空间";
+        let query = "SHOW ROLES IN スペース";
         let mut parser = Parser::new(query);
         let result = parser.parse();
         assert!(

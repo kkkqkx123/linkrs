@@ -211,7 +211,7 @@ impl RewriteRule for PushFilterDownAggregateRule {
         let agg_funcs = agg_node.aggregation_functions();
 
         // Check whether the filter conditions contain references to aggregate functions.
-        // 如果条件引用了聚合结果（如 HAVING COUNT(*) > 10），则不能下推
+        // If the condition references aggregate results (e.g., HAVING COUNT(*) > 10), it cannot be pushed down
         if Self::has_aggregate_function_reference(
             &filter_expr,
             group_keys,
@@ -424,7 +424,7 @@ mod tests {
             .expect("Failed to create AggregateNode");
         let aggregate_enum = PlanNodeEnum::Aggregate(aggregate);
 
-        // 创建 Filter 节点（条件涉及聚合函数结果，如 HAVING COUNT(*) > 10）
+        // Create a Filter node (condition involves aggregate function results, e.g., HAVING COUNT(*) > 10)
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::GreaterThan,
             left: Box::new(Expression::Variable("COUNT".to_string())),

@@ -1,7 +1,7 @@
 //! Selective Correction Module
 //!
 //! Provide the functionality to dynamically adjust selective estimates based on historical performance feedback.
-//! 使用指数加权移动平均(EWMA)算法校正选择性估计。
+//! Uses an exponentially weighted moving average (EWMA) algorithm to correct selectivity estimates.
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 /// Feedback-driven selective correction
 ///
 /// Dynamically adjust the selective estimates based on historical feedback from executions.
-/// 使用指数加权移动平均(EWMA)算法。
+/// Uses an exponentially weighted moving average (EWMA) algorithm.
 ///
 /// # Example
 /// ```
@@ -143,7 +143,7 @@ impl FeedbackDrivenSelectivity {
 
     /// Update the correction factor (based on the new feedback).
     ///
-    /// 使用指数加权移动平均(EWMA)算法。
+    /// Uses an exponentially weighted moving average (EWMA) algorithm.
     pub fn update_with_feedback(&mut self, actual_selectivity: f64) {
         if self.estimated_selectivity <= 0.0 {
             return;
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn test_estimation_confidence() {
         let mut feedback = FeedbackDrivenSelectivity::new(0.1);
-        // 初始置信度应该是0.5（sigmoid(0) = 0.5）
+        // Initial confidence should be 0.5 (sigmoid(0) = 0.5)
         let initial_confidence = feedback.estimation_confidence();
         assert!(initial_confidence < 0.55 && initial_confidence > 0.45);
 

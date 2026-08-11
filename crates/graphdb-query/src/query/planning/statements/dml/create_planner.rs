@@ -536,7 +536,7 @@ mod tests {
         let result = planner.transform(&validated, qctx);
         assert!(
             result.is_ok(),
-            "The多边al CREATE PATH operation should succeed."
+            "The multi-edge CREATE PATH operation should succeed."
         );
     }
 

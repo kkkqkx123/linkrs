@@ -18,7 +18,7 @@
 //! # Note
 //!
 //! The general expression tools and functions (such as extract_property_refs, is_constant) have been moved to another location.
-//! `core::types::expression::common_utils`，本模块仅保留重写专用的函数。
+//! `core::types::expression::common_utils`; this module keeps only the rewrite-specific functions.
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;

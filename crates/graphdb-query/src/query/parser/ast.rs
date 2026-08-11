@@ -1,6 +1,6 @@
 //! AST module
 //!
-//! This module provides an AST (Abstract Syntax Tree) design based on enumerations, which reduces the amount of样板代码 and the runtime overhead.
+//! This module provides an AST (Abstract Syntax Tree) design based on enumerations, which reduces the amount of boilerplate code and the runtime overhead.
 
 // Definition of basic types
 pub mod types;

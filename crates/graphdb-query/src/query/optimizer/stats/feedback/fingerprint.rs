@@ -11,7 +11,7 @@
 /// # Normalization Rules
 /// Remove the spaces at the beginning and end.
 /// 2. Replace multiple blank characters with a single space.
-/// 3. 将字符串常量替换为占位符($1, $2, ...)
+/// 3. Replace string constants with placeholders ($1, $2, ...)
 /// 4. Replace the numeric constants with placeholders.
 /// 5. Convert all text to lowercase.
 ///

@@ -31,9 +31,9 @@ pub trait HeuristicRule: std::fmt::Debug + Send + Sync {
     /// `node`: The current planned node
     ///
     /// # Return
-    /// - `Ok(Some(node))`: 重写成功，返回新节点
-    /// - `Ok(None)`: 不匹配，保持原节点
-    /// - `Err(e)`: 重写失败
+    /// - `Ok(Some(node))`: rewrite succeeded, returns the new node
+    /// - `Ok(None)`: no match, keeps the original node
+    /// - `Err(e)`: rewrite failed
     fn apply(
         &self,
         ctx: &mut RewriteContext,

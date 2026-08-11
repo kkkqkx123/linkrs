@@ -1,7 +1,7 @@
 //! Bidirectional Traversal Optimizer
 //!
 //! Optimization decisions for bidirectional BFS traversals in shortest path queries
-//! 双向BFS同时从起点和终点搜索，可将复杂度从O(b^d)降到O(b^(d/2))
+//! Bidirectional BFS searches from both the start and end points simultaneously, reducing the complexity from O(b^d) to O(b^(d/2))
 
 use std::sync::Arc;
 
@@ -523,7 +523,7 @@ mod tests {
     fn test_depth_allocation_with_tags() {
         let optimizer = create_test_optimizer_with_stats();
 
-        // Person(出度5) -> Company(入度50)，应该给Person端更多深度
+        // Person(out-degree 5) -> Company(in-degree 50), should give the Person side more depth
         let context = DepthAllocationContext::new("a", "b", vec!["works_at".to_string()], 4)
             .with_start_tag("Person")
             .with_end_tag("Company");
@@ -532,7 +532,7 @@ mod tests {
 
         // Verify that the sum of the depths is correct.
         assert_eq!(forward + backward, 4);
-        // Person出度(5) < Company入度(50)，应该给Person更多深度
+        // Person out-degree (5) < Company in-degree (50), should give Person more depth
         // In other words, the value of `forward_depth` should be larger.
         assert!(
             forward >= backward,

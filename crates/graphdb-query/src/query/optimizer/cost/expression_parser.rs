@@ -36,11 +36,11 @@ impl ExpressionParser {
     ///
     /// The following modes are supported:
     /// - Array literals: [a, b, c] -> 3
-    /// - range 函数：range(1, 10) -> 9, range(1, 10, 2) -> 5
+    /// - range function: range(1, 10) -> 9, range(1, 10, 2) -> 5
     /// - Range expressions: 1..10 -> 9, 0..=5 -> 6
-    /// - 集合函数：keys(map), values(map), nodes(path), relationships(path)
-    /// - 字符串分割：split(str, ",")（估算）
-    /// - 集合操作：collect(set)（估算）
+    /// - Collection functions: keys(map), values(map), nodes(path), relationships(path)
+    /// - String split: split(str, ",") (estimated)
+    /// - Collection operations: collect(set) (estimated)
     pub fn parse_list_size(&self, expr: &str) -> Option<f64> {
         let expr = expr.trim();
 
@@ -49,7 +49,7 @@ impl ExpressionParser {
             return self.parse_array_literal(expr);
         }
 
-        // 尝试解析 range(start, end) 或 range(start, end, step)
+        // Try to parse range(start, end) or range(start, end, step)
         if expr.starts_with("range(") && expr.ends_with(')') {
             return self.parse_range_function(expr);
         }
@@ -59,7 +59,7 @@ impl ExpressionParser {
             return self.parse_range_expression(expr);
         }
 
-        // 尝试解析集合函数：keys(), values(), nodes(), relationships()
+        // Try to parse collection functions: keys(), values(), nodes(), relationships()
         if let Some(size) = self.parse_collection_function(expr) {
             return Some(size);
         }
@@ -79,7 +79,7 @@ impl ExpressionParser {
         None
     }
 
-    // ==================== 常量折叠优化 ====================
+    // ==================== Constant folding optimization ====================
 
     /// Try to fold the constants within the expression.
     ///
@@ -287,7 +287,7 @@ impl ExpressionParser {
         }
     }
 
-    // ==================== 值操作辅助方法 ====================
+    // ==================== Value operation helper methods ====================
 
     fn add_values(&self, left: &Value, right: &Value) -> Option<Value> {
         match (left, right) {
@@ -381,7 +381,7 @@ impl ExpressionParser {
     ///
     /// Try to parse the number of iterations from the conditional string. The following patterns are supported:
     /// - Digital direct value: "10" → 10
-    /// - 范围表达式："1..10" 或 "range(1, 10)" -> 9
+    /// - Range expressions: "1..10" or "range(1, 10)" -> 9
     /// - Comparison expressions: "i < 10", "i <= 10" → 10
     /// - Set size: "Items" – Use the set size to make an estimate.
     ///
@@ -399,7 +399,7 @@ impl ExpressionParser {
             return self.parse_range_expression_u32(condition);
         }
 
-        // 尝试解析 range(start, end) 或 range(start, end, step)
+        // Try to parse range(start, end) or range(start, end, step)
         if condition.starts_with("range(") && condition.ends_with(")") {
             return self.parse_range_function(condition).map(|v| v as u32);
         }
@@ -527,7 +527,6 @@ impl ExpressionParser {
     /// Analyzing comparative expressions (such as "i < 10", "count <= 100")
     fn parse_comparison_expression(&self, expr: &str) -> Option<f64> {
         // Matching patterns: var < num, var <= num, var > num, var >= num
-        // 匹配模式：var < num, var <= num, var > num, var >= num
         let operators = [("<", 0u32), ("<=", 0u32), (">", 0u32), (">=", 0u32)];
 
         for (op, _) in &operators {
@@ -549,29 +548,29 @@ impl ExpressionParser {
     fn parse_collection_function(&self, expr: &str) -> Option<f64> {
         let expr_lower = expr.to_lowercase();
 
-        // keys(map) 或 map.keys() - 返回 map 的键列表
+        // keys(map) or map.keys() - returns the key list of the map
         if expr_lower.contains(".keys()") {
             // Unable to determine map size, use default estimate
             return Some(self.config.default_unwind_list_size);
         }
 
-        // values(map) 或 map.values()
+        // values(map) or map.values()
         if expr_lower.starts_with("values(") || expr_lower.contains(".values()") {
             return Some(self.config.default_unwind_list_size);
         }
 
-        // nodes(path) - 返回路径中的节点列表
+        // nodes(path) - returns the node list in the path
         if expr_lower.contains(".nodes()") {
             // Path length unknown, use default estimate
             return Some(self.config.default_unwind_list_size);
         }
 
-        // relationships(path) 或 rels(path) - 返回路径中的关系列表
+        // relationships(path) or rels(path) - returns the relationship list in the path
         if expr_lower.starts_with("relationships(") || expr_lower.starts_with("rels(") {
             return Some(self.config.default_unwind_list_size - 1.0); // The number of relations is usually 1 less than the number of nodes
         }
 
-        // labels(node) - 返回标签列表（通常很小）
+        // labels(node) - returns the label list (usually very small)
         if expr_lower.starts_with("labels(") {
             return Some(1.0); // Usually a node has only 1-2 tags
         }
@@ -583,9 +582,9 @@ impl ExpressionParser {
     fn parse_split_function(&self, expr: &str) -> Option<f64> {
         let expr_lower = expr.to_lowercase();
 
-        // split(string, delimiter) 或 string.split(delimiter)
+        // split(string, delimiter) or string.split(delimiter)
         if expr_lower.contains("split(") || expr_lower.contains(".split(") {
-            // Assume that the average length of each element is 5 characters.串长度估算
+            // Assume that the average length of each element is 5 characters for string length estimation.
             // Assuming an average length of 5 characters per element
             return Some(self.config.default_unwind_list_size);
         }

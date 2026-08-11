@@ -560,7 +560,7 @@ impl DmlParser {
         // Analyzing the TAG list
         // Two grammatical styles are supported:
         // 1. ON tag1, tag2 (optional)
-        // 2. tag_name(prop1, prop2), tag2_name(prop3, prop4)（NebulaGraph 标准语法）
+        // 2. tag_name(prop1, prop2), tag2_name(prop3, prop4) (NebulaGraph standard syntax)
         let mut tags = vec![];
         if ctx.match_token(TokenKind::On) {
             // Syntax: ON tag1, tag2
@@ -576,7 +576,7 @@ impl DmlParser {
                 }
             }
         } else {
-            // 检查是否是 NebulaGraph 标准语法：tag_name(prop1, prop2), tag2_name(prop3, prop4)
+            // Check whether it is the NebulaGraph standard syntax: tag_name(prop1, prop2), tag2_name(prop3, prop4)
             if ctx.is_identifier_token() {
                 loop {
                     let tag_name = ctx.expect_identifier()?;

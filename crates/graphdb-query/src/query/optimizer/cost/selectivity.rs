@@ -382,7 +382,7 @@ impl SelectivityEstimator {
             BinaryOperator::Or => {
                 let left_sel = self.estimate_from_expression(space, left, tag_name);
                 let right_sel = self.estimate_from_expression(space, right, tag_name);
-                // OR 的选择性：P(A or B) = P(A) + P(B) - P(A and B)
+                // OR selectivity: P(A or B) = P(A) + P(B) - P(A and B)
                 let combined =
                     left_sel + right_sel - left_sel * right_sel * defaults::OR_CORRELATION;
                 combined.clamp(0.01, 0.99)

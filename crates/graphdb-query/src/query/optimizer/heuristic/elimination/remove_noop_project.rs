@@ -7,7 +7,7 @@
 //!
 //! Before:
 //! ```text
-//!   Project(v1, v2, v3)  // 列名和子节点输出列名相同
+//!   Project(v1, v2, v3)  // output column names identical to child output
 //!       |
 //! `ScanVertices` (outputs `v1`, `v2`, `v3`)
 //! ```

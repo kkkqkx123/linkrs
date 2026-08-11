@@ -38,13 +38,13 @@ impl<'a> SortLimitEstimator<'a> {
     /// Otherwise, the estimation is based on the number of keys and the number of input lines.
     fn estimate_group_by_cardinality(&self, group_keys: &[String], input_rows: u64) -> u64 {
         if group_keys.is_empty() {
-            // 全局聚合，只返回一行（如 COUNT(*)）
+            // Global aggregate, returns only one row (e.g., COUNT(*))
             return 1;
         }
 
         // Estimating the cardinality based on the number of GROUP BY keys
         // The more keys there are, the more detailed the grouping will be, and the greater the number of output rows will be.
-        // 使用启发式公式：min(input_rows, max(10, input_rows / (2 ^ key_count)))
+        // Use a heuristic formula: min(input_rows, max(10, input_rows / (2 ^ key_count)))
         let key_count = group_keys.len() as u32;
         let divisor = 2_u64.saturating_pow(key_count).max(1);
         let estimated = (input_rows / divisor).max(10);
@@ -87,7 +87,7 @@ impl<'a> NodeEstimator for SortLimitEstimator<'a> {
             PlanNodeEnum::TopN(n) => {
                 let input_rows_val = get_input_rows(child_estimates, 0);
                 let limit = n.limit();
-                // TopN 使用堆实现，复杂度 O(n log k)
+                // TopN uses a heap implementation, complexity O(n log k)
                 let cost = self
                     .cost_calculator
                     .calculate_topn_cost(input_rows_val, limit);

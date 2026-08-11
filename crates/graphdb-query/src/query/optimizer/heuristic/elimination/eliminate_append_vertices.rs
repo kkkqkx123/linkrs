@@ -9,7 +9,7 @@
 //! ```text
 //!   Project
 //!       |
-//!   AppendVertices (vFilter=null, filter=null, 匿名列)
+//!   AppendVertices (vFilter=null, filter=null, anonymous columns)
 //!       |
 //!   GetNeighbors
 //! ```

@@ -30,7 +30,7 @@
 //!
 //! The right branch of “Join” is “Project->AppendVertices->Traverse”.
 //! The `nodeAlias` of the `AppendVertices` function is only referenced once.
-//! - Join 的 hash keys 匹配 id() 或 _joinkey() 模式
+//! - The Join hash keys match id() or _joinkey() patterns
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -71,7 +71,7 @@ impl RemoveAppendVerticesBelowJoinRule {
         collector.properties
     }
 
-    /// 检查表达式是否为 id() 或 _joinkey() 函数调用，返回参数表达式
+    /// Check whether the expression is an id() or _joinkey() function call; return the argument expression
     fn is_id_or_joinkey_function(
         &self,
         expr: &ContextualExpression,
@@ -136,7 +136,7 @@ impl RemoveAppendVerticesBelowJoinRule {
         None
     }
 
-    /// 查找 probe keys 中匹配 id()/_joinkey() 模式的索引
+    /// Find the index of the probe keys matching the id()/_joinkey() pattern
     fn find_matching_probe_key(
         &self,
         probe_keys: &[ContextualExpression],

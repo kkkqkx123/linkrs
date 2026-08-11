@@ -43,12 +43,6 @@ impl NodeExecutionStats {
     pub fn memory_used(&self) -> usize {
         self.executor_stats.memory_peak
     }
-
-    pub fn cache_hit_rate(&self) -> f64 {
-        // Cache statistics removed in phase 1 of metrics migration
-        // See docs/stat/metrics_migration_plan.md for details
-        0.0
-    }
 }
 
 impl Default for NodeExecutionStats {
@@ -64,7 +58,6 @@ pub struct GlobalExecutionStats {
     pub execution_time_us: u64,
     pub total_rows: usize,
     pub peak_memory: usize,
-    pub cache_hit_rate: f64,
 }
 
 impl GlobalExecutionStats {

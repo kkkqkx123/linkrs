@@ -1,7 +1,7 @@
 //! Rules for eliminating the "always false" filter operation
 //!
-//! 根据 nebula-graph 的参考实现，此规则处理 Filter(false) 或 Filter(null) 的情况，
-//! Replace it with a ValueNode that returns an empty set.
+//! Based on the reference implementation in nebula-graph, this rule handles the Filter(false) or Filter(null) case,
+//! replacing it with a ValueNode that returns an empty set.
 //!
 //! # Conversion example
 //!
@@ -14,7 +14,7 @@
 //!
 //! After:
 //! ```text
-//!   Value(空集)
+//!   Value(empty set)
 //!       |
 //!   Start
 //! ```
@@ -183,7 +183,7 @@ mod tests {
         // Test: false
         assert!(rule.is_contradiction(&Expression::Literal(Value::Bool(false))));
 
-        // Test whether it is true (it is not a永假式, i.e., a statement that is always false).
+        // Test whether it is true (it is not a contradiction, i.e., a statement that is always false).
         assert!(!rule.is_contradiction(&Expression::Literal(Value::Bool(true))));
 
         // Testing null
@@ -198,7 +198,7 @@ mod tests {
             right: Box::new(Expression::Literal(Value::Int(0))),
         }));
 
-        // Test 1 = 1 (not a永假式, i.e., not a statement that is always false)
+        // Test 1 = 1 (not a contradiction, i.e., not a statement that is always false)
         assert!(!rule.is_contradiction(&Expression::Binary {
             left: Box::new(Expression::Literal(Value::Int(1))),
             op: BinaryOperator::Equal,

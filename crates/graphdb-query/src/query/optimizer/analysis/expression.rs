@@ -124,7 +124,7 @@ impl AnalysisOptions {
 /// Non-deterministic function checking
 ///
 /// Improve performance by using compile-time static matching instead of runtime HashMaps.
-/// 非确定性函数每次调用可能返回不同结果（如rand()、now()等）。
+/// Non-deterministic functions may return different results on each call (e.g., rand(), now()).
 pub struct NondeterministicChecker;
 
 impl NondeterministicChecker {

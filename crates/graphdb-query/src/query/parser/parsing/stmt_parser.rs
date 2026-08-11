@@ -536,7 +536,7 @@ impl StmtParser {
             ))
         } else if ctx.check_token(TokenKind::Create) {
             // The SHOW CREATE statement: A unified processing method delegated to UtilStmtParser
-            // 支持 SHOW CREATE { SPACE | TAG | EDGE | INDEX } <name>
+            // Supports SHOW CREATE { SPACE | TAG | EDGE | INDEX } <name>
             UtilStmtParser::new().parse_show_create_internal(ctx, start_span)
         } else {
             Err(ParseError::new(
@@ -914,7 +914,7 @@ mod tests {
         // Verification and parsing were successful.
         assert!(
             result.is_ok(),
-            "CREATE SPACE with params 解析失败: {:?}",
+            "CREATE SPACE with params failed to parse: {:?}",
             result.err()
         );
 

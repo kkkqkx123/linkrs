@@ -1,12 +1,12 @@
 //! Rewrite the macro definitions for the rules
 //!
-//! Provide declarative macros to simplify the definition of rewriting rules and reduce the amount of样板 code.
+//! Provide declarative macros to simplify the definition of rewriting rules and reduce the amount of boilerplate code.
 
 // ==================== Basic Rules Macros ====================
 
 /// Define the basic rules for rule rewriting.
 ///
-/// 自动生成规则结构体、Default实现、new()方法和RewriteRule trait实现
+/// Automatically generates the rule struct, Default implementation, new() method and RewriteRule trait implementation
 ///
 /// # Example
 /// ```rust

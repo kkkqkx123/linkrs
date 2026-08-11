@@ -12,12 +12,12 @@
 //! ```text
 //!   Sort(name ASC)
 //!       |
-//!   IndexScan(idx_name)  -- 索引已按 name 排序
+//!   IndexScan(idx_name)  -- index already sorted by name
 //! ```
 //!
 //! After:
 //! ```text
-//!   IndexScan(idx_name)  -- 直接消除 Sort
+//!   IndexScan(idx_name)  -- Sort eliminated directly
 //! ```
 //!
 //! # Note

@@ -51,9 +51,9 @@ pub trait RewriteRule: std::fmt::Debug + Send + Sync {
     /// `node`: The current planned node.
     ///
     /// # Return
-    /// - `Ok(Some(result))`: 重写成功，返回转换结果
-    /// - `Ok(None)`: 不匹配，保持原节点
-    /// - `Err(e)`: 重写失败
+    /// - `Ok(Some(result))`: rewrite succeeded, returns the conversion result
+    /// - `Ok(None)`: no match, keeps the original node
+    /// - `Err(e)`: rewrite failed
     fn apply(
         &self,
         ctx: &mut RewriteContext,
