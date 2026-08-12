@@ -398,7 +398,7 @@ impl StmtParser {
 
         // Analyzing the optional HAVING clause
         let having_clause = if ctx.match_token(TokenKind::Having) {
-            Some(Self::parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| Self::parse_expression(c).map(Some))?
         } else {
             None
         };

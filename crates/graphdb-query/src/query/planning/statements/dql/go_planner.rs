@@ -188,9 +188,12 @@ impl Planner for GoPlanner {
             id: next_node_id(),
             input: Some(Box::new(logical_root)),
             deps: vec![],
-            columns: project_columns,
+            columns: project_columns.clone(),
             output_var: None,
-            col_names: vec![],
+            col_names: project_columns
+                .iter()
+                .map(|col| col.alias.clone())
+                .collect(),
             column_types: vec![],
         });
 

@@ -1279,8 +1279,7 @@ mod tests {
         // Below the sample floor the columnar path is chosen.
         set_typed_columns_enabled(true);
         let decide = || {
-            rt.columnar_policy()
-                .is_none_or(|p| p.should_use_columnar())
+            rt.columnar_policy().is_none_or(|p| p.should_use_columnar())
                 && crate::query::executor::streaming::chunk::typed_columns_enabled()
         };
         assert!(decide());

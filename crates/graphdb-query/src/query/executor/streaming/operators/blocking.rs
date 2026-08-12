@@ -763,34 +763,34 @@ impl BlockingOperator {
                                 // `ValueRowContext` construction). Chunks
                                 // with a selection vector fall back to
                                 // per-row evaluation.
-                                let batch_eval: BatchEvalResult =
-                                    if chunk.selection.is_none() && !chunk.rows.is_empty() {
-                                        match chunk.evaluate_expressions(group_by_expressions, None)
-                                        {
-                                            Ok(keys) => {
-                                                let mut args =
-                                                    Vec::with_capacity(aggregate_functions.len());
-                                                let mut ok = true;
-                                                for (_func, expr) in aggregate_functions.iter() {
-                                                    match chunk.evaluate_expression(expr, None) {
-                                                        Ok(col) => args.push(col),
-                                                        Err(_) => {
-                                                            ok = false;
-                                                            break;
-                                                        }
+                                let batch_eval: BatchEvalResult = if chunk.selection.is_none()
+                                    && !chunk.rows.is_empty()
+                                {
+                                    match chunk.evaluate_expressions(group_by_expressions, None) {
+                                        Ok(keys) => {
+                                            let mut args =
+                                                Vec::with_capacity(aggregate_functions.len());
+                                            let mut ok = true;
+                                            for (_func, expr) in aggregate_functions.iter() {
+                                                match chunk.evaluate_expression(expr, None) {
+                                                    Ok(col) => args.push(col),
+                                                    Err(_) => {
+                                                        ok = false;
+                                                        break;
                                                     }
                                                 }
-                                                if ok {
-                                                    Some((keys, args))
-                                                } else {
-                                                    None
-                                                }
                                             }
-                                            Err(_) => None,
+                                            if ok {
+                                                Some((keys, args))
+                                            } else {
+                                                None
+                                            }
                                         }
-                                    } else {
-                                        None
-                                    };
+                                        Err(_) => None,
+                                    }
+                                } else {
+                                    None
+                                };
 
                                 // Consume the child's selection vector — only
                                 // visible rows are aggregated (no row moves).

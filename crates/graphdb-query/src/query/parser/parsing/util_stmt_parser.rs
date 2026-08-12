@@ -258,7 +258,7 @@ impl UtilStmtParser {
         };
 
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
         } else {
             None
         };
@@ -353,31 +353,40 @@ impl UtilStmtParser {
         }
 
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
         } else {
             None
         };
 
         // Explanation of `ORDER BY`
         let order_by = if ctx.match_token(TokenKind::Order) {
-            ctx.expect_token(TokenKind::By)?;
-            Some(self.parse_order_by_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    c.expect_token(TokenKind::By)?;
+                    self.parse_order_by_clause(c).map(Some)
+                },
+            )?
         } else {
             None
         };
 
         // Analysis of SKIP
         let skip = if ctx.match_token(TokenKind::Skip) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(count)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| c.expect_integer_literal().map(|n| Some(n as usize)),
+            )?
         } else {
             None
         };
 
         // Analysis of the LIMIT clause
         let limit = if ctx.match_token(TokenKind::Limit) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(count)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| c.expect_integer_literal().map(|n| Some(n as usize)),
+            )?
         } else {
             None
         };

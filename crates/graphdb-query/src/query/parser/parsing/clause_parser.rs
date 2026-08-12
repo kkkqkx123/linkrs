@@ -43,16 +43,25 @@ impl ClauseParser {
             });
         } else {
             loop {
-                let expr = self.parse_expression(ctx)?;
-                let alias = if ctx.match_token(TokenKind::As) {
-                    Some(ctx.expect_identifier()?)
-                } else {
-                    None
+                let Some(item) = ctx.recover_clause(
+                    |_| Ok(None),
+                    |c| {
+                        let expr = self.parse_expression(c)?;
+                        let alias = if c.match_token(TokenKind::As) {
+                            Some(c.expect_identifier()?)
+                        } else {
+                            None
+                        };
+                        Ok(Some(ReturnItem::Expression {
+                            expression: expr,
+                            alias,
+                        }))
+                    },
+                )?
+                else {
+                    break;
                 };
-                items.push(ReturnItem::Expression {
-                    expression: expr,
-                    alias,
-                });
+                items.push(item);
                 if !ctx.match_token(TokenKind::Comma) {
                     break;
                 }
@@ -61,8 +70,13 @@ impl ClauseParser {
 
         // Explanation of `ORDER BY`
         let order_by = if ctx.match_token(TokenKind::Order) {
-            ctx.expect_token(TokenKind::By)?;
-            Some(self.parse_order_by_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    c.expect_token(TokenKind::By)?;
+                    self.parse_order_by_clause(c).map(Some)
+                },
+            )?
         } else {
             None
         };
@@ -73,100 +87,45 @@ impl ClauseParser {
 
         // First, try to parse SKIP if present
         if ctx.match_token(TokenKind::Skip) {
-            let count = ctx.expect_integer_literal()? as usize;
-            skip = Some(SkipClause {
-                span: ctx.current_span(),
-                count,
-            });
+            skip = ctx.recover_clause(|_| Ok(None), |c| self.parse_skip_clause(c))?;
         }
 
         // Then, try to parse LIMIT if present
         if ctx.match_token(TokenKind::Limit) {
-            let count = ctx.expect_integer_literal()? as usize;
-            limit = Some(LimitClause {
-                span: ctx.current_span(),
-                count,
-            });
+            limit = ctx.recover_clause(|_| Ok(None), |c| self.parse_limit_clause(c))?;
         }
 
         // If SKIP wasn't parsed yet, try again (handles LIMIT before SKIP case)
         if skip.is_none() && ctx.match_token(TokenKind::Skip) {
-            let count = ctx.expect_integer_literal()? as usize;
-            skip = Some(SkipClause {
-                span: ctx.current_span(),
-                count,
-            });
+            skip = ctx.recover_clause(|_| Ok(None), |c| self.parse_skip_clause(c))?;
         }
 
         // Consume GROUP BY items if present (group keys are extracted from non-aggregate return columns)
         // Supports ROLLUP, CUBE, and GROUPING SETS syntax
         if ctx.match_token(TokenKind::Group) {
-            ctx.expect_token(TokenKind::By)?;
-
-            if ctx.match_token(TokenKind::Rollup) {
-                // GROUP BY ROLLUP(...)
-                ctx.expect_token(TokenKind::LParen)?;
-                loop {
-                    self.parse_expression(ctx)?;
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-                ctx.expect_token(TokenKind::RParen)?;
-            } else if ctx.match_token(TokenKind::Cube) {
-                // GROUP BY CUBE(...)
-                ctx.expect_token(TokenKind::LParen)?;
-                loop {
-                    self.parse_expression(ctx)?;
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-                ctx.expect_token(TokenKind::RParen)?;
-            } else if ctx.match_token(TokenKind::Grouping) {
-                // GROUP BY GROUPING SETS((...), (...))
-                ctx.expect_token(TokenKind::Sets)?;
-                ctx.expect_token(TokenKind::LParen)?;
-                loop {
-                    ctx.expect_token(TokenKind::LParen)?;
-                    loop {
-                        self.parse_expression(ctx)?;
-                        if !ctx.match_token(TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                    ctx.expect_token(TokenKind::RParen)?;
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-                ctx.expect_token(TokenKind::RParen)?;
-            } else {
-                // Standard GROUP BY expr, expr, ...
-                loop {
-                    self.parse_expression(ctx)?;
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-            }
+            ctx.recover_clause(|_| Ok(()), |c| self.parse_return_group_by(c))?;
         }
 
         // Parse optional SAMPLE clause
         let sample = if ctx.match_token(TokenKind::Sample) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(super::super::ast::types::SampleClause {
-                span: ctx.current_span(),
-                count,
-                percentage: None,
-            })
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    let count = c.expect_integer_literal()? as usize;
+                    Ok(Some(crate::query::parser::ast::types::SampleClause {
+                        span: c.current_span(),
+                        count,
+                        percentage: None,
+                    }))
+                },
+            )?
         } else {
             None
         };
 
         // Parse optional HAVING clause
         let having_clause = if ctx.match_token(TokenKind::Having) {
-            Some(self.parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
         } else {
             None
         };
@@ -199,16 +158,25 @@ impl ClauseParser {
             // “YIELD *” indicates that all columns should be returned.
         } else {
             loop {
-                let expr = self.parse_expression(ctx)?;
-                let alias = if ctx.match_token(TokenKind::As) {
-                    Some(ctx.expect_identifier()?)
-                } else {
-                    None
+                let Some(item) = ctx.recover_clause(
+                    |_| Ok(None),
+                    |c| {
+                        let expr = self.parse_expression(c)?;
+                        let alias = if c.match_token(TokenKind::As) {
+                            Some(c.expect_identifier()?)
+                        } else {
+                            None
+                        };
+                        Ok(Some(YieldItem {
+                            expression: expr,
+                            alias,
+                        }))
+                    },
+                )?
+                else {
+                    break;
                 };
-                items.push(YieldItem {
-                    expression: expr,
-                    alias,
-                });
+                items.push(item);
                 if !ctx.match_token(TokenKind::Comma) {
                     break;
                 }
@@ -217,49 +185,51 @@ impl ClauseParser {
 
         // Analyzing the WHERE clause
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
         } else {
             None
         };
 
         // Explanation of `ORDER BY`
         let order_by = if ctx.match_token(TokenKind::Order) {
-            ctx.expect_token(TokenKind::By)?;
-            Some(self.parse_order_by_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    c.expect_token(TokenKind::By)?;
+                    self.parse_order_by_clause(c).map(Some)
+                },
+            )?
         } else {
             None
         };
 
         // Analysis of the LIMIT clause
         let limit = if ctx.match_token(TokenKind::Limit) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(LimitClause {
-                span: ctx.current_span(),
-                count,
-            })
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_limit_clause(c))?
         } else {
             None
         };
 
         // Analysis of SKIP
         let skip = if ctx.match_token(TokenKind::Skip) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(SkipClause {
-                span: ctx.current_span(),
-                count,
-            })
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_skip_clause(c))?
         } else {
             None
         };
 
         // Parse optional SAMPLE clause
         let sample = if ctx.match_token(TokenKind::Sample) {
-            let count = ctx.expect_integer_literal()? as usize;
-            Some(super::super::ast::types::SampleClause {
-                span: ctx.current_span(),
-                count,
-                percentage: None,
-            })
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    let count = c.expect_integer_literal()? as usize;
+                    Ok(Some(crate::query::parser::ast::types::SampleClause {
+                        span: c.current_span(),
+                        count,
+                        percentage: None,
+                    }))
+                },
+            )?
         } else {
             None
         };
@@ -291,51 +261,12 @@ impl ClauseParser {
     ) -> Result<Vec<Assignment>, ParseError> {
         let mut assignments = Vec::new();
         loop {
-            // Parse the LHS as a property path (not a full expression) so the
-            // assignment `=` is not consumed as an equality comparison.
-            let property_expr =
-                crate::query::parser::parsing::expr_parser::parse_property_path_with_context(
-                    ctx,
-                    ctx.expression_context_clone(),
-                )?;
-            ctx.expect_token(TokenKind::Assign)?;
-            let value = self.parse_expression(ctx)?;
-
-            let (property, target) = match property_expr.expression() {
-                Some(expr) => match expr.inner() {
-                    CoreExpression::Property { object, property } => {
-                        // Check if object is a literal (e.g., 1.age) or a variable (e.g., p.age)
-                        let target = match object.as_ref() {
-                            CoreExpression::Literal(_) => Some(property_expr.clone()),
-                            CoreExpression::Variable(_) => None, // Variable-based property access
-                            _ => Some(property_expr.clone()),
-                        };
-                        (property.clone(), target)
-                    }
-                    CoreExpression::Variable(name) => (name.clone(), None),
-                    _ => {
-                        return Err(ParseError::new(
-                            ParseErrorKind::SyntaxError,
-                            "SET assignment requires a property path (e.g., p.age)".to_string(),
-                            ctx.current_position(),
-                        ));
-                    }
-                },
-                None => {
-                    return Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        "Expression not registered in context".to_string(),
-                        ctx.current_position(),
-                    ));
-                }
+            let Some(assignment) =
+                ctx.recover_clause(|_| Ok(None), |c| self.parse_assignment(c).map(Some))?
+            else {
+                break;
             };
-
-            assignments.push(Assignment {
-                property,
-                value,
-                target,
-                object: None,
-            });
+            assignments.push(assignment);
             if !ctx.match_token(TokenKind::Comma) {
                 break;
             }
@@ -343,26 +274,87 @@ impl ClauseParser {
         Ok(assignments)
     }
 
+    /// Parse a single SET assignment: `<property path> = <expression>`.
+    fn parse_assignment(&mut self, ctx: &mut ParseContext) -> Result<Assignment, ParseError> {
+        // Parse the LHS as a property path (not a full expression) so the
+        // assignment `=` is not consumed as an equality comparison.
+        let property_expr =
+            crate::query::parser::parsing::expr_parser::parse_property_path_with_context(
+                ctx,
+                ctx.expression_context_clone(),
+            )?;
+        ctx.expect_token(TokenKind::Assign)?;
+        let value = self.parse_expression(ctx)?;
+
+        let (property, target) = match property_expr.expression() {
+            Some(expr) => match expr.inner() {
+                CoreExpression::Property { object, property } => {
+                    // Check if object is a literal (e.g., 1.age) or a variable (e.g., p.age)
+                    let target = match object.as_ref() {
+                        CoreExpression::Literal(_) => Some(property_expr.clone()),
+                        CoreExpression::Variable(_) => None, // Variable-based property access
+                        _ => Some(property_expr.clone()),
+                    };
+                    (property.clone(), target)
+                }
+                CoreExpression::Variable(name) => (name.clone(), None),
+                _ => {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "SET assignment requires a property path (e.g., p.age)".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+            },
+            None => {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "Expression not registered in context".to_string(),
+                    ctx.current_position(),
+                ));
+            }
+        };
+
+        Ok(Assignment {
+            property,
+            value,
+            target,
+            object: None,
+        })
+    }
+
     /// Analysis of the OVER clause
     pub fn parse_over_clause(&mut self, ctx: &mut ParseContext) -> Result<OverClause, ParseError> {
         let span = ctx.current_span();
 
-        let edge_types = self.parse_edge_types(ctx)?;
+        ctx.recover_clause(
+            |c| {
+                Ok(OverClause {
+                    span: c.current_span(),
+                    edge_types: Vec::new(),
+                    direction: EdgeDirection::Out,
+                })
+            },
+            |c| {
+                let edge_types = self.parse_edge_types(c)?;
 
-        // Analysis direction (optional)
-        let direction = if ctx.match_token(TokenKind::In) || ctx.match_token(TokenKind::Reversely) {
-            EdgeDirection::In
-        } else if ctx.match_token(TokenKind::Bidirect) {
-            EdgeDirection::Both
-        } else {
-            EdgeDirection::Out
-        };
+                // Analysis direction (optional)
+                let direction =
+                    if c.match_token(TokenKind::In) || c.match_token(TokenKind::Reversely) {
+                        EdgeDirection::In
+                    } else if c.match_token(TokenKind::Bidirect) {
+                        EdgeDirection::Both
+                    } else {
+                        EdgeDirection::Out
+                    };
 
-        Ok(OverClause {
-            span,
-            edge_types,
-            direction,
-        })
+                Ok(OverClause {
+                    span,
+                    edge_types,
+                    direction,
+                })
+            },
+        )
     }
 
     /// Analyzing the list of edge types
@@ -373,6 +365,85 @@ impl ClauseParser {
             types.push(ctx.expect_identifier()?);
         }
         Ok(types)
+    }
+
+    /// Parse a SKIP clause body (the SKIP token has already been consumed).
+    fn parse_skip_clause(
+        &mut self,
+        ctx: &mut ParseContext,
+    ) -> Result<Option<SkipClause>, ParseError> {
+        let count = ctx.expect_integer_literal()? as usize;
+        Ok(Some(SkipClause {
+            span: ctx.current_span(),
+            count,
+        }))
+    }
+
+    /// Parse a LIMIT clause body (the LIMIT token has already been consumed).
+    fn parse_limit_clause(
+        &mut self,
+        ctx: &mut ParseContext,
+    ) -> Result<Option<LimitClause>, ParseError> {
+        let count = ctx.expect_integer_literal()? as usize;
+        Ok(Some(LimitClause {
+            span: ctx.current_span(),
+            count,
+        }))
+    }
+
+    /// Parse the GROUP BY body of a RETURN clause (GROUP has been consumed).
+    /// Supports ROLLUP, CUBE, and GROUPING SETS syntax.
+    fn parse_return_group_by(&mut self, ctx: &mut ParseContext) -> Result<(), ParseError> {
+        ctx.expect_token(TokenKind::By)?;
+
+        if ctx.match_token(TokenKind::Rollup) {
+            // GROUP BY ROLLUP(...)
+            ctx.expect_token(TokenKind::LParen)?;
+            loop {
+                self.parse_expression(ctx)?;
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+        } else if ctx.match_token(TokenKind::Cube) {
+            // GROUP BY CUBE(...)
+            ctx.expect_token(TokenKind::LParen)?;
+            loop {
+                self.parse_expression(ctx)?;
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+        } else if ctx.match_token(TokenKind::Grouping) {
+            // GROUP BY GROUPING SETS((...), (...))
+            ctx.expect_token(TokenKind::Sets)?;
+            ctx.expect_token(TokenKind::LParen)?;
+            loop {
+                ctx.expect_token(TokenKind::LParen)?;
+                loop {
+                    self.parse_expression(ctx)?;
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RParen)?;
+        } else {
+            // Standard GROUP BY expr, expr, ...
+            loop {
+                self.parse_expression(ctx)?;
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Analyzing the ORDER BY clause

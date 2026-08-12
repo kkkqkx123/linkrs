@@ -33,25 +33,45 @@ impl TraversalParser {
         ctx.expect_token(TokenKind::Match)?;
 
         let mut patterns = Vec::new();
-        patterns.push(self.parse_pattern(ctx)?);
-        while ctx.match_token(TokenKind::Comma) {
-            patterns.push(self.parse_pattern(ctx)?);
+        loop {
+            let Some(pattern) = ctx.recover_clause(
+                |c| {
+                    Ok(Some(Pattern::Variable(VariablePattern {
+                        span: c.current_span(),
+                        name: String::new(),
+                    })))
+                },
+                |c| self.parse_pattern(c).map(Some),
+            )?
+            else {
+                break;
+            };
+            patterns.push(pattern);
+            if !ctx.match_token(TokenKind::Comma) {
+                break;
+            }
         }
 
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
         } else {
-            Some(self.create_true_expression(ctx)?)
+            Some(Self::create_true_expression(ctx)?)
         };
 
         let return_clause = if ctx.match_token(TokenKind::Return) {
-            Some(ClauseParser::new().parse_return_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_return_clause(c).map(Some),
+            )?
         } else {
             None
         };
 
         let delete_clause = if ctx.match_token(TokenKind::Delete) {
-            Some(self.parse_match_delete_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| self.parse_match_delete_clause(c).map(Some),
+            )?
         } else {
             None
         };
@@ -160,26 +180,42 @@ impl TraversalParser {
 
         ctx.expect_token(TokenKind::From)?;
         let from_span = ctx.current_span();
-        let vertices = self.parse_expression_list(ctx)?;
-        let from_clause = FromClause {
-            span: from_span,
-            vertices,
-        };
+        let from_clause = ctx.recover_clause(
+            |c| {
+                Ok(FromClause {
+                    span: c.current_span(),
+                    vertices: Vec::new(),
+                })
+            },
+            |c| {
+                let vertices = self.parse_expression_list(c)?;
+                Ok(FromClause {
+                    span: from_span,
+                    vertices,
+                })
+            },
+        )?;
 
         let over = if ctx.match_token(TokenKind::Over) {
-            Some(ClauseParser::new().parse_over_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_over_clause(c).map(Some),
+            )?
         } else {
             None
         };
 
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
         } else {
-            Some(self.create_true_expression(ctx)?)
+            Some(Self::create_true_expression(ctx)?)
         };
 
         let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
+            )?
         } else {
             None
         };
@@ -227,42 +263,94 @@ impl TraversalParser {
 
         ctx.expect_token(TokenKind::From)?;
         let from_span = ctx.current_span();
-        let from_vertices = self.parse_expression_list(ctx)?;
-        let from_clause = FromClause {
-            span: from_span,
-            vertices: from_vertices,
+        let from_clause = ctx.recover_clause(
+            |c| {
+                Ok(FromClause {
+                    span: c.current_span(),
+                    vertices: Vec::new(),
+                })
+            },
+            |c| {
+                let vertices = self.parse_expression_list(c)?;
+                Ok(FromClause {
+                    span: from_span,
+                    vertices,
+                })
+            },
+        )?;
+
+        let to_present = ctx.recover_clause(
+            |_| Ok(false),
+            |c| {
+                c.expect_token(TokenKind::To)?;
+                Ok(true)
+            },
+        )?;
+        let to_vertex = if to_present {
+            ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?
+        } else {
+            Self::create_true_expression(ctx)?
         };
 
-        ctx.expect_token(TokenKind::To)?;
-        let to_vertex = self.parse_expression(ctx)?;
-
-        ctx.expect_token(TokenKind::Over)?;
-        let over = ClauseParser::new().parse_over_clause(ctx)?;
+        let over_present = ctx.recover_clause(
+            |_| Ok(false),
+            |c| {
+                c.expect_token(TokenKind::Over)?;
+                Ok(true)
+            },
+        )?;
+        let over = if over_present {
+            ctx.recover_clause(
+                |c| {
+                    Ok(OverClause {
+                        span: c.current_span(),
+                        edge_types: Vec::new(),
+                        direction: EdgeDirection::Out,
+                    })
+                },
+                |c| ClauseParser::new().parse_over_clause(c),
+            )?
+        } else {
+            OverClause {
+                span: ctx.current_span(),
+                edge_types: Vec::new(),
+                direction: EdgeDirection::Out,
+            }
+        };
 
         // Optional: Up to N steps
         let mut max_steps = None;
         if ctx.match_token(TokenKind::Upto) {
-            max_steps = Some(ctx.expect_integer_literal()? as usize);
-            ctx.expect_token(TokenKind::Step)?;
+            let steps = ctx.recover_clause(
+                |_| Ok(None),
+                |c| c.expect_integer_literal().map(|n| n as usize).map(Some),
+            )?;
+            if let Some(n) = steps {
+                max_steps = Some(n);
+                ctx.expect_token(TokenKind::Step)?;
+            }
         }
 
         // Optional WEIGHT clause
         let weight_expression = if ctx.match_token(TokenKind::Weight) {
-            Some(ctx.expect_identifier()?)
+            ctx.recover_clause(|_| Ok(None), |c| c.expect_identifier().map(Some))?
         } else {
             None
         };
 
         // Optional WHERE clause
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
         } else {
-            Some(self.create_true_expression(ctx)?)
+            Some(Self::create_true_expression(ctx)?)
         };
 
         // Optional YIELD clause
         let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
+            )?
         } else {
             None
         };
@@ -312,26 +400,42 @@ impl TraversalParser {
         // Support optional FROM keyword for backward compatibility
         ctx.match_token(TokenKind::From);
         let from_span = ctx.current_span();
-        let vertices = self.parse_expression_list(ctx)?;
-        let from_clause = FromClause {
-            span: from_span,
-            vertices,
-        };
+        let from_clause = ctx.recover_clause(
+            |c| {
+                Ok(FromClause {
+                    span: c.current_span(),
+                    vertices: Vec::new(),
+                })
+            },
+            |c| {
+                let vertices = self.parse_expression_list(c)?;
+                Ok(FromClause {
+                    span: from_span,
+                    vertices,
+                })
+            },
+        )?;
 
         let over = if ctx.match_token(TokenKind::Over) {
-            Some(ClauseParser::new().parse_over_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_over_clause(c).map(Some),
+            )?
         } else {
             None
         };
 
         let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(self.parse_expression(ctx)?)
+            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
         } else {
-            Some(self.create_true_expression(ctx)?)
+            Some(Self::create_true_expression(ctx)?)
         };
 
         let yield_clause = if ctx.match_token(TokenKind::Yield) {
-            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_yield_clause(c).map(Some),
+            )?
         } else {
             None
         };
@@ -684,10 +788,7 @@ impl TraversalParser {
     }
 
     /// Create the default true expression.
-    fn create_true_expression(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<ContextualExpression, ParseError> {
+    fn create_true_expression(ctx: &mut ParseContext) -> Result<ContextualExpression, ParseError> {
         let expr = CoreExpression::literal(true);
         let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
         let id = ctx.expression_context().register_expression(expr_meta);

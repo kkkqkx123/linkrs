@@ -160,7 +160,9 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
-            node.set_col_names(n.col_names);
+            if !n.col_names.is_empty() {
+                node.set_col_names(n.col_names);
+            }
             node.set_column_types(n.column_types);
             PlanNodeEnum::Project(node)
         }

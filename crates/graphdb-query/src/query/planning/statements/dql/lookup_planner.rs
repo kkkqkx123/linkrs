@@ -354,9 +354,9 @@ impl LookupPlanner {
                 id: next_node_id(),
                 input: Some(Box::new(logical_root)),
                 deps: vec![],
-                columns: yield_columns,
+                columns: yield_columns.clone(),
                 output_var: None,
-                col_names: vec![],
+                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
                 column_types: vec![],
             };
             logical_root = LogicalNodeEnum::Project(logical_project);

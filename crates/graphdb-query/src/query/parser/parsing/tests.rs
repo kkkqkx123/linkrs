@@ -466,6 +466,145 @@ mod tests {
     }
 
     #[test]
+    fn test_clause_recovery_single_error_continues() {
+        // The WHERE expression is malformed; recovery must synchronize to the
+        // RETURN clause keyword and still parse the RETURN clause.
+        let query = "MATCH (v) WHERE v.age > RETURN v";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "statement should parse structurally after clause recovery: {:?}",
+            result.err()
+        );
+
+        let errors = parser.take_errors();
+        assert_eq!(errors.len(), 1, "exactly one clause error expected");
+
+        let error = &errors.errors[0];
+        assert!(error.recovered, "clause error must be marked as recovered");
+        assert!(
+            error.message.contains("Return"),
+            "diagnostics should name the offending token: {}",
+            error.message
+        );
+
+        // The recovered statement keeps the following clause.
+        if let Ok(parser_result) = result {
+            if let Stmt::Match(stmt) = parser_result.ast.stmt.clone() {
+                assert!(
+                    stmt.return_clause.is_some(),
+                    "RETURN clause must survive WHERE recovery"
+                );
+            } else {
+                panic!("expected Match statement");
+            }
+        }
+    }
+
+    #[test]
+    fn test_clause_recovery_multiple_errors() {
+        // Two clause-level errors in one statement: a broken WHERE expression
+        // and a LIMIT without an integer. Both must be collected.
+        let query = "MATCH (v) WHERE v.age > RETURN v LIMIT";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "statement should parse structurally after clause recovery: {:?}",
+            result.err()
+        );
+
+        let errors = parser.take_errors();
+        assert_eq!(errors.len(), 2, "both clause errors must be recorded");
+        assert!(
+            errors.errors.iter().all(|e| e.recovered),
+            "all clause errors must be marked as recovered"
+        );
+    }
+
+    #[test]
+    fn test_clause_recovery_across_union_operands() {
+        // A compound statement whose operands each carry a broken WHERE
+        // clause: every clause error is reported in a single pass.
+        let query = "MATCH (v) WHERE v.age > RETURN v UNION MATCH (v) WHERE v.age > RETURN v";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "statement should parse structurally after clause recovery: {:?}",
+            result.err()
+        );
+
+        let errors = parser.take_errors();
+        assert_eq!(errors.len(), 2, "one clause error per union operand");
+        assert!(
+            errors.errors.iter().all(|e| e.recovered),
+            "all clause errors must be marked as recovered"
+        );
+    }
+
+    #[test]
+    fn test_clause_recovery_stops_at_limit() {
+        // More clause errors than RECOVERY_LIMIT (5): parsing must abort.
+        let broken = "MATCH (v) WHERE v.age > RETURN v UNION ";
+        let query = format!(
+            "{}{}{}{}{}{}",
+            broken, broken, broken, broken, broken, broken
+        );
+        let mut parser = Parser::new(&query);
+        let result = parser.parse();
+        assert!(result.is_err(), "recovery limit must abort parsing");
+    }
+
+    #[test]
+    fn test_clause_recovery_expected_tokens_attached() {
+        // LIMIT without an integer literal: the recorded error must carry the
+        // expected token candidates.
+        let query = "MATCH (v) RETURN v LIMIT";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "statement should parse structurally after clause recovery: {:?}",
+            result.err()
+        );
+
+        let errors = parser.take_errors();
+        assert_eq!(errors.len(), 1);
+        let error = &errors.errors[0];
+        assert!(
+            !error.expected_tokens.is_empty(),
+            "expected token candidates must be attached"
+        );
+        assert!(error.recovered);
+    }
+
+    #[test]
+    fn test_clause_recovery_normal_path_unchanged() {
+        // Valid clauses must not trigger recovery or emit diagnostics.
+        let query = "MATCH (v) WHERE v.age > 30 RETURN v ORDER BY v.age LIMIT 10";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(result.is_ok(), "valid query parses: {:?}", result.err());
+        assert!(
+            !parser.has_errors(),
+            "valid query must not produce any diagnostics"
+        );
+
+        if let Ok(parser_result) = result {
+            if let Stmt::Match(stmt) = parser_result.ast.stmt.clone() {
+                assert!(stmt.where_clause.is_some());
+                let return_clause = stmt.return_clause.as_ref().expect("RETURN present");
+                assert!(return_clause.order_by.is_some());
+                assert_eq!(return_clause.limit.as_ref().map(|l| l.count), Some(10));
+            } else {
+                panic!("expected Match statement");
+            }
+        }
+    }
+
+    #[test]
     fn test_extension_registry_empty() {
         use crate::query::parser::parsing::ExtensionRegistry;
         let registry = ExtensionRegistry::new();

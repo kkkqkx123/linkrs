@@ -134,6 +134,9 @@ pub struct StructuredParseError {
     pub hints: Vec<String>,
     /// Context information (converted to string for Clone support)
     pub context: Option<String>,
+    /// Whether the error was produced during error recovery (parsing
+    /// continued after synchronizing to the next clause boundary)
+    pub recovered: bool,
 }
 
 /// Parse error kind enumeration
@@ -205,6 +208,10 @@ impl std::fmt::Display for StructuredParseError {
             for hint in &self.hints {
                 writeln!(f, "    - {}", hint)?;
             }
+        }
+
+        if self.recovered {
+            writeln!(f, "\n  (recovered, parsing continued)")?;
         }
 
         Ok(())
@@ -382,6 +389,7 @@ impl QueryError {
             expected_tokens: Vec::new(),
             hints: Vec::new(),
             context: None,
+            recovered: false,
         })
     }
 
@@ -395,6 +403,7 @@ impl QueryError {
             expected_tokens: Vec::new(),
             hints: Vec::new(),
             context: None,
+            recovered: false,
         })
     }
 
@@ -412,6 +421,7 @@ impl QueryError {
             expected_tokens: Vec::new(),
             hints: vec![location.into()],
             context: None,
+            recovered: false,
         })
     }
 

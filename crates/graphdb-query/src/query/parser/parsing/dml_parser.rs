@@ -67,7 +67,7 @@ impl DmlParser {
                 };
                 // Parse WHERE clause (used to specify vertex ID)
                 let where_clause = if ctx.match_token(TokenKind::Where) {
-                    Some(self.parse_expression(ctx)?)
+                    ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
                 } else {
                     None
                 };
@@ -122,7 +122,7 @@ impl DmlParser {
                 };
                 // Parse WHERE clause
                 let where_clause = if ctx.match_token(TokenKind::Where) {
-                    Some(self.parse_expression(ctx)?)
+                    ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
                 } else {
                     None
                 };
@@ -223,7 +223,7 @@ impl DmlParser {
 
         let where_clause = if ctx.match_token(TokenKind::Where) || ctx.match_token(TokenKind::When)
         {
-            Some(self.parse_expression(ctx)?)
+            ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?
         } else {
             None
         };

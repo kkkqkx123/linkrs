@@ -38,6 +38,9 @@ pub struct ParseError {
     pub expected_tokens: Box<[String]>,
     pub context: Option<Box<dyn Error + Send + Sync>>,
     pub hints: Box<[String]>,
+    /// Set when the error was recorded through error recovery: parsing
+    /// synchronized to the next clause/statement boundary and continued.
+    pub recovered: bool,
 }
 
 impl ParseError {
@@ -51,6 +54,7 @@ impl ParseError {
             expected_tokens: Box::new([]),
             context: None,
             hints: Box::new([]),
+            recovered: false,
         }
     }
 
@@ -135,6 +139,13 @@ impl ParseError {
         new_hints.push(hint.into());
         self.hints = new_hints.into_boxed_slice();
     }
+
+    /// Mark the error as produced during error recovery (parsing continued
+    /// after synchronizing to the next clause boundary).
+    pub fn mark_recovered(mut self) -> Self {
+        self.recovered = true;
+        self
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -166,6 +177,10 @@ impl fmt::Display for ParseError {
             for hint in &self.hints {
                 writeln!(f, "    - {}", hint)?;
             }
+        }
+
+        if self.recovered {
+            writeln!(f, "\n  (recovered, parsing continued)")?;
         }
 
         Ok(())
@@ -228,6 +243,7 @@ impl From<ParseError> for QueryError {
             expected_tokens: parse_error.expected_tokens.into_vec(),
             hints: parse_error.hints.into_vec(),
             context: parse_error.context.as_ref().map(|c| c.to_string()),
+            recovered: parse_error.recovered,
         };
 
         QueryError::structured_parse_error(structured)

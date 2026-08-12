@@ -212,9 +212,12 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input.clone())),
                     deps: vec![input],
-                    columns: project_columns,
+                    columns: project_columns.clone(),
                     output_var: None,
-                    col_names: vec![],
+                    col_names: project_columns
+                        .iter()
+                        .map(|col| col.alias.clone())
+                        .collect(),
                     column_types: vec![],
                 })
             });
@@ -371,9 +374,12 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input.clone())),
                     deps: vec![input],
-                    columns: project_columns,
+                    columns: project_columns.clone(),
                     output_var: None,
-                    col_names: vec![],
+                    col_names: project_columns
+                        .iter()
+                        .map(|col| col.alias.clone())
+                        .collect(),
                     column_types: vec![],
                 })
             });
@@ -445,9 +451,9 @@ impl ClausePlanner for ReturnClausePlanner {
                     id: next_node_id(),
                     input: Some(Box::new(input.clone())),
                     deps: vec![input],
-                    columns: yield_columns,
+                    columns: yield_columns.clone(),
                     output_var: None,
-                    col_names: vec![],
+                    col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
                     column_types: vec![],
                 })
             });

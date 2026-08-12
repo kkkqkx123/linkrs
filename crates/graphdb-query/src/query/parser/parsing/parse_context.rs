@@ -56,6 +56,15 @@ const CLAUSE_SYNC_TOKENS: &[TokenKind] = &[
     TokenKind::Intersect,
     TokenKind::SetMinus,
     TokenKind::Pipe,
+    TokenKind::Match,
+    TokenKind::Go,
+    TokenKind::Find,
+    TokenKind::Lookup,
+    TokenKind::Insert,
+    TokenKind::Update,
+    TokenKind::Delete,
+    TokenKind::And,
+    TokenKind::Or,
     TokenKind::Eof,
 ];
 
@@ -251,7 +260,8 @@ impl<'a> ParseContext<'a> {
                     expected, self.current_token.kind
                 ),
                 pos,
-            ))
+            )
+            .with_expected_tokens(vec![format!("{:?}", expected)]))
         }
     }
 
@@ -354,7 +364,8 @@ impl<'a> ParseContext<'a> {
                     ParseErrorKind::UnexpectedToken,
                     format!("Expected identifier, found {:?}", self.current_token.kind),
                     pos,
-                ))
+                )
+                .with_expected_tokens(vec!["identifier".to_string()]))
             }
         }
     }
@@ -442,7 +453,8 @@ impl<'a> ParseContext<'a> {
                         self.current_token.kind
                     ),
                     pos,
-                ))
+                )
+                .with_expected_tokens(vec!["string literal".to_string()]))
             }
         }
     }
@@ -463,7 +475,8 @@ impl<'a> ParseContext<'a> {
                         self.current_token.kind
                     ),
                     pos,
-                ))
+                )
+                .with_expected_tokens(vec!["integer literal".to_string()]))
             }
         }
     }
@@ -484,7 +497,8 @@ impl<'a> ParseContext<'a> {
                         self.current_token.kind
                     ),
                     pos,
-                ))
+                )
+                .with_expected_tokens(vec!["float literal".to_string()]))
             }
         }
     }
@@ -765,10 +779,33 @@ impl<'a> ParseContext<'a> {
             return Err(error);
         }
 
-        self.add_error(error);
+        self.add_error(error.mark_recovered());
         self.record_recovery();
         self.synchronize(scope);
         Ok(())
+    }
+
+    /// Parse a clause body with clause-level error recovery.
+    ///
+    /// On failure the error is recorded and the parser synchronizes to the
+    /// next clause boundary keyword, so the remaining clauses of the
+    /// enclosing statement are still parsed. `fallback` must produce a
+    /// structurally valid placeholder for the failed clause; the query is
+    /// still rejected once the collected errors are inspected by the caller.
+    /// Returns the original error, unrecorded, when the recovery limit is
+    /// reached.
+    pub fn recover_clause<T>(
+        &mut self,
+        fallback: impl FnOnce(&mut ParseContext) -> Result<T, ParseError>,
+        parse: impl FnOnce(&mut ParseContext) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        match parse(self) {
+            Ok(value) => Ok(value),
+            Err(error) => match self.try_recover(error, RecoveryScope::Clause) {
+                Ok(()) => fallback(self),
+                Err(error) => Err(error),
+            },
+        }
     }
 
     pub fn consume_value(&mut self) -> Result<crate::core::Value, ParseError> {
