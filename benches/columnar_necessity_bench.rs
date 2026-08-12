@@ -144,7 +144,7 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let mut chunk = create_wide_chunk(n);
-                    chunk.build_typed_columns();
+                    chunk.build_typed_columns(true);
                     chunk
                 },
                 |mut chunk| {
@@ -188,7 +188,7 @@ fn bench_selection_chain(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let mut chunk = create_wide_chunk(n);
-                chunk.build_typed_columns();
+                chunk.build_typed_columns(true);
                 chunk
             },
             |mut chunk| {
@@ -216,7 +216,7 @@ fn bench_selection_chain(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let mut chunk = create_wide_chunk(n);
-                chunk.build_typed_columns();
+                chunk.build_typed_columns(true);
                 chunk
             },
             |mut chunk| {
@@ -253,7 +253,7 @@ fn bench_selection_chain(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let mut chunk = create_wide_chunk(n);
-                chunk.build_typed_columns();
+                chunk.build_typed_columns(true);
                 chunk
             },
             |mut chunk| {

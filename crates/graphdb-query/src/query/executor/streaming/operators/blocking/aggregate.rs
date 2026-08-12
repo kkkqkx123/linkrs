@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use crate::core::types::operators::AggregateFunction;
-use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::streaming::helpers::accumulator_states::{
     decode_partial, AggregateAccumulator,

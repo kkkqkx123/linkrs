@@ -28,6 +28,8 @@ pub mod window;
 pub use aggregate::{AggregateState, FinalAggregateState, GroupByState, PartialAggregateState};
 pub use materialize::{DataCollectState, DistinctState, MaterializeState, RollUpApplyState};
 pub use sort::{MergeState, RunBuffer, SortState, TopNState};
+
+type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 pub use window::{WindowFunctionState, WindowState};
 
 use crate::query::executor::streaming::chunk::ColumnarBatch;
@@ -761,7 +763,7 @@ impl BlockingOperator {
                                 // `ValueRowContext` construction). Chunks
                                 // with a selection vector fall back to
                                 // per-row evaluation.
-                                let batch_eval: Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)> =
+                                let batch_eval: BatchEvalResult =
                                     if chunk.selection.is_none() && !chunk.rows.is_empty() {
                                         match chunk.evaluate_expressions(group_by_expressions, None)
                                         {

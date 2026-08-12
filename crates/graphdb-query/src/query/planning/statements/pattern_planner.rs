@@ -50,7 +50,6 @@ use super::plan_combiner;
 /// a parallel pure-logical tree is attached to each SubPlan so the compiler
 /// can build the `LogicalPlan` natively (instead of stripping it back out of
 /// the physical tree).
-
 fn logical_scan_vertices(
     space_id: u64,
     space_name: &str,

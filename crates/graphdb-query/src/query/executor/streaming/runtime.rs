@@ -50,7 +50,7 @@ pub const D1_TYPED_RATE_THRESHOLD: f64 = 0.5;
 /// New callers of [`DataChunk::materialize_selection_by`] must append their
 /// label here (the lookup falls back to the unattributed path for unknown
 /// names, but adding the label keeps per-operator visibility).
-pub const SELECTION_BOUNDARY_OPS: &[&'static str] = &[
+pub const SELECTION_BOUNDARY_OPS: &[&str] = &[
     "Filter",
     "Dedup",
     "Assign",
@@ -1280,7 +1280,7 @@ mod tests {
         set_typed_columns_enabled(true);
         let decide = || {
             rt.columnar_policy()
-                .map_or(true, |p| p.should_use_columnar())
+                .is_none_or(|p| p.should_use_columnar())
                 && crate::query::executor::streaming::chunk::typed_columns_enabled()
         };
         assert!(decide());

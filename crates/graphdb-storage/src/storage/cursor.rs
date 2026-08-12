@@ -772,12 +772,10 @@ impl ColumnValues {
 /// (`VecVertexCursor`, `VecEdgeCursor`) get the same typed-column coverage
 /// when they opt into the column-block scan path.
 fn column_data_type(values: &[Option<crate::core::Value>]) -> DataType {
-    for value in values {
-        if let Some(v) = value {
-            let ty = v.get_type();
-            if !matches!(ty, DataType::Empty | DataType::Null) {
-                return ty;
-            }
+    for v in values.iter().flatten() {
+        let ty = v.get_type();
+        if !matches!(ty, DataType::Empty | DataType::Null) {
+            return ty;
         }
     }
     DataType::Empty

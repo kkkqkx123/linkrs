@@ -24,7 +24,7 @@ fn create_chunk(size: usize) -> DataChunk {
         })
         .collect();
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    chunk.build_typed_columns();
+    chunk.build_typed_columns(true);
     chunk
 }
 

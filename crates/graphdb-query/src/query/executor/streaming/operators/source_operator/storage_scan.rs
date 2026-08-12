@@ -277,7 +277,7 @@ fn use_columnar_path(base: &OperatorBase) -> bool {
     base.runtime
         .as_ref()
         .and_then(|runtime| runtime.columnar_policy())
-        .map_or(true, |policy| policy.should_use_columnar())
+        .is_none_or(|policy| policy.should_use_columnar())
 }
 
 /// Column-block pull loop over a storage cursor (A1).
