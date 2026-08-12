@@ -20,7 +20,8 @@ pub enum ApplyOperator {
         memory_tracker: MemoryTracker,
     },
     PatternApply {
-        key_expressions: Vec<crate::core::types::expr::Expression>,
+        hash_keys: Vec<crate::core::types::expr::Expression>,
+        probe_keys: Vec<crate::core::types::expr::Expression>,
         anti: bool,
         right_rows: Option<Vec<Vec<Value>>>,
         right_layout: Option<Arc<SlotLayout>>,
@@ -49,10 +50,12 @@ impl ApplyOperator {
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
             ApplySpec::PatternApply {
-                key_expressions,
+                hash_keys,
+                probe_keys,
                 anti,
             } => Self::PatternApply {
-                key_expressions: key_expressions.clone(),
+                hash_keys: hash_keys.clone(),
+                probe_keys: probe_keys.clone(),
                 anti: *anti,
                 right_rows: None,
                 right_layout: None,
@@ -173,7 +176,8 @@ impl ApplyOperator {
                 }
             }
             Self::PatternApply {
-                key_expressions,
+                hash_keys,
+                probe_keys,
                 anti,
                 right_rows,
                 right_layout,
@@ -197,14 +201,14 @@ impl ApplyOperator {
                         let left_key = evaluate_join_key(
                             &left_row,
                             left_chunk.layout.clone(),
-                            key_expressions,
+                            hash_keys,
                         )?;
                         let mut exists = false;
                         for right_row in right_rows {
                             let right_key = evaluate_join_key(
                                 right_row,
                                 right_layout.clone(),
-                                key_expressions,
+                                probe_keys,
                             )?;
                             if keys_match(&left_key, &right_key) {
                                 exists = true;

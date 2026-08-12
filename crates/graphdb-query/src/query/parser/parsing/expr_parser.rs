@@ -379,7 +379,8 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 expr: Expression::in_subquery(expression.expr, subquery, false),
                 span,
             };
-        } else if ctx.check_token(TokenKind::Arrow)
+        } else if !ctx.is_edge_syntax_mode()
+            && ctx.check_token(TokenKind::Arrow)
             && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
         {
             ctx.match_token(TokenKind::Arrow);
@@ -393,7 +394,8 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 ),
                 span,
             };
-        } else if ctx.check_token(TokenKind::ArrowRight)
+        } else if !ctx.is_edge_syntax_mode()
+            && ctx.check_token(TokenKind::ArrowRight)
             && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
         {
             ctx.match_token(TokenKind::ArrowRight);
@@ -407,7 +409,8 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 ),
                 span,
             };
-        } else if ctx.check_token(TokenKind::HashArrow)
+        } else if !ctx.is_edge_syntax_mode()
+            && ctx.check_token(TokenKind::HashArrow)
             && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
         {
             ctx.match_token(TokenKind::HashArrow);
@@ -421,7 +424,8 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 ),
                 span,
             };
-        } else if ctx.check_token(TokenKind::HashArrowRight)
+        } else if !ctx.is_edge_syntax_mode()
+            && ctx.check_token(TokenKind::HashArrowRight)
             && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_))
         {
             ctx.match_token(TokenKind::HashArrowRight);
@@ -928,7 +932,7 @@ fn parse_case_expression(
 ) -> Result<ParseResult, ParseError> {
     ctx.expect_token(TokenKind::Case)?;
 
-    let test_expr = if ctx.peek_token().kind != TokenKind::When {
+    let test_expr = if ctx.current_token().kind != TokenKind::When {
         Some(parse_expression(ctx)?.expr)
     } else {
         None
@@ -997,6 +1001,14 @@ fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, Parse
     if ctx.match_token(TokenKind::Match) {
         let pattern_str = parse_pattern_string(ctx)?;
         patterns.push(pattern_str);
+    } else if !matches!(
+        ctx.current_token().kind,
+        TokenKind::Where | TokenKind::Return | TokenKind::RBrace
+    ) {
+        // Bare pattern without the MATCH keyword:
+        // `EXISTS { a:person-[:knows]->b:person }`.
+        let pattern_str = parse_pattern_string(ctx)?;
+        patterns.push(pattern_str);
     }
 
     if ctx.match_token(TokenKind::Where) {
@@ -1021,22 +1033,89 @@ fn parse_pattern_string(ctx: &mut ParseContext<'_>) -> Result<String, ParseError
     let start_pos = ctx.current_position();
     let mut pattern = String::new();
 
-    while !ctx.match_token(TokenKind::RBrace)
-        && !ctx.match_token(TokenKind::Where)
-        && !ctx.match_token(TokenKind::Return)
-        && !ctx.match_token(TokenKind::Match)
-    {
-        pattern.push_str(&ctx.current_token().lexeme);
-        pattern.push(' ');
+    // Collect pattern tokens until a subquery terminator (RBrace / WHERE /
+    // RETURN / MATCH). The terminator is inspected WITHOUT consuming it so
+    // `parse_subquery_body` can dispatch on it afterwards.
+    let mut tokens = Vec::new();
+    loop {
+        let terminator = matches!(
+            ctx.current_token().kind,
+            TokenKind::RBrace
+                | TokenKind::Where
+                | TokenKind::Return
+                | TokenKind::Match
+        );
+        if terminator {
+            break;
+        }
+        tokens.push(ctx.current_token().clone());
         ctx.next_token();
     }
 
-    if pattern.is_empty() {
+    if tokens.is_empty() {
         return Err(ParseError::new(
             ParseErrorKind::SyntaxError,
             "Empty pattern in subquery".to_string(),
             start_pos,
         ));
+    }
+
+    // Canonicalize the pattern string so it can be re-parsed by the
+    // traversal parser later (planning time).
+    //
+    // Parenthesized patterns (e.g. `MATCH (q:person)`) pass through
+    // unchanged. Bare patterns (`a:person-[:knows]->b:person`) have their
+    // node segments wrapped in parentheses to yield the standard form
+    // `(a:person)-[:knows]->(b:person)`.
+    if matches!(tokens[0].kind, TokenKind::LParen) {
+        for tok in &tokens {
+            pattern.push_str(&tok.lexeme);
+            pattern.push(' ');
+        }
+    } else {
+        let mut in_node = false;
+        let mut in_brackets = false;
+        for tok in &tokens {
+            match &tok.kind {
+                TokenKind::Identifier(_) => {
+                    if !in_node && !in_brackets {
+                        pattern.push_str("( ");
+                        in_node = true;
+                    }
+                    pattern.push_str(&tok.lexeme);
+                    pattern.push(' ');
+                }
+                TokenKind::LBracket => {
+                    in_brackets = true;
+                    pattern.push('[');
+                    pattern.push(' ');
+                }
+                TokenKind::RBracket => {
+                    in_brackets = false;
+                    pattern.push(']');
+                    pattern.push(' ');
+                }
+                TokenKind::Minus
+                | TokenKind::Arrow
+                | TokenKind::BackArrow
+                | TokenKind::LeftArrow
+                | TokenKind::RightArrow => {
+                    if in_node {
+                        pattern.push_str(") ");
+                        in_node = false;
+                    }
+                    pattern.push_str(&tok.lexeme);
+                    pattern.push(' ');
+                }
+                _ => {
+                    pattern.push_str(&tok.lexeme);
+                    pattern.push(' ');
+                }
+            }
+        }
+        if in_node {
+            pattern.push(')');
+        }
     }
 
     Ok(pattern.trim().to_string())
@@ -1067,6 +1146,43 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_json_path_get() {
+        // Regression: peek_token used to return the current token, so the
+        // `expr -> 'key'` JSON access postfix never fired.
+        for input in ["m->'key'", "m->>\"key\"", "m#>'a.b'", "m#>>\"a.b\""] {
+            let ctx = &mut ParseContext::new(input);
+            let result = parse_expression(ctx);
+            assert!(result.is_ok(), "parse failed for {input}: {:?}", result.err());
+            let parse_result = result.expect("JSON access parsing should succeed");
+            assert!(matches!(parse_result.expr, Expression::Binary { .. }));
+        }
+    }
+
+    #[test]
+    fn test_parse_in_subquery() {
+        // Regression: peek_token used to return the current token, so
+        // `x IN { subquery }` was never recognized and the tail was dropped.
+        let input = "t.name IN { MATCH (p:person) RETURN p.name }";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(result.is_ok(), "parse failed: {:?}", result.err());
+        let parse_result = result.expect("IN subquery parsing should succeed");
+        match parse_result.expr {
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => {
+                assert!(!negated);
+                assert!(matches!(*expr, Expression::Property { .. }));
+                assert_eq!(subquery.patterns.len(), 1);
+                assert!(subquery.return_expr.is_some());
+            }
+            other => panic!("expected Expression::In, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_parenthesized_expression() {
         let input = "(1 + 2) * 3";
         let ctx = &mut ParseContext::new(input);
@@ -1074,5 +1190,94 @@ mod tests {
         assert!(result.is_ok());
         let parse_result = result.expect("Parsing a bracketed expression should succeed");
         assert!(matches!(parse_result.expr, Expression::Binary { .. }));
+    }
+
+    #[test]
+    fn test_parse_exists_with_where_clause() {
+        // Regression: parse_pattern_string used to consume the WHERE / RETURN
+        // terminators, making `EXISTS { MATCH ... WHERE ... }` fail with
+        // "Expected RBrace, found Identifier(...)".
+        let input = "EXISTS { MATCH (q:person) WHERE q.age > 30 }";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(result.is_ok(), "parse failed: {:?}", result.err());
+        let parse_result = result.expect("EXISTS parsing should succeed");
+        match parse_result.expr {
+            Expression::Exists { body } => {
+                assert_eq!(body.patterns.len(), 1, "one pattern expected");
+                assert_eq!(body.patterns[0], "( q : person )");
+                assert!(
+                    body.where_clause.is_some(),
+                    "WHERE clause must be preserved"
+                );
+            }
+            other => panic!("expected Expression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_exists_with_return_expr() {
+        let input = "EXISTS { MATCH (q:person) WHERE q.age > 30 RETURN q.name }";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(result.is_ok(), "parse failed: {:?}", result.err());
+        let parse_result = result.expect("EXISTS parsing should succeed");
+        match parse_result.expr {
+            Expression::Exists { body } => {
+                assert_eq!(body.patterns.len(), 1);
+                assert!(body.where_clause.is_some());
+                assert!(body.return_expr.is_some(), "RETURN expr must be preserved");
+            }
+            other => panic!("expected Expression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_exists_bare_pattern() {
+        let input = "EXISTS { a:person-[:knows]->b:person }";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(result.is_ok(), "parse failed: {:?}", result.err());
+        let parse_result = result.expect("EXISTS parsing should succeed");
+        match parse_result.expr {
+            Expression::Exists { body } => {
+                assert_eq!(body.patterns.len(), 1);
+                assert_eq!(body.patterns[0], "( a : person ) - [ : knows ] -> ( b : person )");
+                assert!(body.where_clause.is_none());
+            }
+            other => panic!("expected Expression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_subquery_pattern_round_trip_reparse() {
+        // The stored pattern strings must be re-parseable by the traversal
+        // parser, which the exists planner relies on to build the subquery
+        // plan. Both the parenthesized (MATCH) and the bare forms are
+        // canonicalized at parse time.
+        for input in [
+            "EXISTS { MATCH (q:person) }",
+            "EXISTS { a:person-[:knows]->b:person }",
+            "EXISTS { MATCH (a:person)-[:knows]->(b:person) WHERE b.age > 18 }",
+        ] {
+            let ctx = &mut ParseContext::new(input);
+            let result = parse_expression(ctx);
+            assert!(result.is_ok(), "parse failed for {input}: {:?}", result.err());
+            let parse_result = result.expect("EXISTS parsing should succeed");
+            let body = match parse_result.expr {
+                Expression::Exists { body } => body,
+                other => panic!("expected Expression::Exists, got {:?}", other),
+            };
+            for pattern_str in &body.patterns {
+                let mut ctx = &mut ParseContext::new(pattern_str);
+                let mut parser = crate::query::parser::parsing::traversal_parser::TraversalParser::new();
+                let pattern = parser.parse_pattern(&mut ctx);
+                assert!(
+                    pattern.is_ok(),
+                    "stored pattern `{pattern_str}` must be re-parseable: {:?}",
+                    pattern.err()
+                );
+            }
+        }
     }
 }

@@ -88,9 +88,11 @@ pub enum RecoveryScope {
 pub struct ParseContext<'a> {
     lexer: Lexer<'a>,
     current_token: Token,
+    next_token: Option<Token>,
     errors: ParseErrors,
     compat_mode: bool,
     upsert_mode: bool,
+    edge_syntax_mode: bool,
     recursion_depth: usize,
     max_recursion_depth: usize,
     expr_context: Arc<ExpressionAnalysisContext>,
@@ -106,9 +108,11 @@ impl<'a> ParseContext<'a> {
         Self {
             lexer,
             current_token,
+            next_token: None,
             errors: ParseErrors::new(),
             compat_mode: false,
             upsert_mode: false,
+            edge_syntax_mode: false,
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
@@ -124,9 +128,11 @@ impl<'a> ParseContext<'a> {
         Self {
             lexer,
             current_token,
+            next_token: None,
             errors: ParseErrors::new(),
             compat_mode: false,
             upsert_mode: false,
+            edge_syntax_mode: false,
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
@@ -164,6 +170,25 @@ impl<'a> ParseContext<'a> {
 
     pub fn is_upsert_mode(&self) -> bool {
         self.upsert_mode
+    }
+
+    /// Whether the parser is inside a DML edge statement (`src -> dst`)
+    /// where `->` is an edge arrow rather than the JSON access operator.
+    pub fn is_edge_syntax_mode(&self) -> bool {
+        self.edge_syntax_mode
+    }
+
+    /// Run `f` with DML edge syntax enabled, then restore the previous
+    /// mode even on error.
+    pub fn with_edge_syntax_mode<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let saved = self.edge_syntax_mode;
+        self.edge_syntax_mode = true;
+        let result = f(self);
+        self.edge_syntax_mode = saved;
+        result
     }
 
     pub fn enter_recursion(&mut self) -> Result<(), ParseError> {
@@ -227,11 +252,23 @@ impl<'a> ParseContext<'a> {
     }
 
     pub fn next_token(&mut self) {
-        self.current_token = self.lexer.next_token();
+        if let Some(tok) = self.next_token.take() {
+            self.current_token = tok;
+        } else {
+            self.current_token = self.lexer.next_token();
+        }
     }
 
-    pub fn peek_token(&self) -> &Token {
-        &self.current_token
+    /// Return the next token WITHOUT consuming it.
+    ///
+    /// The lookahead is buffered in the context, so the token returned here
+    /// is the one that the next [`ParseContext::next_token`] (or
+    /// `match_token` / `expect_token`) call will consume.
+    pub fn peek_token(&mut self) -> &Token {
+        if self.next_token.is_none() {
+            self.next_token = Some(self.lexer.next_token());
+        }
+        self.next_token.as_ref().expect("lookahead buffer should be filled")
     }
 
     pub fn match_token(&mut self, expected: TokenKind) -> bool {

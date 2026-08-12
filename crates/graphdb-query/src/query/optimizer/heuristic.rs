@@ -87,6 +87,7 @@ pub mod batch;
 
 // Specific Rules Module
 pub mod aggregate;
+pub mod constant_folding;
 pub mod decorrelation;
 pub mod elimination;
 pub mod expand_pushdown;

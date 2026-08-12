@@ -1159,8 +1159,13 @@ pub(super) fn build_pattern_apply_spec(
     node: &crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::PatternApplyNode,
 ) -> Result<ApplySpec, PlanBuildError> {
     Ok(ApplySpec::PatternApply {
-        key_expressions: node
-            .key_cols()
+        hash_keys: node
+            .hash_keys()
+            .iter()
+            .map(contextual_to_expression)
+            .collect::<Result<Vec<_>, _>>()?,
+        probe_keys: node
+            .probe_keys()
             .iter()
             .map(contextual_to_expression)
             .collect::<Result<Vec<_>, _>>()?,

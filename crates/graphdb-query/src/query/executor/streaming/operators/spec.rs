@@ -497,7 +497,8 @@ pub enum ApplySpec {
         correlated_columns: Vec<String>,
     },
     PatternApply {
-        key_expressions: Vec<Expression>,
+        hash_keys: Vec<Expression>,
+        probe_keys: Vec<Expression>,
         anti: bool,
     },
     RollUpApply {

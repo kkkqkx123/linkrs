@@ -484,15 +484,19 @@ impl MemoryEstimatable for RollUpApplyNode {
 ///
 /// Receive two inputs from the left and right sides. Determine whether the data on the left side matches the pattern on the right side based on the key columns.
 /// Supports both forward matching (EXISTS) and reverse matching (NOT EXISTS).
+///
+/// The join keys are split per side: `hash_keys` are evaluated against the
+/// left (outer) row layout, `probe_keys` against the right (subquery) row
+/// layout. This mirrors the `SemiJoinNode` key convention so that
+/// decorrelation is a direct passthrough.
 #[derive(Debug, Clone)]
 pub struct PatternApplyNode {
     id: i64,
     left_input: Box<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     right_input: Box<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
     deps: Vec<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
-    left_input_var: Option<String>,
-    right_input_var: Option<String>,
-    key_cols: Vec<crate::core::types::ContextualExpression>,
+    hash_keys: Vec<crate::core::types::ContextualExpression>,
+    probe_keys: Vec<crate::core::types::ContextualExpression>,
     is_anti_predicate: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
@@ -503,7 +507,8 @@ impl PatternApplyNode {
     pub fn new(
         left_input: crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
         right_input: crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
-        key_cols: Vec<crate::core::types::ContextualExpression>,
+        hash_keys: Vec<crate::core::types::ContextualExpression>,
+        probe_keys: Vec<crate::core::types::ContextualExpression>,
         is_anti_predicate: bool,
     ) -> Result<Self, crate::query::planning::planner::PlannerError> {
         let col_names = left_input.col_names().to_vec();
@@ -514,9 +519,8 @@ impl PatternApplyNode {
             left_input: Box::new(left_input),
             right_input: Box::new(right_input),
             deps,
-            left_input_var: None,
-            right_input_var: None,
-            key_cols,
+            hash_keys,
+            probe_keys,
             is_anti_predicate,
             output_var: None,
             col_names,
@@ -536,16 +540,12 @@ impl PatternApplyNode {
         &self.right_input
     }
 
-    pub fn left_input_var(&self) -> Option<&String> {
-        self.left_input_var.as_ref()
+    pub fn hash_keys(&self) -> &[crate::core::types::ContextualExpression] {
+        &self.hash_keys
     }
 
-    pub fn right_input_var(&self) -> Option<&String> {
-        self.right_input_var.as_ref()
-    }
-
-    pub fn key_cols(&self) -> &[crate::core::types::ContextualExpression] {
-        &self.key_cols
+    pub fn probe_keys(&self) -> &[crate::core::types::ContextualExpression] {
+        &self.probe_keys
     }
 
     pub fn is_anti_predicate(&self) -> bool {
@@ -595,14 +595,6 @@ impl PatternApplyNode {
         self.col_names = names;
     }
 
-    pub fn set_left_input_var(&mut self, var: String) {
-        self.left_input_var = Some(var);
-    }
-
-    pub fn set_right_input_var(&mut self, var: String) {
-        self.right_input_var = Some(var);
-    }
-
     pub fn clone_plan_node(
         &self,
     ) -> crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -612,9 +604,8 @@ impl PatternApplyNode {
                 left_input: self.left_input.clone(),
                 right_input: self.right_input.clone(),
                 deps: self.deps.clone(),
-                left_input_var: self.left_input_var.clone(),
-                right_input_var: self.right_input_var.clone(),
-                key_cols: self.key_cols.clone(),
+                hash_keys: self.hash_keys.clone(),
+                probe_keys: self.probe_keys.clone(),
                 is_anti_predicate: self.is_anti_predicate,
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
@@ -724,23 +715,11 @@ impl MemoryEstimatable for PatternApplyNode {
     fn estimate_memory(&self) -> usize {
         let base = std::mem::size_of::<PatternApplyNode>();
 
-        // Estimate left_input_var and right_input_var Option<String>
-        // Uses capacity() to reflect actual heap allocation
-        let input_var_size = std::mem::size_of::<Option<String>>() * 2
-            + self
-                .left_input_var
-                .as_ref()
-                .map(|s| std::mem::size_of::<String>() + s.capacity())
-                .unwrap_or(0)
-            + self
-                .right_input_var
-                .as_ref()
-                .map(|s| std::mem::size_of::<String>() + s.capacity())
-                .unwrap_or(0);
-
-        // Estimate key_cols Vec<ContextualExpression>
-        let key_cols_size = std::mem::size_of::<Vec<crate::core::types::ContextualExpression>>()
-            + self.key_cols.len() * std::mem::size_of::<crate::core::types::ContextualExpression>();
+        // Estimate hash_keys and probe_keys
+        let keys_size =
+            std::mem::size_of::<Vec<crate::core::types::ContextualExpression>>() * 2
+                + (self.hash_keys.len() + self.probe_keys.len())
+                    * std::mem::size_of::<crate::core::types::ContextualExpression>();
 
         // Estimate is_anti_predicate bool
         let is_anti_size = std::mem::size_of::<bool>();
@@ -771,8 +750,7 @@ impl MemoryEstimatable for PatternApplyNode {
             Vec<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
         >();
 
-        base + input_var_size
-            + key_cols_size
+        base + keys_size
             + is_anti_size
             + col_names_size
             + output_var_size

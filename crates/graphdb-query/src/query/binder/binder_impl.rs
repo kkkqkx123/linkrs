@@ -555,22 +555,24 @@ impl Binder {
                     return_type: DataType::String,
                 })
             }
-            Expression::Exists { body: _body } => Err(DBError::from(
-                crate::core::error::QueryError::invalid_query(
-                    "EXISTS subquery binding not yet implemented".to_string(),
-                ),
-            )),
+            Expression::Exists { body } => {
+                let query = self.bind_subquery_body(body)?;
+                Ok(BoundExpression::Exists {
+                    query: Box::new(query),
+                })
+            }
             Expression::In {
                 expr: innerexpr,
-                subquery: _subquery,
-                negated: _negated,
+                subquery,
+                negated,
             } => {
-                let _e = self.bind_inner_expr(innerexpr, None)?;
-                Err(DBError::from(
-                    crate::core::error::QueryError::invalid_query(
-                        "IN subquery binding not yet implemented".to_string(),
-                    ),
-                ))
+                let bound_expr = self.bind_inner_expr(innerexpr, None)?;
+                let query = self.bind_subquery_body(subquery)?;
+                Ok(BoundExpression::In {
+                    expr: Box::new(bound_expr),
+                    subquery: Box::new(query),
+                    negated: *negated,
+                })
             }
         }
     }
@@ -686,6 +688,124 @@ impl Binder {
             skip: stmt.skip,
             optional: stmt.optional,
             delete_clause,
+        }))
+    }
+
+    /// Wrap a raw expression into a contextual expression for binding.
+    fn plain_expression(expr: Expression) -> crate::core::types::ContextualExpression {
+        let ctx = Arc::new(crate::core::types::expr::expression_context::ExpressionAnalysisContext::new());
+        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+        crate::core::types::ContextualExpression::new(id, ctx)
+    }
+
+    /// Bind the body of an EXISTS / IN subquery into a nested MATCH
+    /// statement.
+    ///
+    /// The subquery patterns (stored as re-parseable strings) are parsed
+    /// into pattern ASTs and bound inside a child scope whose parent is the
+    /// enclosing scope, so variables defined by the outer query resolve as
+    /// correlated references.
+    fn bind_subquery_body(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> DBResult<BoundStatement> {
+        let parent = self.scope.clone();
+        let outer_scope = std::mem::replace(&mut self.scope, BinderScope::with_parent(parent));
+        let result = self.bind_subquery_body_inner(body);
+        self.scope = outer_scope;
+        result
+    }
+
+    fn bind_subquery_body_inner(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> DBResult<BoundStatement> {
+        let mut patterns = Vec::with_capacity(body.patterns.len());
+        let mut parser = crate::query::parser::parsing::TraversalParser::new();
+        for pattern_str in &body.patterns {
+            let pattern = parser
+                .parse_pattern(&mut crate::query::parser::ParseContext::new(pattern_str))
+                .map_err(|e| {
+                    DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                        "Invalid subquery pattern `{pattern_str}`: {e}"
+                    )))
+                })?;
+            patterns.push(pattern);
+        }
+
+        let query_graph = self.build_query_graph(&patterns)?;
+
+        // Register subquery MATCH variables in the child scope before
+        // binding the subquery WHERE / RETURN expressions.
+        for node in &query_graph.nodes {
+            self.scope.define_variable(BinderVariable {
+                name: node.variable.clone(),
+                alias_type: AliasType::Node,
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+        for edge in &query_graph.edges {
+            self.scope.define_variable(BinderVariable {
+                name: edge.variable.clone(),
+                alias_type: AliasType::Edge,
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+
+        let where_clause = body
+            .where_clause
+            .as_ref()
+            .map(|cond| -> DBResult<BoundWhereClause> {
+                let bound = self.bind_expr(&Self::plain_expression(cond.as_ref().clone()))?;
+                Ok(BoundWhereClause { condition: bound })
+            })
+            .transpose()?;
+
+        let return_clause = body
+            .return_expr
+            .as_ref()
+            .map(|ret| -> DBResult<BoundReturnClause> {
+                let bound = self.bind_expr(&Self::plain_expression(ret.as_ref().clone()))?;
+                Ok(BoundReturnClause {
+                    items: vec![BoundReturnItem {
+                        expression: bound,
+                        alias: None,
+                    }],
+                    distinct: false,
+                    order_by: None,
+                    limit: None,
+                    skip: None,
+                    sample: None,
+                })
+            })
+            .transpose()?;
+
+        Ok(BoundStatement::Match(BoundMatchStatement {
+            span: crate::core::types::Span::default(),
+            query_graph,
+            where_clause,
+            return_clause,
+            order_by: None,
+            limit: None,
+            skip: None,
+            optional: false,
+            delete_clause: None,
         }))
     }
 
@@ -1449,5 +1569,138 @@ fn local_variable(name: &str) -> crate::query::binder::scope::BinderVariable {
         tags: Vec::new(),
         properties: std::collections::HashMap::new(),
         is_defined: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_qctx() -> Arc<crate::query::QueryContext> {
+        Arc::new(crate::query::QueryContext::new(Arc::new(
+            crate::query::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )))
+    }
+
+    fn bind_query(query: &str) -> DBResult<BoundStatement> {
+        let mut parser = crate::query::parser::Parser::new(query);
+        let result = parser
+            .parse()
+            .map_err(|e| DBError::from(crate::core::error::QueryError::pipeline_parse_error(e)))?;
+        Binder::new()
+            .with_space(None, 0)
+            .bind(result.ast, test_qctx())
+    }
+
+    #[test]
+    fn test_bind_exists_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age > 30 } RETURN t.name",
+        )
+        .expect("EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert!(
+                    sub.where_clause.is_some(),
+                    "subquery WHERE must be bound"
+                );
+                assert_eq!(sub.query_graph.nodes.len(), 1);
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_exists_bare_pattern() {
+        let bound = bind_query("MATCH (t:person) WHERE EXISTS { p:person-[:knows]->q:person } RETURN t.name")
+            .expect("bare-pattern EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert_eq!(sub.query_graph.nodes.len(), 2, "two nodes in pattern");
+                assert_eq!(sub.query_graph.edges.len(), 1, "one edge in pattern");
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_in_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } RETURN t.name",
+        )
+        .expect("IN query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::In {
+                negated,
+                subquery,
+                ..
+            } => {
+                assert!(!negated);
+                assert!(subquery.as_match().is_some());
+            }
+            other => panic!("expected BoundExpression::In, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_correlated_subquery_resolves_outer_variable() {
+        // `t` is defined by the outer MATCH and referenced inside the
+        // subquery WHERE; binding must succeed via the parent scope.
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.name = t.name } RETURN t.name",
+        )
+        .expect("correlated EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert!(stmt.where_clause.is_some());
+    }
+
+    #[test]
+    fn test_bind_nested_exists() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) \
+             WHERE EXISTS { MATCH (q:person) WHERE q.age > p.age } } RETURN t.name",
+        )
+        .expect("nested EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("outer subquery");
+                let sub_where = sub.where_clause.as_ref().expect("inner WHERE");
+                assert!(matches!(sub_where.condition, BoundExpression::Exists { .. }));
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
     }
 }

@@ -302,7 +302,9 @@ impl BatchOptimizer {
             | PushLimitDownScanEdges(_)
             | PushLimitDownIndexScan(_)
             | PushTopNDownIndexScan(_)
-            | ConvertSortLimitToTopN(_) => OptimizationBatch::Normalize,
+            | ConvertSortLimitToTopN(_)
+            // Constant folding (part of normalize)
+            | FoldConstants(_) => OptimizationBatch::Normalize,
 
             // Join optimization (part of normalize/cleanup)
             PushProjectDownJoin(_)

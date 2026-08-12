@@ -1,4 +1,5 @@
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
@@ -12,6 +13,22 @@ use super::statistics::StatisticsContext;
 use super::transaction_context::TransactionContext;
 use crate::core::error::QueryResult;
 use crate::core::types::SpaceSummary;
+use crate::core::Value;
+
+/// A session-variable operation recorded while an explicit transaction is
+/// active. The overlay guarantees that ROLLBACK (and ROLLBACK TO SAVEPOINT)
+/// restores variables to their pre-statement values, matching transaction
+/// semantics. `Set` records both the previous value (for restore) and the
+/// new value (for snapshot merge); `Savepoint` marks a rollback boundary.
+#[derive(Debug, Clone)]
+enum VariableOp {
+    Set {
+        name: String,
+        prev: Option<Value>,
+        value: Value,
+    },
+    Savepoint { name: String },
+}
 
 #[derive(Debug)]
 pub struct ClientSession {
@@ -22,6 +39,12 @@ pub struct ClientSession {
     transaction_context: TransactionContext,
     statistics_context: StatisticsContext,
     idle_start_time: Arc<RwLock<Instant>>,
+    /// Session-scoped user variables (`$name`). Values are resolved as query
+    /// parameters for every statement executed by the session.
+    session_variables: Arc<RwLock<HashMap<String, Value>>>,
+    /// Transaction-scoped variable operations (set / savepoint markers).
+    /// Non-empty only while an explicit transaction is active.
+    variable_ops: Arc<RwLock<Vec<VariableOp>>>,
 }
 
 impl ClientSession {
@@ -34,6 +57,8 @@ impl ClientSession {
             transaction_context: TransactionContext::new(),
             statistics_context: StatisticsContext::new(),
             idle_start_time: Arc::new(RwLock::new(Instant::now())),
+            session_variables: Arc::new(RwLock::new(HashMap::new())),
+            variable_ops: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -217,6 +242,123 @@ impl ClientSession {
     pub fn statistics(&self) -> &crate::core::SessionStatistics {
         self.statistics_context.statistics()
     }
+
+    // ── Session variables (`$name`) ───────────────────────────────────────
+
+    /// Assign a session variable, recording a transaction overlay operation
+    /// when an explicit transaction is active.
+    pub fn set_variable(&self, name: String, value: Value) {
+        if self.has_active_transaction() {
+            let prev = self.variable_value(&name);
+            self.variable_ops.write().push(VariableOp::Set {
+                name,
+                prev,
+                value,
+            });
+        } else {
+            self.session_variables.write().insert(name, value);
+        }
+    }
+
+    /// Effective value of a session variable: transaction overlay first,
+    /// then the base store.
+    pub fn variable_value(&self, name: &str) -> Option<Value> {
+        let ops = self.variable_ops.read();
+        for op in ops.iter().rev() {
+            if let VariableOp::Set { name: op_name, value, .. } = op {
+                if op_name == name {
+                    return Some(value.clone());
+                }
+            }
+        }
+        self.session_variables.read().get(name).cloned()
+    }
+
+    /// Snapshot of all session variables (base + overlay) for injection as
+    /// query parameters.
+    pub fn variables_snapshot(&self) -> HashMap<String, Value> {
+        let mut merged = self.session_variables.read().clone();
+        for op in self.variable_ops.read().iter() {
+            if let VariableOp::Set { name, value, .. } = op {
+                merged.insert(name.clone(), value.clone());
+            }
+        }
+        merged
+    }
+
+    /// COMMIT: apply overlay operations to the base store and clear the
+    /// overlay (the last assignment of each variable wins).
+    pub fn commit_variables(&self) {
+        let mut base = self.session_variables.write();
+        let ops = std::mem::take(&mut *self.variable_ops.write());
+        for op in ops {
+            if let VariableOp::Set { name, value, .. } = op {
+                base.insert(name, value);
+            }
+        }
+    }
+
+    /// Full ROLLBACK: restore pre-transaction values and clear the overlay.
+    pub fn rollback_variables(&self) {
+        self.restore_overlay_after(None);
+    }
+
+    /// ROLLBACK TO SAVEPOINT: restore values assigned after the named
+    /// savepoint and truncate the overlay at the savepoint marker.
+    pub fn rollback_variables_to(&self, savepoint_name: &str) -> bool {
+        self.restore_overlay_after(Some(savepoint_name))
+    }
+
+    /// RELEASE SAVEPOINT: drop the marker (operations stay part of the
+    /// transaction; they are no longer individually rollback-able).
+    pub fn release_variable_savepoint(&self, savepoint_name: &str) {
+        let mut ops = self.variable_ops.write();
+        ops.retain(|op| !matches!(op, VariableOp::Savepoint { name } if name == savepoint_name));
+    }
+
+    /// SAVEPOINT: record a variable-overlay boundary so ROLLBACK TO can
+    /// restore assignments made after the savepoint.
+    pub fn push_variable_savepoint(&self, savepoint_name: &str) {
+        self.variable_ops.write().push(VariableOp::Savepoint {
+            name: savepoint_name.to_string(),
+        });
+    }
+
+    /// Restore variable values for operations at or after `savepoint_name`
+    /// (or the whole overlay when `None`), then truncate those operations.
+    /// Returns whether a matching savepoint marker was found.
+    fn restore_overlay_after(&self, savepoint_name: Option<&str>) -> bool {
+        let mut base = self.session_variables.write();
+        let mut ops = self.variable_ops.write();
+        let removed: Vec<VariableOp> = match savepoint_name {
+            Some(name) => {
+                let mut found = None;
+                for (idx, op) in ops.iter().enumerate() {
+                    if matches!(op, VariableOp::Savepoint { name: n } if n == name) {
+                        found = Some(idx + 1);
+                    }
+                }
+                match found {
+                    Some(idx) => ops.drain(idx..).collect(),
+                    None => return false,
+                }
+            }
+            None => std::mem::take(&mut *ops),
+        };
+        for op in removed.iter().rev() {
+            if let VariableOp::Set { name, prev, .. } = op {
+                match prev {
+                    Some(value) => {
+                        base.insert(name.clone(), value.clone());
+                    }
+                    None => {
+                        base.remove(name);
+                    }
+                }
+            }
+        }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -265,7 +407,6 @@ mod tests {
             client_session.space().expect("space should exist").name,
             "test_space"
         );
-
         client_session.update_space_name("new_space".to_string());
         assert_eq!(
             client_session
@@ -430,5 +571,127 @@ mod tests {
 
         client_session.clear_savepoints();
         assert_eq!(client_session.savepoint_count(), 0);
+    }
+
+    #[test]
+    fn test_session_variables_outside_transaction() {
+        let session = Session {
+            session_id: 123,
+            user_name: "testuser".to_string(),
+            space_name: None,
+            graph_addr: None,
+            timezone: None,
+        };
+
+        let client_session = ClientSession::new(session);
+
+        client_session.set_variable("x".to_string(), Value::Int(1));
+        assert_eq!(
+            client_session.variable_value("x"),
+            Some(Value::Int(1)),
+            "set outside a transaction writes the base store"
+        );
+
+        // Overwrite.
+        client_session.set_variable("x".to_string(), Value::Int(2));
+        assert_eq!(client_session.variable_value("x"), Some(Value::Int(2)));
+
+        let snapshot = client_session.variables_snapshot();
+        assert_eq!(snapshot.get("x"), Some(&Value::Int(2)));
+    }
+
+    #[test]
+    fn test_session_variables_transaction_rollback_restores() {
+        let session = Session {
+            session_id: 123,
+            user_name: "testuser".to_string(),
+            space_name: None,
+            graph_addr: None,
+            timezone: None,
+        };
+
+        let client_session = ClientSession::new(session);
+
+        // Pre-transaction value.
+        client_session.set_variable("x".to_string(), Value::Int(1));
+
+        client_session.bind_transaction(crate::transaction::TransactionId(7));
+        assert!(client_session.has_active_transaction());
+
+        // Assignments inside the transaction go to the overlay.
+        client_session.set_variable("x".to_string(), Value::Int(100));
+        client_session.set_variable("y".to_string(), Value::string("txn"));
+        assert_eq!(client_session.variable_value("x"), Some(Value::Int(100)));
+        assert_eq!(
+            client_session.variable_value("y"),
+            Some(Value::string("txn"))
+        );
+
+        // Full rollback restores pre-transaction values.
+        client_session.rollback_variables();
+        client_session.unbind_transaction();
+        assert_eq!(client_session.variable_value("x"), Some(Value::Int(1)));
+        assert_eq!(client_session.variable_value("y"), None);
+    }
+
+    #[test]
+    fn test_session_variables_transaction_commit_merges() {
+        let session = Session {
+            session_id: 123,
+            user_name: "testuser".to_string(),
+            space_name: None,
+            graph_addr: None,
+            timezone: None,
+        };
+
+        let client_session = ClientSession::new(session);
+
+        client_session.bind_transaction(crate::transaction::TransactionId(8));
+        client_session.set_variable("a".to_string(), Value::Int(5));
+
+        client_session.commit_variables();
+        client_session.unbind_transaction();
+        assert_eq!(client_session.variable_value("a"), Some(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_session_variables_rollback_to_savepoint() {
+        let session = Session {
+            session_id: 123,
+            user_name: "testuser".to_string(),
+            space_name: None,
+            graph_addr: None,
+            timezone: None,
+        };
+
+        let client_session = ClientSession::new(session);
+
+        client_session.bind_transaction(crate::transaction::TransactionId(9));
+
+        client_session.set_variable("a".to_string(), Value::Int(1));
+        client_session.push_variable_savepoint("sp1");
+        client_session.set_variable("a".to_string(), Value::Int(2));
+        client_session.set_variable("b".to_string(), Value::Int(3));
+
+        assert!(
+            client_session.rollback_variables_to("sp1"),
+            "savepoint marker must be found"
+        );
+        assert_eq!(
+            client_session.variable_value("a"),
+            Some(Value::Int(1)),
+            "assignment after the savepoint is restored"
+        );
+        assert_eq!(client_session.variable_value("b"), None);
+
+        // Unknown savepoint: nothing changes.
+        client_session.set_variable("b".to_string(), Value::Int(4));
+        assert!(!client_session.rollback_variables_to("missing"));
+        assert_eq!(client_session.variable_value("b"), Some(Value::Int(4)));
+
+        // Released savepoints are no longer rollback targets.
+        client_session.push_variable_savepoint("sp2");
+        client_session.release_variable_savepoint("sp2");
+        assert!(!client_session.rollback_variables_to("sp2"));
     }
 }

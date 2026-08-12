@@ -27,6 +27,7 @@
 //! ```
 
 use crate::query::optimizer::heuristic::aggregate;
+use crate::query::optimizer::heuristic::constant_folding;
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::decorrelation;
 use crate::query::optimizer::heuristic::elimination;
@@ -133,6 +134,9 @@ define_rewrite_rules! {
         EliminateEmptySetOperation(elimination::EliminateEmptySetOperationRule),
         DedupElimination(elimination::DedupEliminationRule),
         EliminateSort(elimination::EliminateSortRule),
+
+        // ==================== Constant Folding Rule ====================
+        FoldConstants(constant_folding::FoldConstantsRule),
 
         // ==================== Merging Rules ====================
         CombineFilter(merge::CombineFilterRule),
@@ -252,6 +256,9 @@ impl Default for RuleRegistry {
         let mut registry = Self::new();
         registry.add(RewriteRule::EliminateFilter(
             elimination::EliminateFilterRule::new(),
+        ));
+        registry.add(RewriteRule::FoldConstants(
+            constant_folding::FoldConstantsRule::new(),
         ));
         registry.add(RewriteRule::RemoveNoopProject(
             elimination::RemoveNoopProjectRule::new(),
@@ -418,7 +425,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 53);
+        assert_eq!(registry.len(), 54);
     }
 
     #[test]

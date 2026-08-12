@@ -424,6 +424,8 @@ impl<
             return self.handle_savepoint(&session, stmt);
         } else if trimmed_stmt.starts_with("RELEASE SAVEPOINT") {
             return self.handle_release_savepoint(&session, stmt);
+        } else if trimmed_stmt.starts_with("LET ") {
+            return self.handle_let_statement(&session, stmt);
         }
 
         // Perform a regular query using core layer QueryApi
@@ -482,6 +484,7 @@ impl<
             || trimmed_stmt.starts_with("ROLLBACK")
             || trimmed_stmt.starts_with("SAVEPOINT")
             || trimmed_stmt.starts_with("RELEASE SAVEPOINT")
+            || trimmed_stmt.starts_with("LET ")
         {
             return self
                 .execute(session_id, stmt)
@@ -497,7 +500,10 @@ impl<
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
-            parameters: None,
+            parameters: Some(filter_session_parameters(
+                session.variables_snapshot(),
+                stmt,
+            )),
             query_id: Some(query_id as u64),
         };
 
@@ -551,7 +557,6 @@ impl<
             .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
 
         session.charge();
-
         let username = session.user();
 
         // Permission check: The admin has all permissions, so no check is required.
@@ -595,13 +600,18 @@ impl<
             None
         };
 
-        // Use core layer QueryApi to execute query
+        // Use core layer QueryApi to execute query. Session variables are
+        // injected as parameters, filtered to the ones the statement actually
+        // references (the plan validator rejects unknown parameters).
         let query_request = crate::api::core::QueryRequest {
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
-            parameters: None,
+            parameters: Some(filter_session_parameters(
+                session.variables_snapshot(),
+                stmt,
+            )),
             query_id: None,
         };
 
@@ -933,9 +943,7 @@ impl<
         if suffix.starts_with("READ WRITE") {
             return Ok(Some(false));
         }
-        Err(format!(
-            "Invalid BEGIN access mode, expected READ ONLY or READ WRITE"
-        ))
+        Err("Invalid BEGIN access mode, expected READ ONLY or READ WRITE".to_string())
     }
 
     /// Processing the BEGIN TRANSACTION statement
@@ -1032,6 +1040,7 @@ impl<
             Ok(()) => {
                 session.unbind_transaction();
                 session.set_auto_commit(true);
+                session.commit_variables();
                 info!("Session {} committed transaction {}", session.id(), txn_id);
                 Ok(ExecutionResult::Success)
             }
@@ -1051,8 +1060,11 @@ impl<
 
         // Check whether it is a command to perform a ROLLBACK TO SAVEPOINT.
         if trimmed.starts_with("ROLLBACK TO ") {
-            let savepoint_name = trimmed
-                .strip_prefix("ROLLBACK TO ")
+            // Extract the savepoint name from the ORIGINAL statement to
+            // preserve case (the transaction layer matches names verbatim).
+            let original = stmt.trim();
+            let savepoint_name = original
+                .get("ROLLBACK TO ".len()..)
                 .map(|s| s.trim())
                 .ok_or("Invalid ROLLBACK TO syntax")?;
 
@@ -1075,6 +1087,7 @@ impl<
             txn_manager
                 .rollback_to_savepoint(txn_id, savepoint_info.id, storage)
                 .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+            session.rollback_variables_to(savepoint_name);
             info!(
                 "Session {} rolled back transaction {} to savepoint {}",
                 session.id(),
@@ -1097,6 +1110,7 @@ impl<
                 Ok(()) => {
                     session.unbind_transaction();
                     session.set_auto_commit(true);
+                    session.rollback_variables();
                     info!(
                         "Session {} rolled back transaction {}",
                         session.id(),
@@ -1133,6 +1147,8 @@ impl<
         let savepoint_id = txn_manager
             .create_savepoint(txn_id, Some(savepoint_name.to_string()))
             .map_err(|e| format!("Failed to create savepoint: {}", e))?;
+
+        session.push_variable_savepoint(savepoint_name);
 
         info!(
             "Session {} created savepoint {} in transaction {} (ID: {})",
@@ -1184,8 +1200,123 @@ impl<
             txn_id
         );
 
+        session.release_variable_savepoint(savepoint_name);
+
         Ok(ExecutionResult::Success)
     }
+
+    /// Processing the `LET $name = expr` session-variable assignment.
+    ///
+    /// The right-hand side is evaluated through the query engine as
+    /// `RETURN <expr>` (session variables are injected as parameters, so an
+    /// expression may reference earlier assignments). The first value of the
+    /// first row is stored in the session; inside an explicit transaction the
+    /// assignment is recorded on the variable overlay so ROLLBACK /
+    /// ROLLBACK TO SAVEPOINT restore the previous value.
+    fn handle_let_statement(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt: &str,
+    ) -> Result<ExecutionResult, String> {
+        let (name, expr) = Self::parse_let_statement(stmt)?;
+        let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
+        let evaluate_stmt = format!("RETURN ({})", expr);
+        let result = self.execute_query_with_permission(session.id(), &evaluate_stmt, space_id)?;
+        let value = match result {
+            ExecutionResult::DataSet { data, .. } => data
+                .rows
+                .into_iter()
+                .next()
+                .and_then(|row| row.into_iter().next())
+                .ok_or_else(|| format!("LET expression '{}' returned no value", expr))?,
+            _ => {
+                return Err(format!(
+                    "LET expression '{}' could not be evaluated",
+                    expr
+                ));
+            }
+        };
+        session.set_variable(name, value);
+        info!("Session {} set session variable", session.id());
+        Ok(ExecutionResult::Success)
+    }
+
+    /// Parse `LET $name = expr` into the variable name and expression text.
+    ///
+    /// Both `LET $name = expr` and `LET name = expr` are accepted. The name
+    /// must be a valid identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+    fn parse_let_statement(stmt: &str) -> Result<(String, String), String> {
+        let rest = stmt.trim_start();
+        let rest = &rest["LET".len()..];
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('$').unwrap_or(rest);
+        let eq_pos = rest
+            .find('=')
+            .ok_or("LET requires an assignment: LET $name = expr")?;
+        let name = rest[..eq_pos].trim();
+        let expr = rest[eq_pos + 1..].trim();
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            return Err(format!("Invalid session variable name '{}'", name));
+        }
+        if expr.is_empty() {
+            return Err(format!("LET {} requires an expression", name));
+        }
+        Ok((name.to_string(), expr.to_string()))
+    }
+}
+
+/// Collect the `$name` parameter references from a statement by lexing it.
+///
+/// Only a `Dollar` token directly followed by an identifier counts; string
+/// literals and the nGQL refs `$^` / `$$` / `$-` (distinct tokens) are
+/// excluded. Malformed input simply yields the references found so far.
+fn statement_parameter_names(stmt: &str) -> Vec<String> {
+    use graphdb_query::query::parser::core::TokenKind;
+    use graphdb_query::query::parser::lexing::Lexer;
+
+    let mut lexer = Lexer::new(stmt);
+    let mut params = Vec::new();
+    let mut expect_dollar_name = false;
+    loop {
+        let token = lexer.next_token();
+        match token.kind {
+            TokenKind::Eof => break,
+            TokenKind::Dollar => expect_dollar_name = true,
+            TokenKind::Identifier(name) if expect_dollar_name => {
+                if !params.iter().any(|p: &String| p == &name) {
+                    params.push(name);
+                }
+                expect_dollar_name = false;
+            }
+            _ => expect_dollar_name = false,
+        }
+    }
+    params
+}
+
+/// Restrict a session-variable snapshot to the parameters referenced by the
+/// statement, so unrelated session variables do not trip plan validation.
+/// Referenced names that have no session value default to NULL.
+fn filter_session_parameters(
+    variables: std::collections::HashMap<String, crate::core::Value>,
+    stmt: &str,
+) -> std::collections::HashMap<String, crate::core::Value> {
+    let referenced = statement_parameter_names(stmt);
+    let mut filtered = std::collections::HashMap::with_capacity(referenced.len());
+    for name in referenced {
+        let value = variables
+            .get(&name)
+            .cloned()
+            .unwrap_or(crate::core::Value::Null(Default::default()));
+        filtered.insert(name, value);
+    }
+    filtered
 }
 
 impl<S> GraphService<S>
@@ -1376,35 +1507,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::GraphService;
+    use crate::storage::MockStorage;
 
     #[test]
     fn parse_begin_access_mode_variants() {
-        assert_eq!(GraphService::parse_begin_access_mode("BEGIN"), Ok(None));
+        assert_eq!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN"), Ok(None));
         assert_eq!(
-            GraphService::parse_begin_access_mode("BEGIN TRANSACTION"),
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION"),
             Ok(None)
         );
         assert_eq!(
-            GraphService::parse_begin_access_mode("BEGIN READ ONLY"),
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ ONLY"),
             Ok(Some(true))
         );
         assert_eq!(
-            GraphService::parse_begin_access_mode("BEGIN READ WRITE"),
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ WRITE"),
             Ok(Some(false))
         );
         assert_eq!(
-            GraphService::parse_begin_access_mode("BEGIN TRANSACTION READ ONLY"),
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ ONLY"),
             Ok(Some(true))
         );
         assert_eq!(
-            GraphService::parse_begin_access_mode("START TRANSACTION READ WRITE"),
+            GraphService::<MockStorage>::parse_begin_access_mode("START TRANSACTION READ WRITE"),
             Ok(Some(false))
         );
         assert_eq!(
-            GraphService::parse_begin_access_mode("begin read only"),
+            GraphService::<MockStorage>::parse_begin_access_mode("begin read only"),
             Ok(Some(true))
         );
-        assert!(GraphService::parse_begin_access_mode("BEGIN READ").is_err());
-        assert!(GraphService::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err());
+        assert!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ").is_err());
+        assert!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err());
     }
 }

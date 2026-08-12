@@ -683,22 +683,16 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         }
 
         LogicalNodeEnum::PatternApply(n) => {
-            let input =
-                convert_logical_to_physical(*n.input.expect("PatternApplyNode missing input"));
-            let fallback = crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode::new().into_enum();
+            let input = convert_logical_to_physical(n.left_input().clone());
+            let right_input = convert_logical_to_physical(n.right_input().clone());
             let mut node = crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::PatternApplyNode::new(
-                input, fallback, n.key_cols, n.is_anti_predicate,
+                input, right_input, n.hash_keys().to_vec(), n.probe_keys().to_vec(),
+                n.is_anti_predicate,
             ).expect("Failed to construct PatternApplyNode");
-            if let Some(var) = n.left_input_var {
-                node.set_left_input_var(var);
+            if let Some(var) = n.output_var() {
+                node.set_output_var(var.to_string());
             }
-            if let Some(var) = n.right_input_var {
-                node.set_right_input_var(var);
-            }
-            if let Some(var) = n.output_var {
-                node.set_output_var(var);
-            }
-            node.set_col_names(n.col_names);
+            node.set_col_names(n.col_names().to_vec());
             PlanNodeEnum::PatternApply(node)
         }
 

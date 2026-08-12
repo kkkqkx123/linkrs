@@ -287,11 +287,15 @@ impl DmlParser {
     }
 
     fn parse_update_edge(&mut self, ctx: &mut ParseContext) -> Result<UpdateTarget, ParseError> {
+        // `->` is an edge arrow inside this statement, not the JSON access
+        // operator, so expression parsing must not treat `-> 'key'` as a
+        // postfix JSON get.
+        ctx.with_edge_syntax_mode(|ctx| {
         // Check whether it is UPSERT EDGE syntax: src -> dst @rank OF edge_type
         // or UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
         // or UPDATE EDGE Syntax (short): src -> dst [@rank] OF edge_type
         let is_upsert = ctx.is_upsert_mode();
-        let is_literal = ctx.peek_token().kind.is_literal();
+        let is_literal = ctx.current_token().kind.is_literal();
 
         if is_upsert || is_literal {
             // UPSERT EDGE or short UPDATE EDGE Syntax: src -> dst [@rank] OF edge_type
@@ -342,6 +346,7 @@ impl DmlParser {
                 rank,
             })
         }
+        })
     }
 
     /// Parse short edge update syntax: src -> dst [@rank] OF edge_type
@@ -353,6 +358,7 @@ impl DmlParser {
     ) -> Result<UpdateTarget, ParseError> {
         use crate::query::parser::ast::stmt::UpdateTarget;
 
+        ctx.with_edge_syntax_mode(|ctx| {
         // The -> token
         ctx.expect_token(TokenKind::Arrow)?;
 
@@ -376,12 +382,17 @@ impl DmlParser {
             dst,
             rank,
         })
+        })
     }
 
     /// Analysis of the DELETE statement
     pub fn parse_delete_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::{DeleteStmt, DeleteTarget};
 
+        // `->` is an edge arrow inside this statement, not the JSON access
+        // operator, so expression parsing must not treat `-> 'key'` as a
+        // postfix JSON get.
+        ctx.with_edge_syntax_mode(|ctx| {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Delete)?;
 
@@ -400,8 +411,8 @@ impl DmlParser {
             // Two syntaxes:
             // 1) DELETE EDGE <edge_type> <src> -> <dst> [@rank] [, ...]
             // 2) DELETE EDGE <src> -> <dst> [@rank] OF <edge_type> [, ...]
-            // Disambiguate: if the next token is a literal, it's syntax 2 (src -> dst OF edge_type)
-            let is_literal = ctx.peek_token().kind.is_literal();
+            // Disambiguate: if the current token is a literal, it's syntax 2 (src -> dst OF edge_type)
+            let is_literal = ctx.current_token().kind.is_literal();
 
             let (edge_type, edges) = if is_literal {
                 // Syntax 2: <src> -> <dst> [@rank] OF <edge_type>
@@ -518,6 +529,7 @@ impl DmlParser {
             where_clause: None,
             with_edge,
         }))
+        })
     }
 
     /// Analyzing the INSERT statement
@@ -704,6 +716,10 @@ impl DmlParser {
             ctx.next_token();
         }
 
+        // `->` is an edge arrow inside this statement, not the JSON access
+        // operator, so expression parsing must not treat `-> 'key'` as a
+        // postfix JSON get.
+        ctx.with_edge_syntax_mode(|ctx| {
         let mut edges = vec![];
         loop {
             let src = self.parse_expression(ctx)?;
@@ -751,6 +767,7 @@ impl DmlParser {
             },
             if_not_exists,
         }))
+        })
     }
 
     /// Parse the MERGE statement

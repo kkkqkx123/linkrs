@@ -20,5 +20,7 @@ pub mod extended_types;
 pub mod optimizer;
 #[path = "e2e/schema_manager.rs"]
 pub mod schema_manager;
+#[path = "e2e/session_transaction.rs"]
+pub mod session_transaction;
 #[path = "e2e/social_network.rs"]
 pub mod social_network;

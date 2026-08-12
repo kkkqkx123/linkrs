@@ -140,7 +140,7 @@ mod tests {
         });
         let filter = PlanNodeEnum::Filter(FilterNode::new(test_scan(), condition).expect("filter"));
         let pattern_apply = PlanNodeEnum::PatternApply(
-            PatternApplyNode::new(test_scan(), filter, vec![], false)
+            PatternApplyNode::new(test_scan(), filter, vec![], vec![], false)
                 .expect("pattern apply should build"),
         );
 
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn test_keeps_anti_apply_as_anti_join() {
         let pattern_apply = PlanNodeEnum::PatternApply(
-            PatternApplyNode::new(test_scan(), test_scan(), vec![], true)
+            PatternApplyNode::new(test_scan(), test_scan(), vec![], vec![], true)
                 .expect("pattern apply should build"),
         );
 

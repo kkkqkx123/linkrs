@@ -299,11 +299,12 @@ impl PlanNodeFactory {
     pub fn create_pattern_apply(
         left_input: PlanNodeEnum,
         right_input: PlanNodeEnum,
-        key_cols: Vec<crate::core::types::ContextualExpression>,
+        hash_keys: Vec<crate::core::types::ContextualExpression>,
+        probe_keys: Vec<crate::core::types::ContextualExpression>,
         is_anti_predicate: bool,
     ) -> Result<PlanNodeEnum, crate::query::planning::planner::PlannerError> {
         let pattern_apply_node =
-            PatternApplyNode::new(left_input, right_input, key_cols, is_anti_predicate)?;
+            PatternApplyNode::new(left_input, right_input, hash_keys, probe_keys, is_anti_predicate)?;
         Ok(PlanNodeEnum::PatternApply(pattern_apply_node))
     }
 

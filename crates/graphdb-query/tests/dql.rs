@@ -27,6 +27,8 @@ mod lookup;
 mod match_query;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
+#[path = "dql/constant_folding.rs"]
+mod constant_folding;
 #[path = "dql/set_operations.rs"]
 mod set_operations;
 #[path = "dql/subgraph.rs"]

@@ -33,12 +33,7 @@
 //! let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view, &selectivity);
 //! ```
 
-use std::sync::Arc;
-
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::operators::BinaryOperator;
-use crate::core::types::ContextualExpression;
 use crate::core::Expression;
 use crate::query::optimizer::analysis::BatchPlanAnalysis;
 use crate::query::optimizer::cost::SelectivityEstimator;
@@ -409,250 +404,49 @@ impl SubqueryUnnestingOptimizer {
     /// old InnerJoin conversion was unsound for both cases (duplicated left
     /// rows and leaked right columns).
     ///
-    /// The key columns are split per side: the left-side variable is
-    /// substituted into `hash_keys`, the right-side variable into
-    /// `probe_keys` (matching the InnerJoinNode key convention).
+    /// The keys are a direct passthrough: `PatternApplyNode` already carries
+    /// per-side key expressions (`hash_keys` for the left/outer layout,
+    /// `probe_keys` for the right/subquery layout), matching the
+    /// `SemiJoinNode` key convention.
     pub fn build_semi_join_from_pattern_apply(
         pattern_apply: PatternApplyNode,
     ) -> Result<PlanNodeEnum, crate::query::planning::planner::PlannerError> {
-        let key_cols = pattern_apply.key_cols().to_vec();
-
-        let left_var = pattern_apply
-            .left_input_var()
-            .cloned()
-            .unwrap_or_else(|| "left".to_string());
-        let right_var = pattern_apply
-            .right_input_var()
-            .cloned()
-            .unwrap_or_else(|| "right".to_string());
-
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-
-        let mut hash_keys = Vec::new();
-        let mut probe_keys = Vec::new();
-
-        for key_col in &key_cols {
-            if let Some(original_meta) = key_col.expression() {
-                let original_expr = original_meta.inner();
-                let left_key_expr = replace_all_variables(original_expr, &left_var);
-                let left_key_meta = ExpressionMeta::new(left_key_expr);
-                let left_key_id = expr_ctx.register_expression(left_key_meta);
-                let left_key_contextual = ContextualExpression::new(left_key_id, expr_ctx.clone());
-                hash_keys.push(left_key_contextual);
-
-                let right_key_expr = replace_all_variables(original_expr, &right_var);
-                let right_key_meta = ExpressionMeta::new(right_key_expr);
-                let right_key_id = expr_ctx.register_expression(right_key_meta);
-                let right_key_contextual =
-                    ContextualExpression::new(right_key_id, expr_ctx.clone());
-                probe_keys.push(right_key_contextual);
-            }
-        }
-
         let left_input = pattern_apply.left_input().clone();
         let right_input = pattern_apply.right_input().clone();
 
         let join_node = if pattern_apply.is_anti_predicate() {
-            SemiJoinNode::new_anti(left_input, right_input, hash_keys, probe_keys)?
+            SemiJoinNode::new_anti(
+                left_input,
+                right_input,
+                pattern_apply.hash_keys().to_vec(),
+                pattern_apply.probe_keys().to_vec(),
+            )?
         } else {
-            SemiJoinNode::new_semi(left_input, right_input, hash_keys, probe_keys)?
+            SemiJoinNode::new_semi(
+                left_input,
+                right_input,
+                pattern_apply.hash_keys().to_vec(),
+                pattern_apply.probe_keys().to_vec(),
+            )?
         };
 
         Ok(PlanNodeEnum::SemiJoin(join_node))
     }
 }
 
-/// Replace all variable references in the expression with the specified
-/// variables. This function recursively traverses the expression tree and
-/// replaces all Variable nodes with the specified variable name. This is
-/// used to convert the variables in the original expression when
-/// transforming PatternApply to SemiJoin. The placeholders (usually "_")
-/// should be replaced with the variable names provided on the left and on
-/// the right.
-///
-/// # Parameters
-/// `expr`: The expression that needs to be converted.
-/// `new_var`: The name of the new variable
-///
-/// # Returns
-/// The expression with all variables replaced
-fn replace_all_variables(expr: &Expression, new_var: &str) -> Expression {
-    match expr {
-        Expression::Variable(_) => Expression::Variable(new_var.to_string()),
-        Expression::Property { object, property } => Expression::Property {
-            object: Box::new(replace_all_variables(object, new_var)),
-            property: property.clone(),
-        },
-        Expression::Binary { op, left, right } => Expression::Binary {
-            op: *op,
-            left: Box::new(replace_all_variables(left, new_var)),
-            right: Box::new(replace_all_variables(right, new_var)),
-        },
-        Expression::Unary { op, operand } => Expression::Unary {
-            op: *op,
-            operand: Box::new(replace_all_variables(operand, new_var)),
-        },
-        Expression::Function { name, args } => Expression::Function {
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|arg| replace_all_variables(arg, new_var))
-                .collect(),
-        },
-        Expression::Aggregate {
-            func,
-            args,
-            distinct,
-            filter,
-        } => Expression::Aggregate {
-            func: func.clone(),
-            args: args
-                .iter()
-                .map(|a| replace_all_variables(a, new_var))
-                .collect(),
-            distinct: *distinct,
-            filter: filter
-                .as_ref()
-                .map(|f| Box::new(replace_all_variables(f, new_var))),
-        },
-        Expression::List(items) => Expression::List(
-            items
-                .iter()
-                .map(|item| replace_all_variables(item, new_var))
-                .collect(),
-        ),
-        Expression::Map(entries) => Expression::Map(
-            entries
-                .iter()
-                .map(|(k, v): &(String, Expression)| (k.clone(), replace_all_variables(v, new_var)))
-                .collect(),
-        ),
-        Expression::Case {
-            test_expr,
-            conditions,
-            default,
-        } => Expression::Case {
-            test_expr: test_expr
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-            conditions: conditions
-                .iter()
-                .map(|(w, t)| {
-                    (
-                        replace_all_variables(w, new_var),
-                        replace_all_variables(t, new_var),
-                    )
-                })
-                .collect(),
-            default: default
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-        },
-        Expression::TypeCast {
-            expression,
-            target_type,
-        } => Expression::TypeCast {
-            expression: Box::new(replace_all_variables(expression, new_var)),
-            target_type: target_type.clone(),
-        },
-        Expression::Subscript { collection, index } => Expression::Subscript {
-            collection: Box::new(replace_all_variables(collection, new_var)),
-            index: Box::new(replace_all_variables(index, new_var)),
-        },
-        Expression::Range {
-            collection,
-            start,
-            end,
-        } => Expression::Range {
-            collection: Box::new(replace_all_variables(collection, new_var)),
-            start: start
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-            end: end
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-        },
-        Expression::Path(exprs) => Expression::Path(
-            exprs
-                .iter()
-                .map(|e| replace_all_variables(e, new_var))
-                .collect(),
-        ),
-        Expression::Label(_) => expr.clone(),
-        Expression::ListComprehension {
-            variable,
-            source,
-            filter,
-            map,
-        } => Expression::ListComprehension {
-            variable: variable.clone(),
-            source: Box::new(replace_all_variables(source, new_var)),
-            filter: filter
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-            map: map
-                .as_ref()
-                .map(|e| Box::new(replace_all_variables(e, new_var))),
-        },
-        Expression::LabelTagProperty { tag, property } => Expression::LabelTagProperty {
-            tag: Box::new(replace_all_variables(tag, new_var)),
-            property: property.clone(),
-        },
-        Expression::TagProperty { tag_name, property } => Expression::TagProperty {
-            tag_name: tag_name.clone(),
-            property: property.clone(),
-        },
-        Expression::EdgeProperty {
-            edge_name,
-            property,
-        } => Expression::EdgeProperty {
-            edge_name: edge_name.clone(),
-            property: property.clone(),
-        },
-        Expression::Predicate { func, args } => Expression::Predicate {
-            func: func.clone(),
-            args: args
-                .iter()
-                .map(|arg| replace_all_variables(arg, new_var))
-                .collect(),
-        },
-        Expression::Reduce {
-            accumulator,
-            initial,
-            variable,
-            source,
-            mapping,
-        } => Expression::Reduce {
-            accumulator: accumulator.clone(),
-            initial: Box::new(replace_all_variables(initial, new_var)),
-            variable: variable.clone(),
-            source: Box::new(replace_all_variables(source, new_var)),
-            mapping: Box::new(replace_all_variables(mapping, new_var)),
-        },
-        Expression::PathBuild(exprs) => Expression::PathBuild(
-            exprs
-                .iter()
-                .map(|e| replace_all_variables(e, new_var))
-                .collect(),
-        ),
-        Expression::Parameter(_) => expr.clone(),
-        Expression::Literal(_) => expr.clone(),
-        Expression::Vector(_) => expr.clone(),
-        Expression::Exists { .. } => expr.clone(),
-        Expression::In { .. } => expr.clone(),
-        Expression::WindowFunction { .. } => expr.clone(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::ExpressionMeta;
+    use crate::core::types::ContextualExpression;
     use crate::query::optimizer::analysis::BatchPlanAnalyzer;
     use crate::query::optimizer::stats::StatisticsManager;
     use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
     use crate::query::planning::plan::core::nodes::PlanNodeEnum;
+    use std::sync::Arc;
 
     fn test_scan() -> PlanNodeEnum {
         let mut scan = ScanVerticesNode::new(1, "test");
@@ -748,7 +542,7 @@ mod tests {
         };
         let filter = PlanNodeEnum::Filter(FilterNode::new(scan, condition).expect("filter"));
 
-        let pattern_apply = PatternApplyNode::new(test_scan(), filter, vec![], false)
+        let pattern_apply = PatternApplyNode::new(test_scan(), filter, vec![], vec![], false)
             .expect("pattern apply should build");
 
         let analysis =
@@ -773,27 +567,52 @@ mod tests {
     #[test]
     fn test_unnest_produces_semi_join_with_split_keys() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let key_expr = Expression::Property {
-            object: Box::new(Expression::Variable("_".to_string())),
+        let hash_key_expr = Expression::Property {
+            object: Box::new(Expression::Variable("t".to_string())),
             property: "city".to_string(),
         };
-        let key_id = ctx.register_expression(ExpressionMeta::new(key_expr));
-        let key_col = ContextualExpression::new(key_id, ctx);
+        let probe_key_expr = Expression::Property {
+            object: Box::new(Expression::Variable("p".to_string())),
+            property: "city".to_string(),
+        };
+        let hash_key_id = ctx.register_expression(ExpressionMeta::new(hash_key_expr));
+        let hash_key = ContextualExpression::new(hash_key_id, ctx.clone());
+        let probe_key_id = ctx.register_expression(ExpressionMeta::new(probe_key_expr));
+        let probe_key = ContextualExpression::new(probe_key_id, ctx);
 
-        let pattern_apply = PatternApplyNode::new(test_scan(), test_scan(), vec![key_col], false)
-            .expect("pattern apply should build");
-        let mut apply = pattern_apply.clone();
-        apply.set_left_input_var("l".to_string());
-        apply.set_right_input_var("r".to_string());
+        let pattern_apply = PatternApplyNode::new(
+            test_scan(),
+            test_scan(),
+            vec![hash_key],
+            vec![probe_key],
+            false,
+        )
+        .expect("pattern apply should build");
 
         let transformed = SubqueryUnnestingOptimizer::new()
-            .unnest(apply)
+            .unnest(pattern_apply)
             .expect("unnest should succeed");
         match &transformed {
             PlanNodeEnum::SemiJoin(join) => {
                 assert!(!join.is_anti());
                 assert_eq!(join.hash_keys().len(), 1);
                 assert_eq!(join.probe_keys().len(), 1);
+                let hash_meta = join.hash_keys()[0].expression().expect("hash key meta");
+                let probe_meta = join.probe_keys()[0].expression().expect("probe key meta");
+                assert_eq!(
+                    hash_meta.inner(),
+                    &Expression::Property {
+                        object: Box::new(Expression::Variable("t".to_string())),
+                        property: "city".to_string(),
+                    }
+                );
+                assert_eq!(
+                    probe_meta.inner(),
+                    &Expression::Property {
+                        object: Box::new(Expression::Variable("p".to_string())),
+                        property: "city".to_string(),
+                    }
+                );
             }
             _ => panic!("expected SemiJoin, got {:?}", transformed.name()),
         }
@@ -801,8 +620,9 @@ mod tests {
 
     #[test]
     fn test_unnest_anti_produces_anti_join() {
-        let pattern_apply = PatternApplyNode::new(test_scan(), test_scan(), vec![], true)
-            .expect("pattern apply should build");
+        let pattern_apply =
+            PatternApplyNode::new(test_scan(), test_scan(), vec![], vec![], true)
+                .expect("pattern apply should build");
 
         let transformed = SubqueryUnnestingOptimizer::new()
             .unnest(pattern_apply)

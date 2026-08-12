@@ -241,11 +241,89 @@ impl TestDb {
                     "A transaction is already active".to_string(),
                 ));
             }
+            let mut options = TransactionOptions::default();
+            if let Some(access_mode) = parse_begin_access_mode(query)? {
+                if access_mode {
+                    options = options.read_only();
+                }
+            }
             let txn_id = self
                 .transaction_manager
-                .begin_transaction(TransactionOptions::default())
+                .begin_transaction(options)
                 .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             self.current_transaction = Some(txn_id);
+            return Ok(empty_query_result());
+        }
+        if trimmed.starts_with("SAVEPOINT") {
+            let name = query["SAVEPOINT".len()..].trim().to_string();
+            if name.is_empty() {
+                return Err(graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "Savepoint name cannot be empty".to_string(),
+                ));
+            }
+            let txn_id = self.current_transaction.ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "No active transaction, cannot create savepoint".to_string(),
+                )
+            })?;
+            self.transaction_manager
+                .create_savepoint(txn_id, Some(name))
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            return Ok(empty_query_result());
+        }
+        if trimmed.starts_with("RELEASE SAVEPOINT") {
+            let name = query["RELEASE SAVEPOINT".len()..].trim().to_string();
+            if name.is_empty() {
+                return Err(graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "Savepoint name cannot be empty".to_string(),
+                ));
+            }
+            let txn_id = self.current_transaction.ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "No active transaction, cannot release savepoint".to_string(),
+                )
+            })?;
+            let context = self
+                .transaction_manager
+                .get_context(txn_id)
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(format!(
+                    "Savepoint '{}' does not exist",
+                    name
+                ))
+            })?;
+            self.transaction_manager
+                .release_savepoint(txn_id, savepoint.id)
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            return Ok(empty_query_result());
+        }
+        if trimmed.starts_with("ROLLBACK TO") {
+            let name = query["ROLLBACK TO".len()..].trim().to_string();
+            if name.is_empty() {
+                return Err(graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "Savepoint name cannot be empty".to_string(),
+                ));
+            }
+            let txn_id = self.current_transaction.ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(
+                    "No active transaction, cannot rollback to savepoint".to_string(),
+                )
+            })?;
+            let context = self
+                .transaction_manager
+                .get_context(txn_id)
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
+            let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
+                graphdb::api::core::CoreError::QueryExecutionFailed(format!(
+                    "Savepoint '{}' does not exist",
+                    name
+                ))
+            })?;
+            let storage = self.storage.read();
+            self.transaction_manager
+                .rollback_to_savepoint(txn_id, savepoint.id, &*storage)
+                .map_err(|e| graphdb::api::core::CoreError::QueryExecutionFailed(e.to_string()))?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("COMMIT") {
@@ -335,6 +413,21 @@ impl TestDb {
         self.query_api.execute_stream(query, ctx)
     }
 
+    /// Execute a statement as an independent auto-commit session, ignoring
+    /// any session transaction tracked by this handle (simulates a second
+    /// client). Transaction control statements are NOT handled here.
+    pub fn execute_external(&mut self, query: &str) -> CoreResult<QueryResult> {
+        let ctx = graphdb::api::core::types::QueryRequest {
+            space_id: self.current_space_id,
+            space_name: self.current_space_name.clone(),
+            auto_commit: true,
+            transaction_id: None,
+            parameters: None,
+            query_id: None,
+        };
+        self.query_api.execute(query, ctx)
+    }
+
     /// Execute a batch of auto-commit statements in one storage window (P6).
     ///
     /// Statements must be plain auto-commit statements (no BEGIN/COMMIT/ROLLBACK
@@ -401,6 +494,31 @@ impl TestDb {
             }
         }
     }
+}
+
+/// Parse the transaction access mode from a `BEGIN [TRANSACTION] [READ
+/// ONLY | READ WRITE]` statement.
+///
+/// Returns `Ok(Some(true))` for READ ONLY, `Ok(Some(false))` for READ
+/// WRITE and `Ok(None)` when no access mode is specified. Malformed
+/// suffixes (e.g. `BEGIN READ`) are rejected.
+fn parse_begin_access_mode(stmt: &str) -> CoreResult<Option<bool>> {
+    let upper = stmt.trim().to_uppercase();
+    let (_, suffix) = if let Some(pos) = upper.find("READ") {
+        (&upper[..pos], &upper[pos..])
+    } else {
+        return Ok(None);
+    };
+    let suffix = suffix.trim_start();
+    if suffix.starts_with("READ ONLY") {
+        return Ok(Some(true));
+    }
+    if suffix.starts_with("READ WRITE") {
+        return Ok(Some(false));
+    }
+    Err(graphdb::api::core::CoreError::QueryExecutionFailed(
+        "Invalid BEGIN access mode, expected READ ONLY or READ WRITE".to_string(),
+    ))
 }
 
 fn empty_query_result() -> QueryResult {
