@@ -2939,6 +2939,93 @@ mod tests {
             .expect("vertex exists");
         assert_eq!(full_again.properties.len(), 2);
     }
+
+    #[test]
+    fn test_get_edge_projected() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        let edge_type = crate::core::types::EdgeTypeInfo::new("KNOWS".to_string())
+            .with_src_tag("Person".to_string())
+            .with_dst_tag("Person".to_string())
+            .with_properties(vec![
+                PropertyDef::new("since".to_string(), DataType::Int),
+                PropertyDef::new("weight".to_string(), DataType::Int),
+            ]);
+        storage.create_edge_type("test_space", &edge_type).unwrap();
+
+        let src = VertexId::from_int64(1);
+        let dst = VertexId::from_int64(2);
+        storage
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    src,
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        vec![("name".to_string(), Value::string("Alice"))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .unwrap();
+        storage
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    dst,
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        vec![("name".to_string(), Value::string("Bob"))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .unwrap();
+        storage
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    src,
+                    dst,
+                    "KNOWS".to_string(),
+                    0,
+                    vec![
+                        ("since".to_string(), Value::BigInt(2020)),
+                        ("weight".to_string(), Value::BigInt(7)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            )
+            .unwrap();
+
+        let full = storage
+            .get_edge("test_space", &src, &dst, "KNOWS", 0)
+            .unwrap()
+            .expect("edge exists");
+        assert_eq!(full.properties().len(), 2);
+
+        let projected = storage
+            .get_edge_projected("test_space", &src, &dst, "KNOWS", 0, &["weight".to_string()])
+            .unwrap()
+            .expect("edge exists");
+        assert_eq!(projected.properties().len(), 1);
+        assert_eq!(
+            projected.properties().get("weight"),
+            Some(&Value::BigInt(7))
+        );
+        assert!(!projected.properties().contains_key("since"));
+
+        // Full read must not be poisoned by the projected read.
+        let full_again = storage
+            .get_edge("test_space", &src, &dst, "KNOWS", 0)
+            .unwrap()
+            .expect("edge exists");
+        assert_eq!(full_again.properties().len(), 2);
+    }
     #[test]
     fn cold_snapshot_delta_time_machine_merge_flow() {
         use crate::storage::client::StorageSnapshotOps;

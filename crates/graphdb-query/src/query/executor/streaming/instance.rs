@@ -359,11 +359,29 @@ impl QueryExecutionInstance {
         feedback.actual_time_us = profile.total_time_us;
 
         for (key, op_profile) in &profile.operators {
+            let op_time_us =
+                op_profile.open_time_us + op_profile.next_time_us + op_profile.close_time_us;
+            // Track Apply vs SemiJoin rows and time so the decision feedback
+            // loop can compare the measured cost of the nested-loop / hash
+            // paths of subquery decorrelation.
+            match op_profile.name.as_str() {
+                "PatternApply" => {
+                    feedback.apply_rows += op_profile.output_rows;
+                    feedback.apply_time_us += op_time_us;
+                }
+                "SemiJoin" => {
+                    feedback.join_rows += op_profile.output_rows;
+                    feedback.join_time_us += op_time_us;
+                }
+                _ => {}
+            }
             if let Some(operator) = self.plan.operator(key.physical_operator_id) {
                 if let Some(estimated) = operator.estimated_cardinality {
                     // For filter operators, attach the normalized predicate
                     // key so the feedback loop (phase 2) can correct the
-                    // selectivity of the specific condition.
+                    // selectivity of the specific condition; all other
+                    // cardinality-estimated operators carry a shape key so
+                    // the loop can correct their row counts.
                     let condition_key = match &operator.spec {
                         super::plan::types::OperatorKindSpec::Unary(
                             super::operators::spec::UnarySpec::Filter { predicate },
@@ -373,17 +391,22 @@ impl QueryExecutionInstance {
                         )),
                         _ => None,
                     };
+                    let shape_key = if condition_key.is_some() {
+                        None
+                    } else {
+                        crate::query::executor::streaming::operators::spec::
+                            operator_cardinality_shape_key(feedback.space.as_deref(), &operator.spec)
+                    };
                     feedback.add_operator_feedback(OperatorFeedback {
                         operator_id: key.physical_operator_id.0.to_string(),
                         operator_type: op_profile.name.clone(),
                         estimated_rows: estimated as u64,
                         actual_rows: op_profile.output_rows,
                         estimated_time_us: 0,
-                        actual_time_us: op_profile.open_time_us
-                            + op_profile.next_time_us
-                            + op_profile.close_time_us,
-                        execution_loops: 1,
+                        actual_time_us: op_time_us,
+                        execution_loops: op_profile.advance_count.max(1),
                         condition_key,
+                        shape_key,
                     });
                 }
             }

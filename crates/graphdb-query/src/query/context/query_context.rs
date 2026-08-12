@@ -296,7 +296,7 @@ mod tests {
         let rctx = Arc::new(QueryRequestContext::new("MATCH (n) RETURN n".to_string()));
         let ctx = QueryContext::new(rctx);
 
-        let mut runtime = ExecutionRuntime::default_budget();
+        let runtime = ExecutionRuntime::default_budget();
         runtime.set_cancel_token(ctx.cancel_token());
         assert!(!runtime.is_cancelled());
 

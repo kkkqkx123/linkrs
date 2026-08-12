@@ -143,6 +143,7 @@ pub(super) fn build_source_spec(
             src: Some(get_node.src().to_string()),
             dst: Some(get_node.dst().to_string()),
             rank: 0,
+            projected_properties: get_node.projected_properties().to_vec(),
         }),
         PlanNodeEnum::GetNeighbors(get_node) => Ok(SourceSpec::GetNeighbors {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
@@ -380,6 +381,45 @@ pub(super) fn build_filter_spec(
     let condition = node.condition();
     let predicate = contextual_to_expression(condition)?;
     Ok(UnarySpec::Filter { predicate })
+}
+
+/// Build the storage-backed `AppendVertices` unary spec from the plan node.
+///
+/// The vertex to fetch is resolved per input row: the node's
+/// `src_expression` takes precedence, falling back to `input_var` as a
+/// row-column reference.  The appended columns are the flat
+/// `{entity_var}.{prop}` names (or a single `{entity_var}` full-vertex
+/// column when no properties are demanded).
+pub(super) fn build_append_vertices_spec(
+    node: &crate::query::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode,
+    exec_ctx: &ExecutionContext,
+) -> Result<UnarySpec, PlanBuildError> {
+    let entity_expr = if let Some(src) = node.src_expression() {
+        contextual_to_expression(src)?
+    } else if let Some(input_var) = node.input_var() {
+        Expression::Variable(input_var.to_string())
+    } else {
+        return Err(PlanBuildError::capability(
+            "append_vertices_entity",
+            "AppendVertices requires an entity expression (src_expression or input_var)",
+        ));
+    };
+    let entity_var = node
+        .node_alias()
+        .map(|s| s.to_string())
+        .or_else(|| node.col_names().first().cloned())
+        .unwrap_or_else(|| node.vertex_tag().to_string());
+    let prop_names: Vec<String> = node
+        .vertex_props()
+        .iter()
+        .flat_map(|tp| tp.props.iter().cloned())
+        .collect();
+    Ok(UnarySpec::AppendVertices {
+        space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        entity_var,
+        entity_expr,
+        prop_names,
+    })
 }
 
 /// Name of the single column a count-only expand emits (the per-chunk edge

@@ -112,3 +112,39 @@ pub struct AntiJoinNode { ... }   // 新增
   `KeepPatternApply`）
 - **回退**：`OptimizerEngine` 增加开关 `enable_subquery_unnesting`（默认 true），
   关闭即回到纯 Apply 执行
+
+## 7. 实施状态（2026-08-12）
+
+阶段二落地情况：
+
+- 已完成：硬编码行数估计替换、`is_simple_subquery_shape` 扩展、SemiJoin/AntiJoin
+  节点与算子、启发式 Decorrelation 批次挂载（`heuristic/decorrelation.rs` 的
+  `UnnestSimplePatternApplyRule`）、EXPLAIN CBO notes、`QueryExecutionFeedback`
+  记录 Apply vs SemiJoin 实际行数（`apply_rows` / `join_rows`）
+- 2026-08-12 补充（反馈闭环三层全部落地）：
+  - **行数级基数反馈**：
+    - `FeedbackDrivenFactor`（`stats/feedback/factor.rs`）：泛化 EWMA 修正因子
+      （estimated × factor，clamp 上下限）
+    - `CardinalityFeedbackManager`（`stats/feedback/cardinality.rs`）：按规范化
+      算子形状键 `{space}:{Type}:{discriminator}` 修正输出行数
+    - 物理侧形状键 `operator_cardinality_shape_key`（spec.rs）与计划侧
+      `cardinality_shape_key`（row_estimates.rs）格式一致
+    - `OperatorFeedback.shape_key` 采集；`maybe_apply_feedback` 对所有带
+      shape_key 的算子折叠 estimated/actual ratio（Filter 仍走 condition_key）
+    - `estimate_node_output_rows_corrected`（row_estimates.rs）为 CBO 决策提供
+      修正行数；传递型节点（Project/Limit/Filter）不重复计权，避免复合过修正；
+      写回计划的行数保持原始值（反馈度量残差一致）
+    - 消费方：`should_unnest`（左右输入）、`topn_wiring`；`invalidate_space_feedback`
+      同时清空基数修正
+  - **度量补全**：`execution_loops` 实报（ProfileEntry 新增 `advance_count`，
+    每 chunk 产出 +1，替代硬编码 1）
+  - **决策级实证闭环**：
+    - `DecisionFeedbackStore` + `DecorrelationAdvice`（`stats/feedback/decision.rs`）：
+      按空间记录 Apply / SemiJoin 实测行数与耗时
+    - `maybe_apply_feedback` 折叠 apply_rows/join_rows + 实测耗时
+    - `should_unnest` 决策顺序：① 实证偏好（confidence ≥ 0.7，`UnnestReason::Empirical`
+      / `KeepReason::EmpiricalKeep`）→ ② 修正基数上的成本对比；成本模型固定系数
+      0.1 替换为实测 `apply_cost_per_row`（us/row）
+- 遗留：EXISTS/IN/NOT IN 表达式级转换依赖 binder 产生 PatternApply 的路径，
+  未单独验证；`AggregateStrategy` 的输入行数仍用未修正的 logical 估计
+  （`estimate_node_output_rows_logical`），留待接入

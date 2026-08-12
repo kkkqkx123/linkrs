@@ -46,6 +46,8 @@ use crate::query::optimizer::heuristic::batch::{
 };
 use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
+use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
+use crate::query::optimizer::stats::feedback::decision::DecisionFeedbackStore;
 use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
 use crate::query::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
 use crate::query::optimizer::stats::feedback::trigger::AutoFeedbackTrigger;
@@ -104,6 +106,18 @@ pub struct OptimizerEngine {
     /// `SelectivityEstimator` consults these corrections before falling back
     /// to histogram / heuristic estimates.
     selectivity_feedback: Arc<SelectivityFeedbackManager>,
+    /// Shared cardinality correction manager (stats feedback loop, phase 3).
+    ///
+    /// `maybe_apply_feedback` folds the estimated-vs-actual ratios of every
+    /// shape-keyed operator (scans, traversals, joins, applies) into
+    /// per-shape EWMA factors; `estimate_node_output_rows` consults these
+    /// factors so all cost-based decisions consume corrected row counts.
+    cardinality_feedback: Arc<CardinalityFeedbackManager>,
+    /// Shared decision-level feedback store (Apply vs Join, phase 3).
+    ///
+    /// Records which decorrelation path actually executed and its measured
+    /// rows / time; the CBO unnesting decision consults the empirical advice.
+    decision_feedback: Arc<DecisionFeedbackStore>,
     /// Trigger for when the feedback history should be folded into
     /// `selectivity_feedback` (cooldown + error threshold).
     feedback_trigger: AutoFeedbackTrigger,
@@ -169,6 +183,8 @@ impl OptimizerEngine {
             stats_manager.clone(),
             selectivity_feedback.clone(),
         ));
+        let cardinality_feedback = Arc::new(CardinalityFeedbackManager::new());
+        let decision_feedback = Arc::new(DecisionFeedbackStore::new());
 
         // Create batch plan analyzer (unified analysis)
         let batch_plan_analyzer = BatchPlanAnalyzer::new();
@@ -195,6 +211,8 @@ impl OptimizerEngine {
             max_heuristic_iterations: 100,
             feedback_history: Arc::new(QueryFeedbackHistory::default()),
             selectivity_feedback,
+            cardinality_feedback,
+            decision_feedback,
             feedback_trigger: AutoFeedbackTrigger::default(),
             enable_feedback: true,
             columnar_policy: Arc::new(
@@ -252,6 +270,16 @@ impl OptimizerEngine {
         &self.selectivity_feedback
     }
 
+    /// Obtain the shared cardinality correction manager (feedback loop, phase 3).
+    pub fn cardinality_feedback(&self) -> &Arc<CardinalityFeedbackManager> {
+        &self.cardinality_feedback
+    }
+
+    /// Obtain the shared decision feedback store (feedback loop, phase 3).
+    pub fn decision_feedback(&self) -> &Arc<DecisionFeedbackStore> {
+        &self.decision_feedback
+    }
+
     /// Enable / disable the feedback-driven selectivity correction loop.
     pub fn set_enable_feedback(&mut self, enable: bool) {
         self.enable_feedback = enable;
@@ -278,9 +306,12 @@ impl OptimizerEngine {
     ///
     /// Iterates every fingerprint with feedback history; when the average
     /// row-estimation error passes the trigger threshold, the per-operator
-    /// estimated-vs-actual ratios of filter operators are smoothed into the
-    /// shared [`SelectivityFeedbackManager`] under their normalized
-    /// condition keys (phase 2 of the statistics feedback loop).
+    /// estimated-vs-actual ratios are smoothed into the shared
+    /// [`SelectivityFeedbackManager`] (per normalized predicate key) and the
+    /// shared [`CardinalityFeedbackManager`] (per normalized operator shape
+    /// key).  Apply / SemiJoin executions are additionally folded into the
+    /// [`DecisionFeedbackStore`] so the unnesting decision can use measured
+    /// evidence.
     ///
     /// This is called at the start of [`OptimizeEngine::optimize`] and is
     /// gated by `enable_feedback`, so the hot path only pays for the RwLock
@@ -291,6 +322,7 @@ impl OptimizerEngine {
         }
         let history = self.feedback_history();
         let mut applied = 0usize;
+        let mut decision_runs = 0usize;
         for fingerprint in history.get_all_fingerprints() {
             let Some(avg_error) = history.get_avg_row_error(&fingerprint) else {
                 continue;
@@ -299,11 +331,27 @@ impl OptimizerEngine {
                 continue;
             }
             for feedback in history.get_feedback_for_query(&fingerprint) {
+                let space = feedback.space.as_deref().unwrap_or("");
+                if feedback.apply_rows > 0 {
+                    self.decision_feedback
+                        .record_apply_run(space, feedback.apply_rows, feedback.apply_time_us);
+                    decision_runs += 1;
+                }
+                if feedback.join_rows > 0 {
+                    self.decision_feedback
+                        .record_join_run(space, feedback.join_rows, feedback.join_time_us);
+                    decision_runs += 1;
+                }
                 for op in &feedback.operator_feedbacks {
                     if let Some(key) = &op.condition_key {
                         // Correction factor = actual_rows / estimated_rows.
                         let ratio = op.actual_rows as f64 / op.estimated_rows.max(1) as f64;
                         if self.selectivity_feedback.update_feedback_ratio(key, ratio) {
+                            applied += 1;
+                        }
+                    } else if let Some(key) = &op.shape_key {
+                        let ratio = op.actual_rows as f64 / op.estimated_rows.max(1) as f64;
+                        if self.cardinality_feedback.update_feedback_ratio(key, ratio) {
                             applied += 1;
                         }
                     }
@@ -313,8 +361,15 @@ impl OptimizerEngine {
         }
         if applied > 0 {
             log::debug!(
-                "Feedback loop: applied {} selectivity corrections from {} fingerprints",
+                "Feedback loop: applied {} selectivity/cardinality corrections from {} fingerprints",
                 applied,
+                history.query_count()
+            );
+        }
+        if decision_runs > 0 {
+            log::debug!(
+                "Feedback loop: folded {} Apply/Join decision runs from {} fingerprints",
+                decision_runs,
                 history.query_count()
             );
         }
@@ -327,20 +382,28 @@ impl OptimizerEngine {
     /// schema or data change.
     pub fn invalidate_space_feedback(&self, space: Option<&str>) {
         let removed = match space {
-            Some(space) => self
-                .selectivity_feedback
-                .remove_feedback_by_space(&format!("{}:", space)),
+            Some(space) => {
+                let removed = self
+                    .selectivity_feedback
+                    .remove_feedback_by_space(&format!("{}:", space));
+                removed + self.cardinality_feedback.remove_feedback_by_space(&format!("{}:", space))
+            }
             None => {
                 let keys = self.selectivity_feedback.get_all_keys();
                 for key in &keys {
                     self.selectivity_feedback.remove_feedback(key);
                 }
-                keys.len()
+                let cardinality_keys = self.cardinality_feedback.get_all_keys();
+                for key in &cardinality_keys {
+                    self.cardinality_feedback.remove_feedback(key);
+                }
+                keys.len() + cardinality_keys.len()
             }
         };
+        self.decision_feedback.invalidate_space(space);
         if removed > 0 {
             log::info!(
-                "Invalidated {} selectivity feedback corrections for space {:?}",
+                "Invalidated {} feedback corrections for space {:?}",
                 removed,
                 space
             );
@@ -783,6 +846,7 @@ impl OptimizerEngine {
                     &optimizer,
                     stats,
                     &self.selectivity_estimator,
+                    &self.cardinality_feedback,
                     &mut notes,
                 );
             plan.set_root(rewritten);
@@ -869,12 +933,20 @@ impl OptimizerEngine {
         // Try PatternApply unnesting at this level first.
         if let PatternApply(apply) = node {
             let analysis = self.batch_plan_analyzer.analyze(node);
+            let advice = self.decision_feedback.advice(stats.space().unwrap_or(""));
             if let UnnestDecision::ShouldUnnest { ref reason, .. } = self
                 .subquery_unnesting_optimizer
-                .should_unnest(apply, &analysis, stats)
+                .should_unnest(
+                    apply,
+                    &analysis,
+                    stats,
+                    &self.selectivity_estimator,
+                    &self.cardinality_feedback,
+                    &advice,
+                )
             {
-                log::debug!("CBO: unnesting PatternApply -> InnerJoin ({:?})", reason);
-                notes.push(format!("unnest pattern_apply -> hash_join ({:?})", reason));
+                log::debug!("CBO: unnesting PatternApply -> SemiJoin ({:?})", reason);
+                notes.push(format!("unnest pattern_apply -> semi_join ({:?})", reason));
                 if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
                     return self.unnest_subqueries(&join, stats, notes);
                 }
@@ -1027,6 +1099,7 @@ mod tests {
                 actual_time_us: 0,
                 execution_loops: 1,
                 condition_key: Some(key.clone()),
+                shape_key: None,
             });
             engine.feedback_history.add_feedback(feedback);
         }
@@ -1073,6 +1146,7 @@ mod tests {
             actual_time_us: 0,
             execution_loops: 1,
             condition_key: Some("space:v.age > 30".to_string()),
+            shape_key: None,
         });
         engine.feedback_history.add_feedback(feedback);
 
@@ -1085,6 +1159,65 @@ mod tests {
         // Nothing was applied because the switch is off; enabling it and
         // triggering with a registered key would apply corrections.
         assert!(!engine.feedback_enabled());
+    }
+
+    #[test]
+    fn test_feedback_loop_corrects_cardinality_shape_keys() {
+        use crate::query::optimizer::stats::feedback::query::{
+            OperatorFeedback, QueryExecutionFeedback,
+        };
+
+        let engine = OptimizerEngine::default();
+
+        // Register the shape through the estimate path (as optimization does).
+        let key = "test_space:ScanVertices:person".to_string();
+        engine.cardinality_feedback.register_key(key.clone(), 100.0);
+
+        // Simulate history: the scan estimated 100 rows, actually produced 300.
+        for _ in 0..10 {
+            let mut feedback = QueryExecutionFeedback::new("fp".to_string());
+            feedback.space = Some("test_space".to_string());
+            feedback.add_operator_feedback(OperatorFeedback {
+                operator_id: "op1".to_string(),
+                operator_type: "ScanVertices".to_string(),
+                estimated_rows: 100,
+                actual_rows: 300,
+                estimated_time_us: 0,
+                actual_time_us: 0,
+                execution_loops: 1,
+                condition_key: None,
+                shape_key: Some(key.clone()),
+            });
+            engine.feedback_history.add_feedback(feedback);
+        }
+
+        engine.maybe_apply_feedback();
+
+        let corrected = engine
+            .cardinality_feedback
+            .corrected_rows(&key)
+            .expect("shape should remain registered");
+        assert!(
+            corrected > 150.0,
+            "corrected={} should move toward 300",
+            corrected
+        );
+
+        // Decision feedback: an Apply run with rows and time is folded in.
+        let mut feedback = QueryExecutionFeedback::new("fp2".to_string());
+        feedback.space = Some("test_space".to_string());
+        feedback.apply_rows = 500;
+        feedback.apply_time_us = 50_000;
+        engine.feedback_history.add_feedback(feedback);
+        engine.maybe_apply_feedback();
+        let advice = engine.decision_feedback.advice("test_space");
+        assert!(advice.apply_cost_per_row.is_some());
+
+        // Invalidation drops both the shape corrections and decision stats.
+        engine.invalidate_space_feedback(Some("test_space"));
+        assert!(engine.cardinality_feedback.corrected_rows(&key).is_none());
+        let advice = engine.decision_feedback.advice("test_space");
+        assert!(advice.apply_cost_per_row.is_none());
     }
 
     #[test]

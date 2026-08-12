@@ -14,6 +14,7 @@ use crate::storage::{
 };
 use crate::transaction::UndoTarget;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! mock_stub {
@@ -35,6 +36,9 @@ pub struct MockStorage {
     fail_batch_insert_edges: Arc<RwLock<bool>>,
     edge_types: Arc<RwLock<Vec<EdgeTypeInfo>>>,
     edges: Arc<RwLock<Vec<Edge>>>,
+    /// Vertices keyed by space (mirrors the graph storage API used by
+    /// executor-level tests for the point-lookup sources).
+    vertices: Arc<RwLock<HashMap<String, Vec<Vertex>>>>,
 }
 
 impl MockStorage {
@@ -48,6 +52,7 @@ impl MockStorage {
             fail_batch_insert_edges: Arc::new(RwLock::new(false)),
             edge_types: Arc::new(RwLock::new(Vec::new())),
             edges: Arc::new(RwLock::new(Vec::new())),
+            vertices: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -83,7 +88,35 @@ impl Default for MockStorage {
 }
 
 impl StorageReader for MockStorage {
-    mock_stub!(&self, get_vertex(_space: &str, _id: &VertexId) -> Result<Option<Vertex>, StorageError>, Ok(None));
+    fn get_vertex(
+        &self,
+        space: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
+        Ok(self
+            .vertices
+            .read()
+            .get(space)
+            .and_then(|vertices| {
+                vertices.iter().find(|v| v.vid == *id).cloned()
+            }))
+    }
+
+    fn get_vertex_projected(
+        &self,
+        space: &str,
+        id: &VertexId,
+        projection: &[String],
+    ) -> Result<Option<Vertex>, StorageError> {
+        let vertex = self.get_vertex(space, id)?;
+        if projection.is_empty() {
+            return Ok(vertex);
+        }
+        Ok(vertex.map(|mut v| {
+            v.properties.retain(|k, _| projection.contains(k));
+            v
+        }))
+    }
     mock_stub!(&self, scan_vertices(_space: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_vertices_by_tag(_space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_vertices_by_prop(_space: &str, _tag: &str, _prop: &str, _value: &Value) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
@@ -143,7 +176,18 @@ impl StorageReader for MockStorage {
 }
 
 impl StorageWriter for MockStorage {
-    mock_stub!(&mut self, insert_vertex(_space: &str, _vertex: Vertex) -> Result<VertexId, StorageError>, Ok(VertexId::new()));
+    fn insert_vertex(
+        &mut self,
+        space: &str,
+        vertex: Vertex,
+    ) -> Result<VertexId, StorageError> {
+        self.vertices
+            .write()
+            .entry(space.to_string())
+            .or_default()
+            .push(vertex.clone());
+        Ok(vertex.vid)
+    }
     mock_stub!(&mut self, update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
     mock_stub!(&mut self, delete_vertex(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
     mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));

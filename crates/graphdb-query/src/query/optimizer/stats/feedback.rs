@@ -12,7 +12,10 @@
 //! `query` – The structure that contains feedback regarding the execution of the query.
 //! “History” – Querying the feedback history management system.
 
+pub mod cardinality;
 pub mod collector;
+pub mod decision;
+pub mod factor;
 pub mod fingerprint;
 pub mod history;
 pub mod query;
@@ -20,7 +23,10 @@ pub mod selectivity;
 pub mod trigger;
 
 // Re-export the main types while maintaining backward compatibility.
+pub use cardinality::CardinalityFeedbackManager;
 pub use collector::{ExecutionFeedbackCollector, SimpleExecutionFeedback, SimpleFeedbackCollector};
+pub use decision::{DecisionFeedbackStore, DecorrelationAdvice};
+pub use factor::FeedbackDrivenFactor;
 pub use fingerprint::{generate_query_fingerprint, normalize_query};
 pub use history::QueryFeedbackHistory;
 pub use query::{OperatorFeedback, QueryExecutionFeedback};

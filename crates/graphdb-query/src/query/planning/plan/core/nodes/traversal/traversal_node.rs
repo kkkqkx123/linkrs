@@ -768,6 +768,10 @@ impl AppendVerticesNode {
         self.input_var.as_deref()
     }
 
+    pub fn set_input_var(&mut self, var: String) {
+        self.input_var = Some(var);
+    }
+
     pub fn src_expression(&self) -> Option<&ContextualExpression> {
         self.src_expression.as_ref()
     }

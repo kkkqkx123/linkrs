@@ -56,6 +56,13 @@ pub struct OperatorFeedback {
     /// `UnarySpec::Filter`); used by the statistics feedback loop (phase 2)
     /// to attach estimated-vs-actual row ratios to a specific predicate.
     pub condition_key: Option<String>,
+    /// Normalized operator shape key (`"{space}:{Type}:{discriminator}"`).
+    ///
+    /// Populated for operators whose output cardinality is estimated
+    /// independently (scans, graph traversals, joins, applies); used by the
+    /// cardinality feedback loop to correct per-shape row estimates.  Filter
+    /// operators are keyed by `condition_key` instead and leave this `None`.
+    pub shape_key: Option<String>,
 }
 
 impl OperatorFeedback {
@@ -75,6 +82,7 @@ impl OperatorFeedback {
             actual_time_us: 0,
             execution_loops: 1,
             condition_key: None,
+            shape_key: None,
         }
     }
 
@@ -155,6 +163,18 @@ pub struct QueryExecutionFeedback {
     pub actual_time_us: u64,
     /// Execution timestamp
     pub execution_timestamp: Instant,
+    /// Actual rows produced by Apply-style operators (nested-loop paths).
+    ///
+    /// Populated from the execution profile; used to contrast the nested-loop
+    /// execution cost of kept `PatternApply` subqueries against the hash
+    /// `SemiJoin` rows of unnested plans.
+    pub apply_rows: u64,
+    /// Actual rows produced by `SemiJoin` operators (unnested hash paths).
+    pub join_rows: u64,
+    /// Actual time (microseconds) spent in Apply-style operators.
+    pub apply_time_us: u64,
+    /// Actual time (microseconds) spent in `SemiJoin` operators.
+    pub join_time_us: u64,
     /// Feedback from each operator
     pub operator_feedbacks: Vec<OperatorFeedback>,
 }
@@ -170,6 +190,10 @@ impl QueryExecutionFeedback {
             estimated_time_us: 0,
             actual_time_us: 0,
             execution_timestamp: Instant::now(),
+            apply_rows: 0,
+            join_rows: 0,
+            apply_time_us: 0,
+            join_time_us: 0,
             operator_feedbacks: Vec::new(),
         }
     }
@@ -253,6 +277,7 @@ mod tests {
             actual_time_us: 1200,
             execution_loops: 1,
             condition_key: None,
+            shape_key: None,
         };
 
         assert_eq!(feedback.row_estimation_error(), 0.5); // (150-100)/100
@@ -270,6 +295,7 @@ mod tests {
             actual_time_us: 5000,
             execution_loops: 10,
             condition_key: None,
+            shape_key: None,
         };
 
         assert_eq!(feedback.avg_rows_per_loop(), 50.0); // 500/10
@@ -308,6 +334,7 @@ mod tests {
             actual_time_us: 1100,
             execution_loops: 1,
             condition_key: None,
+            shape_key: None,
         });
 
         feedback.add_operator_feedback(OperatorFeedback {
@@ -319,6 +346,7 @@ mod tests {
             actual_time_us: 450,
             execution_loops: 1,
             condition_key: None,
+            shape_key: None,
         });
 
         let avg_row_error = feedback.avg_operator_row_error();

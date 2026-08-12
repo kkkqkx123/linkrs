@@ -92,7 +92,42 @@ pub(crate) fn edge_record_to_edge(
     dst_id: &str,
 ) -> Edge {
     let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
+    edge_record_to_edge_with_props(record, edge_type, src_id, dst_id, props)
+}
 
+/// Like [`edge_record_to_edge`] but decodes only the requested properties.
+///
+/// Filters the record's property map before materializing the `Edge`, so
+/// unneeded columns are never cloned into the edge's property map.  An
+/// empty projection decodes every property (same "empty means everything"
+/// convention as the other projected read paths).
+pub(crate) fn edge_record_to_edge_projected(
+    record: &EdgeRecord,
+    edge_type: &str,
+    src_id: &str,
+    dst_id: &str,
+    projection: &[String],
+) -> Edge {
+    let props: HashMap<String, Value> = if projection.is_empty() {
+        record.properties.iter().cloned().collect()
+    } else {
+        record
+            .properties
+            .iter()
+            .filter(|(key, _)| projection.contains(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    };
+    edge_record_to_edge_with_props(record, edge_type, src_id, dst_id, props)
+}
+
+fn edge_record_to_edge_with_props(
+    record: &EdgeRecord,
+    edge_type: &str,
+    src_id: &str,
+    dst_id: &str,
+    props: HashMap<String, Value>,
+) -> Edge {
     let src_vid = if let Ok(id) = src_id.parse::<i64>() {
         VertexId::from_int64(id)
     } else {

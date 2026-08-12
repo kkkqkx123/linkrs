@@ -14,11 +14,12 @@
 //! so the choice is cost-driven rather than syntactic.
 
 use crate::query::optimizer::cost::SelectivityEstimator;
-use crate::query::optimizer::cost_based::row_estimates::estimate_node_output_rows;
+use crate::query::optimizer::cost_based::row_estimates::estimate_node_output_rows_corrected;
 use crate::query::optimizer::cost_based::traversal::rewrite_children;
 use crate::query::optimizer::cost_based::{
     SortContext, SortEliminationDecision, SortEliminationOptimizer,
 };
+use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::core::nodes::operation::sort_node::TopNNode;
@@ -31,6 +32,7 @@ pub fn rewrite_sort_with_limits(
     optimizer: &SortEliminationOptimizer,
     stats: &StatsView,
     selectivity: &SelectivityEstimator,
+    cardinality: &CardinalityFeedbackManager,
     notes: &mut Vec<String>,
 ) -> PlanNodeEnum {
     use PlanNodeEnum::*;
@@ -41,7 +43,8 @@ pub fn rewrite_sort_with_limits(
             let offset = limit.offset();
             let count = limit.count();
             if offset >= 0 && count > 0 {
-                let input_rows = estimate_node_output_rows(sort.input(), stats, selectivity);
+                let input_rows =
+                    estimate_node_output_rows_corrected(sort.input(), stats, selectivity, cardinality);
                 let context =
                     SortContext::new(sort.clone(), input_rows).with_limit(count + offset.max(0));
                 match optimizer.optimize_with_memory(&context, None) {
@@ -74,7 +77,7 @@ pub fn rewrite_sort_with_limits(
 
     // Recursively rewrite children.
     let mut closure = |child: &PlanNodeEnum| {
-        rewrite_sort_with_limits(child, optimizer, stats, selectivity, notes)
+        rewrite_sort_with_limits(child, optimizer, stats, selectivity, cardinality, notes)
     };
     rewrite_children(node, &mut closure)
 }
@@ -124,8 +127,14 @@ mod tests {
         let selectivity = SelectivityEstimator::new(manager.clone());
         let plan = build_limit_sort(10, 100);
         let mut notes = Vec::new();
-        let rewritten =
-            rewrite_sort_with_limits(&plan, &optimizer, &view, &selectivity, &mut notes);
+        let rewritten = rewrite_sort_with_limits(
+            &plan,
+            &optimizer,
+            &view,
+            &selectivity,
+            &CardinalityFeedbackManager::new(),
+            &mut notes,
+        );
         let PlanNodeEnum::Limit(limit) = &rewritten else {
             panic!("expected limit at root");
         };
@@ -155,6 +164,7 @@ mod tests {
             &optimizer,
             &view,
             &selectivity,
+            &CardinalityFeedbackManager::new(),
             &mut notes,
         );
         assert!(matches!(rewritten, PlanNodeEnum::Sort(_)));

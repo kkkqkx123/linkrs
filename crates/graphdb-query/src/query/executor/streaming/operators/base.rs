@@ -256,6 +256,9 @@ impl OperatorBase {
                 entry
                     .output_rows
                     .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                entry
+                    .advance_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }

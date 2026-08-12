@@ -286,6 +286,10 @@ impl BatchOptimizer {
             // Property pruning batch
             PushProjectDownScanVertices(_)
             | PushProjectDownScanEdges(_)
+            |             PushProjectDownGetVertices(_)
+            | PushProjectDownGetNeighbors(_)
+            | PushProjectDownGetEdges(_)
+            | PushProjectDownAppendVertices(_)
             | EnrichScanSlotsWithFilterProps(_) => OptimizationBatch::PropertyPruning,
 
             // Expand pushdown batch: whole-plan annotation of traversal hops.
@@ -310,6 +314,9 @@ impl BatchOptimizer {
             | JoinElimination(_)
             | IndexJoinSelection(_)
             | JoinReorder(_) => OptimizationBatch::Normalize,
+
+            // Decorrelation batch: stat-free subquery unnesting gate.
+            UnnestSimplePatternApply(_) => OptimizationBatch::Decorrelation,
         }
     }
 

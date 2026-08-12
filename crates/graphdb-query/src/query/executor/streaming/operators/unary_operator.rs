@@ -54,7 +54,11 @@ pub enum UnaryOperator {
         input_done: bool,
     },
     AppendVertices {
-        vertex_properties: Vec<(String, Expression)>,
+        entity_var: String,
+        entity_expr: Expression,
+        prop_names: Vec<String>,
+        storage: Option<Arc<parking_lot::RwLock<dyn crate::storage::QueryStorage>>>,
+        space_name: String,
         state: UnaryOperatorState,
     },
     Sample {
@@ -106,8 +110,17 @@ impl UnaryOperator {
                 current_unwind_index: 0,
                 input_done: false,
             },
-            super::spec::UnarySpec::AppendVertices { vertex_properties } => Self::AppendVertices {
-                vertex_properties: vertex_properties.clone(),
+            super::spec::UnarySpec::AppendVertices {
+                space_name,
+                entity_var,
+                entity_expr,
+                prop_names,
+            } => Self::AppendVertices {
+                entity_var: entity_var.clone(),
+                entity_expr: entity_expr.clone(),
+                prop_names: prop_names.clone(),
+                storage: None,
+                space_name: space_name.clone(),
                 state,
             },
             super::spec::UnarySpec::Sample { count } => Self::Sample {
@@ -123,6 +136,7 @@ impl UnaryOperator {
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+        let storage = base.runtime.as_ref().and_then(|rt| rt.storage.clone());
         match self {
             Self::Filter { state, .. }
             | Self::Project { state, .. }
@@ -131,6 +145,12 @@ impl UnaryOperator {
                 state.parameters = params;
             }
             _ => {}
+        }
+        if let Self::AppendVertices {
+            storage: target, ..
+        } = self
+        {
+            *target = storage;
         }
         match self {
             Self::Filter { .. }
@@ -460,12 +480,21 @@ impl UnaryOperator {
                 *current_unwind_index = 0;
             },
             Self::AppendVertices {
-                vertex_properties,
+                entity_var: _,
+                entity_expr,
+                prop_names,
+                storage,
+                space_name,
                 state,
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("AppendVertices");
                     let layout = chunk.get_layout();
+                    let storage_ref = storage.as_ref().ok_or_else(|| {
+                        QueryError::execution("AppendVertices requires storage".to_string())
+                    })?;
+                    let guard = storage_ref.read();
+                    let flat = !prop_names.is_empty();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
@@ -478,10 +507,49 @@ impl UnaryOperator {
                         } else {
                             ValueRowContext::new(row.clone(), layout.clone())
                         };
-                        for (_prop_name, expr) in vertex_properties.iter() {
-                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                Ok(val) => new_row.push(val),
-                                Err(_) => new_row.push(Value::Null(crate::core::NullType::Null)),
+                        let entity = match ExpressionEvaluator::evaluate(entity_expr, &mut ctx) {
+                            Ok(val) => val,
+                            Err(_) => Value::Null(crate::core::NullType::Null),
+                        };
+                        let vid = match crate::core::types::storage_ids::VertexId::try_from(
+                            &entity,
+                        ) {
+                            Ok(vid) => vid,
+                            Err(_) => {
+                                new_row.push(Value::Null(crate::core::NullType::Null));
+                                result_rows.push(new_row);
+                                continue;
+                            }
+                        };
+                        match guard.get_vertex_projected(space_name, &vid, prop_names) {
+                            Ok(Some(vertex)) => {
+                                if flat {
+                                    for prop in prop_names.iter() {
+                                        new_row.push(
+                                            vertex
+                                                .property_value(prop)
+                                                .unwrap_or_else(|| {
+                                                    Value::Null(crate::core::NullType::Null)
+                                                }),
+                                        );
+                                    }
+                                } else {
+                                    new_row.push(Value::Vertex(Box::new(vertex)));
+                                }
+                            }
+                            Ok(None) => {
+                                if flat {
+                                    for _ in prop_names.iter() {
+                                        new_row.push(Value::Null(
+                                            crate::core::NullType::Null,
+                                        ));
+                                    }
+                                } else {
+                                    new_row.push(Value::Null(crate::core::NullType::Null));
+                                }
+                            }
+                            Err(_) => {
+                                new_row.push(Value::Null(crate::core::NullType::Null));
                             }
                         }
                         result_rows.push(new_row);
@@ -558,5 +626,201 @@ fn matches_value(val: &Value) -> bool {
         Value::Double(f) => *f != 0.0,
         Value::String(s) => !s.is_empty(),
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::storage_ids::VertexId;
+    use crate::core::{Tag, Vertex};
+    use crate::query::executor::base::MemoryBudget;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
+    use crate::query::executor::streaming::slot::SlotLayout;
+    use crate::storage::StorageWriter;
+    use parking_lot::RwLock;
+
+    fn runtime_with_storage(storage: Arc<RwLock<dyn crate::storage::QueryStorage>>) -> Arc<ExecutionRuntime> {
+        Arc::new(ExecutionRuntime::new(
+            QueryIdentity::default(),
+            MemoryBudget::new(1024 * 1024),
+            Some(storage),
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ))
+    }
+
+    #[test]
+    fn append_vertices_fetches_vertex_and_appends_flat_columns() {
+        let mut mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
+        mock.insert_vertex(
+            "test",
+            Vertex::new(
+                VertexId::from_int64(1),
+                vec![Tag::new(
+                    "person".to_string(),
+                    vec![
+                        ("name".to_string(), Value::string("Alice")),
+                        ("age".to_string(), Value::Int(30)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )],
+            ),
+        )
+        .expect("insert vertex");
+        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
+
+        // Input row: [vid]
+        let input = Box::new(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::string("1")]],
+                current_index: 0,
+                col_names: vec!["vid".to_string()],
+            },
+        ));
+        let mut append = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            input,
+            UnaryOperator::AppendVertices {
+                entity_var: "v".to_string(),
+                entity_expr: Expression::Variable("vid".to_string()),
+                prop_names: vec!["name".to_string(), "age".to_string()],
+                storage: None,
+                space_name: "test".to_string(),
+                state: UnaryOperatorState { parameters: None },
+            },
+        );
+        append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
+        append.open().expect("open should succeed");
+        let chunk = append.advance().expect("advance should succeed");
+        let chunk = chunk.expect("one output chunk");
+        assert_eq!(chunk.len(), 1);
+        let row = &chunk.rows[0];
+        assert_eq!(row.len(), 3, "vid + name + age");
+        assert_eq!(row[0], Value::string("1"));
+        assert_eq!(row[1], Value::string("Alice"));
+        assert_eq!(row[2], Value::Int(30));
+        assert!(append.advance().expect("advance").is_none());
+    }
+
+    #[test]
+    fn append_vertices_full_value_appends_vertex_object() {
+        let mut mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
+        mock.insert_vertex(
+            "test",
+            Vertex::new(
+                VertexId::from_int64(7),
+                vec![Tag::new(
+                    "person".to_string(),
+                    vec![("name".to_string(), Value::string("Bob"))]
+                        .into_iter()
+                        .collect(),
+                )],
+            ),
+        )
+        .expect("insert vertex");
+        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
+
+        let input = Box::new(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::Int(7)]],
+                current_index: 0,
+                col_names: vec!["vid".to_string()],
+            },
+        ));
+        let mut append = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            input,
+            UnaryOperator::AppendVertices {
+                entity_var: "v".to_string(),
+                entity_expr: Expression::Variable("vid".to_string()),
+                prop_names: vec![],
+                storage: None,
+                space_name: "test".to_string(),
+                state: UnaryOperatorState { parameters: None },
+            },
+        );
+        append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
+        append.open().expect("open should succeed");
+        let chunk = append.advance().expect("advance").expect("one chunk");
+        let row = &chunk.rows[0];
+        assert_eq!(row.len(), 2, "vid + full vertex");
+        match &row[1] {
+            Value::Vertex(vertex) => {
+                assert_eq!(vertex.vid, VertexId::from_int64(7));
+                assert_eq!(
+                    vertex.property_value("name"),
+                    Some(Value::string("Bob"))
+                );
+            }
+            other => panic!("expected full vertex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn append_vertices_missing_vertex_yields_null_columns() {
+        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> =
+            Arc::new(RwLock::new(
+                crate::storage::MockStorage::new().expect("MockStorage should be created"),
+            ));
+        let input = Box::new(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::string("missing")]],
+                current_index: 0,
+                col_names: vec!["vid".to_string()],
+            },
+        ));
+        let mut append = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            input,
+            UnaryOperator::AppendVertices {
+                entity_var: "v".to_string(),
+                entity_expr: Expression::Variable("vid".to_string()),
+                prop_names: vec!["name".to_string()],
+                storage: None,
+                space_name: "test".to_string(),
+                state: UnaryOperatorState { parameters: None },
+            },
+        );
+        append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
+        append.open().expect("open should succeed");
+        let chunk = append.advance().expect("advance").expect("one chunk");
+        let row = &chunk.rows[0];
+        assert_eq!(row.len(), 2);
+        assert!(matches!(row[1], Value::Null(_)));
+    }
+
+    #[test]
+    fn append_vertices_without_storage_fails() {
+        let input = Box::new(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::Int(1)]],
+                current_index: 0,
+                col_names: vec!["vid".to_string()],
+            },
+        ));
+        let mut append = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            input,
+            UnaryOperator::AppendVertices {
+                entity_var: "v".to_string(),
+                entity_expr: Expression::Variable("vid".to_string()),
+                prop_names: vec!["name".to_string()],
+                storage: None,
+                space_name: "test".to_string(),
+                state: UnaryOperatorState { parameters: None },
+            },
+        );
+        append.open().expect("open should succeed");
+        let error = append.advance().expect_err("storage required");
+        assert!(error.to_string().contains("requires storage"));
     }
 }

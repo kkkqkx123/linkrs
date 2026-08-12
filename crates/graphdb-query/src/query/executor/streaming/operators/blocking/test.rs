@@ -333,8 +333,6 @@ fn values_from(rows: &[Vec<Value>]) -> Vec<Value> {
 /// input (typed columns, mixed kinds, NULLs, all supported types).
 #[test]
 fn test_columnar_sort_matches_row_sort() {
-    use crate::core::types::expr::Expression;
-
     let cases: Vec<Vec<Vec<Value>>> = vec![
         // Typed i64.
         (0..30)

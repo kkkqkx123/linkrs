@@ -193,7 +193,6 @@ mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::ContextualExpression;
-    use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::ScanVerticesNode;
     use std::sync::Arc;

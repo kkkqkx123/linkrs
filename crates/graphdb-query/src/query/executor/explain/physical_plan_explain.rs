@@ -195,12 +195,16 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             if !col_names.is_empty() {
                 pnd.output_var = col_names.join(", ");
             }
-            // Surface the projected property list for storage scans so the
-            // slot-coverage optimization (P1: EnrichScanSlotsWithFilterProps)
-            // is observable in EXPLAIN output.
+            // Surface the projected property list for storage scans and
+            // graph-operator sources so the property-pruning optimizations
+            // (EnrichScanSlotsWithFilterProps, typed GetVertices/GetNeighbors
+            // pushdown) are observable in EXPLAIN output.
             let projected: Vec<String> = match src_spec {
                 crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { projected_properties, .. }
                 | crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { projected_properties, .. }
+                | crate::query::executor::streaming::operators::spec::SourceSpec::GetVertices { projected_properties, .. }
+                | crate::query::executor::streaming::operators::spec::SourceSpec::GetEdges { projected_properties, .. }
+                | crate::query::executor::streaming::operators::spec::SourceSpec::GetNeighbors { projected_properties, .. }
                 => projected_properties.clone(),
                 _ => vec![],
             };

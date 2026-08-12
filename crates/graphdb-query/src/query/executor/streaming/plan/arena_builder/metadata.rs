@@ -456,11 +456,20 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
                 .collect::<Vec<_>>();
             SlotLayout::from_names(&names)
         }
-        OperatorKindSpec::Unary(UnarySpec::AppendVertices { vertex_properties }) => {
-            layout_with_added_names(
-                &input,
-                vertex_properties.iter().map(|(name, _)| name.clone()),
-            )
+        OperatorKindSpec::Unary(UnarySpec::AppendVertices {
+            entity_var,
+            prop_names,
+            ..
+        }) => {
+            let added: Vec<String> = if prop_names.is_empty() {
+                vec![entity_var.clone()]
+            } else {
+                prop_names
+                    .iter()
+                    .map(|prop| format!("{entity_var}.{prop}"))
+                    .collect()
+            };
+            layout_with_added_names(&input, added)
         }
         OperatorKindSpec::Blocking(
             BlockingSpec::Aggregate {
@@ -635,7 +644,13 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
             &["vertex".to_string()],
             projected_properties,
         )),
-        SourceSpec::GetEdges { .. } => SlotLayout::from_names(&["edge".to_string()]),
+        SourceSpec::GetEdges {
+            projected_properties,
+            ..
+        } => SlotLayout::from_names(&flat_scan_col_names(
+            &["edge".to_string()],
+            projected_properties,
+        )),
         SourceSpec::GetNeighbors {
             projected_properties,
             ..

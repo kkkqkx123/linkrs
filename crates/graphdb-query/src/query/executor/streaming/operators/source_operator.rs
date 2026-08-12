@@ -97,6 +97,7 @@ pub enum SourceOperator {
         src: Option<String>,
         dst: Option<String>,
         rank: i64,
+        projected_properties: Vec<String>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     /// Traverse neighbors of each input vertex.
@@ -214,6 +215,7 @@ impl SourceOperator {
                 src,
                 dst,
                 rank,
+                projected_properties,
             } => Self::GetEdges {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -221,6 +223,7 @@ impl SourceOperator {
                 src: src.clone(),
                 dst: dst.clone(),
                 rank: *rank,
+                projected_properties: projected_properties.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::GetNeighbors {
@@ -548,5 +551,72 @@ mod tests {
             result2.is_none(),
             "second call must also return None (regression: do not re-emit)"
         );
+    }
+
+    #[test]
+    fn get_edges_projected_filters_edge_properties() {
+        use crate::core::Edge;
+        let mut mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
+        let src = crate::core::types::storage_ids::VertexId::from_int64(1);
+        let dst = crate::core::types::storage_ids::VertexId::from_int64(2);
+        mock.set_edges(vec![Edge {
+            src,
+            dst,
+            edge_type: "friend".to_string(),
+            ranking: 0,
+            props: vec![
+                ("degree".to_string(), Value::Double(0.8)),
+                ("since".to_string(), Value::Int(2020)),
+            ]
+            .into_iter()
+            .collect(),
+        }]);
+        let storage = Arc::new(RwLock::new(mock));
+        let mut source = SourceOperator::GetEdges {
+            storage: Some(storage),
+            space_name: "test".to_string(),
+            edge_type: Some("friend".to_string()),
+            src: Some("1".to_string()),
+            dst: Some("2".to_string()),
+            rank: 0,
+            projected_properties: vec!["degree".to_string()],
+            cursor: None,
+        };
+        let runtime = Arc::new(ExecutionRuntime::new(
+            QueryIdentity::default(),
+            MemoryBudget::new(1024 * 1024),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
+
+        source.open(&mut base).expect("open should succeed");
+
+        let chunk = source
+            .next(&mut base)
+            .expect("first next should succeed")
+            .expect("edge must be returned");
+        assert_eq!(chunk.len(), 1);
+        let row = &chunk.rows[0];
+        assert_eq!(row.len(), 2, "edge column + one flat property column");
+        match &row[0] {
+            Value::Edge(edge) => {
+                assert_eq!(edge.properties().len(), 1, "only degree must be kept");
+                assert_eq!(
+                    edge.properties().get("degree"),
+                    Some(&Value::Double(0.8))
+                );
+            }
+            other => panic!("expected Value::Edge, got {:?}", other),
+        }
+        assert_eq!(row[1], Value::Double(0.8));
+
+        assert!(source
+            .next(&mut base)
+            .expect("second next should succeed")
+            .is_none());
     }
 }

@@ -1380,11 +1380,25 @@ impl ArenaPlanAssembler {
                 node.id(),
                 "Select plan nodes are not supported",
             )),
-            PlanNodeEnum::AppendVertices(_) => Err(PlanBuildError::unsupported(
-                node.name(),
-                node.id(),
-                "AppendVertices plan nodes are not supported",
-            )),
+            PlanNodeEnum::AppendVertices(append_node) => {
+                let (child_fid, _) = Self::convert_node(
+                    append_node.inputs().first().ok_or_else(|| {
+                        PlanBuildError::missing_value(
+                            "AppendVertices",
+                            node.id(),
+                            "input",
+                            "AppendVertices requires an input",
+                        )
+                    })?,
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    exec_ctx,
+                )?;
+                let spec = build_append_vertices_spec(append_node, exec_ctx)?;
+                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
+            }
         }
     }
 }

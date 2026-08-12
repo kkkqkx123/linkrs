@@ -1072,10 +1072,7 @@ mod tests {
 
     #[test]
     fn anchored_traversal_selects_partition_layout() {
-        use crate::core::EdgeDirection;
-        use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-            MultipleInputNode, PlanNode,
-        };
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
         let stats = make_stats();
@@ -1101,10 +1098,7 @@ mod tests {
 
     #[test]
     fn two_hop_traversal_is_rejected_without_annotation() {
-        use crate::core::EdgeDirection;
-        use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-            MultipleInputNode, PlanNode,
-        };
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
         use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 
         let stats = make_stats();
@@ -1127,7 +1121,6 @@ mod tests {
 
     #[test]
     fn annotated_two_hop_traversal_selects_partition_layout() {
-        use crate::core::EdgeDirection;
         use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
             MultipleInputNode, PlanNode,
         };

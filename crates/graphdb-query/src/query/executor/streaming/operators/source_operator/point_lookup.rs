@@ -10,8 +10,8 @@ use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::{open_edge_scan, EdgeCursor, ScanOptions, VecEdgeCursor};
 
 use super::util::{
-    attach_columnar_stats, make_edge_row, make_flat_vertex_row, parse_vertex_id, reserve_memory,
-    storage_error,
+    attach_columnar_stats, make_edge_row, make_flat_edge_row, make_flat_vertex_row,
+    parse_vertex_id, reserve_memory, storage_error,
 };
 use super::SourceOperator;
 
@@ -43,6 +43,7 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             src,
             dst,
             rank,
+            projected_properties,
             cursor,
         } => {
             let storage_ref = storage
@@ -54,11 +55,28 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             {
                 let src = parse_vertex_id(src);
                 let dst = parse_vertex_id(dst);
-                guard
-                    .get_edge(space_name, &src, &dst, edge_type, *rank)
-                    .map_err(|error| storage_error("GetEdges", "get edge", space_name, error))?
-                    .into_iter()
-                    .collect::<Vec<_>>()
+                if projected_properties.is_empty() {
+                    guard
+                        .get_edge(space_name, &src, &dst, edge_type, *rank)
+                        .map_err(|error| storage_error("GetEdges", "get edge", space_name, error))?
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    guard
+                        .get_edge_projected(
+                            space_name,
+                            &src,
+                            &dst,
+                            edge_type,
+                            *rank,
+                            projected_properties,
+                        )
+                        .map_err(|error| {
+                            storage_error("GetEdges", "get edge projected", space_name, error)
+                        })?
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                }
             } else {
                 let scan_opts = ScanOptions {
                     edge_type: edge_type.clone(),
@@ -101,8 +119,11 @@ pub(crate) fn next(
             projected_properties,
         ),
         SourceOperator::GetEdges {
-            space_name, cursor, ..
-        } => next_get_edges(base, space_name, cursor),
+            space_name,
+            projected_properties,
+            cursor,
+            ..
+        } => next_get_edges(base, space_name, cursor, projected_properties),
         _ => unreachable!("point_lookup::next called for a non-lookup source"),
     }
 }
@@ -244,6 +265,7 @@ fn next_get_edges(
     base: &mut OperatorBase,
     space_name: &str,
     cursor: &mut Option<Box<dyn EdgeCursor>>,
+    projected_properties: &[String],
 ) -> Result<Option<DataChunk>, QueryError> {
     let mut cur = match cursor.take() {
         Some(c) => c,
@@ -255,7 +277,18 @@ fn next_get_edges(
     if batch.is_empty() {
         return Ok(None);
     }
-    let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
+    let flat = !projected_properties.is_empty();
+    let rows = batch
+        .into_iter()
+        .map(|mut edge| {
+            if flat {
+                edge.props.retain(|key, _| projected_properties.contains(key));
+                make_flat_edge_row(edge, projected_properties)
+            } else {
+                make_edge_row(edge)
+            }
+        })
+        .collect::<Vec<_>>();
     if !rows.is_empty() {
         let reservation = reserve_memory(base, &rows)?;
         let chunk = attach_columnar_stats(

@@ -6,16 +6,15 @@ use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cold::{ColdIndexEntry, ColdSnapshot};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-use crate::storage::edge::EdgeStore;
-use crate::storage::edge::Nbr;
+use crate::storage::edge::{EdgeRecord, EdgeStore, Nbr};
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::params::EdgeOperationParams;
 
 use super::context::helpers;
 use super::context::GraphStorageContext;
 use super::ops::{
-    edge_record_to_edge, endpoint_label_id, serialize_properties, value_to_string,
-    vertex_record_to_vertex,
+    edge_record_to_edge, edge_record_to_edge_projected, endpoint_label_id, serialize_properties,
+    value_to_string, vertex_record_to_vertex,
 };
 
 /// Resolve a VertexId to its internal u32 CSR index via vertex tables.
@@ -294,6 +293,30 @@ pub(crate) fn get_edge(
     edge_type: &str,
     rank: i64,
 ) -> StorageResult<Option<Edge>> {
+    get_edge_impl(ctx, space, src, dst, edge_type, rank, None)
+}
+
+pub(crate) fn get_edge_projected(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src: &VertexId,
+    dst: &VertexId,
+    edge_type: &str,
+    rank: i64,
+    projection: &[String],
+) -> StorageResult<Option<Edge>> {
+    get_edge_impl(ctx, space, src, dst, edge_type, rank, Some(projection))
+}
+
+fn get_edge_impl(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src: &VertexId,
+    dst: &VertexId,
+    edge_type: &str,
+    rank: i64,
+    projection: Option<&[String]>,
+) -> StorageResult<Option<Edge>> {
     record_schema_read(ctx, space);
     let edge_info = ctx
         .schema_manager()
@@ -341,7 +364,7 @@ pub(crate) fn get_edge(
         },
         ts,
     ) {
-        let edge = edge_record_to_edge(&record, edge_type, &src_str, &dst_str);
+        let edge = edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
         return Ok(Some(edge));
     }
 
@@ -361,12 +384,28 @@ pub(crate) fn get_edge(
                 VertexId::from_int64(src_internal as i64),
                 dst_internal_vid,
             );
-            let edge = edge_record_to_edge(&record, edge_type, &src_str, &dst_str);
+            let edge = edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
             return Ok(Some(edge));
         }
     }
 
     Ok(None)
+}
+
+/// Materialize an edge record, honoring an optional property projection.
+fn edge_record_to_edge_with_projection(
+    record: &EdgeRecord,
+    edge_type: &str,
+    src_str: &str,
+    dst_str: &str,
+    projection: Option<&[String]>,
+) -> Edge {
+    match projection {
+        Some(projection) => {
+            edge_record_to_edge_projected(record, edge_type, src_str, dst_str, projection)
+        }
+        None => edge_record_to_edge(record, edge_type, src_str, dst_str),
+    }
 }
 
 /// Get the minimum snapshot timestamp for a cold snapshot, or u64::MAX if none.

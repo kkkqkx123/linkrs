@@ -472,7 +472,6 @@ mod tests {
     use crate::core::Value;
     use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
     use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
-    use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use crate::query::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
     use std::sync::Arc;

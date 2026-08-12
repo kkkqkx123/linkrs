@@ -24,14 +24,18 @@
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::visitor::ExpressionVisitor;
 use crate::core::types::expr::visitor_collectors::VariableCollector;
+use crate::core::types::expr::ExpressionAnalysisContext;
+use crate::core::Expression;
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
+use crate::query::planning::plan::core::common::TagProp;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
 use crate::query::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
 use crate::query::planning::plan::PlanNodeEnum;
+use std::sync::Arc;
 
 /// Rules for converting Edge-Vertex JOIN to AppendVertices
 #[derive(Debug)]
@@ -107,7 +111,34 @@ impl JoinToAppendVerticesRule {
         }
 
         let vertex_tag = scan_vertices.tag().cloned().unwrap_or_default();
+        // The vertex binding var (flat-column prefix and analyzer binding).
+        let vertex_var = scan_vertices
+            .col_names()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| vertex_tag.clone());
+        // The edge binding var from the edge-side join key ("e._dst" -> "e").
+        let edge_var = edge_key.split('.').next().unwrap_or(edge_key).to_string();
+        let entity_expr = Expression::Function {
+            name: if edge_key.to_lowercase().contains("dst") {
+                "dst".to_string()
+            } else {
+                "src".to_string()
+            },
+            args: vec![Expression::Variable(edge_var)],
+        };
+
         let mut append_vertices = AppendVerticesNode::new(scan_vertices.space_id(), &vertex_tag);
+        append_vertices.set_vertex_props(vec![TagProp {
+            tag: vertex_tag.clone(),
+            props: scan_vertices.projected_properties().to_vec(),
+        }]);
+        append_vertices.set_input_var(vertex_var.clone());
+        append_vertices.set_node_alias(vertex_var.clone());
+        append_vertices.set_src_expression_expression(
+            entity_expr,
+            Arc::new(ExpressionAnalysisContext::new()),
+        );
 
         append_vertices.add_input(if edge_on_left {
             left.clone()

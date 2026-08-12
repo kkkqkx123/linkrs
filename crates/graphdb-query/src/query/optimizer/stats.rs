@@ -24,9 +24,10 @@ pub mod view;
 pub use collector::{CollectedSummary, StatisticsCollector};
 pub use edge::{EdgeTypeStatistics, HotVertexInfo, SkewnessLevel};
 pub use feedback::{
-    generate_query_fingerprint, normalize_query, ExecutionFeedbackCollector,
-    FeedbackDrivenSelectivity, OperatorFeedback, QueryExecutionFeedback, QueryFeedbackHistory,
-    SelectivityFeedbackManager, SimpleExecutionFeedback, SimpleFeedbackCollector,
+    generate_query_fingerprint, normalize_query, CardinalityFeedbackManager, DecisionFeedbackStore,
+    DecorrelationAdvice, ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback,
+    QueryExecutionFeedback, QueryFeedbackHistory, SelectivityFeedbackManager,
+    SimpleExecutionFeedback, SimpleFeedbackCollector,
 };
 pub use histogram::{Histogram, HistogramBucket, RangeCondition};
 pub use manager::StatisticsManager;

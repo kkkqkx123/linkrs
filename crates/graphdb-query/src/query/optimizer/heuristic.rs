@@ -87,6 +87,7 @@ pub mod batch;
 
 // Specific Rules Module
 pub mod aggregate;
+pub mod decorrelation;
 pub mod elimination;
 pub mod expand_pushdown;
 pub mod join_optimization;
@@ -120,6 +121,7 @@ pub use rule_enum::{RewriteRule as RewriteRuleEnum, RuleRegistry};
 
 // Export all rewriting rules in a unified manner.
 pub use aggregate::*;
+pub use decorrelation::*;
 pub use elimination::*;
 pub use expand_pushdown::*;
 pub use join_optimization::*;

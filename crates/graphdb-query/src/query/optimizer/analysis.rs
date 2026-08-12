@@ -34,6 +34,7 @@ pub mod batch;
 pub mod expression;
 pub mod fingerprint;
 pub mod reference_count;
+pub mod required_properties;
 
 // Re-export the main types
 pub use batch::{AggregatedExpressionAnalysis, BatchPlanAnalysis, BatchPlanAnalyzer};
@@ -43,6 +44,9 @@ pub use expression::{
 pub use fingerprint::{FingerprintCalculator, PlanFingerprint};
 pub use reference_count::{
     ReferenceCountAnalysis, ReferenceCountAnalyzer, SubplanId, SubplanReferenceInfo,
+};
+pub use required_properties::{
+    binding_var, PropertyRequirement, RequiredPropertiesMap, RequiredPropertyAnalyzer,
 };
 
 #[cfg(test)]

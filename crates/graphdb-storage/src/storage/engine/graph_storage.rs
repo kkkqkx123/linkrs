@@ -662,6 +662,18 @@ impl StorageReader for GraphStorage {
         reader::get_edge(&self.ctx, space, src, dst, edge_type, rank)
     }
 
+    fn get_edge_projected(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+        projection: &[String],
+    ) -> Result<Option<Edge>, StorageError> {
+        reader::get_edge_projected(&self.ctx, space, src, dst, edge_type, rank, projection)
+    }
+
     fn get_node_edges(
         &self,
         space: &str,

@@ -251,6 +251,9 @@ pub struct OperatorProfile {
     pub next_time_us: u64,
     pub close_time_us: u64,
     pub output_rows: u64,
+    /// Number of chunks produced (advances).  Used as the per-operator
+    /// execution loop count in the feedback path.
+    pub advance_count: u64,
     pub peak_memory: u64,
     pub peak_memory_bytes: u64,
     pub spilled_bytes: u64,
@@ -295,6 +298,7 @@ pub struct ProfileEntry {
     pub next_time_us: AtomicU64,
     pub close_time_us: AtomicU64,
     pub output_rows: AtomicU64,
+    pub advance_count: AtomicU64,
     pub peak_memory_bytes: AtomicU64,
     pub spilled_bytes: AtomicU64,
     pub spill_count: AtomicU64,
@@ -311,6 +315,7 @@ impl ProfileEntry {
             next_time_us: AtomicU64::new(profile.next_time_us),
             close_time_us: AtomicU64::new(profile.close_time_us),
             output_rows: AtomicU64::new(profile.output_rows),
+            advance_count: AtomicU64::new(profile.advance_count),
             peak_memory_bytes: AtomicU64::new(profile.peak_memory_bytes),
             spilled_bytes: AtomicU64::new(profile.spilled_bytes),
             spill_count: AtomicU64::new(profile.spill_count),
@@ -328,6 +333,7 @@ impl ProfileEntry {
             next_time_us: self.next_time_us.load(Ordering::Relaxed),
             close_time_us: self.close_time_us.load(Ordering::Relaxed),
             output_rows: self.output_rows.load(Ordering::Relaxed),
+            advance_count: self.advance_count.load(Ordering::Relaxed),
             peak_memory: self.peak_memory_bytes.load(Ordering::Relaxed),
             peak_memory_bytes: self.peak_memory_bytes.load(Ordering::Relaxed),
             spilled_bytes: self.spilled_bytes.load(Ordering::Relaxed),
@@ -582,6 +588,7 @@ impl ProfileCollector {
                 entry.next_time_us += op.next_time_us;
                 entry.close_time_us += op.close_time_us;
                 entry.output_rows += op.output_rows;
+                entry.advance_count += op.advance_count;
                 entry.peak_memory_bytes = entry.peak_memory_bytes.max(op.peak_memory_bytes);
                 entry.spill_count += op.spill_count;
                 entry.spilled_bytes += op.spilled_bytes;

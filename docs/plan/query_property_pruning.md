@@ -94,3 +94,53 @@ AppendVertices / Expand 等）读取的整行整属性无法按需收窄；且�
   - 测试矩阵覆盖别名/函数/嵌套属性访问
 - **回退**：规则注册开关 `ENABLE_TYPED_PROPERTY_PRUNING`（默认关闭，
   验证充分后开启），回退即恢复现状
+
+## 7. 实施状态（2026-08-12）
+
+- 已完成：
+  - `RequiredPropertyAnalyzer`（`optimizer/analysis/required_properties.rs`）：
+    自顶向下需求传播，`PropertyRequirement { alias, tag_name, prop_names,
+    full_value }`；仅收集 `Property { object: Variable, .. }` 引用，
+    裸引用/不透明对象/函数参数/别名标记 full-value（sticky，任何位置出现即
+    阻止裁剪）；叶子算子按绑定变量解析 tag
+  - `PushProjectDownGetVerticesRule` / `PushProjectDownGetNeighborsRule`
+    （`projection_pushdown/`）：Project → (Filter)* → 图算子链，保留 Project
+    节点仅收窄 `projected_properties`；规则已启用并挂到
+    `OptimizationBatch::PropertyPruning`（与 EnrichScanSlotsWithFilterProps
+    同批次，并集语义无重复注入）
+  - EXPLAIN 对 GetVertices/GetNeighbors 展示 `projected` 列
+- 2026-08-12 补充（剩余两项全部落地）：
+  - **GetEdges 四层垂直切片打通**：
+    - `GetEdgesNode.projected_properties` 字段 + 访问器
+      （`graph_scan_node.rs`）
+    - `PushProjectDownGetEdgesRule`（`projection_pushdown/`），Project →
+      (Filter)* → GetEdges 链，绑定变量取 `output_var`/src
+    - `SourceSpec::GetEdges { projected_properties }` + specs.rs 接线 +
+      metadata.rs flat 列布局（`edge.{prop}`）+ EXPLAIN `projected` 展示
+    - 执行双路径：点查走 `get_edge_projected`（graph_storage 覆盖实现在
+      `edge_record_to_edge` 前过滤 `record.properties`，避免整 HashMap
+      构建）；退化扫描分支逐边 retain + `make_flat_edge_row` 追加 flat 列
+    - 存储层：`StorageReader::get_edge_projected`（默认实现 = get_edge +
+      retain，与顶点对称）+ reader 覆盖实现 + 单测
+  - **AppendVertices 物理执行落地**：
+    - `UnarySpec::AppendVertices` 重定义为存储型
+      `{ space_name, entity_var, entity_expr, prop_names }`（原表达式求值
+      版为死代码，语义被替换）
+    - `UnaryOperator::AppendVertices`：逐行 evaluate entity_expr →
+      `VertexId` → `get_vertex_projected`；prop_names 非空追加 flat 列，
+      为空追加整 `Value::Vertex`（full-value 语义）；open() 时从 runtime
+      注入 storage
+    - conversion.rs 的 `AppendVertices` 分支从 unsupported 改为
+      `push_unary_op`（实体解析优先级：src_expression > input_var）
+    - metadata.rs 布局 = 输入布局 + flat `{entity_var}.{prop}` 列
+    - `JoinToAppendVerticesRule` 补全节点：vertex_props 取自
+      ScanVertices 的 projected_properties、src_expression = dst()/src()
+      函数表达式、input_var/node_alias = 顶点绑定变量
+    - `PushProjectDownAppendVerticesRule`（新规则）按分析器需求收窄
+      `vertex_props`，与 GetEdges 规则同批次
+- 遗留：
+  - EXPLAIN 每算子 projected 展示已覆盖 Source 层；中间算子的列级展示未做
+  - 正确性回归：`cargo test -p graphdb-query --lib` 全量通过（1403），
+    `cargo test -p graphdb-storage --lib` 通过（721），e2e 67 通过，
+    clippy 零警告
+  - 未做基准收益度量（benchmark 留待后续）

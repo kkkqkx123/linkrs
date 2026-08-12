@@ -161,6 +161,7 @@ define_plan_node! {
         expression: Option<ContextualExpression>,
         dedup: bool,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: GetEdges
     input: ZeroInputNode
@@ -191,6 +192,7 @@ impl GetEdgesNode {
             expression: None,
             dedup: false,
             limit: None,
+            projected_properties: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -235,6 +237,22 @@ impl GetEdgesNode {
 
     pub fn limit(&self) -> Option<i64> {
         self.limit
+    }
+
+    pub fn edge_props(&self) -> &[EdgeProp] {
+        &self.edge_props
+    }
+
+    pub fn set_edge_props(&mut self, props: Vec<EdgeProp>) {
+        self.edge_props = props;
+    }
+
+    pub fn projected_properties(&self) -> &[String] {
+        &self.projected_properties
+    }
+
+    pub fn set_projected_properties(&mut self, properties: Vec<String>) {
+        self.projected_properties = properties;
     }
 }
 

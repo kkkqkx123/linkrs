@@ -62,6 +62,30 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         edge_type: &str,
         rank: i64,
     ) -> Result<Option<Edge>, StorageError>;
+
+    /// Fetch an edge with only the requested properties.
+    ///
+    /// The default implementation calls [`get_edge`] and filters the
+    /// property map.  Storage engines that natively support column projection
+    /// should override this to avoid decoding unneeded columns.
+    fn get_edge_projected(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+        projection: &[String],
+    ) -> Result<Option<Edge>, StorageError> {
+        let edge = self.get_edge(space, src, dst, edge_type, rank)?;
+        if projection.is_empty() {
+            return Ok(edge);
+        }
+        Ok(edge.map(|mut e| {
+            e.props.retain(|k, _| projection.contains(k));
+            e
+        }))
+    }
     fn get_node_edges(
         &self,
         space: &str,

@@ -28,6 +28,7 @@
 
 use crate::query::optimizer::heuristic::aggregate;
 use crate::query::optimizer::heuristic::context::RewriteContext;
+use crate::query::optimizer::heuristic::decorrelation;
 use crate::query::optimizer::heuristic::elimination;
 use crate::query::optimizer::heuristic::expand_pushdown;
 use crate::query::optimizer::heuristic::join_optimization;
@@ -157,11 +158,16 @@ define_rewrite_rules! {
         PushFilterDownAllPaths(predicate_pushdown::PushFilterDownAllPathsRule),
 
         // ==================== Projection Pushdown Rules ====================
-        // NOTE: PushProjectDown{GetVertices,GetEdges,GetNeighbors}
-        // are intentionally excluded. Those rules erase the Project node and
-        // treat output aliases as raw property references, which is unsound
-        // for computed expressions, aliases, and functions. Re-enable only
-        // after implementing typed required-property pruning (Phase 4).
+        // NOTE: GetVertices / GetNeighbors / GetEdges rules narrow the graph
+        // operator's `projected_properties` through typed required-property
+        // analysis (optimizer/analysis/required_properties.rs). The Project
+        // node is preserved; only the columns read by the graph operator are
+        // narrowed, which keeps computed expressions, aliases, and functions
+        // sound (bare / opaque variable usage blocks the rewrite).
+        PushProjectDownGetVertices(projection_pushdown::PushProjectDownGetVerticesRule),
+        PushProjectDownGetNeighbors(projection_pushdown::PushProjectDownGetNeighborsRule),
+        PushProjectDownGetEdges(projection_pushdown::PushProjectDownGetEdgesRule),
+        PushProjectDownAppendVertices(projection_pushdown::PushProjectDownAppendVerticesRule),
         PushProjectDownScanVertices(projection_pushdown::PushProjectDownScanVerticesRule),
         PushProjectDownScanEdges(projection_pushdown::PushProjectDownScanEdgesRule),
         // Enriches scan `projected_properties` with residual filter
@@ -186,6 +192,12 @@ define_rewrite_rules! {
         // scans/expands; annotates ExpandAll hops with id_only/count_only so
         // the executor can skip full vertex/edge materialization.
         ExpandPushdownAnnotate(expand_pushdown::ExpandPushdownAnnotateRule),
+
+        // ==================== Decorrelation Rules ====================
+        // Stat-free gate: converts simple deterministic PatternApply
+        // subqueries to SemiJoin/AntiJoin. Heavy cost-based judgment stays
+        // in the CBO phase (cost_based/subquery_unnesting.rs).
+        UnnestSimplePatternApply(decorrelation::UnnestSimplePatternApplyRule),
 
         // ==================== JOIN Optimization Rules ====================
         PushProjectDownJoin(join_optimization::PushProjectDownJoinRule),
@@ -323,6 +335,18 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushProjectDownScanEdges(
             projection_pushdown::PushProjectDownScanEdgesRule::new(),
         ));
+        registry.add(RewriteRule::PushProjectDownGetVertices(
+            projection_pushdown::PushProjectDownGetVerticesRule::new(),
+        ));
+        registry.add(RewriteRule::PushProjectDownGetNeighbors(
+            projection_pushdown::PushProjectDownGetNeighborsRule::new(),
+        ));
+        registry.add(RewriteRule::PushProjectDownGetEdges(
+            projection_pushdown::PushProjectDownGetEdgesRule::new(),
+        ));
+        registry.add(RewriteRule::PushProjectDownAppendVertices(
+            projection_pushdown::PushProjectDownAppendVerticesRule::new(),
+        ));
         registry.add(RewriteRule::EnrichScanSlotsWithFilterProps(
             slot_coverage::EnrichScanSlotsWithFilterPropsRule::new(),
         ));
@@ -352,6 +376,9 @@ impl Default for RuleRegistry {
         ));
         registry.add(RewriteRule::ExpandPushdownAnnotate(
             expand_pushdown::ExpandPushdownAnnotateRule::new(),
+        ));
+        registry.add(RewriteRule::UnnestSimplePatternApply(
+            decorrelation::UnnestSimplePatternApplyRule::new(),
         ));
         registry.add(RewriteRule::PushProjectDownJoin(
             join_optimization::PushProjectDownJoinRule::new(),
@@ -391,7 +418,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 48);
+        assert_eq!(registry.len(), 53);
     }
 
     #[test]

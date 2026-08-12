@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::query::optimizer::cost::SelectivityEstimator;
+use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
@@ -28,6 +29,80 @@ const DEDUP_SELECTIVITY: f64 = 0.8;
 /// Row multiplier applied to aggregation with group keys.
 const AGGREGATE_SELECTIVITY: f64 = 0.1;
 
+/// Normalized shape key of a plan node's output cardinality.
+///
+/// Mirrors the physical-side generator
+/// `spec::operator_cardinality_shape_key` (same `"{space}:{Type}:{discriminator}"`
+/// format) so feedback recorded against executed operators corrects the
+/// same shapes during cost-based estimation.  Returns `None` for nodes whose
+/// cardinality is derived (pass-through operators and filters — filters are
+/// corrected per predicate by the selectivity feedback loop).
+fn cardinality_shape_key(
+    space: Option<&str>,
+    node: &PlanNodeEnum,
+) -> Option<String> {
+    use PlanNodeEnum::*;
+    let prefix = space.unwrap_or("").to_string();
+    let key = |kind: &str, discriminator: Option<&str>| {
+        let mut key = format!("{prefix}:{kind}");
+        if let Some(discriminator) = discriminator {
+            if !discriminator.is_empty() {
+                key.push(':');
+                key.push_str(discriminator);
+            }
+        }
+        Some(key)
+    };
+    match node {
+        ScanVertices(n) => key("ScanVertices", n.tag().map(String::as_str)),
+        ScanEdges(n) => key("ScanEdges", n.edge_type().as_deref()),
+        GetVertices(_) => key("GetVertices", None),
+        GetEdges(n) => key("GetEdges", Some(n.edge_type())),
+        GetNeighbors(n) => key("GetNeighbors", Some(n.direction())),
+        IndexScan(n) => key("IndexScan", Some(n.index_name())),
+        Expand(n) => key("Expand", Some(&n.edge_types().join(","))),
+        ExpandAll(n) => key("ExpandAll", Some(&n.edge_types().join(","))),
+        Traverse(n) => key("Traverse", Some(&n.edge_types().join(","))),
+        BiExpand(n) => key("BiExpand", Some(&n.edge_types().join(","))),
+        BiTraverse(n) => key("BiTraverse", Some(&n.edge_types().join(","))),
+        AppendVertices(n) => key("AppendVertices", Some(n.vertex_tag())),
+        PatternApply(_) => key("PatternApply", None),
+        Apply(_) => key("Apply", None),
+        RollUpApply(_) => key("RollUpApply", None),
+        InnerJoin(_) => key("InnerJoin", None),
+        LeftJoin(_) => key("LeftJoin", None),
+        RightJoin(_) => key("RightJoin", None),
+        FullOuterJoin(_) => key("FullOuterJoin", None),
+        CrossJoin(_) => key("CrossJoin", None),
+        SemiJoin(_) => key("SemiJoin", None),
+        Union(_) => key("Union", None),
+        Minus(_) => key("Minus", None),
+        Intersect(_) => key("Intersect", None),
+        Aggregate(_) => key("Aggregate", None),
+        // Pass-through / derived operators and filters carry no shape key.
+        _ => None,
+    }
+}
+
+/// Apply the learned cardinality correction for `node`, if registered.
+fn corrected_rows(
+    node: &PlanNodeEnum,
+    raw: u64,
+    space: Option<&str>,
+    cardinality: Option<&CardinalityFeedbackManager>,
+) -> u64 {
+    let Some(manager) = cardinality else {
+        return raw;
+    };
+    let Some(key) = cardinality_shape_key(space, node) else {
+        return raw;
+    };
+    match manager.corrected_rows(&key) {
+        Some(corrected) => (corrected.round().max(1.0)) as u64,
+        None => raw,
+    }
+}
+
 /// Estimate the output row count of a logical node, post-order.
 ///
 /// `stats` drives leaf scan estimates; `selectivity` is used for filters.
@@ -38,6 +113,30 @@ pub fn estimate_node_output_rows(
     stats: &StatsView,
     selectivity: &SelectivityEstimator,
 ) -> u64 {
+    estimate_node_output_rows_impl(node, stats, selectivity, None)
+}
+
+/// Like [`estimate_node_output_rows`] but applies learned per-shape
+/// cardinality corrections.
+///
+/// Consumed by cost-based decisions (subquery unnesting, TopN conversion);
+/// the raw variant stays for the plan writeback so recorded feedback
+/// measures the uncorrected estimate error.
+pub fn estimate_node_output_rows_corrected(
+    node: &PlanNodeEnum,
+    stats: &StatsView,
+    selectivity: &SelectivityEstimator,
+    cardinality: &CardinalityFeedbackManager,
+) -> u64 {
+    estimate_node_output_rows_impl(node, stats, selectivity, Some(cardinality))
+}
+
+fn estimate_node_output_rows_impl(
+    node: &PlanNodeEnum,
+    stats: &StatsView,
+    selectivity: &SelectivityEstimator,
+    cardinality: Option<&CardinalityFeedbackManager>,
+) -> u64 {
     use PlanNodeEnum::*;
 
     match node {
@@ -47,21 +146,35 @@ pub fn estimate_node_output_rows(
                 .tag()
                 .map(|tag| stats.vertex_count(tag))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            n.limit()
+            let raw = n
+                .limit()
                 .map(|limit| tag_rows.min(limit as u64))
-                .unwrap_or(tag_rows)
+                .unwrap_or(tag_rows);
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
         ScanEdges(n) => {
             let edge_rows = n
                 .edge_type()
                 .map(|edge_type| stats.edge_count(&edge_type))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            n.limit()
+            let raw = n
+                .limit()
                 .map(|limit| edge_rows.min(limit as u64))
-                .unwrap_or(edge_rows)
+                .unwrap_or(edge_rows);
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
-        GetVertices(n) => n.limit().unwrap_or(1).max(1) as u64,
-        GetEdges(n) => n.limit().unwrap_or(10).max(1) as u64,
+        GetVertices(n) => corrected_rows(
+            node,
+            n.limit().unwrap_or(1).max(1) as u64,
+            stats.space(),
+            cardinality,
+        ),
+        GetEdges(n) => corrected_rows(
+            node,
+            n.limit().unwrap_or(10).max(1) as u64,
+            stats.space(),
+            cardinality,
+        ),
         GetNeighbors(n) => {
             let fanout = n
                 .edge_types()
@@ -72,14 +185,20 @@ pub fn estimate_node_output_rows(
                         .map(|s| (s.avg_out_degree.max(0.0)) as u64)
                 })
                 .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT);
-            (n.limit().unwrap_or(fanout as i64).max(1) as u64).max(fanout)
+            let raw = (n.limit().unwrap_or(fanout as i64).max(1) as u64).max(fanout);
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
-        IndexScan(n) => n.limit().unwrap_or(UNKNOWN_SCAN_ROWS as i64).max(1) as u64,
+        IndexScan(n) => corrected_rows(
+            node,
+            n.limit().unwrap_or(UNKNOWN_SCAN_ROWS as i64).max(1) as u64,
+            stats.space(),
+            cardinality,
+        ),
         Start(_) | Argument(_) => 1,
 
         // ── Single-input operations ──
         Filter(n) => {
-            let input_rows = estimate_node_output_rows(n.input(), stats, selectivity);
+            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             let condition = n.condition();
             let tag_name = first_tag_of_input(n.input());
             let expr_selectivity = condition
@@ -94,103 +213,112 @@ pub fn estimate_node_output_rows(
                 .unwrap_or(DEFAULT_FILTER_SELECTIVITY);
             (input_rows as f64 * expr_selectivity).max(1.0) as u64
         }
-        Project(_) | Sort(_) | Sample(_) | Window(_) => child_rows_of(node, stats, selectivity),
+        Project(_) | Sort(_) | Sample(_) | Window(_) => {
+            child_rows_of_impl(node, stats, selectivity, cardinality)
+        }
         TopN(n) => {
-            let input_rows = estimate_node_output_rows(n.input(), stats, selectivity);
+            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             input_rows.min(n.limit() as u64)
         }
         Limit(n) => {
-            let input_rows = estimate_node_output_rows(n.input(), stats, selectivity);
+            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             input_rows.min((n.offset() + n.count()) as u64)
         }
         Dedup(n) => {
-            let input_rows = estimate_node_output_rows(n.input(), stats, selectivity);
+            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             (input_rows as f64 * DEDUP_SELECTIVITY).max(1.0) as u64
         }
         Aggregate(n) => {
-            let input_rows = estimate_node_output_rows(n.input(), stats, selectivity);
-            if n.group_keys().is_empty() {
+            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let raw = if n.group_keys().is_empty() {
                 1
             } else {
                 (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
-            }
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
 
         // ── Binary operators ──
         // Joins multiply their inputs (semi-join keeps the left side).
         InnerJoin(_) | LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
             let children = node.children();
-            if children.len() >= 2 {
-                let left = estimate_node_output_rows(children[0], stats, selectivity);
-                let right = estimate_node_output_rows(children[1], stats, selectivity);
+            let raw = if children.len() >= 2 {
+                let left = estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
+                let right = estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
                 left.saturating_mul(right)
             } else {
-                child_rows_of(node, stats, selectivity)
-            }
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
         FullOuterJoin(_) => {
             let children = node.children();
-            if children.len() >= 2 {
-                let left = estimate_node_output_rows(children[0], stats, selectivity);
-                let right = estimate_node_output_rows(children[1], stats, selectivity);
+            let raw = if children.len() >= 2 {
+                let left = estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
+                let right = estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
                 left.saturating_add(right)
             } else {
-                child_rows_of(node, stats, selectivity)
-            }
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
-        SemiJoin(_) => child_rows_of(node, stats, selectivity),
+        SemiJoin(_) => child_rows_of_impl(node, stats, selectivity, cardinality),
         Union(_) => {
             let mut total = 0u64;
             for child in node.children() {
-                total = total.saturating_add(estimate_node_output_rows(child, stats, selectivity));
+                total = total.saturating_add(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
             }
-            total
+            corrected_rows(node, total, stats.space(), cardinality)
         }
         Minus(_) | Intersect(_) => {
             let mut smallest = u64::MAX;
             for child in node.children() {
-                smallest = smallest.min(estimate_node_output_rows(child, stats, selectivity));
+                smallest = smallest.min(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
             }
-            if smallest == u64::MAX {
+            let raw = if smallest == u64::MAX {
                 0
             } else {
                 smallest
-            }
+            };
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
 
         // ── Traversal / apply operators ──
         Expand(_) | ExpandAll(_) | Traverse(_) | BiExpand(_) | BiTraverse(_)
         | AppendVertices(_) => {
-            child_rows_of(node, stats, selectivity).saturating_mul(DEFAULT_NEIGHBORHOOD_FANOUT)
+            let raw = child_rows_of_impl(node, stats, selectivity, cardinality)
+                .saturating_mul(DEFAULT_NEIGHBORHOOD_FANOUT);
+            corrected_rows(node, raw, stats.space(), cardinality)
         }
         PatternApply(_) | Apply(_) | RollUpApply(_) => {
             let children = node.children();
             let mut total = 1u64;
             for child in children {
-                total = total.saturating_mul(estimate_node_output_rows(child, stats, selectivity));
+                total = total.saturating_mul(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
             }
-            total
+            corrected_rows(node, total, stats.space(), cardinality)
         }
 
         // ── Pass-through / control flow ──
         PassThrough(_) | Materialize(_) | Unwind(_) | DataCollect(_) | Remove(_) | Assign(_) => {
-            child_rows_of(node, stats, selectivity)
+            child_rows_of_impl(node, stats, selectivity, cardinality)
         }
 
         // ── Leaf or unsupported nodes: fall back to the input or a constant ──
-        node => child_rows_of(node, stats, selectivity),
+        node => child_rows_of_impl(node, stats, selectivity, cardinality),
     }
 }
 
 /// Estimate of the first child (pass-through semantics), or 1 for leaves.
-fn child_rows_of(
+fn child_rows_of_impl(
     node: &PlanNodeEnum,
     stats: &StatsView,
     selectivity: &SelectivityEstimator,
+    cardinality: Option<&CardinalityFeedbackManager>,
 ) -> u64 {
     node.children()
         .first()
-        .map(|child| estimate_node_output_rows(child, stats, selectivity))
+        .map(|child| estimate_node_output_rows_impl(child, stats, selectivity, cardinality))
         .unwrap_or(1)
 }
 
@@ -575,5 +703,68 @@ mod tests {
         let estimate = estimate_node_output_rows_logical(&aggregate, &view, &selectivity);
         // 1000 * AGGREGATE_SELECTIVITY (0.1), floored at 1.
         assert_eq!(estimate, 100);
+    }
+
+    #[test]
+    fn corrected_variant_applies_learned_shape_factor() {
+        use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
+
+        let (manager, selectivity) = setup();
+        let view = StatsView::new(&manager, Some("test"));
+        let mut tag_stats = crate::query::optimizer::stats::TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 100;
+        manager.update_tag_stats("test", tag_stats);
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        let scan_node = PlanNodeEnum::ScanVertices(scan);
+
+        let raw = estimate_node_output_rows(&scan_node, &view, &selectivity);
+        assert_eq!(raw, 100);
+
+        // Learn that the scan actually returns 3x the estimate.
+        let cardinality = CardinalityFeedbackManager::new();
+        cardinality.register_key("test:ScanVertices:person".to_string(), raw as f64);
+        for _ in 0..50 {
+            cardinality.update_feedback_ratio("test:ScanVertices:person", 3.0);
+        }
+
+        let corrected =
+            estimate_node_output_rows_corrected(&scan_node, &view, &selectivity, &cardinality);
+        assert!(
+            corrected > 200 && corrected <= 1000,
+            "corrected={} should move toward 300",
+            corrected
+        );
+
+        // The raw variant is unaffected (plan writeback keeps raw estimates).
+        assert_eq!(estimate_node_output_rows(&scan_node, &view, &selectivity), 100);
+    }
+
+    #[test]
+    fn corrected_variant_propagates_through_pass_through_nodes() {
+        use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
+
+        let (manager, selectivity) = setup();
+        let view = StatsView::new(&manager, Some("test"));
+        let mut tag_stats = crate::query::optimizer::stats::TagStatistics::new("person".to_string());
+        tag_stats.vertex_count = 100;
+        manager.update_tag_stats("test", tag_stats);
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_tag("person");
+        let scan_node = PlanNodeEnum::ScanVertices(scan);
+        let limit = LimitNode::new(scan_node, 0, 1000).expect("limit should build");
+        let limit_node = PlanNodeEnum::Limit(limit);
+
+        let cardinality = CardinalityFeedbackManager::new();
+        cardinality.register_key("test:ScanVertices:person".to_string(), 100.0);
+        for _ in 0..50 {
+            cardinality.update_feedback_ratio("test:ScanVertices:person", 2.0);
+        }
+
+        // The Limit (pass-through) estimate inherits the corrected child rows.
+        let corrected =
+            estimate_node_output_rows_corrected(&limit_node, &view, &selectivity, &cardinality);
+        assert!(corrected > 150, "corrected={} should inherit the factor", corrected);
     }
 }
