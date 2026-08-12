@@ -173,31 +173,51 @@ impl Binder {
                 Expression::Range { collection, .. } => check(scope, collection),
                 Expression::Path(items) => items.iter().try_for_each(|i| check(scope, i)),
                 Expression::ListComprehension {
+                    variable,
                     source,
                     filter,
                     map,
-                    ..
                 } => {
                     check(scope, source)?;
+                    let inner = inner_scope_with_variable(scope, variable);
                     if let Some(f) = filter {
-                        check(scope, f)?;
+                        check(&inner, f)?;
                     }
                     if let Some(m) = map {
-                        check(scope, m)?;
+                        check(&inner, m)?;
                     }
                     Ok(())
                 }
                 Expression::LabelTagProperty { tag, .. } => check(scope, tag),
-                Expression::Predicate { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
+                Expression::Predicate { args, .. } => {
+                    // First argument is the locally bound iteration variable;
+                    // the source is checked in the outer scope and the
+                    // predicate condition in a scope where it is bound.
+                    let Some(Expression::Variable(variable)) = args.first() else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    let Some(source_expr) = args.get(1) else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    let Some(predicate_expr) = args.get(2) else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    check(scope, source_expr)?;
+                    let inner = inner_scope_with_variable(scope, variable);
+                    check(&inner, predicate_expr)
+                }
                 Expression::Reduce {
+                    accumulator,
                     initial,
+                    variable,
                     source,
                     mapping,
-                    ..
                 } => {
                     check(scope, initial)?;
                     check(scope, source)?;
-                    check(scope, mapping)
+                    let mut inner = inner_scope_with_variable(scope, variable);
+                    inner.define_variable(local_variable(accumulator));
+                    check(&inner, mapping)
                 }
                 Expression::PathBuild(items) => items.iter().try_for_each(|i| check(scope, i)),
                 Expression::WindowFunction { args, .. } => {
@@ -1404,5 +1424,30 @@ impl Binder {
 impl Default for Binder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Scope helpers for runtime-context expressions ──────────────────────────
+
+/// Create a child scope that additionally binds `variable` as a local
+/// iteration variable (list comprehension / predicate / reduce).
+fn inner_scope_with_variable(
+    scope: &crate::query::binder::scope::BinderScope,
+    variable: &str,
+) -> crate::query::binder::scope::BinderScope {
+    let mut inner = crate::query::binder::scope::BinderScope::with_parent(scope.clone());
+    inner.define_variable(local_variable(variable));
+    inner
+}
+
+/// Build a runtime-typed local binder variable for a scope-local
+/// iteration variable.
+fn local_variable(name: &str) -> crate::query::binder::scope::BinderVariable {
+    crate::query::binder::scope::BinderVariable {
+        name: name.to_string(),
+        alias_type: crate::core::types::semantic::AliasType::Runtime,
+        tags: Vec::new(),
+        properties: std::collections::HashMap::new(),
+        is_defined: true,
     }
 }

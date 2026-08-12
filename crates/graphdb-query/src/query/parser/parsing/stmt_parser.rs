@@ -742,6 +742,8 @@ impl StmtParser {
     }
 
     /// Parse BEGIN TRANSACTION statement
+    ///
+    /// Grammar: `BEGIN [TRANSACTION] [READ ONLY | READ WRITE]`
     fn parse_begin_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Begin)?;
@@ -751,10 +753,38 @@ impl StmtParser {
             ctx.expect_token(TokenKind::Transaction)?;
         }
 
+        // Optional: access mode (READ ONLY / READ WRITE)
+        let mut read_only = None;
+        if ctx.check_token(TokenKind::Read) {
+            ctx.expect_token(TokenKind::Read)?;
+            let mode = if ctx.check_token(TokenKind::Only) {
+                ctx.expect_token(TokenKind::Only)?;
+                true
+            } else if ctx.check_token(TokenKind::Write) {
+                ctx.expect_token(TokenKind::Write)?;
+                false
+            } else {
+                let pos = ctx.current_position();
+                return Err(ParseError::new(
+                    ParseErrorKind::UnexpectedToken,
+                    format!(
+                        "Expected READ ONLY or READ WRITE, found {:?}",
+                        ctx.current_token().kind
+                    ),
+                    pos,
+                )
+                .with_expected_tokens(vec!["READ ONLY".to_string(), "READ WRITE".to_string()]));
+            };
+            read_only = Some(mode);
+        }
+
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
-        Ok(Stmt::BeginTransaction(BeginTransactionStmt { span }))
+        Ok(Stmt::BeginTransaction(BeginTransactionStmt {
+            span,
+            read_only,
+        }))
     }
 
     /// Parse COMMIT TRANSACTION statement
@@ -1145,6 +1175,55 @@ mod tests {
         } else {
             panic!("The expectation is that the KillQuery statement will be executed.");
         }
+    }
+
+    #[test]
+    fn test_parse_begin_transaction_access_modes() {
+        let mut ctx = create_parser_context("BEGIN TRANSACTION");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "BEGIN TRANSACTION parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::BeginTransaction(stmt)) = result {
+            assert_eq!(stmt.read_only, None);
+        } else {
+            panic!("Expected a BeginTransaction statement");
+        }
+
+        let mut ctx = create_parser_context("BEGIN READ ONLY");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "BEGIN READ ONLY parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::BeginTransaction(stmt)) = result {
+            assert_eq!(stmt.read_only, Some(true));
+        } else {
+            panic!("Expected a BeginTransaction statement");
+        }
+
+        let mut ctx = create_parser_context("BEGIN TRANSACTION READ WRITE");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "BEGIN TRANSACTION READ WRITE parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::BeginTransaction(stmt)) = result {
+            assert_eq!(stmt.read_only, Some(false));
+        } else {
+            panic!("Expected a BeginTransaction statement");
+        }
+
+        let mut ctx = create_parser_context("BEGIN READ");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_err(),
+            "BEGIN READ should be rejected as an incomplete access mode"
+        );
     }
 
     #[test]

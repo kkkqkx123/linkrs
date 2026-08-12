@@ -251,7 +251,11 @@ impl Stmt {
             Stmt::SearchVector(_) => "SEARCH VECTOR",
             Stmt::LookupVector(_) => "LOOKUP VECTOR",
             Stmt::MatchVector(_) => "MATCH VECTOR",
-            Stmt::BeginTransaction(_) => "BEGIN TRANSACTION",
+            Stmt::BeginTransaction(stmt) => match stmt.read_only {
+                Some(true) => "BEGIN TRANSACTION READ ONLY",
+                Some(false) => "BEGIN TRANSACTION READ WRITE",
+                None => "BEGIN TRANSACTION",
+            },
             Stmt::CommitTransaction(_) => "COMMIT TRANSACTION",
             Stmt::RollbackTransaction(_) => "ROLLBACK TRANSACTION",
         }

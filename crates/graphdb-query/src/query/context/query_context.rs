@@ -32,7 +32,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::{CharsetInfo, SpaceInfo};
+use crate::core::types::{CharsetInfo, SpaceInfo, Timestamp};
 use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::utils::{Arena, IdGenerator};
@@ -71,6 +71,10 @@ pub struct QueryContext {
     space_info: Option<SpaceInfo>,
     /// Character set information
     charset_info: Option<Box<CharsetInfo>>,
+    /// MVCC snapshot timestamp for consistent reads within explicit
+    /// transactions. `None` = auto-commit single statement (current-version
+    /// reads).
+    snapshot_ts: Option<Timestamp>,
     /// Optional arena allocator for temporary allocations during query execution
     arena: Option<Arena>,
 }
@@ -87,6 +91,7 @@ impl QueryContext {
             id_gen: IdGenerator::new(0),
             space_info: None,
             charset_info: None,
+            snapshot_ts: None,
             arena: None,
         }
     }
@@ -114,6 +119,7 @@ impl QueryContext {
         id_gen: IdGenerator,
         space_info: Option<SpaceInfo>,
         charset_info: Option<Box<CharsetInfo>>,
+        snapshot_ts: Option<Timestamp>,
         arena: Option<Arena>,
     ) -> Self {
         Self {
@@ -122,6 +128,7 @@ impl QueryContext {
             id_gen,
             space_info,
             charset_info,
+            snapshot_ts,
             arena,
         }
     }
@@ -157,6 +164,15 @@ impl QueryContext {
     /// Setting character set information
     pub fn set_charset_info(&mut self, charset_info: CharsetInfo) {
         self.charset_info = Some(Box::new(charset_info));
+    }
+
+    /// The MVCC snapshot timestamp for consistent reads within explicit
+    /// transactions.
+    ///
+    /// `None` means auto-commit single-statement execution, which reads the
+    /// current version of the data.
+    pub fn snapshot_ts(&self) -> Option<Timestamp> {
+        self.snapshot_ts
     }
 
     /// Generate an ID.
@@ -224,6 +240,7 @@ impl QueryContext {
         self.id_gen.reset(0);
         self.space_info = None;
         self.charset_info = None;
+        self.snapshot_ts = None;
         if let Some(ref mut arena) = self.arena {
             arena.reset();
         }
@@ -257,6 +274,7 @@ impl std::fmt::Debug for QueryContext {
         f.debug_struct("QueryContext")
             .field("rctx", &self.rctx)
             .field("space_id", &self.space_id())
+            .field("snapshot_ts", &self.snapshot_ts)
             .field("killed", &self.is_killed())
             .field("has_arena", &self.arena.is_some())
             .finish()

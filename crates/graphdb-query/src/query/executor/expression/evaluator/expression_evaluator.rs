@@ -266,16 +266,24 @@ impl ExpressionEvaluator {
                 CollectionOperationEvaluator::eval_property_access(&edge_value, property)
             }
 
-            // Other types of expressions that require runtime context to be executed
-            Expression::Label(_) => {
-                Err(ExpressionError::type_error("Unsolved labeled expressions"))
+            // Expressions that may require runtime context – delegated to the
+            // context, which either resolves them against the row binding or
+            // reports a precise per-expression error.
+            Expression::Label(name) => context.evaluate_label(name),
+            Expression::ListComprehension {
+                variable,
+                source,
+                filter,
+                map,
+            } => context.evaluate_list_comprehension(
+                variable,
+                source,
+                filter.as_deref(),
+                map.as_deref(),
+            ),
+            Expression::LabelTagProperty { tag, property } => {
+                context.evaluate_label_tag_property(tag, property)
             }
-            Expression::ListComprehension { .. } => Err(ExpressionError::type_error(
-                "List Derivation Expressions Require Runtime Contexts",
-            )),
-            Expression::LabelTagProperty { .. } => Err(ExpressionError::type_error(
-                "Tagged attribute expressions require runtime context",
-            )),
             Expression::TagProperty { tag_name, property } => {
                 let compound = format!("{}.{}", tag_name, property);
                 if let Some(val) = context.get_variable(&compound) {
@@ -286,15 +294,15 @@ impl ExpressionEvaluator {
                     .ok_or_else(|| ExpressionError::undefined_variable(tag_name))?;
                 CollectionOperationEvaluator::eval_property_access(&tag_value, property)
             }
-            Expression::Predicate { .. } => Err(ExpressionError::type_error(
-                "Predicate expressions require a runtime context",
-            )),
-            Expression::Reduce { .. } => Err(ExpressionError::type_error(
-                "Inductive expressions require a runtime context",
-            )),
-            Expression::PathBuild(_) => Err(ExpressionError::type_error(
-                "Path construction expressions require a runtime context",
-            )),
+            Expression::Predicate { func, args } => context.evaluate_predicate(func, args),
+            Expression::Reduce {
+                accumulator,
+                initial,
+                variable,
+                source,
+                mapping,
+            } => context.evaluate_reduce(accumulator, initial, variable, source, mapping),
+            Expression::PathBuild(items) => context.evaluate_path_build(items),
             Expression::Parameter(name) => context
                 .get_parameter(name)
                 .ok_or_else(|| ExpressionError::undefined_parameter(name)),

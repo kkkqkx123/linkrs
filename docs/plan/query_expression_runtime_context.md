@@ -1,5 +1,9 @@
 # 表达式求值器运行时上下文表达式支持方案
 
+> 状态：已实施（2026-08-12）。与初版方案的差异：trait 默认实现提供
+> 完整通用求值（非 Unsupported），`evaluate_label` 保留精确错误；binder
+> 补充 ListComprehension/Predicate 局部迭代变量绑定修复。
+
 ## 1. 现状分析
 
 通用求值器 `executor/expression/evaluator/expression_evaluator.rs` 对以下
@@ -112,3 +116,38 @@ pub trait ExpressionContext {
   默认实现返回带表达式类型的错误信息；步骤 4/5 的消费方测试强制覆盖
 - **回退**：trait 方法全部有默认实现，删除具体实现即恢复现状，无需改
   调用方
+
+## 7. 实施记录（2026-08-12）
+
+### 已落地
+
+1. **步骤 1（binder 路径核查）+ 修复**：`rg` 核查确认
+   ListComprehension/Predicate/Reduce 由 Project 投影（RETURN/WITH 子句）
+   携带。核查中发现 binder 的作用域检查缺陷并修复：
+   - `binder_impl.rs` 新增 `inner_scope_with_variable` / `local_variable`
+     辅助（Predicate 的迭代变量在检查 filter 时已绑定）
+   - Predicate 三元参数防护（缺失 source/predicate 时回退全参数检查）
+   - ListComprehension 的 WHERE filter 在含变量作用域内检查
+2. **步骤 2（trait 扩展）**：六个方法全部提供**完整通用默认实现**（非
+   Unsupported）——`evaluate_list_comprehension` / `evaluate_predicate` /
+   `evaluate_reduce` / `evaluate_label_tag_property` / `evaluate_path_build`
+   基于 `get_variable`/`set_variable`/`ExpressionEvaluator` 可零上下文
+   求值；仅 `evaluate_label`（裸标签需绑定 tag 集合）返回带标签名的精确
+   错误（原笼统 "require runtime context"）
+3. **步骤 3（evaluator 分支改调）**：`expression_evaluator.rs` 六个
+   `type_error` 分支改为调用 trait 方法（traits.rs 内置 7 条单测覆盖
+   正常值与错误路径）
+4. **步骤 4/5 简化**：通用默认实现已足够支撑行绑定上下文
+   （ValueRowContext/BorrowedRowContext 零改动）；无独立图算子上下文
+   需求
+5. **步骤 6（列式回退）**：`chunk/eval.rs` 既有
+   `evaluate_expression_per_row` 逐行回退路径复用 trait 方法，无需新增
+   列式分支
+
+### 测试
+
+- 端到端：`test_return_list_comprehension`（`RETURN [x IN [1,2,3,4] WHERE
+  x > 2 | x * 10]`）、`test_return_list_comprehension_in_vertex_projection`
+  （MATCH 投影内 comprehension）通过
+- 回归：`graphdb-query` lib 1410 → 1415 全通过
+- 待补（资源受限未跑 integration）：`cargo test -p graphdb-query --test '*'`

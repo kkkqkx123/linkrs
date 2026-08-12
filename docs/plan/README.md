@@ -9,9 +9,9 @@
 |--------|------|------|------|
 | 高 | 子查询反嵌套增强 | [query_subquery_unnesting.md](query_subquery_unnesting.md) | 已实施（2026-08-12，遗留见文末） |
 | 高 | 类型化属性裁剪（Property Pruning） | [query_property_pruning.md](query_property_pruning.md) | 已实施（2026-08-12，遗留见文末） |
-| 高 | 表达式求值器运行时上下文表达式 | [query_expression_runtime_context.md](query_expression_runtime_context.md) | 待实施 |
+| 高 | 表达式求值器运行时上下文表达式 | [query_expression_runtime_context.md](query_expression_runtime_context.md) | 已实施（2026-08-12，遗留见文末） |
 | 中 | 解析器 Clause 级错误恢复 | [query_parser_clause_recovery.md](query_parser_clause_recovery.md) | 已实施 |
-| 中 | MVCC 快照注入 QueryContext | [query_transaction_snapshot.md](query_transaction_snapshot.md) | 待实施 |
+| 中 | MVCC 快照注入 QueryContext | [query_transaction_snapshot.md](query_transaction_snapshot.md) | 已实施（2026-08-12，遗留验证见文末） |
 | 中 | 分区规划启用前置条件 | [query_partitioning_enablement.md](query_partitioning_enablement.md) | 待实施 |
 
 ## 背景
@@ -81,11 +81,49 @@
 - 验证：`graphdb-query` lib 1403 通过、`graphdb-storage` lib 721 通过、
   e2e 67 通过、clippy 零警告
 
+### 2026-08-12 增补（阶段三剩余全部落地）
+
+**表达式求值器运行时上下文表达式**（`query_expression_runtime_context.md`）：
+
+- `ExpressionContext` trait 新增 `evaluate_label` / `evaluate_list_comprehension` /
+  `evaluate_label_tag_property` / `evaluate_predicate` / `evaluate_reduce` /
+  `evaluate_path_build` 六个运行时上下文方法，通用默认实现基于
+  `get_variable`/`set_variable` 完整求值（ListComprehension/Predicate/Reduce
+  零上下文即可用），`evaluate_label` 返回精确错误信息（原笼统
+  "require runtime context"）
+- `expression_evaluator.rs` 六个硬编码 `type_error` 分支改调 trait 方法
+- binder 使用路径核查 + 修复：ListComprehension/Predicate 的局部迭代变量
+  绑定（`inner_scope_with_variable` / `local_variable`，Predicate 三元参数
+  防护），WITH/RETURN/顶点投影路径打通
+- `chunk/eval.rs` 逐行回退路径复用 trait 方法（无需新增列式代码）
+- 测试：`test_return_list_comprehension`（RETURN + WHERE 过滤 + 映射）、
+  `test_return_list_comprehension_in_vertex_projection`（MATCH 投影中）
+  端到端通过；`graphdb-query` lib 1410 → 1415
+
+**MVCC 快照注入 QueryContext**（`query_transaction_snapshot.md`）：
+
+- `QueryContext`/`QueryContextBuilder` 增加 `snapshot_ts` 字段与
+  `with_snapshot_ts` / `snapshot_ts()`（方案步骤 1）
+- `prepared.rs::snapshot_ts_for_request`：显式事务语句从
+  `operation_context.read_timestamp` 派生快照注入 QueryContext；
+  auto-commit 保持 None（方案步骤 3，执行器透传经 StorageOperationContext
+  已完成，步骤 2/4/5 无需改动，差异见方案文档第 7 节）
+- SQL `BEGIN [TRANSACTION] [READ ONLY | READ WRITE]`：lexer 关键字 +
+  parser + `GraphService` 接线 → `begin_read_transaction`（只读快照事务）
+- 验证：`graphdb-query` lib 1415、`graphdb-transaction` lib 224、
+  `graphdb-api` lib 通过；clippy 零新增警告（既有 10 条测试警告未动）
+
+### 遗留验证（资源受限环境未跑 integration）
+
+- `cargo test -p graphdb-query --test '*'` 全量回归
+- `BEGIN READ ONLY` 会话级端到端（同一事务两语句读同一快照、
+  只读事务内 DML 拒绝）
+
 ## 实施顺序建议
 
-1. **阶段一**：低风险增量 —— 解析器 Clause 恢复（`query_parser_clause_recovery.md`）
-2. **阶段二**：优化器增强 —— 子查询反嵌套 + 属性裁剪（高优先级两篇）
-3. **阶段三**：执行层 —— 表达式运行时上下文、事务快照
+1. **阶段一**：低风险增量 —— 解析器 Clause 恢复（`query_parser_clause_recovery.md`）✅
+2. **阶段二**：优化器增强 —— 子查询反嵌套 + 属性裁剪（高优先级两篇）✅
+3. **阶段三**：执行层 —— 表达式运行时上下文、事务快照 ✅（2026-08-12）
 4. **阶段四**：分区规划启用（依赖存储层提供单调版本，需跨 crate 协调）
 
 每篇方案文档包含：现状分析、方案设计（引用具体文件/函数）、实施步骤、

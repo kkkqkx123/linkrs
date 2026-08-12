@@ -358,6 +358,13 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok(s)
             }
+            // Access-mode keywords are only reserved after BEGIN; allow them
+            // as identifiers elsewhere (e.g. a tag/property named `read`).
+            TokenKind::Read | TokenKind::Only | TokenKind::Write => {
+                let s = self.current_token.lexeme.clone();
+                self.next_token();
+                Ok(s)
+            }
             _ => {
                 let pos = self.current_position();
                 Err(ParseError::new(

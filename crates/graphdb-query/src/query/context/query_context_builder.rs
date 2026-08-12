@@ -17,7 +17,7 @@
 //!     .build();
 //! ```
 
-use crate::core::types::{CharsetInfo, SpaceInfo, SpaceSummary};
+use crate::core::types::{CharsetInfo, SpaceInfo, SpaceSummary, Timestamp};
 use crate::query::executor::streaming::query_registry::CancelToken;
 use crate::utils::{Arena, IdGenerator};
 use std::sync::Arc;
@@ -46,6 +46,7 @@ pub struct QueryContextBuilder {
     id_gen: Option<IdGenerator>,
     space_info: Option<SpaceInfo>,
     charset_info: Option<Box<CharsetInfo>>,
+    snapshot_ts: Option<Timestamp>,
     arena: Option<Arena>,
 }
 
@@ -57,6 +58,7 @@ impl QueryContextBuilder {
             id_gen: None,
             space_info: None,
             charset_info: None,
+            snapshot_ts: None,
             arena: None,
         }
     }
@@ -71,6 +73,7 @@ impl QueryContextBuilder {
             id_gen: None,
             space_info: space.map(SpaceInfo::from),
             charset_info: None,
+            snapshot_ts: None,
             arena: None,
         }
     }
@@ -108,6 +111,19 @@ impl QueryContextBuilder {
         self
     }
 
+    /// Set the MVCC snapshot timestamp for consistent reads within an
+    /// explicit transaction. When set, execution reads data as of this
+    /// timestamp; when absent (`None`), auto-commit current-version reads.
+    pub fn with_snapshot_ts(mut self, snapshot_ts: Timestamp) -> Self {
+        self.snapshot_ts = Some(snapshot_ts);
+        self
+    }
+
+    /// The configured MVCC snapshot timestamp (if any).
+    pub fn snapshot_ts(&self) -> Option<Timestamp> {
+        self.snapshot_ts
+    }
+
     /// Build the QueryContext.
     ///
     /// # Panics
@@ -123,6 +139,7 @@ impl QueryContextBuilder {
             id_gen,
             self.space_info,
             self.charset_info,
+            self.snapshot_ts,
             self.arena,
         )
     }
@@ -215,6 +232,28 @@ mod tests {
         let query_context = QueryContextBuilder::new(rctx).with_arena().build();
 
         assert!(query_context.has_arena());
+    }
+
+    #[test]
+    fn test_builder_with_snapshot_ts() {
+        let rctx = Arc::new(QueryRequestContext {
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query: "MATCH (n) RETURN n".to_string(),
+            parameters: HashMap::new(),
+            ..Default::default()
+        });
+
+        let builder = QueryContextBuilder::new(rctx.clone());
+        assert_eq!(builder.snapshot_ts(), None);
+
+        let query_context = builder.with_snapshot_ts(42).build();
+
+        assert_eq!(query_context.snapshot_ts(), Some(42));
+
+        let default_context = QueryContextBuilder::new(rctx).build();
+        assert_eq!(default_context.snapshot_ts(), None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
+use crate::core::types::Timestamp;
 use crate::core::types::TransactionId;
 use crate::query::binder::BoundStatement;
 use crate::query::executor::base::ExecutionResult;
@@ -664,7 +665,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<&SpaceInfo>,
     ) -> Arc<QueryContext> {
-        let mut query_context = QueryContext::new(rctx);
+        let snapshot_ts = snapshot_ts_for_request(&rctx);
+        let mut builder = QueryContext::builder(rctx);
+        if let Some(ts) = snapshot_ts {
+            builder = builder.with_snapshot_ts(ts);
+        }
+        let mut query_context = builder.build();
         if let Some(space) = space_info {
             query_context.set_space_info(space.clone());
         }
@@ -870,6 +876,21 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     }
 }
 
+/// Derive the MVCC snapshot timestamp for a request.
+///
+/// Statements inside an explicit transaction inherit the transaction's
+/// snapshot timestamp (effective snapshot → storage operation context read
+/// timestamp). Auto-commit statements return `None` so they read the current
+/// version of the data.
+fn snapshot_ts_for_request(rctx: &QueryRequestContext) -> Option<Timestamp> {
+    if rctx.auto_commit {
+        return None;
+    }
+    rctx.operation_context
+        .as_ref()
+        .map(|context| context.read_timestamp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -912,5 +933,46 @@ mod tests {
             let stmt = parse(query);
             assert!(!is_direct_dml(&stmt), "not direct DML: {query}");
         }
+    }
+
+    #[test]
+    fn explicit_transaction_inherits_snapshot_timestamp() {
+        let op_ctx = crate::storage::StorageOperationContext::transaction_with_timestamps(
+            crate::core::types::TransactionId(7),
+            42,
+            Some(43),
+            false,
+            false,
+        );
+        let mut rctx = QueryRequestContext::new("MATCH (n) RETURN n".to_string());
+        rctx.auto_commit = false;
+        rctx.operation_context = Some(op_ctx);
+
+        assert_eq!(snapshot_ts_for_request(&rctx), Some(42));
+    }
+
+    #[test]
+    fn auto_commit_has_no_snapshot_timestamp() {
+        let op_ctx = crate::storage::StorageOperationContext::transaction_with_timestamps(
+            crate::core::types::TransactionId(7),
+            42,
+            Some(43),
+            false,
+            true,
+        );
+        let mut rctx = QueryRequestContext::new("MATCH (n) RETURN n".to_string());
+        rctx.auto_commit = true;
+        rctx.operation_context = Some(op_ctx);
+
+        assert_eq!(snapshot_ts_for_request(&rctx), None);
+    }
+
+    #[test]
+    fn explicit_transaction_without_operation_context_has_no_snapshot() {
+        let mut rctx = QueryRequestContext::new("MATCH (n) RETURN n".to_string());
+        rctx.auto_commit = false;
+        rctx.operation_context = None;
+
+        assert_eq!(snapshot_ts_for_request(&rctx), None);
     }
 }

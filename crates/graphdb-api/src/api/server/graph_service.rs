@@ -415,7 +415,7 @@ impl<
         // Handle transaction control statements
         let trimmed_stmt = stmt.trim().to_uppercase();
         if trimmed_stmt.starts_with("BEGIN") || trimmed_stmt.starts_with("START TRANSACTION") {
-            return self.handle_begin_transaction(&session);
+            return self.handle_begin_transaction(&session, stmt);
         } else if trimmed_stmt.starts_with("COMMIT") {
             return self.handle_commit_transaction(&session).await;
         } else if trimmed_stmt.starts_with("ROLLBACK") {
@@ -913,10 +913,36 @@ impl<
         Ok(())
     }
 
+    /// Parse the transaction access mode from a `BEGIN [TRANSACTION] [READ
+    /// ONLY | READ WRITE]` statement.
+    ///
+    /// Returns `Ok(Some(true))` for READ ONLY, `Ok(Some(false))` for READ
+    /// WRITE and `Ok(None)` when no access mode is specified. Malformed
+    /// suffixes (e.g. `BEGIN READ`) are rejected.
+    fn parse_begin_access_mode(stmt: &str) -> Result<Option<bool>, String> {
+        let upper = stmt.trim().to_uppercase();
+        let (_, suffix) = if let Some(pos) = upper.find("READ") {
+            (&upper[..pos], &upper[pos..])
+        } else {
+            return Ok(None);
+        };
+        let suffix = suffix.trim_start();
+        if suffix.starts_with("READ ONLY") {
+            return Ok(Some(true));
+        }
+        if suffix.starts_with("READ WRITE") {
+            return Ok(Some(false));
+        }
+        Err(format!(
+            "Invalid BEGIN access mode, expected READ ONLY or READ WRITE"
+        ))
+    }
+
     /// Processing the BEGIN TRANSACTION statement
     fn handle_begin_transaction(
         &self,
         session: &Arc<ClientSession>,
+        stmt: &str,
     ) -> Result<ExecutionResult, String> {
         self.validate_session_transaction_state(session)?;
 
@@ -929,12 +955,28 @@ impl<
             .as_ref()
             .ok_or("Transaction manager not initialized")?;
 
-        let options = session.transaction_options();
+        // READ ONLY transactions start a consistent MVCC snapshot read
+        // (begin_read_transaction -> acquire_read_timestamp); READ WRITE /
+        // unspecified transactions proceed with the session defaults.
+        let access_mode = Self::parse_begin_access_mode(stmt)?;
+        let mut options = session.transaction_options();
+        if let Some(read_only) = access_mode {
+            options.read_only = read_only;
+        }
         match txn_manager.begin_transaction_with_owner(options, session.id().to_string()) {
             Ok(txn_id) => {
                 session.bind_transaction(txn_id);
                 session.set_auto_commit(false);
-                info!("Session {} started transaction {}", session.id(), txn_id);
+                info!(
+                    "Session {} started {} transaction {}",
+                    session.id(),
+                    if access_mode == Some(true) {
+                        "read-only"
+                    } else {
+                        "read-write"
+                    },
+                    txn_id
+                );
                 Ok(ExecutionResult::Success)
             }
             Err(e) => {
@@ -1328,5 +1370,41 @@ where
             }
         }
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GraphService;
+
+    #[test]
+    fn parse_begin_access_mode_variants() {
+        assert_eq!(GraphService::parse_begin_access_mode("BEGIN"), Ok(None));
+        assert_eq!(
+            GraphService::parse_begin_access_mode("BEGIN TRANSACTION"),
+            Ok(None)
+        );
+        assert_eq!(
+            GraphService::parse_begin_access_mode("BEGIN READ ONLY"),
+            Ok(Some(true))
+        );
+        assert_eq!(
+            GraphService::parse_begin_access_mode("BEGIN READ WRITE"),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            GraphService::parse_begin_access_mode("BEGIN TRANSACTION READ ONLY"),
+            Ok(Some(true))
+        );
+        assert_eq!(
+            GraphService::parse_begin_access_mode("START TRANSACTION READ WRITE"),
+            Ok(Some(false))
+        );
+        assert_eq!(
+            GraphService::parse_begin_access_mode("begin read only"),
+            Ok(Some(true))
+        );
+        assert!(GraphService::parse_begin_access_mode("BEGIN READ").is_err());
+        assert!(GraphService::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err());
     }
 }
