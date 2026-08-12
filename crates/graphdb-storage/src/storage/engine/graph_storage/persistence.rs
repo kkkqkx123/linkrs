@@ -497,6 +497,10 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     ctx.version_manager()
         .init_ts(ctx.version_manager().read_timestamp());
 
+    // Replaying the WAL changed the physical layout; invalidate cached
+    // plans that assumed the pre-recovery layout.
+    ctx.bump_layout_version();
+
     Ok(stats)
 }
 
@@ -541,6 +545,10 @@ pub(crate) fn recover_from_wal_with_config(
     // Update read_ts so recovered data is visible to subsequent reads.
     ctx.version_manager()
         .init_ts(ctx.version_manager().read_timestamp());
+
+    // Replaying the WAL changed the physical layout; invalidate cached
+    // plans that assumed the pre-recovery layout.
+    ctx.bump_layout_version();
 
     Ok(stats)
 }

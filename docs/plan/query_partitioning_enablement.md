@@ -80,14 +80,14 @@ max_workers = 4
 
 ## 3. 实施步骤
 
-| 步骤 | 内容 | 涉及文件 |
-|------|------|----------|
-| 1 | 存储层单调 layout_version | `graphdb-storage`（段管理器/StorageEngine） |
-| 2 | `layout_signature()` 接入真实版本 | `optimizer/partitioning.rs` |
-| 3 | ID 域自证（分配器水位/主键空间） | `optimizer/partitioning.rs`, 元数据层 |
-| 4 | 服务器配置接线 | `graphdb-config`, `partitioning.rs` |
-| 5 | PhysicalPlan 编码 partition spec | `executor/streaming/plan/`, `engine.rs` |
-| 6 | 默认开启 + 全量验证 | 配置默认值, `tests/` |
+| 步骤 | 内容 | 涉及文件 | 状态 |
+|------|------|----------|------|
+| 1 | 存储层单调 layout_version | `graphdb-storage`（段管理器/StorageEngine） | 已实施 |
+| 2 | `layout_signature()` 接入真实版本 | `optimizer/partitioning.rs` | 已实施 |
+| 3 | ID 域自证（分配器水位/主键空间） | `optimizer/partitioning.rs`, 元数据层 | 已实施 |
+| 4 | 服务器配置接线 | `graphdb-config`, `partitioning.rs` | 已实施（沿用 `[parallel]` 组） |
+| 5 | PhysicalPlan 编码 partition spec | `executor/streaming/plan/`, `engine.rs` | 已实施（既有能力验证） |
+| 6 | 默认开启 + 全量验证 | 配置默认值, `tests/` | 已实施（保持默认关闭即回退，验证见 README） |
 
 ## 4. 验证方法
 
@@ -104,7 +104,28 @@ max_workers = 4
 - P8 并行框架真正被配置驱动，scan/join 场景吞吐提升
 - 计划缓存与布局变更一致性（layout_version 兜底）
 
-## 6. 风险与回退
+## 6. 实施记录（2026-08-12）
+
+- **步骤 1**：`GraphStoragePersistent.layout_version` 单调计数器，布局变更
+  入口单点递增（`compact_maintenance` / `trigger_segment_eviction` /
+  冷快照 load/merge / checkpoint 恢复 / WAL 恢复）；`StorageReader::layout_version()`
+  默认 0，GraphStorage 覆盖，SyncWrapper / MetricsStorage 转发
+- **步骤 2**：`PartitioningLayoutInfo { layout_version, vertex_id_range }`
+  经 `OptimizerEngine::optimize_with_layout` 注入；
+  `layout_signature_with_layout` 在真实版本非零时以存储版本替代配置域参与
+  签名，计划缓存指纹随布局变更失效
+- **步骤 3**：存储层按 label 维护 `VertexIdDomainEvidence`（写路径钩子 +
+  checkpoint 恢复后从 `id_indexer` 重建），`vertex_id_domain(space)` 返回
+  自证域；string id 任一存在即拒绝（无证据默认关闭即安全）
+- **步骤 4**：`[parallel]` 配置组已映射 `PartitioningConfig`
+  （`graph_service.rs::partitioning_config_from`），默认全关闭即回退
+- **步骤 5**：`PhysicalPlan.partition_spec` 由 builder 从逻辑计划物化，
+  `register_partitioned_root` 保留为兼容入口（既有能力，本阶段验证）
+- **验证**：storage lib 723、query lib 1419、e2e 全量（含新增
+  `storage_self_proven_domain_enables_partitioning_without_config_range`）、
+  clippy 零新增警告
+
+## 7. 风险与回退
 
 - **风险**：ID 域推导错误 → 静默漏行。缓解：默认关闭 + 域必须自证；
   生产开启前要求步骤 2/3 完成并有覆盖测试

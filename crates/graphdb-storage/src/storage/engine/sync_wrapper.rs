@@ -557,6 +557,8 @@ macro_rules! forward_auto_commit_methods {
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn layout_version(&self) -> u64;
+        fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_prop(

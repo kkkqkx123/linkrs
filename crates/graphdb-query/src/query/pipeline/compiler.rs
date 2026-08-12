@@ -20,9 +20,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         plan: crate::query::planning::plan::ExecutionPlan,
         space_name: Option<&str>,
     ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
+        // Read the storage-provided layout information (monotonic layout
+        // version + self-proven vertex-id domain) so partitioning can be
+        // enabled safely when evidence exists. Without storage access the
+        // default (config-only) layout is used.
+        let layout_info = match &self.storage {
+            Some(storage) => {
+                let guard = storage.read();
+                crate::query::optimizer::partitioning::PartitioningLayoutInfo {
+                    layout_version: guard.layout_version(),
+                    vertex_id_range: space_name.and_then(|space| guard.vertex_id_domain(space)),
+                }
+            }
+            None => crate::query::optimizer::partitioning::PartitioningLayoutInfo::default(),
+        };
         let mut optimized = self
             .optimizer_engine
-            .optimize(plan, space_name)
+            .optimize_with_layout(plan, space_name, &layout_info)
             .map_err(|e| DBError::from(QueryError::pipeline_optimization_error(e)))?;
         let cfg = self.optimizer_engine.partitioning_config();
         optimized.set_max_workers(cfg.max_workers.max(1));

@@ -1,9 +1,10 @@
 //! Conservative physical partition selection for streaming plans.
 //!
-//! The selector intentionally requires a caller-provided vertex-id domain.
-//! Statistics can estimate work, but cannot prove an ID range covers a scan;
-//! guessing a full integer range would silently omit non-numeric or sparse
-//! identifiers.
+//! The selector requires a **self-proven** vertex-id domain: the storage
+//! layer observes every vertex-id write and can prove a covering
+//! `[min, max]` range (see `StorageReader::vertex_id_domain`). Statistics can
+//! estimate work, but cannot prove an ID range covers a scan; guessing a full
+//! integer range would silently omit non-numeric or sparse identifiers.
 
 use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
@@ -13,14 +14,15 @@ use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum}
 
 /// Static configuration for partition selection. The default is disabled so
 /// introducing the optimizer cannot change query results without an explicit
-/// trusted layout source.
+/// self-proven layout source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitioningConfig {
     pub enabled: bool,
     pub min_rows_per_partition: u64,
     pub max_partitions: usize,
-    /// Trusted vertex ID range.  Ranges use `i64` to match the real vertex
-    /// ID type and avoid silent truncation of values >= 2^32.
+    /// Fallback vertex ID range used when the storage cannot self-prove a
+    /// domain. Ranges use `i64` to match the real vertex ID type and avoid
+    /// silent truncation of values >= 2^32.
     pub vertex_id_range: Option<std::ops::Range<i64>>,
     /// Maximum worker threads for intra-query parallelism (P8).
     /// 1 means fully serial (P7 fallback).
@@ -48,6 +50,22 @@ pub struct PartitioningDecision {
     pub reason: String,
 }
 
+/// Storage-provided layout information read at optimize time.
+///
+/// The planner no longer trusts a caller-supplied vertex-id range blindly:
+/// `vertex_id_range` is the storage's **self-proven** domain (see
+/// `StorageReader::vertex_id_domain`), and `layout_version` is the storage's
+/// monotonic physical layout version (see `StorageReader::layout_version`).
+/// When the storage cannot prove a domain, the configured range is used as a
+/// fallback; when neither exists, partitioning falls back (safe default).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PartitioningLayoutInfo {
+    /// Monotonic storage layout version (0 = not provided).
+    pub layout_version: u64,
+    /// Storage self-proven vertex-id domain covering the space.
+    pub vertex_id_range: Option<std::ops::Range<i64>>,
+}
+
 /// Chooses a partition layout only for a single tagged vertex scan. More
 /// complex source topologies retain the existing single-tree path until they
 /// have an explicit source-domain mapping in the physical planner.
@@ -68,18 +86,32 @@ impl PartitioningPlanner {
     /// Deterministic layout signature for the current partitioning config and
     /// data domain.  It is embedded in the [`PartitionSpec::layout_version`]
     /// so the plan cache fingerprint changes whenever the trusted vertex-id
-    /// range, partition granularity, or data domain changes — forcing a
-    /// replan instead of reusing a stale cached partition layout.
-    fn layout_signature(&self, source: &PartitionSource) -> u64 {
+    /// range, partition granularity, data domain, or the storage's monotonic
+    /// layout version changes — forcing a replan instead of reusing a stale
+    /// cached partition layout.
+    ///
+    /// When the storage provides a real monotonic layout version, it replaces
+    /// the config-range component of the signature (the storage layout is the
+    /// authoritative data-domain witness); otherwise the configured range is
+    /// hashed as before.
+    fn layout_signature_with_layout(
+        &self,
+        source: &PartitionSource,
+        layout: &PartitioningLayoutInfo,
+    ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        match &self.config.vertex_id_range {
-            Some(range) => {
-                range.start.hash(&mut hasher);
-                range.end.hash(&mut hasher);
-            }
-            None => {
-                hasher.write_u8(0);
+        if layout.layout_version != 0 {
+            layout.layout_version.hash(&mut hasher);
+        } else {
+            match &self.config.vertex_id_range {
+                Some(range) => {
+                    range.start.hash(&mut hasher);
+                    range.end.hash(&mut hasher);
+                }
+                None => {
+                    hasher.write_u8(0);
+                }
             }
         }
         self.config.min_rows_per_partition.hash(&mut hasher);
@@ -89,18 +121,51 @@ impl PartitioningPlanner {
         hasher.finish()
     }
 
+    /// Config-only layout signature (no storage layout information).
+    #[cfg(test)]
+    fn layout_signature(&self, source: &PartitionSource) -> u64 {
+        self.layout_signature_with_layout(source, &PartitioningLayoutInfo::default())
+    }
+
+    /// Decide using only the static configuration (config-range fallback).
+    ///
+    /// Convenience entry used by tests and callers without storage layout
+    /// information; the pipeline passes [`PartitioningLayoutInfo`] via
+    /// [`decide_with_layout`](Self::decide_with_layout).
     pub fn decide(&self, root: &PlanNodeEnum, statistics: &StatsView) -> PartitioningDecision {
+        self.decide_with_layout(root, statistics, &PartitioningLayoutInfo::default())
+    }
+
+    /// Decide using storage-provided layout information (self-proven
+    /// vertex-id domain and monotonic layout version).
+    pub fn decide_with_layout(
+        &self,
+        root: &PlanNodeEnum,
+        statistics: &StatsView,
+        layout: &PartitioningLayoutInfo,
+    ) -> PartitioningDecision {
         if !self.config.enabled {
             return Self::fallback("partitioning is disabled");
         }
         if self.config.max_partitions < 2 {
             return Self::fallback("partitioning max_partitions is less than two");
         }
-        let Some(range) = self.config.vertex_id_range.clone() else {
-            return Self::fallback("no trusted vertex-id range is configured");
+        // The storage self-proven domain wins; the configured range is a
+        // fallback for setups that explicitly trust a caller-supplied range.
+        let range = match layout
+            .vertex_id_range
+            .clone()
+            .or_else(|| self.config.vertex_id_range.clone())
+        {
+            Some(range) => range,
+            None => {
+                return Self::fallback(
+                    "no self-proven vertex-id range is available (storage evidence or config)",
+                )
+            }
         };
         if range.start >= range.end {
-            return Self::fallback("configured vertex-id range is empty");
+            return Self::fallback("vertex-id range is empty");
         }
 
         // Reject plans with unsupported node categories.
@@ -117,7 +182,8 @@ impl PartitioningPlanner {
             // above the anchor vertex scan). The anchor is partitioned by
             // vertex-id range and each partition expands locally; only
             // recursive / path-algorithm traversals are rejected outright.
-            if let Some(decision) = self.decide_anchored_traversal(root, statistics, &range) {
+            if let Some(decision) = self.decide_anchored_traversal(root, statistics, &range, layout)
+            {
                 return decision;
             }
             return Self::fallback(
@@ -148,7 +214,7 @@ impl PartitioningPlanner {
             let source = PartitionSource::VertexId {
                 tag: tag.to_string(),
             };
-            let layout_version = self.layout_signature(&source);
+            let layout_version = self.layout_signature_with_layout(&source, layout);
             match PartitionSpec::try_new(
                 ranges,
                 source,
@@ -169,9 +235,9 @@ impl PartitioningPlanner {
                 }
             }
         } else if scans.is_empty() {
-            self.decide_edge_scan(root, statistics, &range)
+            self.decide_edge_scan(root, statistics, &range, layout)
         } else {
-            self.decide_multi_scan(root, statistics, &range)
+            self.decide_multi_scan(root, statistics, &range, layout)
         }
     }
 
@@ -190,6 +256,7 @@ impl PartitioningPlanner {
         root: &PlanNodeEnum,
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
+        layout: &PartitioningLayoutInfo,
     ) -> PartitioningDecision {
         let Some((left, right, kind)) = Self::split_independent_branches(root) else {
             return Self::fallback(
@@ -239,7 +306,7 @@ impl PartitioningPlanner {
         let source = PartitionSource::VertexId {
             tag: representative,
         };
-        let layout_version = self.layout_signature(&source);
+        let layout_version = self.layout_signature_with_layout(&source, layout);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => PartitioningDecision {
                 partition_spec: Some(spec),
@@ -265,6 +332,7 @@ impl PartitioningPlanner {
         root: &PlanNodeEnum,
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
+        layout: &PartitioningLayoutInfo,
     ) -> Option<PartitioningDecision> {
         let mut chain = Vec::new();
         if !Self::collect_anchored_chain(root, &mut chain) {
@@ -323,7 +391,7 @@ impl PartitioningPlanner {
         let source = PartitionSource::VertexId {
             tag: tag.to_string(),
         };
-        let layout_version = self.layout_signature(&source);
+        let layout_version = self.layout_signature_with_layout(&source, layout);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => Some(PartitioningDecision {
                 partition_spec: Some(spec),
@@ -463,6 +531,7 @@ impl PartitioningPlanner {
         root: &PlanNodeEnum,
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
+        layout: &PartitioningLayoutInfo,
     ) -> PartitioningDecision {
         let mut chain = Vec::new();
         if !Self::collect_chain(root, &mut chain) {
@@ -495,7 +564,7 @@ impl PartitioningPlanner {
         let source = PartitionSource::EdgeId {
             edge_type: edge_type.to_string(),
         };
-        let layout_version = self.layout_signature(&source);
+        let layout_version = self.layout_signature_with_layout(&source, layout);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => {
                 let description = spec.source().to_string();
@@ -722,7 +791,118 @@ mod tests {
 
         let decision = planner.decide(&tagged_scan(), &view_of(&stats));
         assert!(decision.partition_spec.is_none());
-        assert!(decision.reason.contains("trusted vertex-id range"));
+        assert!(decision.reason.contains("vertex-id range"));
+    }
+
+    #[test]
+    fn storage_self_proven_domain_enables_partitioning_without_config_range() {
+        // The storage self-proven domain (PartitioningLayoutInfo) must be
+        // sufficient to enable partitioning even when the config carries no
+        // trusted range (the phase-4 enablement path).
+        let stats = make_stats();
+        let planner = PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 4,
+            max_workers: 4,
+            ..PartitioningConfig::default()
+        });
+
+        let layout = PartitioningLayoutInfo {
+            layout_version: 42,
+            vertex_id_range: Some(0i64..10_000),
+        };
+        let decision = planner.decide_with_layout(&tagged_scan(), &view_of(&stats), &layout);
+        let spec = decision
+            .partition_spec
+            .expect("storage-proven domain must enable partitioning");
+        assert_eq!(spec.partition_count(), 4);
+    }
+
+    #[test]
+    fn storage_self_proven_domain_overrides_config_range() {
+        let stats = make_stats();
+        let planner = PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 4,
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 4,
+            max_buffered_chunks: 10,
+        });
+
+        // A narrower proven domain must be used (not the config range).
+        let layout = PartitioningLayoutInfo {
+            layout_version: 7,
+            vertex_id_range: Some(100i64..200),
+        };
+        let decision = planner.decide_with_layout(&tagged_scan(), &view_of(&stats), &layout);
+        let spec = decision.partition_spec.expect("partitioned spec");
+        assert_eq!(spec.ranges().first().expect("first range").start, 100);
+        assert_eq!(
+            spec.ranges().last().expect("last range").end,
+            200,
+            "ranges must be derived from the storage-proven domain"
+        );
+    }
+
+    #[test]
+    fn storage_layout_version_changes_the_signature() {
+        // The plan-cache fingerprint must change when the storage's monotonic
+        // layout version changes, even with identical config and domain.
+        let stats = make_stats();
+        let planner = make_planner();
+        let plan = tagged_scan();
+
+        let v1 = planner
+            .decide_with_layout(
+                &plan,
+                &view_of(&stats),
+                &PartitioningLayoutInfo {
+                    layout_version: 1,
+                    vertex_id_range: Some(0i64..10_000),
+                },
+            )
+            .partition_spec
+            .expect("partitioned")
+            .layout_version();
+        let v2 = planner
+            .decide_with_layout(
+                &plan,
+                &view_of(&stats),
+                &PartitioningLayoutInfo {
+                    layout_version: 2,
+                    vertex_id_range: Some(0i64..10_000),
+                },
+            )
+            .partition_spec
+            .expect("partitioned")
+            .layout_version();
+        assert_ne!(
+            v1, v2,
+            "a storage layout change must invalidate the cached partition layout"
+        );
+    }
+
+    #[test]
+    fn missing_storage_domain_falls_back_without_config_range() {
+        // No storage evidence and no configured range: partitioning must stay
+        // disabled (safe default) with an observable reason.
+        let stats = make_stats();
+        let planner = PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 4,
+            max_workers: 4,
+            ..PartitioningConfig::default()
+        });
+        let decision = planner.decide_with_layout(
+            &tagged_scan(),
+            &view_of(&stats),
+            &PartitioningLayoutInfo::default(),
+        );
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("vertex-id range"));
     }
 
     fn make_planner() -> PartitioningPlanner {

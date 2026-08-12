@@ -605,10 +605,7 @@ mod tests {
         match &row[0] {
             Value::Edge(edge) => {
                 assert_eq!(edge.properties().len(), 1, "only degree must be kept");
-                assert_eq!(
-                    edge.properties().get("degree"),
-                    Some(&Value::Double(0.8))
-                );
+                assert_eq!(edge.properties().get("degree"), Some(&Value::Double(0.8)));
             }
             other => panic!("expected Value::Edge, got {:?}", other),
         }

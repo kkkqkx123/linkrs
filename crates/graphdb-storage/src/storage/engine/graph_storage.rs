@@ -624,6 +624,14 @@ impl StorageReader for GraphStorage {
         reader::get_vertex(&self.ctx, space, id)
     }
 
+    fn layout_version(&self) -> u64 {
+        self.ctx.layout_version()
+    }
+
+    fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>> {
+        self.ctx.vertex_id_domain(space)
+    }
+
     fn get_vertex_projected(
         &self,
         space: &str,
@@ -1845,6 +1853,8 @@ impl crate::storage::client::StorageSnapshotOps for GraphStorage {
         let snapshot = crate::storage::cold::ColdSnapshot::open(path)?;
         let info = cold_snapshot_info(&snapshot)?;
         self.ctx.load_cold_snapshot(snapshot);
+        // Loading edge data changes the physical edge layout.
+        self.ctx.bump_layout_version();
         Ok(info)
     }
 
@@ -1904,6 +1914,10 @@ impl crate::storage::client::StorageSnapshotOps for GraphStorage {
                 label,
                 path.display()
             );
+        }
+        if !merged_infos.is_empty() {
+            // Consolidating a snapshot shelf changes the physical edge layout.
+            self.ctx.bump_layout_version();
         }
         Ok(merged_infos)
     }

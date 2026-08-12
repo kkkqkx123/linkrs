@@ -282,7 +282,8 @@ fn next_get_edges(
         .into_iter()
         .map(|mut edge| {
             if flat {
-                edge.props.retain(|key, _| projected_properties.contains(key));
+                edge.props
+                    .retain(|key, _| projected_properties.contains(key));
                 make_flat_edge_row(edge, projected_properties)
             } else {
                 make_edge_row(edge)

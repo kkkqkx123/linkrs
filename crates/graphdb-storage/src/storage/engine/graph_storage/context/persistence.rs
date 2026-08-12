@@ -200,6 +200,11 @@ impl GraphStorageContext {
 
         self.register_loaded_native_indexes()?;
 
+        // Restored tables bypass the write-path domain accumulator; rebuild
+        // the self-proven vertex-id evidence and bump the layout version so
+        // cached plans that assumed an older layout are invalidated.
+        self.rebuild_vertex_id_domains();
+
         Ok(())
     }
 }

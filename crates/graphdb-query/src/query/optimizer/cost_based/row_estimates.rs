@@ -37,10 +37,7 @@ const AGGREGATE_SELECTIVITY: f64 = 0.1;
 /// same shapes during cost-based estimation.  Returns `None` for nodes whose
 /// cardinality is derived (pass-through operators and filters — filters are
 /// corrected per predicate by the selectivity feedback loop).
-fn cardinality_shape_key(
-    space: Option<&str>,
-    node: &PlanNodeEnum,
-) -> Option<String> {
+fn cardinality_shape_key(space: Option<&str>, node: &PlanNodeEnum) -> Option<String> {
     use PlanNodeEnum::*;
     let prefix = space.unwrap_or("").to_string();
     let key = |kind: &str, discriminator: Option<&str>| {
@@ -198,7 +195,8 @@ fn estimate_node_output_rows_impl(
 
         // ── Single-input operations ──
         Filter(n) => {
-            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let input_rows =
+                estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             let condition = n.condition();
             let tag_name = first_tag_of_input(n.input());
             let expr_selectivity = condition
@@ -217,19 +215,23 @@ fn estimate_node_output_rows_impl(
             child_rows_of_impl(node, stats, selectivity, cardinality)
         }
         TopN(n) => {
-            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let input_rows =
+                estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             input_rows.min(n.limit() as u64)
         }
         Limit(n) => {
-            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let input_rows =
+                estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             input_rows.min((n.offset() + n.count()) as u64)
         }
         Dedup(n) => {
-            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let input_rows =
+                estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             (input_rows as f64 * DEDUP_SELECTIVITY).max(1.0) as u64
         }
         Aggregate(n) => {
-            let input_rows = estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
+            let input_rows =
+                estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
             let raw = if n.group_keys().is_empty() {
                 1
             } else {
@@ -243,8 +245,10 @@ fn estimate_node_output_rows_impl(
         InnerJoin(_) | LeftJoin(_) | RightJoin(_) | CrossJoin(_) => {
             let children = node.children();
             let raw = if children.len() >= 2 {
-                let left = estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
-                let right = estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
+                let left =
+                    estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
+                let right =
+                    estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
                 left.saturating_mul(right)
             } else {
                 child_rows_of_impl(node, stats, selectivity, cardinality)
@@ -254,8 +258,10 @@ fn estimate_node_output_rows_impl(
         FullOuterJoin(_) => {
             let children = node.children();
             let raw = if children.len() >= 2 {
-                let left = estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
-                let right = estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
+                let left =
+                    estimate_node_output_rows_impl(children[0], stats, selectivity, cardinality);
+                let right =
+                    estimate_node_output_rows_impl(children[1], stats, selectivity, cardinality);
                 left.saturating_add(right)
             } else {
                 child_rows_of_impl(node, stats, selectivity, cardinality)
@@ -266,20 +272,26 @@ fn estimate_node_output_rows_impl(
         Union(_) => {
             let mut total = 0u64;
             for child in node.children() {
-                total = total.saturating_add(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
+                total = total.saturating_add(estimate_node_output_rows_impl(
+                    child,
+                    stats,
+                    selectivity,
+                    cardinality,
+                ));
             }
             corrected_rows(node, total, stats.space(), cardinality)
         }
         Minus(_) | Intersect(_) => {
             let mut smallest = u64::MAX;
             for child in node.children() {
-                smallest = smallest.min(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
+                smallest = smallest.min(estimate_node_output_rows_impl(
+                    child,
+                    stats,
+                    selectivity,
+                    cardinality,
+                ));
             }
-            let raw = if smallest == u64::MAX {
-                0
-            } else {
-                smallest
-            };
+            let raw = if smallest == u64::MAX { 0 } else { smallest };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
 
@@ -294,7 +306,12 @@ fn estimate_node_output_rows_impl(
             let children = node.children();
             let mut total = 1u64;
             for child in children {
-                total = total.saturating_mul(estimate_node_output_rows_impl(child, stats, selectivity, cardinality));
+                total = total.saturating_mul(estimate_node_output_rows_impl(
+                    child,
+                    stats,
+                    selectivity,
+                    cardinality,
+                ));
             }
             corrected_rows(node, total, stats.space(), cardinality)
         }
@@ -711,7 +728,8 @@ mod tests {
 
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats = crate::query::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats =
+            crate::query::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 100;
         manager.update_tag_stats("test", tag_stats);
         let mut scan = ScanVerticesNode::new(1, "test");
@@ -737,7 +755,10 @@ mod tests {
         );
 
         // The raw variant is unaffected (plan writeback keeps raw estimates).
-        assert_eq!(estimate_node_output_rows(&scan_node, &view, &selectivity), 100);
+        assert_eq!(
+            estimate_node_output_rows(&scan_node, &view, &selectivity),
+            100
+        );
     }
 
     #[test]
@@ -747,7 +768,8 @@ mod tests {
 
         let (manager, selectivity) = setup();
         let view = StatsView::new(&manager, Some("test"));
-        let mut tag_stats = crate::query::optimizer::stats::TagStatistics::new("person".to_string());
+        let mut tag_stats =
+            crate::query::optimizer::stats::TagStatistics::new("person".to_string());
         tag_stats.vertex_count = 100;
         manager.update_tag_stats("test", tag_stats);
         let mut scan = ScanVerticesNode::new(1, "test");
@@ -765,6 +787,10 @@ mod tests {
         // The Limit (pass-through) estimate inherits the corrected child rows.
         let corrected =
             estimate_node_output_rows_corrected(&limit_node, &view, &selectivity, &cardinality);
-        assert!(corrected > 150, "corrected={} should inherit the factor", corrected);
+        assert!(
+            corrected > 150,
+            "corrected={} should inherit the factor",
+            corrected
+        );
     }
 }

@@ -12,7 +12,7 @@
 | 高 | 表达式求值器运行时上下文表达式 | [query_expression_runtime_context.md](query_expression_runtime_context.md) | 已实施（2026-08-12，遗留见文末） |
 | 中 | 解析器 Clause 级错误恢复 | [query_parser_clause_recovery.md](query_parser_clause_recovery.md) | 已实施 |
 | 中 | MVCC 快照注入 QueryContext | [query_transaction_snapshot.md](query_transaction_snapshot.md) | 已实施（2026-08-12，遗留验证见文末） |
-| 中 | 分区规划启用前置条件 | [query_partitioning_enablement.md](query_partitioning_enablement.md) | 待实施 |
+| 中 | 分区规划启用前置条件 | [query_partitioning_enablement.md](query_partitioning_enablement.md) | 已实施（2026-08-12，见下方增补） |
 
 ## 背景
 
@@ -119,12 +119,46 @@
 - `BEGIN READ ONLY` 会话级端到端（同一事务两语句读同一快照、
   只读事务内 DML 拒绝）
 
+### 2026-08-12 增补（阶段四：分区规划启用全部落地）
+
+**分区规划启用前置条件**（`query_partitioning_enablement.md`）：
+
+- **存储层单调布局版本**：
+  - `GraphStoragePersistent` 新增 `layout_version` 单调计数器（初始 1），
+    布局变更入口单点递增：compaction/段合并（`compact_maintenance`）、
+    段驱逐（`trigger_segment_eviction`）、冷快照加载/合并、
+    checkpoint 恢复、WAL 恢复回放
+  - `StorageReader` 新增 `layout_version()`（默认 0 = 未提供），
+    GraphStorage 覆盖实现，SyncWrapper/MetricsStorage 转发
+- **ID 域自证（主键空间登记表）**：
+  - 存储层按 label 追踪 `VertexIdDomainEvidence`（min/max i64 id +
+    string-id 标志），写路径钩子（`insert_vertex`/`insert_vertex_by_i64`）
+    覆盖普通写入、批量写入、WAL 恢复回放
+  - `vertex_id_domain(space)` 返回跨 label 并集域，任一 label 含
+    string id 即拒绝（无证据默认关闭即安全）；checkpoint 恢复后
+    从 vertex table 的 `id_indexer` 重建证据
+- **优化器接入**：
+  - `PartitioningLayoutInfo { layout_version, vertex_id_range }` 在
+    optimize 时注入（`optimize_with_layout`），存储自证域优先于配置域
+  - `layout_signature_with_layout`：真实布局版本非零时替代配置域参与
+    签名 → 布局变更后计划缓存指纹失效
+  - 管线 `optimize_execution_plan` 从 storage 读取布局信息传入优化器
+- **配置接线**（沿用既有 `[parallel]` 组）：`enabled`/`workers`/
+  `min_rows_per_partition`/`max_partitions`/`max_buffered_chunks`/
+  `vertex_id_*` 已在 `graph_service.rs` 映射到 `PartitioningConfig`，
+  默认全关闭即回退开关
+- **PhysicalPlan 编码**（既有能力验证）：`PhysicalPlan.partition_spec`
+  由 builder 从逻辑计划物化，`register_partitioned_root` 保留为兼容入口
+- 测试：storage lib 723、query lib 1419、e2e（parallel_partition_execution
+  22 含新增 `storage_self_proven_domain_enables_partitioning_without_config_range`）、
+  dml/ddl/dcl/integration 全量通过；clippy 零新增警告
+
 ## 实施顺序建议
 
 1. **阶段一**：低风险增量 —— 解析器 Clause 恢复（`query_parser_clause_recovery.md`）✅
 2. **阶段二**：优化器增强 —— 子查询反嵌套 + 属性裁剪（高优先级两篇）✅
 3. **阶段三**：执行层 —— 表达式运行时上下文、事务快照 ✅（2026-08-12）
-4. **阶段四**：分区规划启用（依赖存储层提供单调版本，需跨 crate 协调）
+4. **阶段四**：分区规划启用（依赖存储层提供单调版本，需跨 crate 协调）✅（2026-08-12）
 
 每篇方案文档包含：现状分析、方案设计（引用具体文件/函数）、实施步骤、
 验证方法、预期收益、风险与回退。

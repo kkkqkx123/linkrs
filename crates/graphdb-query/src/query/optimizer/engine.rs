@@ -45,7 +45,9 @@ use crate::query::optimizer::heuristic::batch::{
     BatchOptimizer, BatchStatistics, OptimizationBatch,
 };
 use crate::query::optimizer::heuristic::rule_enum::RuleRegistry;
-use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
+use crate::query::optimizer::partitioning::{
+    PartitioningConfig, PartitioningLayoutInfo, PartitioningPlanner,
+};
 use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::query::optimizer::stats::feedback::decision::DecisionFeedbackStore;
 use crate::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
@@ -333,13 +335,19 @@ impl OptimizerEngine {
             for feedback in history.get_feedback_for_query(&fingerprint) {
                 let space = feedback.space.as_deref().unwrap_or("");
                 if feedback.apply_rows > 0 {
-                    self.decision_feedback
-                        .record_apply_run(space, feedback.apply_rows, feedback.apply_time_us);
+                    self.decision_feedback.record_apply_run(
+                        space,
+                        feedback.apply_rows,
+                        feedback.apply_time_us,
+                    );
                     decision_runs += 1;
                 }
                 if feedback.join_rows > 0 {
-                    self.decision_feedback
-                        .record_join_run(space, feedback.join_rows, feedback.join_time_us);
+                    self.decision_feedback.record_join_run(
+                        space,
+                        feedback.join_rows,
+                        feedback.join_time_us,
+                    );
                     decision_runs += 1;
                 }
                 for op in &feedback.operator_feedbacks {
@@ -386,7 +394,10 @@ impl OptimizerEngine {
                 let removed = self
                     .selectivity_feedback
                     .remove_feedback_by_space(&format!("{}:", space));
-                removed + self.cardinality_feedback.remove_feedback_by_space(&format!("{}:", space))
+                removed
+                    + self
+                        .cardinality_feedback
+                        .remove_feedback_by_space(&format!("{}:", space))
             }
             None => {
                 let keys = self.selectivity_feedback.get_all_keys();
@@ -491,6 +502,19 @@ impl OptimizerEngine {
         plan: ExecutionPlan,
         space: Option<&str>,
     ) -> OptimizeResult<ExecutionPlan> {
+        // Without storage layout information the planner falls back to the
+        // configured (or absent) vertex-id range — safe, no evidence.
+        self.optimize_with_layout(plan, space, &PartitioningLayoutInfo::default())
+    }
+
+    /// Optimize with storage-provided layout information (layout version and
+    /// self-proven vertex-id domain). See [`PartitioningLayoutInfo`].
+    pub fn optimize_with_layout(
+        &self,
+        plan: ExecutionPlan,
+        space: Option<&str>,
+        layout: &PartitioningLayoutInfo,
+    ) -> OptimizeResult<ExecutionPlan> {
         let mut current_plan = plan;
 
         // Phase 0: fold recorded execution feedback into the selectivity
@@ -511,7 +535,7 @@ impl OptimizerEngine {
         current_plan = self.apply_cost_based(current_plan, space)?;
         log::debug!("Phase 2 completed successfully");
 
-        current_plan = self.apply_partitioning_selection(current_plan, space);
+        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
         Ok(current_plan)
     }
@@ -520,6 +544,7 @@ impl OptimizerEngine {
         &self,
         mut plan: ExecutionPlan,
         space: Option<&str>,
+        layout: &PartitioningLayoutInfo,
     ) -> ExecutionPlan {
         if plan.partition_spec().is_some() {
             return plan;
@@ -528,7 +553,9 @@ impl OptimizerEngine {
             return plan;
         };
         let stats = StatsView::new(&self.stats_manager, space);
-        let decision = self.partitioning_planner.decide(root, &stats);
+        let decision = self
+            .partitioning_planner
+            .decide_with_layout(root, &stats, layout);
         if let Some(spec) = decision.partition_spec {
             log::debug!("Selected partition layout: {}", decision.reason);
             plan.set_partition_spec(spec);
@@ -934,9 +961,8 @@ impl OptimizerEngine {
         if let PatternApply(apply) = node {
             let analysis = self.batch_plan_analyzer.analyze(node);
             let advice = self.decision_feedback.advice(stats.space().unwrap_or(""));
-            if let UnnestDecision::ShouldUnnest { ref reason, .. } = self
-                .subquery_unnesting_optimizer
-                .should_unnest(
+            if let UnnestDecision::ShouldUnnest { ref reason, .. } =
+                self.subquery_unnesting_optimizer.should_unnest(
                     apply,
                     &analysis,
                     stats,

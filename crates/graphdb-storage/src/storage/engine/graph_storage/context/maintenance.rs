@@ -336,6 +336,11 @@ impl GraphStorageContext {
             cleanup_ts
         );
 
+        // Vertex/edge compaction, segment merges, and eviction all changed
+        // the physical layout: bump the monotonic layout version so cached
+        // plans that assumed the previous layout are invalidated.
+        self.bump_layout_version();
+
         Ok(())
     }
 }

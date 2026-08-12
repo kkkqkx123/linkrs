@@ -209,8 +209,12 @@ impl SubqueryUnnestingOptimizer {
         }
 
         // 4. Checking the number of estimated rows for subqueries
-        let estimated_rows =
-            self.estimate_subquery_rows(pattern_apply.right_input(), stats, selectivity, cardinality);
+        let estimated_rows = self.estimate_subquery_rows(
+            pattern_apply.right_input(),
+            stats,
+            selectivity,
+            cardinality,
+        );
         if estimated_rows > self.max_subquery_rows {
             return UnnestDecision::KeepPatternApply {
                 reason: KeepReason::TooManyRows,

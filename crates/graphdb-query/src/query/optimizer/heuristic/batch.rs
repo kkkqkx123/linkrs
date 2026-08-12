@@ -286,7 +286,7 @@ impl BatchOptimizer {
             // Property pruning batch
             PushProjectDownScanVertices(_)
             | PushProjectDownScanEdges(_)
-            |             PushProjectDownGetVertices(_)
+            | PushProjectDownGetVertices(_)
             | PushProjectDownGetNeighbors(_)
             | PushProjectDownGetEdges(_)
             | PushProjectDownAppendVertices(_)

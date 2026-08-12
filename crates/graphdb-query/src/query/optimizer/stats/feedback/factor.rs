@@ -42,7 +42,12 @@ impl FeedbackDrivenFactor {
     }
 
     /// Create a factor with custom parameters.
-    pub fn with_params(estimated: f64, alpha: f64, min_correction: f64, max_correction: f64) -> Self {
+    pub fn with_params(
+        estimated: f64,
+        alpha: f64,
+        min_correction: f64,
+        max_correction: f64,
+    ) -> Self {
         Self {
             estimated,
             correction_factor: 1.0,

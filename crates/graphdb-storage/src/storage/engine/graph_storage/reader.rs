@@ -364,7 +364,8 @@ fn get_edge_impl(
         },
         ts,
     ) {
-        let edge = edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
+        let edge =
+            edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
         return Ok(Some(edge));
     }
 
@@ -384,7 +385,9 @@ fn get_edge_impl(
                 VertexId::from_int64(src_internal as i64),
                 dst_internal_vid,
             );
-            let edge = edge_record_to_edge_with_projection(&record, edge_type, &src_str, &dst_str, projection);
+            let edge = edge_record_to_edge_with_projection(
+                &record, edge_type, &src_str, &dst_str, projection,
+            );
             return Ok(Some(edge));
         }
     }

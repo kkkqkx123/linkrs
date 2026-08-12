@@ -7,6 +7,7 @@ use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cold::ColdSnapshot;
+use crate::storage::engine::graph_storage::context::VertexIdDomainEvidence;
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 
 use crate::storage::mvcc::SnapshotHandle;
@@ -876,5 +877,94 @@ impl GraphStorageContext {
         } else {
             cfg_dir.clone()
         }
+    }
+
+    // ── Layout version & vertex-id domain evidence ───────────────────────────
+
+    /// Monotonic physical layout version. Bumped on segment allocation,
+    /// merge, compaction, eviction, restore, and cold-snapshot load/merge so
+    /// consumers can detect stale plans.
+    pub(crate) fn layout_version(&self) -> u64 {
+        self.persistent.layout_version.get()
+    }
+
+    /// Bump the monotonic physical layout version.
+    pub(crate) fn bump_layout_version(&self) {
+        self.persistent.layout_version.bump();
+    }
+
+    /// Observe an i64 vertex-id write for the space's self-proven domain.
+    /// Negative ids are rejected by the write path; the domain evidence only
+    /// trusts non-negative i64 ids and falls back to `None` otherwise.
+    pub(crate) fn observe_vertex_id_i64(&self, label: LabelId, id: i64) {
+        let evidence = self.vertex_id_domain_evidence(label);
+        evidence.observe_i64(id);
+    }
+
+    /// Observe a non-numeric (string) vertex-id write. Any string id in a
+    /// label invalidates the numeric domain evidence for that label.
+    pub(crate) fn observe_vertex_id_string(&self, label: LabelId) {
+        let evidence = self.vertex_id_domain_evidence(label);
+        evidence.observe_string();
+    }
+
+    fn vertex_id_domain_evidence(&self, label: LabelId) -> Arc<VertexIdDomainEvidence> {
+        let domains = &self.persistent.vertex_id_domains;
+        if let Some(evidence) = domains.read().get(&label) {
+            return Arc::clone(evidence);
+        }
+        let evidence = Arc::new(VertexIdDomainEvidence::new());
+        domains
+            .write()
+            .entry(label)
+            .or_insert_with(|| Arc::clone(&evidence));
+        evidence
+    }
+
+    /// Union of the self-proven vertex-id domains across the space's labels.
+    /// Returns `None` when any label with rows lacks evidence (mixed/string
+    /// ids), since a guessed range could silently omit rows. Labels with no
+    /// writes have no evidence entry and contribute nothing — they are
+    /// skipped rather than blocking the whole space.
+    pub(crate) fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>> {
+        let tags = self.schema_manager().list_tags(space).ok()?;
+        let domains = self.persistent.vertex_id_domains.read();
+        let mut min = i64::MAX;
+        let mut max = i64::MIN;
+        for tag in &tags {
+            let Some(evidence) = domains.get(&tag.tag_id) else {
+                // No writes for this label: nothing to cover.
+                continue;
+            };
+            let range = evidence.domain()?;
+            min = min.min(range.start);
+            max = max.max(range.end);
+        }
+        if min >= max {
+            return None;
+        }
+        Some(min..max)
+    }
+
+    /// Rebuild the self-proven vertex-id domain evidence from the live vertex
+    /// tables. Called after restore/checkpoint load where write-path
+    /// accumulation did not run. Also bumps the layout version (a restore
+    /// changes the physical layout).
+    pub(crate) fn rebuild_vertex_id_domains(&self) {
+        let tables = self
+            .persistent
+            .data_store
+            .with_vertex_tables(|tables| tables.values().cloned().collect::<Vec<_>>());
+        for table in tables {
+            let label = table.label();
+            let evidence = self.vertex_id_domain_evidence(label);
+            for key in table.external_id_keys() {
+                match key {
+                    crate::storage::vertex::IdKey::Int(id) => evidence.observe_i64(id),
+                    crate::storage::vertex::IdKey::Text(_) => evidence.observe_string(),
+                }
+            }
+        }
+        self.bump_layout_version();
     }
 }

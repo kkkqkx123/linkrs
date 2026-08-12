@@ -69,7 +69,10 @@ impl CardinalityFeedbackManager {
 
     /// The correction factor for a shape key, if registered.
     pub fn correction_factor(&self, key: &str) -> Option<f64> {
-        self.feedbacks.read().get(key).map(|f| f.correction_factor())
+        self.feedbacks
+            .read()
+            .get(key)
+            .map(|f| f.correction_factor())
     }
 
     /// Update feedback from an estimated-vs-actual row ratio.
@@ -149,10 +152,7 @@ mod tests {
     fn test_register_and_correct() {
         let manager = CardinalityFeedbackManager::new();
         manager.register_key("s:ScanVertices:Person".to_string(), 100.0);
-        assert_eq!(
-            manager.corrected_rows("s:ScanVertices:Person"),
-            Some(100.0)
-        );
+        assert_eq!(manager.corrected_rows("s:ScanVertices:Person"), Some(100.0));
         for _ in 0..50 {
             manager.update_feedback_ratio("s:ScanVertices:Person", 3.0);
         }

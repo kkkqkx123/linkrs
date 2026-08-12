@@ -511,9 +511,8 @@ impl UnaryOperator {
                             Ok(val) => val,
                             Err(_) => Value::Null(crate::core::NullType::Null),
                         };
-                        let vid = match crate::core::types::storage_ids::VertexId::try_from(
-                            &entity,
-                        ) {
+                        let vid = match crate::core::types::storage_ids::VertexId::try_from(&entity)
+                        {
                             Ok(vid) => vid,
                             Err(_) => {
                                 new_row.push(Value::Null(crate::core::NullType::Null));
@@ -525,13 +524,9 @@ impl UnaryOperator {
                             Ok(Some(vertex)) => {
                                 if flat {
                                     for prop in prop_names.iter() {
-                                        new_row.push(
-                                            vertex
-                                                .property_value(prop)
-                                                .unwrap_or_else(|| {
-                                                    Value::Null(crate::core::NullType::Null)
-                                                }),
-                                        );
+                                        new_row.push(vertex.property_value(prop).unwrap_or_else(
+                                            || Value::Null(crate::core::NullType::Null),
+                                        ));
                                     }
                                 } else {
                                     new_row.push(Value::Vertex(Box::new(vertex)));
@@ -540,9 +535,7 @@ impl UnaryOperator {
                             Ok(None) => {
                                 if flat {
                                     for _ in prop_names.iter() {
-                                        new_row.push(Value::Null(
-                                            crate::core::NullType::Null,
-                                        ));
+                                        new_row.push(Value::Null(crate::core::NullType::Null));
                                     }
                                 } else {
                                     new_row.push(Value::Null(crate::core::NullType::Null));
@@ -641,7 +634,9 @@ mod tests {
     use crate::storage::StorageWriter;
     use parking_lot::RwLock;
 
-    fn runtime_with_storage(storage: Arc<RwLock<dyn crate::storage::QueryStorage>>) -> Arc<ExecutionRuntime> {
+    fn runtime_with_storage(
+        storage: Arc<RwLock<dyn crate::storage::QueryStorage>>,
+    ) -> Arc<ExecutionRuntime> {
         Arc::new(ExecutionRuntime::new(
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
@@ -754,10 +749,7 @@ mod tests {
         match &row[1] {
             Value::Vertex(vertex) => {
                 assert_eq!(vertex.vid, VertexId::from_int64(7));
-                assert_eq!(
-                    vertex.property_value("name"),
-                    Some(Value::string("Bob"))
-                );
+                assert_eq!(vertex.property_value("name"), Some(Value::string("Bob")));
             }
             other => panic!("expected full vertex, got {:?}", other),
         }
@@ -765,10 +757,9 @@ mod tests {
 
     #[test]
     fn append_vertices_missing_vertex_yields_null_columns() {
-        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> =
-            Arc::new(RwLock::new(
-                crate::storage::MockStorage::new().expect("MockStorage should be created"),
-            ));
+        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(
+            crate::storage::MockStorage::new().expect("MockStorage should be created"),
+        ));
         let input = Box::new(StreamingExecutor::Source(
             OperatorBase::new(0),
             SourceOperator::ScanVertices {

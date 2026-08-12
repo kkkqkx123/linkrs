@@ -23,6 +23,27 @@ use graphdb_transaction::transaction::TransactionMutationRecorder;
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
 
+    /// Monotonic physical layout version of the vertex/edge segment layout.
+    ///
+    /// Bumped on segment allocation, merge, compaction, eviction, restore,
+    /// and cold-snapshot load/merge. `0` means the implementation does not
+    /// track a layout version (default) — consumers then cannot use it to
+    /// invalidate cached plans.
+    fn layout_version(&self) -> u64 {
+        0
+    }
+
+    /// Self-proven vertex-id domain covering a whole space.
+    ///
+    /// Returns `Some(min..max)` only when the storage can prove that every
+    /// vertex id written to the space is a non-negative i64 within that
+    /// range. `None` means no proof exists (mixed or string ids, or no
+    /// writes) and partition planning must not guess a range.
+    fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>> {
+        let _ = space;
+        None
+    }
+
     /// Fetch a vertex with only the requested properties.
     ///
     /// The default implementation calls [`get_vertex`] and filters the

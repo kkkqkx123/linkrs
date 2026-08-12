@@ -135,10 +135,8 @@ impl JoinToAppendVerticesRule {
         }]);
         append_vertices.set_input_var(vertex_var.clone());
         append_vertices.set_node_alias(vertex_var.clone());
-        append_vertices.set_src_expression_expression(
-            entity_expr,
-            Arc::new(ExpressionAnalysisContext::new()),
-        );
+        append_vertices
+            .set_src_expression_expression(entity_expr, Arc::new(ExpressionAnalysisContext::new()));
 
         append_vertices.add_input(if edge_on_left {
             left.clone()

@@ -890,3 +890,54 @@ fn partitioned_equality_join_matches_serial_results() {
         );
     }
 }
+
+#[test]
+fn storage_self_proven_domain_enables_partitioning_without_config_range() {
+    // Phase 4 enablement: with no configured vertex-id range, the storage's
+    // self-proven domain (accumulated on writes) must be enough to partition
+    // a large tagged scan, and results must match the serial path.
+    let storage = setup_storage();
+
+    let mut engine = OptimizerEngine::default();
+    engine.set_partitioning_config(PartitioningConfig {
+        enabled: true,
+        min_rows_per_partition: 400,
+        max_partitions: 4,
+        vertex_id_range: None, // no trusted config range: storage must prove it
+        max_workers: 2,
+        max_buffered_chunks: 10,
+    });
+    let stats = Arc::new(StatsManager::new());
+    let mut pipeline =
+        QueryPipelineManager::with_optimizer(storage.clone(), stats, Arc::new(engine));
+    pipeline
+        .collect_statistics(SPACE, true)
+        .expect("collect statistics");
+
+    let q = "MATCH (n:Node) WHERE n.value < 800 RETURN count(n)";
+    let serial_rows = query_rows(&mut pipeline, q);
+    assert_eq!(serial_rows, vec![vec![Value::BigInt(800)]]);
+
+    // The pipeline reads the storage layout version + self-proven domain, so
+    // the partitioned plan must carry a real layout version and run
+    // partitioned (actual workers >= 2).
+    let output = query_rows(
+        &mut pipeline,
+        "EXPLAIN ANALYZE MATCH (n:Node) WHERE n.value < 800 RETURN count(n)",
+    );
+    let plan = output[0][0].to_string().unwrap_or_default();
+    assert!(
+        plan.contains("Partitioning:"),
+        "storage self-proven domain must enable partitioning, got:\n{plan}"
+    );
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 2,
+        "storage-driven partitioning must use real workers, got actual={actual}:\n{plan}"
+    );
+}

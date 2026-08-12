@@ -309,6 +309,8 @@ impl GraphStorageContext {
                 total_freed,
                 target_bytes
             );
+            // Evicting cold segments changes the physical edge layout.
+            self.bump_layout_version();
         }
 
         Ok(total_freed)

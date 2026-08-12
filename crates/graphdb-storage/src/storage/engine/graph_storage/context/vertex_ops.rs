@@ -34,6 +34,7 @@ impl GraphStorageContext {
             .cache_manager
             .cache_vertex_id(label, external_id, internal_id, ts);
         self.mark_vertex_modified(label);
+        self.observe_vertex_id_string(label);
 
         Ok(internal_id)
     }
@@ -71,6 +72,7 @@ impl GraphStorageContext {
             ts,
         );
         self.mark_vertex_modified(label);
+        self.observe_vertex_id_i64(label, external_id);
 
         Ok(internal_id)
     }

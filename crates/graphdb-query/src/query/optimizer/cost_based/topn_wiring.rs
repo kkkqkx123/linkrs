@@ -43,8 +43,12 @@ pub fn rewrite_sort_with_limits(
             let offset = limit.offset();
             let count = limit.count();
             if offset >= 0 && count > 0 {
-                let input_rows =
-                    estimate_node_output_rows_corrected(sort.input(), stats, selectivity, cardinality);
+                let input_rows = estimate_node_output_rows_corrected(
+                    sort.input(),
+                    stats,
+                    selectivity,
+                    cardinality,
+                );
                 let context =
                     SortContext::new(sort.clone(), input_rows).with_limit(count + offset.max(0));
                 match optimizer.optimize_with_memory(&context, None) {

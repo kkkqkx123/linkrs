@@ -88,18 +88,12 @@ impl Default for MockStorage {
 }
 
 impl StorageReader for MockStorage {
-    fn get_vertex(
-        &self,
-        space: &str,
-        id: &VertexId,
-    ) -> Result<Option<Vertex>, StorageError> {
+    fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError> {
         Ok(self
             .vertices
             .read()
             .get(space)
-            .and_then(|vertices| {
-                vertices.iter().find(|v| v.vid == *id).cloned()
-            }))
+            .and_then(|vertices| vertices.iter().find(|v| v.vid == *id).cloned()))
     }
 
     fn get_vertex_projected(
@@ -176,11 +170,7 @@ impl StorageReader for MockStorage {
 }
 
 impl StorageWriter for MockStorage {
-    fn insert_vertex(
-        &mut self,
-        space: &str,
-        vertex: Vertex,
-    ) -> Result<VertexId, StorageError> {
+    fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
         self.vertices
             .write()
             .entry(space.to_string())

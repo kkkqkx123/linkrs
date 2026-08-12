@@ -315,6 +315,19 @@ impl ShardedVertexTable {
         ids
     }
 
+    /// External vertex-id keys of every live row, across all shards.
+    ///
+    /// Used to rebuild the self-proven vertex-id domain evidence after a
+    /// restore (the write-path accumulator is not populated by disk loads).
+    pub fn external_id_keys(&self) -> Vec<crate::storage::vertex::IdKey> {
+        let mut keys = Vec::new();
+        for shard in &self.shards {
+            let table = shard.read();
+            keys.extend(table.id_indexer.iter().into_iter().map(|(key, _)| key));
+        }
+        keys
+    }
+
     /// Batch variant of [`get_projected_by_internal_id`].
     ///
     /// Input ids are grouped by shard, decoded with one lock acquisition and

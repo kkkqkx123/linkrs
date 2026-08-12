@@ -970,9 +970,11 @@ pub fn operator_cardinality_shape_key(
             key("AppendVertices", Some(entity_var))
         }
         OperatorKindSpec::Unary(_) => None,
-        OperatorKindSpec::Blocking(BlockingSpec::Aggregate { .. }
-        | BlockingSpec::PartialAggregate { .. }
-        | BlockingSpec::FinalAggregate { .. }) => key("Aggregate", None),
+        OperatorKindSpec::Blocking(
+            BlockingSpec::Aggregate { .. }
+            | BlockingSpec::PartialAggregate { .. }
+            | BlockingSpec::FinalAggregate { .. },
+        ) => key("Aggregate", None),
         OperatorKindSpec::Blocking(_) => None,
         OperatorKindSpec::Join(spec) => match spec {
             JoinSpec::InnerJoin { .. } => join_types("InnerJoin"),
@@ -986,18 +988,12 @@ pub fn operator_cardinality_shape_key(
             JoinSpec::NestedLoopJoin { .. } => join_types("NestedLoopJoin"),
         },
         OperatorKindSpec::Graph(spec) => match spec {
-            GraphSpec::Expand { edge_types, .. } => {
-                key("Expand", Some(&edge_types.join(",")))
-            }
+            GraphSpec::Expand { edge_types, .. } => key("Expand", Some(&edge_types.join(","))),
             GraphSpec::ExpandAll { edge_types, .. } => {
                 key("ExpandAll", Some(&edge_types.join(",")))
             }
-            GraphSpec::Traverse { edge_types, .. } => {
-                key("Traverse", Some(&edge_types.join(",")))
-            }
-            GraphSpec::BiExpand { edge_types, .. } => {
-                key("BiExpand", Some(&edge_types.join(",")))
-            }
+            GraphSpec::Traverse { edge_types, .. } => key("Traverse", Some(&edge_types.join(","))),
+            GraphSpec::BiExpand { edge_types, .. } => key("BiExpand", Some(&edge_types.join(","))),
             GraphSpec::BiTraverse { edge_types, .. } => {
                 key("BiTraverse", Some(&edge_types.join(",")))
             }

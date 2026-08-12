@@ -63,10 +63,10 @@ pub use error::{CostError, CostResult, OptimizeError, OptimizeResult};
 pub use partitioning::{PartitioningConfig, PartitioningDecision, PartitioningPlanner};
 
 pub use stats::{
-    CardinalityFeedbackManager, DecisionFeedbackStore, DecorrelationAdvice,
-    EdgeTypeStatistics, ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback,
-    PropertyStatistics, QueryExecutionFeedback, QueryFeedbackHistory, SelectivityFeedbackManager,
-    StatisticsManager, TagStatistics,
+    CardinalityFeedbackManager, DecisionFeedbackStore, DecorrelationAdvice, EdgeTypeStatistics,
+    ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback, PropertyStatistics,
+    QueryExecutionFeedback, QueryFeedbackHistory, SelectivityFeedbackManager, StatisticsManager,
+    TagStatistics,
 };
 
 pub use cost::{CostAssigner, CostCalculator, CostModelConfig, SelectivityEstimator};
