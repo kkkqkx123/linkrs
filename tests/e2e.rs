@@ -24,3 +24,5 @@ pub mod schema_manager;
 pub mod session_transaction;
 #[path = "e2e/social_network.rs"]
 pub mod social_network;
+#[path = "e2e/subquery.rs"]
+pub mod subquery;

@@ -369,14 +369,17 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                     span,
                 };
             }
-        } else if ctx.check_token(TokenKind::In) && ctx.peek_token().kind == TokenKind::LBrace {
+        } else if (ctx.check_token(TokenKind::In) || ctx.check_token(TokenKind::NotIn))
+            && ctx.peek_token().kind == TokenKind::LBrace
+        {
+            let negated = ctx.match_token(TokenKind::NotIn);
             ctx.match_token(TokenKind::In);
             ctx.expect_token(TokenKind::LBrace)?;
             let subquery = parse_subquery_body(ctx)?;
             ctx.expect_token(TokenKind::RBrace)?;
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
             expression = ParseResult {
-                expr: Expression::in_subquery(expression.expr, subquery, false),
+                expr: Expression::in_subquery(expression.expr, subquery, negated),
                 span,
             };
         } else if !ctx.is_edge_syntax_mode()
@@ -1179,6 +1182,30 @@ mod tests {
                 assert!(subquery.return_expr.is_some());
             }
             other => panic!("expected Expression::In, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_not_in_subquery() {
+        // Regression: `NOT IN` lexes as a single NotIn token that the parser
+        // used to drop, silently discarding the whole subquery.
+        let input = "t.name NOT IN { MATCH (p:person) RETURN p.name }";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx);
+        assert!(result.is_ok(), "parse failed: {:?}", result.err());
+        let parse_result = result.expect("NOT IN subquery parsing should succeed");
+        match parse_result.expr {
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => {
+                assert!(negated);
+                assert!(matches!(*expr, Expression::Property { .. }));
+                assert_eq!(subquery.patterns.len(), 1);
+                assert!(subquery.return_expr.is_some());
+            }
+            other => panic!("expected negated Expression::In, got {:?}", other),
         }
     }
 

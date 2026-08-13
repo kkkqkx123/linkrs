@@ -151,6 +151,41 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             pairs.push(Pair::new("blocking", "true"));
         }
 
+        // PatternApply subquery keys: hash_keys evaluate against the outer
+        // (left) layout, probe_keys against the subquery (right) layout.
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Apply(
+            crate::query::executor::streaming::operators::spec::ApplySpec::PatternApply {
+                hash_keys,
+                probe_keys,
+                anti,
+            },
+        ) = &op_spec.spec
+        {
+            if !hash_keys.is_empty() {
+                pairs.push(Pair::new(
+                    "hash_keys",
+                    hash_keys
+                        .iter()
+                        .map(crate::core::types::expr::Expression::to_expression_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ));
+            }
+            if !probe_keys.is_empty() {
+                pairs.push(Pair::new(
+                    "probe_keys",
+                    probe_keys
+                        .iter()
+                        .map(crate::core::types::expr::Expression::to_expression_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ));
+            }
+            if *anti {
+                pairs.push(Pair::new("anti", "true"));
+            }
+        }
+
         if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable {
             threshold,
         } = &props.memory_policy

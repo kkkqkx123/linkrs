@@ -284,7 +284,6 @@ impl PlanNodeVisitor for DescribeVisitor {
         visit_data_collect => "DataCollect", DataCollectNode,
         visit_unwind => "Unwind", UnwindNode,
         visit_assign => "Assign", AssignNode,
-        visit_pattern_apply => "PatternApply", PatternApplyNode,
         visit_roll_up_apply => "RollUpApply", RollUpApplyNode,
     );
 
@@ -323,6 +322,37 @@ impl PlanNodeVisitor for DescribeVisitor {
     // ==========================================
     // Single-input nodes with extra descriptions
     // ==========================================
+
+    fn visit_pattern_apply(&mut self, node: &PatternApplyNode) {
+        node.left_input().accept(self);
+        node.right_input().accept(self);
+        let deps = vec![node.left_input().id(), node.right_input().id()];
+        let mut desc = PlanNodeDescription::new("PatternApply", node.id());
+        desc.set_dependencies(deps);
+
+        let hash_keys: Vec<String> = node
+            .hash_keys()
+            .iter()
+            .map(|k| k.to_expression_string())
+            .collect();
+        let probe_keys: Vec<String> = node
+            .probe_keys()
+            .iter()
+            .map(|k| k.to_expression_string())
+            .collect();
+        if !hash_keys.is_empty() {
+            desc.add_description("hash_keys", hash_keys.join(", "));
+        }
+        if !probe_keys.is_empty() {
+            desc.add_description("probe_keys", probe_keys.join(", "));
+        }
+        if node.is_anti_predicate() {
+            desc.add_description("anti", "true");
+        }
+
+        self.descriptions.push(desc);
+        self.visited_ids.insert(node.id());
+    }
 
     fn visit_project(&mut self, node: &ProjectNode) {
         let deps = self.visit_children_single(node);
@@ -667,5 +697,91 @@ impl PlanNodeVisitor for DescribeVisitor {
 
         self.descriptions.push(desc);
         self.visited_ids.insert(node.id());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::ExpressionMeta;
+    use crate::core::types::operators::BinaryOperator;
+    use crate::core::types::ContextualExpression;
+    use crate::core::Expression;
+    use crate::query::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+    use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+    use std::sync::Arc;
+
+    fn scan() -> PlanNodeEnum {
+        let mut scan = ScanVerticesNode::new(1, "test");
+        scan.set_col_names(vec!["t".to_string()]);
+        scan.into_enum()
+    }
+
+    fn contextual(expr: Expression) -> ContextualExpression {
+        let ctx = Arc::new(ExpressionAnalysisContext::new());
+        let id = ctx.register_expression(ExpressionMeta::new(expr));
+        ContextualExpression::new(id, ctx)
+    }
+
+    fn key(var: &str, prop: &str) -> ContextualExpression {
+        contextual(Expression::binary(
+            Expression::property(Expression::variable(var), prop),
+            BinaryOperator::Equal,
+            Expression::literal(1),
+        ))
+    }
+
+    #[test]
+    fn pattern_apply_describes_keys_and_anti() {
+        let left = scan();
+        let left_id = left.id();
+        let right = scan();
+        let right_id = right.id();
+        let apply = PatternApplyNode::new(
+            left,
+            right,
+            vec![key("t", "name")],
+            vec![key("p", "name")],
+            true,
+        )
+        .expect("pattern apply should build");
+        let node = PlanNodeEnum::PatternApply(apply);
+
+        let mut visitor = DescribeVisitor::new();
+        node.accept(&mut visitor);
+        let descs = visitor.into_descriptions();
+
+        let pattern = descs
+            .iter()
+            .find(|d| d.name == "PatternApply")
+            .expect("PatternApply should be described");
+        assert_eq!(pattern.dependencies.as_deref(), Some(&[left_id, right_id][..]));
+
+        let pairs = pattern.description.as_ref().expect("description present");
+        let lookup: std::collections::HashMap<&str, &str> = pairs
+            .iter()
+            .map(|p| (p.key.as_str(), p.value.as_str()))
+            .collect();
+        assert!(lookup["hash_keys"].contains("t.name"));
+        assert!(lookup["probe_keys"].contains("p.name"));
+        assert_eq!(lookup["anti"], "true");
+    }
+
+    #[test]
+    fn pattern_apply_skips_empty_keys_and_non_anti() {
+        let apply = PatternApplyNode::new(scan(), scan(), vec![], vec![], false)
+            .expect("pattern apply should build");
+        let node = PlanNodeEnum::PatternApply(apply);
+
+        let mut visitor = DescribeVisitor::new();
+        node.accept(&mut visitor);
+        let descs = visitor.into_descriptions();
+
+        let pattern = descs
+            .iter()
+            .find(|d| d.name == "PatternApply")
+            .expect("PatternApply should be described");
+        assert!(pattern.description.is_none());
     }
 }

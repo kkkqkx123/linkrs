@@ -13,6 +13,7 @@ use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilt
 use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
@@ -43,36 +44,101 @@ impl ClausePlanner for WhereClausePlanner {
 
     fn transform_clause(
         &self,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
         stmt: &Stmt,
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let condition = extract_where_condition(stmt)?;
 
-        let input_node = input_plan.root().as_ref().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed(
-                "The WHERE clause requires an input plan".to_string(),
-            )
-        })?;
+        // Extract conjunctive EXISTS / IN subqueries. When none are present
+        // the classic filter-only path is unchanged.
+        let condition_expr = condition.expression().map(|e| e.inner().clone());
+        let mut specs = Vec::new();
+        let residual_expr =
+            condition_expr.map(|e| exists_planner::extract_conjunctive_exists(&e, &mut specs));
 
-        let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
-        let logical_root = wrap_logical(&input_plan, |input| {
-            LogicalNodeEnum::Filter(LogicalFilterNode {
-                id: next_node_id(),
-                input: Some(Box::new(input.clone())),
-                deps: vec![input],
-                condition,
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            })
-        });
-        Ok(SubPlan {
-            root: Some(filter_node.into_enum()),
-            tail: input_plan.tail,
-            logical_root,
-        })
+        if specs.is_empty() {
+            return plan_simple_filter(condition, input_plan);
+        }
+
+        let residual_expr = residual_expr.expect("residual exists alongside specs");
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        let mut plan = input_plan;
+        for spec in &specs {
+            let planned = exists_planner::plan_subquery(spec, &qctx, space_id, &space_name)?;
+            plan = exists_planner::wrap_pattern_apply(plan, &planned, spec.negated)?;
+        }
+
+        if !exists_planner::is_trivially_true(&residual_expr) {
+            let context = condition.context().clone();
+            let residual_ctx = exists_planner::to_contextual(residual_expr, &context);
+            plan = plan_simple_filter_with(residual_ctx, plan)?;
+        }
+
+        Ok(plan)
     }
+}
+
+/// Classic path: a plain filter node over the input.
+fn plan_simple_filter(
+    condition: ContextualExpression,
+    input_plan: SubPlan,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = input_plan.root().as_ref().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed(
+            "The WHERE clause requires an input plan".to_string(),
+        )
+    })?;
+
+    let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
+    let logical_root = wrap_logical(&input_plan, |input| {
+        LogicalNodeEnum::Filter(LogicalFilterNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            condition,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    });
+    Ok(SubPlan {
+        root: Some(filter_node.into_enum()),
+        tail: input_plan.tail,
+        logical_root,
+    })
+}
+
+/// Apply a prepared filter condition on top of a plan.
+fn plan_simple_filter_with(
+    condition: ContextualExpression,
+    input_plan: SubPlan,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = input_plan.root().as_ref().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed(
+            "The WHERE clause requires an input plan".to_string(),
+        )
+    })?;
+
+    let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
+    let logical_root = wrap_logical(&input_plan, |input| {
+        LogicalNodeEnum::Filter(LogicalFilterNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            condition,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    });
+    Ok(SubPlan {
+        root: Some(filter_node.into_enum()),
+        tail: input_plan.tail,
+        logical_root,
+    })
 }
 
 fn extract_where_condition(stmt: &Stmt) -> Result<ContextualExpression, PlannerError> {

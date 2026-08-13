@@ -17,6 +17,7 @@
 //! statement planners (like `MatchStatementPlanner`), while statement planners
 //! are top-level planners registered in `PlannerEnum`.
 
+pub mod exists_planner;
 pub mod order_by_planner;
 pub mod pagination_planner;
 pub mod return_clause_planner;
