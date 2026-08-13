@@ -27,6 +27,7 @@ use super::super::operators::recursive_fragment_operator::RecursiveFragmentOpera
 use super::super::operators::set_operator::SetOperator;
 use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
+use super::super::operators::spec::ApplySpec;
 use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
@@ -35,6 +36,7 @@ use super::types::{
     FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
 };
 use crate::core::error::QueryError;
+use crate::query::executor::base::MemoryTracker;
 
 use super::super::instance::QueryBindings;
 
@@ -204,11 +206,27 @@ impl PhysicalPlanMaterializer {
                     let op = SetOperator::from_spec(set_spec, &bindings.memory_budget);
                     StreamingExecutor::Set(base, Box::new(left), Box::new(right), op)
                 }
-                OperatorKindSpec::Apply(apply_spec) => {
-                    let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
-                    let op = ApplyOperator::from_spec(apply_spec, &bindings.memory_budget);
-                    StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
-                }
+                OperatorKindSpec::Apply(apply_spec) => match apply_spec {
+                    ApplySpec::CorrelatedApply { sub_plan, anti } => {
+                        let left = take_unary_input(fragment.id, op_id, &mut inputs)?;
+                        let right =
+                            StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start);
+                        let op = ApplyOperator::CorrelatedApply {
+                            sub_plan: sub_plan.clone(),
+                            bindings: Box::new(stripped_bindings(bindings)),
+                            anti: *anti,
+                            right_rows: None,
+                            right_layout: None,
+                            memory_tracker: MemoryTracker::new(bindings.memory_budget.clone()),
+                        };
+                        StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
+                    }
+                    _ => {
+                        let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
+                        let op = ApplyOperator::from_spec(apply_spec, &bindings.memory_budget);
+                        StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
+                    }
+                },
                 OperatorKindSpec::Exchange(exchange_spec) => {
                     if inputs.is_empty() {
                         return Err(QueryError::execution(format!(
@@ -443,6 +461,21 @@ impl PhysicalPlanMaterializer {
     }
 }
 
+/// Clone the bindings with the parameter maps cleared.
+///
+/// CorrelatedApply caches these bindings and re-materializes the nested right
+/// subtree per outer row.  The nested sub-plan is built with an empty
+/// parameter schema, so carrying the outer `parameters`/`parameter_frame`
+/// would make `validate_bindings` report `Unknown parameter`.  Runtime
+/// parameters are still resolved from the parent runtime's `parameter_values`,
+/// which the sub-executor inherits via `set_runtime(Some(parent))`.
+fn stripped_bindings(bindings: &QueryBindings) -> QueryBindings {
+    let mut stripped = bindings.clone();
+    stripped.parameters = Arc::new(HashMap::new());
+    stripped.parameter_frame = None;
+    stripped
+}
+
 fn take_external_inputs(
     contract: &InputContract,
     fragment_roots: &mut HashMap<FragmentId, StreamingExecutor>,
@@ -513,4 +546,166 @@ fn take_binary_inputs(
         QueryError::execution(format!("Operator {:?} has no left input", operator_id))
     })?;
     Ok((left, right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::{ContextualExpression, ExpressionMeta};
+    use crate::query::executor::base::ExecutionContext;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::parameters::ParameterSchema;
+    use crate::query::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
+    use crate::query::executor::streaming::plan::context::PhysicalPlanBuildContext;
+    use crate::query::executor::streaming::transaction_scope::TransactionScope;
+    use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+    use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+    use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::query::planning::plan::core::nodes::control_flow::ArgumentNode;
+    use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode;
+    use crate::query::planning::plan::core::nodes::join::CrossJoinNode;
+    use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use std::collections::HashMap;
+
+    fn build_correlated_apply_plan() -> Arc<PhysicalPlan> {
+        let left = PlanNodeEnum::Start(StartNode::new());
+
+        let mut argument = ArgumentNode::new(-2, "_correlated_apply");
+        argument.set_col_names(vec!["t".to_string()]);
+        let cross = CrossJoinNode::new(PlanNodeEnum::Argument(argument), left.clone())
+            .expect("cross join should build");
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_id = expr_ctx.register_expression(ExpressionMeta::new(
+            crate::core::Expression::Literal(crate::core::Value::Bool(true)),
+        ));
+        let condition = ContextualExpression::new(expr_id, expr_ctx);
+        let filter = FilterNode::new(cross.into_enum(), condition).expect("filter should build");
+        let right = PlanNodeEnum::Filter(filter);
+
+        let apply = CorrelatedApplyNode::new(left, right, false).expect("apply should build");
+        let node = PlanNodeEnum::CorrelatedApply(apply);
+
+        let mut ctx = PhysicalPlanBuildContext::new();
+        let exec_ctx = ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
+        let plan =
+            PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("plan should build");
+        let plan = Arc::new(plan);
+        crate::query::executor::streaming::plan::validator::PhysicalPlanValidator::validate(&plan)
+            .expect("plan should validate");
+        plan
+    }
+
+    fn bindings() -> QueryBindings {
+        QueryBindings {
+            parameters: Arc::new(HashMap::new()),
+            parameter_frame: None,
+            space_name: None,
+            storage: None,
+            bound_snapshot: None,
+            memory_budget: crate::query::executor::base::MemoryBudget::default_budget(),
+            max_workers: 1,
+            chunk_size: 1024,
+            max_buffered_chunks: 4,
+            query_id: 1,
+            cancel_token: None,
+            session_id: None,
+            user_name: None,
+            query_text: None,
+            transaction: TransactionScope::None,
+            shared_scheduler: None,
+            partition_count: 0,
+            arena: None,
+            feedback_history: None,
+            columnar_policy: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
+        }
+    }
+
+    #[test]
+    fn materialize_correlated_apply_uses_unary_input_and_start_placeholder() {
+        let plan = build_correlated_apply_plan();
+        let (root, _runtime) =
+            PhysicalPlanMaterializer::materialize(&plan, &bindings()).expect("should materialize");
+
+        let (left, right, op) = match root {
+            StreamingExecutor::Apply(_, left, right, op) => (left, right, op),
+            other => panic!("expected Apply executor, got {:?}", other.operator_name()),
+        };
+        assert!(
+            matches!(op, ApplyOperator::CorrelatedApply { .. }),
+            "CorrelatedApply spec must materialize into the CorrelatedApply operator"
+        );
+        assert!(
+            matches!(&*left, StreamingExecutor::Source(_, SourceOperator::Start)),
+            "left input comes from the unary input fragment (Start source)"
+        );
+        assert!(
+            matches!(&*right, StreamingExecutor::Source(_, SourceOperator::Start)),
+            "right input is the Start placeholder (never executed)"
+        );
+    }
+
+    #[test]
+    fn stripped_bindings_clears_parameters_for_nested_materialize() {
+        let plan = build_correlated_apply_plan();
+        let apply_spec = plan
+            .operators
+            .iter()
+            .find_map(|op| match &op.spec {
+                OperatorKindSpec::Apply(
+                    super::super::super::operators::spec::ApplySpec::CorrelatedApply {
+                        sub_plan,
+                        ..
+                    },
+                ) => Some(sub_plan.clone()),
+                _ => None,
+            })
+            .expect("plan contains CorrelatedApply");
+
+        // The sub-plan carries an empty parameter schema.
+        assert!(
+            apply_spec.parameter_schema.is_empty(),
+            "nested sub-plan must have an empty parameter schema"
+        );
+
+        // Unstripped bindings with a stray parameter would trip
+        // `validate_bindings` with "Unknown parameter" on the nested plan.
+        let schema = ParameterSchema::new(vec![
+            crate::query::executor::streaming::parameters::ParameterDesc {
+                name: "p".to_string(),
+                slot: crate::query::executor::streaming::parameters::ParameterSlot(0),
+                value_type: Some(crate::core::DataType::String),
+                nullable: true,
+                default: None,
+            },
+        ]);
+        let mut raw = bindings();
+        raw.parameters = Arc::new(
+            [("p".to_string(), crate::core::Value::string("value"))]
+                .into_iter()
+                .collect(),
+        );
+        raw.build_parameter_frame(&schema);
+        assert!(!raw.parameters.is_empty());
+        assert!(raw.parameter_frame.is_some());
+
+        let stripped = stripped_bindings(&raw);
+        assert!(
+            stripped.parameters.is_empty(),
+            "stripped bindings must drop the parameter map"
+        );
+        assert!(
+            stripped.parameter_frame.is_none(),
+            "stripped bindings must drop the parameter frame"
+        );
+
+        // The stripped bindings must materialize the nested sub-plan cleanly.
+        let (sub_root, _runtime) = PhysicalPlanMaterializer::materialize(&apply_spec, &stripped)
+            .expect("nested sub-plan should materialize without Unknown parameter");
+        assert!(sub_root.operator_name() == "Filter" || sub_root.operator_name() == "CrossJoin");
+    }
 }

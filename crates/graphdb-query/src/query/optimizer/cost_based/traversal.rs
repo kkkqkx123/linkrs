@@ -64,6 +64,7 @@ pub fn rewrite_children(
         Assign(n) => Assign(rewrite_single!(n)),
         Remove(n) => Remove(rewrite_single!(n)),
         PatternApply(n) => PatternApply(rewrite_single!(n)),
+        CorrelatedApply(n) => CorrelatedApply(rewrite_single!(n)),
         RollUpApply(n) => RollUpApply(rewrite_single!(n)),
         Materialize(n) => Materialize(rewrite_single!(n)),
         Traverse(n) => Traverse(rewrite_single!(n)),

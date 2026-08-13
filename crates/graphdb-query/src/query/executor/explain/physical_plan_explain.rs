@@ -186,6 +186,19 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             }
         }
 
+        // CorrelatedApply: the right subtree is re-executed per outer row.
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Apply(
+            crate::query::executor::streaming::operators::spec::ApplySpec::CorrelatedApply {
+                anti,
+                ..
+            },
+        ) = &op_spec.spec
+        {
+            if *anti {
+                pairs.push(Pair::new("anti", "true"));
+            }
+        }
+
         if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable {
             threshold,
         } = &props.memory_policy

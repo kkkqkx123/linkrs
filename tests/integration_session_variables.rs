@@ -6,8 +6,8 @@
 
 use graphdb::api::server::graph_service::GraphService;
 use graphdb::config::Config;
-use graphdb::storage::{GraphStorage, SyncWrapper};
 use graphdb::query::DataSet;
+use graphdb::storage::{GraphStorage, SyncWrapper};
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
 use std::sync::Arc;
 
@@ -19,7 +19,8 @@ async fn setup() -> (Arc<GraphService<SyncWrapper<GraphStorage>>>, i64) {
     let storage = Arc::new(SyncWrapper::new(
         GraphStorage::new_with_path(db_path).expect("Failed to create storage"),
     ));
-    let transaction_manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
+    let transaction_manager =
+        Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
 
     let graph_service =
         GraphService::new_with_transaction_manager(config, storage, transaction_manager).await;
@@ -60,7 +61,11 @@ async fn exec(
     }
 }
 
-async fn exec_err(service: &Arc<GraphService<SyncWrapper<GraphStorage>>>, sid: i64, stmt: &str) -> String {
+async fn exec_err(
+    service: &Arc<GraphService<SyncWrapper<GraphStorage>>>,
+    sid: i64,
+    stmt: &str,
+) -> String {
     service
         .execute(sid, stmt)
         .await
@@ -216,8 +221,16 @@ async fn test_session_variable_let_errors() {
     assert!(err.contains("LET requires an assignment"), "got: {}", err);
 
     let err = exec_err(&service, sid, "LET $ = 1").await;
-    assert!(err.contains("Invalid session variable name"), "got: {}", err);
+    assert!(
+        err.contains("Invalid session variable name"),
+        "got: {}",
+        err
+    );
 
     let err = exec_err(&service, sid, "LET $1x = 1").await;
-    assert!(err.contains("Invalid session variable name"), "got: {}", err);
+    assert!(
+        err.contains("Invalid session variable name"),
+        "got: {}",
+        err
+    );
 }

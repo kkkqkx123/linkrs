@@ -27,7 +27,9 @@ enum VariableOp {
         prev: Option<Value>,
         value: Value,
     },
-    Savepoint { name: String },
+    Savepoint {
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -250,11 +252,9 @@ impl ClientSession {
     pub fn set_variable(&self, name: String, value: Value) {
         if self.has_active_transaction() {
             let prev = self.variable_value(&name);
-            self.variable_ops.write().push(VariableOp::Set {
-                name,
-                prev,
-                value,
-            });
+            self.variable_ops
+                .write()
+                .push(VariableOp::Set { name, prev, value });
         } else {
             self.session_variables.write().insert(name, value);
         }
@@ -265,7 +265,12 @@ impl ClientSession {
     pub fn variable_value(&self, name: &str) -> Option<Value> {
         let ops = self.variable_ops.read();
         for op in ops.iter().rev() {
-            if let VariableOp::Set { name: op_name, value, .. } = op {
+            if let VariableOp::Set {
+                name: op_name,
+                value,
+                ..
+            } = op
+            {
                 if op_name == name {
                     return Some(value.clone());
                 }

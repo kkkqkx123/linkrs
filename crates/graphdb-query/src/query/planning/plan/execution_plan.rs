@@ -344,6 +344,7 @@ fn connect_node_input(node: &mut PlanNodeEnum, input: PlanNodeEnum) -> Result<()
         PlanNodeEnum::Unwind(n) => n.set_input(input),
         PlanNodeEnum::Assign(n) => n.set_input(input),
         PlanNodeEnum::PatternApply(n) => n.set_input(input),
+        PlanNodeEnum::CorrelatedApply(n) => n.set_input(input),
         PlanNodeEnum::RollUpApply(n) => n.set_input(input),
         PlanNodeEnum::Remove(n) => n.set_input(input),
         PlanNodeEnum::Materialize(n) => n.set_input(input),

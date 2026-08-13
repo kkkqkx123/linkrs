@@ -291,61 +291,61 @@ impl DmlParser {
         // operator, so expression parsing must not treat `-> 'key'` as a
         // postfix JSON get.
         ctx.with_edge_syntax_mode(|ctx| {
-        // Check whether it is UPSERT EDGE syntax: src -> dst @rank OF edge_type
-        // or UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
-        // or UPDATE EDGE Syntax (short): src -> dst [@rank] OF edge_type
-        let is_upsert = ctx.is_upsert_mode();
-        let is_literal = ctx.current_token().kind.is_literal();
+            // Check whether it is UPSERT EDGE syntax: src -> dst @rank OF edge_type
+            // or UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
+            // or UPDATE EDGE Syntax (short): src -> dst [@rank] OF edge_type
+            let is_upsert = ctx.is_upsert_mode();
+            let is_literal = ctx.current_token().kind.is_literal();
 
-        if is_upsert || is_literal {
-            // UPSERT EDGE or short UPDATE EDGE Syntax: src -> dst [@rank] OF edge_type
-            let src = self.parse_expression(ctx)?;
-            ctx.expect_token(TokenKind::Arrow)?;
-            let dst = self.parse_expression(ctx)?;
+            if is_upsert || is_literal {
+                // UPSERT EDGE or short UPDATE EDGE Syntax: src -> dst [@rank] OF edge_type
+                let src = self.parse_expression(ctx)?;
+                ctx.expect_token(TokenKind::Arrow)?;
+                let dst = self.parse_expression(ctx)?;
 
-            let rank = if ctx.match_token(TokenKind::At) {
-                Some(self.parse_expression(ctx)?)
+                let rank = if ctx.match_token(TokenKind::At) {
+                    Some(self.parse_expression(ctx)?)
+                } else {
+                    None
+                };
+
+                ctx.expect_token(TokenKind::Of)?;
+                let edge_type = Some(ctx.expect_identifier()?);
+
+                Ok(UpdateTarget::Edge {
+                    edge_type,
+                    src,
+                    dst,
+                    rank,
+                })
             } else {
-                None
-            };
+                // UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
+                ctx.expect_token(TokenKind::Of)?;
 
-            ctx.expect_token(TokenKind::Of)?;
-            let edge_type = Some(ctx.expect_identifier()?);
+                // Analyzing edge types
+                let edge_type = ctx.expect_identifier()?;
 
-            Ok(UpdateTarget::Edge {
-                edge_type,
-                src,
-                dst,
-                rank,
-            })
-        } else {
-            // UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
-            ctx.expect_token(TokenKind::Of)?;
+                // Analyzing src and dst
+                ctx.expect_token(TokenKind::From)?;
+                let src = self.parse_expression(ctx)?;
 
-            // Analyzing edge types
-            let edge_type = ctx.expect_identifier()?;
+                ctx.expect_token(TokenKind::To)?;
+                let dst = self.parse_expression(ctx)?;
 
-            // Analyzing src and dst
-            ctx.expect_token(TokenKind::From)?;
-            let src = self.parse_expression(ctx)?;
+                // Analysis of @rank (optional)
+                let rank = if ctx.match_token(TokenKind::At) {
+                    Some(self.parse_expression(ctx)?)
+                } else {
+                    None
+                };
 
-            ctx.expect_token(TokenKind::To)?;
-            let dst = self.parse_expression(ctx)?;
-
-            // Analysis of @rank (optional)
-            let rank = if ctx.match_token(TokenKind::At) {
-                Some(self.parse_expression(ctx)?)
-            } else {
-                None
-            };
-
-            Ok(UpdateTarget::Edge {
-                edge_type: Some(edge_type),
-                src,
-                dst,
-                rank,
-            })
-        }
+                Ok(UpdateTarget::Edge {
+                    edge_type: Some(edge_type),
+                    src,
+                    dst,
+                    rank,
+                })
+            }
         })
     }
 
@@ -359,29 +359,29 @@ impl DmlParser {
         use crate::query::parser::ast::stmt::UpdateTarget;
 
         ctx.with_edge_syntax_mode(|ctx| {
-        // The -> token
-        ctx.expect_token(TokenKind::Arrow)?;
+            // The -> token
+            ctx.expect_token(TokenKind::Arrow)?;
 
-        // Parse dst
-        let dst = self.parse_expression(ctx)?;
+            // Parse dst
+            let dst = self.parse_expression(ctx)?;
 
-        // Optional @rank
-        let rank = if ctx.match_token(TokenKind::At) {
-            Some(self.parse_expression(ctx)?)
-        } else {
-            None
-        };
+            // Optional @rank
+            let rank = if ctx.match_token(TokenKind::At) {
+                Some(self.parse_expression(ctx)?)
+            } else {
+                None
+            };
 
-        // OF edge_type
-        ctx.expect_token(TokenKind::Of)?;
-        let edge_type = Some(ctx.expect_identifier()?);
+            // OF edge_type
+            ctx.expect_token(TokenKind::Of)?;
+            let edge_type = Some(ctx.expect_identifier()?);
 
-        Ok(UpdateTarget::Edge {
-            edge_type,
-            src,
-            dst,
-            rank,
-        })
+            Ok(UpdateTarget::Edge {
+                edge_type,
+                src,
+                dst,
+                rank,
+            })
         })
     }
 
@@ -393,142 +393,142 @@ impl DmlParser {
         // operator, so expression parsing must not treat `-> 'key'` as a
         // postfix JSON get.
         ctx.with_edge_syntax_mode(|ctx| {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Delete)?;
+            let start_span = ctx.current_span();
+            ctx.expect_token(TokenKind::Delete)?;
 
-        // Check whether there are any keywords such as VERTEX, EDGE, or TAG.
-        let target = if ctx.match_token(TokenKind::Vertex) {
-            // DELETE VERTEX vid [, vid ...]
-            let mut vids = vec![];
-            loop {
-                vids.push(self.parse_expression(ctx)?);
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
-                }
-            }
-            DeleteTarget::Vertices(vids)
-        } else if ctx.match_token(TokenKind::Edge) {
-            // Two syntaxes:
-            // 1) DELETE EDGE <edge_type> <src> -> <dst> [@rank] [, ...]
-            // 2) DELETE EDGE <src> -> <dst> [@rank] OF <edge_type> [, ...]
-            // Disambiguate: if the current token is a literal, it's syntax 2 (src -> dst OF edge_type)
-            let is_literal = ctx.current_token().kind.is_literal();
-
-            let (edge_type, edges) = if is_literal {
-                // Syntax 2: <src> -> <dst> [@rank] OF <edge_type>
-                let mut edges = vec![];
+            // Check whether there are any keywords such as VERTEX, EDGE, or TAG.
+            let target = if ctx.match_token(TokenKind::Vertex) {
+                // DELETE VERTEX vid [, vid ...]
+                let mut vids = vec![];
                 loop {
-                    let src = self.parse_expression(ctx)?;
-                    ctx.expect_token(TokenKind::Arrow)?;
-                    let dst = self.parse_expression(ctx)?;
-
-                    let rank = if ctx.match_token(TokenKind::At) {
-                        Some(self.parse_expression(ctx)?)
-                    } else {
-                        None
-                    };
-
-                    edges.push((src, dst, rank));
-
+                    vids.push(self.parse_expression(ctx)?);
                     if !ctx.match_token(TokenKind::Comma) {
                         break;
                     }
                 }
-                ctx.expect_token(TokenKind::Of)?;
-                let edge_type = Some(ctx.expect_identifier()?);
+                DeleteTarget::Vertices(vids)
+            } else if ctx.match_token(TokenKind::Edge) {
+                // Two syntaxes:
+                // 1) DELETE EDGE <edge_type> <src> -> <dst> [@rank] [, ...]
+                // 2) DELETE EDGE <src> -> <dst> [@rank] OF <edge_type> [, ...]
+                // Disambiguate: if the current token is a literal, it's syntax 2 (src -> dst OF edge_type)
+                let is_literal = ctx.current_token().kind.is_literal();
 
-                (edge_type, edges)
+                let (edge_type, edges) = if is_literal {
+                    // Syntax 2: <src> -> <dst> [@rank] OF <edge_type>
+                    let mut edges = vec![];
+                    loop {
+                        let src = self.parse_expression(ctx)?;
+                        ctx.expect_token(TokenKind::Arrow)?;
+                        let dst = self.parse_expression(ctx)?;
+
+                        let rank = if ctx.match_token(TokenKind::At) {
+                            Some(self.parse_expression(ctx)?)
+                        } else {
+                            None
+                        };
+
+                        edges.push((src, dst, rank));
+
+                        if !ctx.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    ctx.expect_token(TokenKind::Of)?;
+                    let edge_type = Some(ctx.expect_identifier()?);
+
+                    (edge_type, edges)
+                } else {
+                    // Syntax 1: <edge_type> <src> -> <dst> [@rank] [, ...]
+                    let edge_type = Some(ctx.expect_identifier()?);
+
+                    let mut edges = vec![];
+                    loop {
+                        let src = self.parse_expression(ctx)?;
+                        ctx.expect_token(TokenKind::Arrow)?;
+                        let dst = self.parse_expression(ctx)?;
+
+                        let rank = if ctx.match_token(TokenKind::At) {
+                            Some(self.parse_expression(ctx)?)
+                        } else {
+                            None
+                        };
+
+                        edges.push((src, dst, rank));
+
+                        if !ctx.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    (edge_type, edges)
+                };
+
+                DeleteTarget::Edges { edge_type, edges }
+            } else if ctx.match_token(TokenKind::Tag) {
+                // DELETE TAG tag_name [, tag_name ...] FROM vid [, vid ...]
+                let mut tags = vec![];
+
+                // Check whether it is a wildcard character (*).
+                if ctx.match_token(TokenKind::Star) {
+                    tags.push("*".to_string());
+                } else {
+                    // Parse the list of tags
+                    loop {
+                        let tag_name = ctx.expect_identifier()?;
+                        tags.push(tag_name);
+                        if !ctx.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+
+                // The “FROM” keyword in a query
+                ctx.expect_token(TokenKind::From)?;
+
+                // Analyzing the list of vertex IDs
+                let mut vids = vec![];
+                loop {
+                    vids.push(self.parse_expression(ctx)?);
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+
+                let is_all_tags = tags.iter().any(|t| t == "*");
+
+                DeleteTarget::Tags {
+                    tag_names: tags,
+                    vertex_ids: vids,
+                    is_all_tags,
+                }
             } else {
-                // Syntax 1: <edge_type> <src> -> <dst> [@rank] [, ...]
-                let edge_type = Some(ctx.expect_identifier()?);
-
-                let mut edges = vec![];
+                // The default interpretation is the deletion of vertices.
+                let mut vids = vec![];
                 loop {
-                    let src = self.parse_expression(ctx)?;
-                    ctx.expect_token(TokenKind::Arrow)?;
-                    let dst = self.parse_expression(ctx)?;
-
-                    let rank = if ctx.match_token(TokenKind::At) {
-                        Some(self.parse_expression(ctx)?)
-                    } else {
-                        None
-                    };
-
-                    edges.push((src, dst, rank));
-
+                    vids.push(self.parse_expression(ctx)?);
                     if !ctx.match_token(TokenKind::Comma) {
                         break;
                     }
                 }
-                (edge_type, edges)
+                DeleteTarget::Vertices(vids)
             };
 
-            DeleteTarget::Edges { edge_type, edges }
-        } else if ctx.match_token(TokenKind::Tag) {
-            // DELETE TAG tag_name [, tag_name ...] FROM vid [, vid ...]
-            let mut tags = vec![];
-
-            // Check whether it is a wildcard character (*).
-            if ctx.match_token(TokenKind::Star) {
-                tags.push("*".to_string());
+            let with_edge = if ctx.match_token(TokenKind::With) {
+                ctx.expect_token(TokenKind::Edge)?;
+                true
             } else {
-                // Parse the list of tags
-                loop {
-                    let tag_name = ctx.expect_identifier()?;
-                    tags.push(tag_name);
-                    if !ctx.match_token(TokenKind::Comma) {
-                        break;
-                    }
-                }
-            }
+                false
+            };
 
-            // The “FROM” keyword in a query
-            ctx.expect_token(TokenKind::From)?;
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
 
-            // Analyzing the list of vertex IDs
-            let mut vids = vec![];
-            loop {
-                vids.push(self.parse_expression(ctx)?);
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
-                }
-            }
-
-            let is_all_tags = tags.iter().any(|t| t == "*");
-
-            DeleteTarget::Tags {
-                tag_names: tags,
-                vertex_ids: vids,
-                is_all_tags,
-            }
-        } else {
-            // The default interpretation is the deletion of vertices.
-            let mut vids = vec![];
-            loop {
-                vids.push(self.parse_expression(ctx)?);
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
-                }
-            }
-            DeleteTarget::Vertices(vids)
-        };
-
-        let with_edge = if ctx.match_token(TokenKind::With) {
-            ctx.expect_token(TokenKind::Edge)?;
-            true
-        } else {
-            false
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Delete(DeleteStmt {
-            span,
-            target,
-            where_clause: None,
-            with_edge,
-        }))
+            Ok(Stmt::Delete(DeleteStmt {
+                span,
+                target,
+                where_clause: None,
+                with_edge,
+            }))
         })
     }
 
@@ -720,53 +720,53 @@ impl DmlParser {
         // operator, so expression parsing must not treat `-> 'key'` as a
         // postfix JSON get.
         ctx.with_edge_syntax_mode(|ctx| {
-        let mut edges = vec![];
-        loop {
-            let src = self.parse_expression(ctx)?;
-            ctx.expect_token(TokenKind::Arrow)?;
-            let dst = self.parse_expression(ctx)?;
+            let mut edges = vec![];
+            loop {
+                let src = self.parse_expression(ctx)?;
+                ctx.expect_token(TokenKind::Arrow)?;
+                let dst = self.parse_expression(ctx)?;
 
-            let rank = if ctx.match_token(TokenKind::At) {
-                Some(self.parse_expression(ctx)?)
-            } else {
-                None
-            };
+                let rank = if ctx.match_token(TokenKind::At) {
+                    Some(self.parse_expression(ctx)?)
+                } else {
+                    None
+                };
 
-            let mut values = vec![];
-            if ctx.match_token(TokenKind::Colon) {
-                ctx.expect_token(TokenKind::LParen)?;
-                // Support empty value list: :()
-                if !ctx.check_token(TokenKind::RParen) {
-                    loop {
-                        let value = self.parse_expression(ctx)?;
-                        values.push(value);
-                        if !ctx.match_token(TokenKind::Comma) {
-                            break;
+                let mut values = vec![];
+                if ctx.match_token(TokenKind::Colon) {
+                    ctx.expect_token(TokenKind::LParen)?;
+                    // Support empty value list: :()
+                    if !ctx.check_token(TokenKind::RParen) {
+                        loop {
+                            let value = self.parse_expression(ctx)?;
+                            values.push(value);
+                            if !ctx.match_token(TokenKind::Comma) {
+                                break;
+                            }
                         }
                     }
+                    ctx.expect_token(TokenKind::RParen)?;
                 }
-                ctx.expect_token(TokenKind::RParen)?;
+
+                edges.push((src, dst, rank, values));
+
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
             }
 
-            edges.push((src, dst, rank, values));
+            let end_span = ctx.current_span();
+            let span = ctx.merge_span(start_span.start, end_span.end);
 
-            if !ctx.match_token(TokenKind::Comma) {
-                break;
-            }
-        }
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Insert(InsertStmt {
-            span,
-            target: InsertTarget::Edge {
-                edge_name,
-                prop_names,
-                edges,
-            },
-            if_not_exists,
-        }))
+            Ok(Stmt::Insert(InsertStmt {
+                span,
+                target: InsertTarget::Edge {
+                    edge_name,
+                    prop_names,
+                    edges,
+                },
+                if_not_exists,
+            }))
         })
     }
 

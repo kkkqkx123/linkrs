@@ -693,7 +693,9 @@ impl Binder {
 
     /// Wrap a raw expression into a contextual expression for binding.
     fn plain_expression(expr: Expression) -> crate::core::types::ContextualExpression {
-        let ctx = Arc::new(crate::core::types::expr::expression_context::ExpressionAnalysisContext::new());
+        let ctx = Arc::new(
+            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
         crate::core::types::ContextualExpression::new(id, ctx)
     }
@@ -1614,10 +1616,7 @@ mod tests {
         match where_clause.condition {
             BoundExpression::Exists { query } => {
                 let sub = query.as_match().expect("subquery should be a Match");
-                assert!(
-                    sub.where_clause.is_some(),
-                    "subquery WHERE must be bound"
-                );
+                assert!(sub.where_clause.is_some(), "subquery WHERE must be bound");
                 assert_eq!(sub.query_graph.nodes.len(), 1);
             }
             other => panic!("expected BoundExpression::Exists, got {:?}", other),
@@ -1626,8 +1625,10 @@ mod tests {
 
     #[test]
     fn test_bind_exists_bare_pattern() {
-        let bound = bind_query("MATCH (t:person) WHERE EXISTS { p:person-[:knows]->q:person } RETURN t.name")
-            .expect("bare-pattern EXISTS query should bind");
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { p:person-[:knows]->q:person } RETURN t.name",
+        )
+        .expect("bare-pattern EXISTS query should bind");
         let stmt = match bound {
             BoundStatement::Match(s) => s,
             other => panic!("expected Match, got {:?}", other.kind()),
@@ -1656,9 +1657,7 @@ mod tests {
         let where_clause = stmt.where_clause.expect("where clause expected");
         match where_clause.condition {
             BoundExpression::In {
-                negated,
-                subquery,
-                ..
+                negated, subquery, ..
             } => {
                 assert!(!negated);
                 assert!(subquery.as_match().is_some());
@@ -1698,7 +1697,10 @@ mod tests {
             BoundExpression::Exists { query } => {
                 let sub = query.as_match().expect("outer subquery");
                 let sub_where = sub.where_clause.as_ref().expect("inner WHERE");
-                assert!(matches!(sub_where.condition, BoundExpression::Exists { .. }));
+                assert!(matches!(
+                    sub_where.condition,
+                    BoundExpression::Exists { .. }
+                ));
             }
             other => panic!("expected BoundExpression::Exists, got {:?}", other),
         }

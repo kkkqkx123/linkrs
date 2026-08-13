@@ -1028,6 +1028,10 @@ impl OptimizerEngine {
             // typically a leaf scan and is left unchanged.
             PatternApply(n) => PatternApply(rewrite_single!(n)),
 
+            // CorrelatedApply: the right subtree is re-executed per row and
+            // is never unnest-ed; rewrite only the outer (left) pipeline.
+            CorrelatedApply(n) => CorrelatedApply(rewrite_single!(n)),
+
             // Leaf / unsupported nodes: return unchanged.
             _ => node.clone(),
         }

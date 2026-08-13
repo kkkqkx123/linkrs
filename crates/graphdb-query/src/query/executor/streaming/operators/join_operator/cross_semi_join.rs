@@ -17,8 +17,14 @@ pub(super) fn next_cross_join(
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
     right_consumed: &mut bool,
+    output_done: &mut bool,
     ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    // The full cartesian product is emitted in a single chunk; subsequent
+    // pulls must report exhaustion instead of re-emitting it forever.
+    if *output_done {
+        return Ok(None);
+    }
     let memory_tracker = &mut *ctx.memory_tracker;
     let right_col_names = &mut *ctx.right_col_names;
     let base = &mut *ctx.base;
@@ -54,6 +60,7 @@ pub(super) fn next_cross_join(
     }
 
     if all_left_rows.is_empty() || all_right_rows.is_empty() {
+        *output_done = true;
         return Ok(None);
     }
 
@@ -67,6 +74,7 @@ pub(super) fn next_cross_join(
         }
     }
 
+    *output_done = true;
     if result_rows.is_empty() {
         Ok(None)
     } else {

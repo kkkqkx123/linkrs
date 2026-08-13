@@ -46,11 +46,6 @@ SIMD note (Phase 0): `.cargo/config.toml` sets `-C target-cpu=x86-64-v3`
 (AVX2, Haswell+ 2013) for auto-vectorization. Fallback on older CPUs:
 `RUSTFLAGS="-C target-cpu=x86_64"` (or delete the `[target]` section).
 
-```shell
-cargo clippy --all-targets --all-features            # full compile check
-cargo check -p graphdb --features server,fulltext-search,c_api,grpc,qdrant  # check with all features
-```
-
 ## Development Conventions
 
 - Rust standard formatting (`cargo fmt`)
@@ -60,7 +55,6 @@ cargo check -p graphdb --features server,fulltext-search,c_api,grpc,qdrant  # ch
 
 ```shell
 cargo test --lib -- --nocapture               # lib tests
-cargo test --test '*' -- --nocapture           # integration tests
 cargo test <test_name>                         # specific test(s)
 ```
 

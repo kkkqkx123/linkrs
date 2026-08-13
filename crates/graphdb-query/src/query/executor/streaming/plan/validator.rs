@@ -276,10 +276,27 @@ impl PhysicalPlanValidator {
                 | OperatorKindSpec::Sink(_)
                 | OperatorKindSpec::Ddl(_)
                 | OperatorKindSpec::Fulltext(_)
-                | OperatorKindSpec::Vector(_) => 1,
+                | OperatorKindSpec::Vector(_)
+                | OperatorKindSpec::Apply(
+                    crate::query::executor::streaming::operators::spec::ApplySpec::CorrelatedApply {
+                        ..
+                    },
+                ) => 1,
                 OperatorKindSpec::Join(_)
                 | OperatorKindSpec::Set(_)
-                | OperatorKindSpec::Apply(_) => 2,
+                | OperatorKindSpec::Apply(
+                    crate::query::executor::streaming::operators::spec::ApplySpec::Apply { .. },
+                )
+                | OperatorKindSpec::Apply(
+                    crate::query::executor::streaming::operators::spec::ApplySpec::PatternApply {
+                        ..
+                    },
+                )
+                | OperatorKindSpec::Apply(
+                    crate::query::executor::streaming::operators::spec::ApplySpec::RollUpApply {
+                        ..
+                    },
+                ) => 2,
                 OperatorKindSpec::Exchange(_) => {
                     continue;
                 }
@@ -613,7 +630,19 @@ impl PhysicalPlanValidator {
                     OperatorKindSpec::Source(_) => 0,
                     OperatorKindSpec::Join(_)
                     | OperatorKindSpec::Set(_)
-                    | OperatorKindSpec::Apply(_) => 2,
+                    | OperatorKindSpec::Apply(
+                        crate::query::executor::streaming::operators::spec::ApplySpec::Apply { .. },
+                    )
+                    | OperatorKindSpec::Apply(
+                        crate::query::executor::streaming::operators::spec::ApplySpec::PatternApply {
+                            ..
+                        },
+                    )
+                    | OperatorKindSpec::Apply(
+                        crate::query::executor::streaming::operators::spec::ApplySpec::RollUpApply {
+                            ..
+                        },
+                    ) => 2,
                     OperatorKindSpec::Exchange(_) => arity,
                     _ => 1,
                 };

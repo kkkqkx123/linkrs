@@ -288,6 +288,7 @@ impl StreamingExecutor {
             Apply(_, _, _, op) => match op {
                 ApplyOperator::Apply { .. } => "Apply",
                 ApplyOperator::PatternApply { .. } => "PatternApply",
+                ApplyOperator::CorrelatedApply { .. } => "CorrelatedApply",
                 ApplyOperator::RollUpApply { .. } => "RollUpApply",
             },
             Blocking(_, _, op) => match op {

@@ -21,8 +21,8 @@ use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::
 use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
-    AssignNode, DataCollectNode, DedupNode, PatternApplyNode, RollUpApplyNode, UnionNode,
-    UnwindNode,
+    AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, PatternApplyNode, RollUpApplyNode,
+    UnionNode, UnwindNode,
 };
 use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -350,6 +350,19 @@ impl PlanNodeVisitor for DescribeVisitor {
             desc.add_description("anti", "true");
         }
 
+        self.descriptions.push(desc);
+        self.visited_ids.insert(node.id());
+    }
+
+    fn visit_correlated_apply(&mut self, node: &CorrelatedApplyNode) {
+        node.left_input().accept(self);
+        node.right_input().accept(self);
+        let deps = vec![node.left_input().id(), node.right_input().id()];
+        let mut desc = PlanNodeDescription::new("CorrelatedApply", node.id());
+        desc.set_dependencies(deps);
+        if node.is_anti_predicate() {
+            desc.add_description("anti", "true");
+        }
         self.descriptions.push(desc);
         self.visited_ids.insert(node.id());
     }
@@ -756,7 +769,10 @@ mod tests {
             .iter()
             .find(|d| d.name == "PatternApply")
             .expect("PatternApply should be described");
-        assert_eq!(pattern.dependencies.as_deref(), Some(&[left_id, right_id][..]));
+        assert_eq!(
+            pattern.dependencies.as_deref(),
+            Some(&[left_id, right_id][..])
+        );
 
         let pairs = pattern.description.as_ref().expect("description present");
         let lookup: std::collections::HashMap<&str, &str> = pairs
@@ -783,5 +799,54 @@ mod tests {
             .find(|d| d.name == "PatternApply")
             .expect("PatternApply should be described");
         assert!(pattern.description.is_none());
+    }
+
+    #[test]
+    fn correlated_apply_describes_subtrees_and_anti() {
+        let left = scan();
+        let left_id = left.id();
+        let right = scan();
+        let right_id = right.id();
+        let apply =
+            CorrelatedApplyNode::new(left, right, true).expect("correlated apply should build");
+        let node = PlanNodeEnum::CorrelatedApply(apply);
+
+        let mut visitor = DescribeVisitor::new();
+        node.accept(&mut visitor);
+        let descs = visitor.into_descriptions();
+
+        let ca = descs
+            .iter()
+            .find(|d| d.name == "CorrelatedApply")
+            .expect("CorrelatedApply should be described");
+        assert_eq!(
+            ca.dependencies.as_deref(),
+            Some(&[left_id, right_id][..]),
+            "both outer and embedded right subtrees are described"
+        );
+
+        let pairs = ca.description.as_ref().expect("description present");
+        let lookup: std::collections::HashMap<&str, &str> = pairs
+            .iter()
+            .map(|p| (p.key.as_str(), p.value.as_str()))
+            .collect();
+        assert_eq!(lookup["anti"], "true");
+    }
+
+    #[test]
+    fn correlated_apply_omits_anti_when_not_anti() {
+        let apply =
+            CorrelatedApplyNode::new(scan(), scan(), false).expect("correlated apply should build");
+        let node = PlanNodeEnum::CorrelatedApply(apply);
+
+        let mut visitor = DescribeVisitor::new();
+        node.accept(&mut visitor);
+        let descs = visitor.into_descriptions();
+
+        let ca = descs
+            .iter()
+            .find(|d| d.name == "CorrelatedApply")
+            .expect("CorrelatedApply should be described");
+        assert!(ca.description.is_none());
     }
 }

@@ -33,8 +33,8 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
-    ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
-    RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
+    ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
+    PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 pub use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -128,6 +128,7 @@ pub trait PlanNodeVisitor {
     impl_visitor_methods!(
         PatternApply, PatternApplyNode, visit_pattern_apply;
         RollUpApply, RollUpApplyNode, visit_roll_up_apply;
+        CorrelatedApply, CorrelatedApplyNode, visit_correlated_apply;
         Remove, RemoveNode, visit_remove;
     );
 
@@ -246,6 +247,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::Dedup(node) => visitor.visit_dedup(node),
             PlanNodeEnum::PatternApply(node) => visitor.visit_pattern_apply(node),
             PlanNodeEnum::RollUpApply(node) => visitor.visit_roll_up_apply(node),
+            PlanNodeEnum::CorrelatedApply(node) => visitor.visit_correlated_apply(node),
             PlanNodeEnum::Remove(node) => visitor.visit_remove(node),
             PlanNodeEnum::Union(node) => visitor.visit_union(node),
             PlanNodeEnum::Minus(node) => visitor.visit_minus(node),

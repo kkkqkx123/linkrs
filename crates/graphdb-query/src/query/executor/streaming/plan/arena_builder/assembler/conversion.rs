@@ -1,7 +1,7 @@
 //! Recursive assembly of operators and fragment DAG edges.
 
 use super::super::super::super::operators::spec::{
-    BlockingSpec, DdlSpec, JoinSpec, SetSpec, SourceSpec, TxnSpec,
+    ApplySpec, BlockingSpec, DdlSpec, JoinSpec, SetSpec, SourceSpec, TxnSpec,
 };
 use super::super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::super::types::{
@@ -10,10 +10,13 @@ use super::super::super::types::{
 };
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
+use crate::query::executor::streaming::plan::PhysicalPlanBuildContext;
+use crate::query::executor::streaming::plan::PhysicalPlanBuilder;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
+use std::sync::Arc;
 
 use super::super::metadata::{
     estimate_source_cardinality, source_explain_name, source_output_layout,
@@ -836,6 +839,41 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     left_fid,
                     right_fid,
+                    node.id(),
+                    spec,
+                )
+            }
+            PlanNodeEnum::CorrelatedApply(ca_node) => {
+                let (left_fid, _) = Self::convert_node(
+                    ca_node.left_input(),
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    exec_ctx,
+                )?;
+                // Build the self-contained right subtree as a nested physical
+                // plan (Argument -> ... -> Filter over the correlation frame).
+                // The sub-plan stays out of the outer fragment graph: only the
+                // left input participates in the arena DAG, and the right
+                // subtree is re-executed per row at runtime.
+                let mut sub_ctx = PhysicalPlanBuildContext::from_execution_context(exec_ctx);
+                sub_ctx.partition_spec = None;
+                let sub_plan = Arc::new(PhysicalPlanBuilder::build(
+                    ca_node.right_input(),
+                    &mut sub_ctx,
+                    exec_ctx,
+                )?);
+                let spec = ApplySpec::CorrelatedApply {
+                    sub_plan,
+                    anti: ca_node.is_anti_predicate(),
+                };
+                Self::push_apply_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    left_fid,
                     node.id(),
                     spec,
                 )

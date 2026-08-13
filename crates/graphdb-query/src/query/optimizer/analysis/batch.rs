@@ -429,6 +429,11 @@ impl BatchPlanAnalyzer {
                 let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
                 left_count + right_count
             }
+            PlanNodeEnum::CorrelatedApply(n) => {
+                let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
+                let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));
+                left_count + right_count
+            }
             PlanNodeEnum::RollUpApply(n) => {
                 let left_count = self.analyze_recursive(n.left_input(), context, Some(node_id));
                 let right_count = self.analyze_recursive(n.right_input(), context, Some(node_id));

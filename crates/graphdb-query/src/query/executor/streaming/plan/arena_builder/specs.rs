@@ -80,7 +80,9 @@ pub(super) fn build_source_spec(
 ) -> Result<SourceSpec, PlanBuildError> {
     match node {
         PlanNodeEnum::Start(_) => Ok(SourceSpec::Start),
-        PlanNodeEnum::Argument(_) => Ok(SourceSpec::Argument),
+        PlanNodeEnum::Argument(arg_node) => Ok(SourceSpec::Argument {
+            col_names: arg_node.col_names().to_vec(),
+        }),
         PlanNodeEnum::ScanVertices(scan_node) => {
             let limit = scan_node
                 .limit()

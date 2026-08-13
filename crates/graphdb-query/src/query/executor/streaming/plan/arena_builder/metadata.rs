@@ -136,7 +136,9 @@ pub(super) fn populate_input_contracts(
                 OperatorKindSpec::Source(_) => InputContract::NoInput,
                 OperatorKindSpec::Join(_)
                 | OperatorKindSpec::Set(_)
-                | OperatorKindSpec::Apply(_) => {
+                | OperatorKindSpec::Apply(ApplySpec::Apply { .. })
+                | OperatorKindSpec::Apply(ApplySpec::PatternApply { .. })
+                | OperatorKindSpec::Apply(ApplySpec::RollUpApply { .. }) => {
                     if inputs.len() >= 2 {
                         InputContract::BinaryInputs {
                             left: inputs[0].clone(),
@@ -324,7 +326,7 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
             SourceSpec::GetNeighbors { .. } => "neighborhood_scan".to_string(),
             SourceSpec::GetProp { .. } => "property_lookup".to_string(),
             SourceSpec::StandaloneValues { .. } => "values".to_string(),
-            SourceSpec::Argument | SourceSpec::Start => "seed".to_string(),
+            SourceSpec::Argument { .. } | SourceSpec::Start => "seed".to_string(),
         }),
         OperatorKindSpec::Join(_) => Some("hash_join".to_string()),
         OperatorKindSpec::Blocking(spec) => Some(match spec {
@@ -421,7 +423,7 @@ pub(super) fn estimate_source_cardinality(spec: &SourceSpec) -> Option<f64> {
         SourceSpec::GetVertices { vertex_ids, .. } => {
             vertex_ids.as_ref().map(|ids| ids.len() as f64)
         }
-        SourceSpec::Argument | SourceSpec::Start => Some(1.0),
+        SourceSpec::Argument { .. } | SourceSpec::Start => Some(1.0),
         SourceSpec::GetEdges { .. }
         | SourceSpec::GetNeighbors { .. }
         | SourceSpec::IndexScan { .. }
@@ -511,6 +513,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             )
         }
         OperatorKindSpec::Apply(ApplySpec::PatternApply { .. })
+        | OperatorKindSpec::Apply(ApplySpec::CorrelatedApply { .. })
         | OperatorKindSpec::Apply(ApplySpec::Apply { .. })
         | OperatorKindSpec::Set(_)
         | OperatorKindSpec::Exchange(_)
@@ -623,7 +626,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
 pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
     match spec {
         SourceSpec::Start => SlotLayout::new(vec![]),
-        SourceSpec::Argument => SlotLayout::new(vec![]),
+        SourceSpec::Argument { col_names } => SlotLayout::from_names(col_names),
         SourceSpec::ScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StandaloneValues { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StorageScanVertices {
@@ -681,7 +684,7 @@ fn flat_scan_col_names(col_names: &[String], projected_properties: &[String]) ->
 pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
     match spec {
         SourceSpec::Start => "Start",
-        SourceSpec::Argument => "Argument",
+        SourceSpec::Argument { .. } => "Argument",
         SourceSpec::ScanVertices { .. } => "ScanVertices",
         SourceSpec::StandaloneValues { .. } => "StandaloneValues",
         SourceSpec::StorageScanVertices { .. } => "StorageScanVertices",
@@ -786,6 +789,7 @@ pub(super) fn apply_explain_name(spec: &ApplySpec) -> &'static str {
     match spec {
         ApplySpec::Apply { .. } => "Apply",
         ApplySpec::PatternApply { .. } => "PatternApply",
+        ApplySpec::CorrelatedApply { .. } => "CorrelatedApply",
         ApplySpec::RollUpApply { .. } => "RollUpApply",
     }
 }
@@ -830,5 +834,34 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
         TxnSpec::BeginTransaction => "BeginTransaction",
         TxnSpec::Commit => "Commit",
         TxnSpec::Rollback => "Rollback",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_output_layout_argument_uses_outer_col_names() {
+        let spec = SourceSpec::Argument {
+            col_names: vec!["t".to_string(), "t.name".to_string()],
+        };
+        let layout = source_output_layout(&spec);
+        assert_eq!(layout.len(), 2, "argument layout mirrors outer slot count");
+        assert_eq!(
+            layout.slot_id("t"),
+            Some(0),
+            "first outer column lands in slot 0"
+        );
+        assert_eq!(
+            layout.slot_id("t.name"),
+            Some(1),
+            "second outer column lands in slot 1"
+        );
+        assert_eq!(
+            layout.slot_id("unknown"),
+            None,
+            "unrelated name must not resolve"
+        );
     }
 }

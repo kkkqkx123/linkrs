@@ -57,6 +57,13 @@ define_logical_join_node! {
     enum: PatternApply
 }
 
+define_logical_join_node! {
+    pub struct LogicalCorrelatedApplyNode {
+        is_anti_predicate: bool,
+    }
+    enum: CorrelatedApply
+}
+
 define_logical_plan_node_with_deps! {
     pub struct LogicalMaterializeNode {}
     enum: Materialize

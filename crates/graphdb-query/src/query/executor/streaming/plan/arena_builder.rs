@@ -318,4 +318,84 @@ mod tests {
         )
         .expect("transaction plan should validate");
     }
+
+    #[test]
+    fn correlated_apply_builds_nested_sub_plan_rooted_at_argument() {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::{ContextualExpression, ExpressionMeta};
+        use crate::query::executor::streaming::operators::spec::ApplySpec;
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+        use crate::query::planning::plan::core::nodes::control_flow::ArgumentNode;
+        use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode;
+        use crate::query::planning::plan::core::nodes::join::CrossJoinNode;
+        use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+
+        // Outer (left) plan.
+        let left = PlanNodeEnum::Start(StartNode::new());
+
+        // Right subtree: Filter(CrossJoin(Argument(col_names = outer), Start),
+        // true) — the self-contained plan rebuilt per outer row at runtime.
+        let mut argument = ArgumentNode::new(-2, "_correlated_apply");
+        argument.set_col_names(vec!["t".to_string()]);
+        let cross = CrossJoinNode::new(PlanNodeEnum::Argument(argument), left.clone())
+            .expect("cross join should build");
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_id = expr_ctx.register_expression(ExpressionMeta::new(
+            crate::core::Expression::Literal(crate::core::Value::Bool(true)),
+        ));
+        let condition = ContextualExpression::new(expr_id, expr_ctx);
+        let filter = FilterNode::new(cross.into_enum(), condition).expect("filter should build");
+        let right = PlanNodeEnum::Filter(filter);
+
+        let apply =
+            CorrelatedApplyNode::new(left, right, false).expect("correlated apply should build");
+        let node = PlanNodeEnum::CorrelatedApply(apply);
+
+        let mut ctx = PhysicalPlanBuildContext::new();
+        let exec_ctx = test_context();
+        let plan =
+            PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("plan should build");
+
+        let apply_op = plan
+            .operators
+            .iter()
+            .find(|op| {
+                matches!(
+                    op.spec,
+                    OperatorKindSpec::Apply(ApplySpec::CorrelatedApply { .. })
+                )
+            })
+            .expect("plan contains a CorrelatedApply operator");
+
+        let sub_plan = match &apply_op.spec {
+            OperatorKindSpec::Apply(ApplySpec::CorrelatedApply { sub_plan, anti }) => {
+                assert!(!anti, "correlated apply defaults to semi");
+                sub_plan
+            }
+            _ => unreachable!("spec match earlier guarantees the variant"),
+        };
+
+        // The nested sub-plan is self-contained and contains an Argument
+        // source whose layout mirrors the outer columns.
+        let argument_source = sub_plan
+            .operators
+            .iter()
+            .find(|op| {
+                matches!(
+                    op.spec,
+                    OperatorKindSpec::Source(SourceSpec::Argument { .. })
+                )
+            })
+            .expect("sub-plan must be rooted at an Argument source");
+        match &argument_source.spec {
+            OperatorKindSpec::Source(SourceSpec::Argument { col_names }) => {
+                assert_eq!(
+                    col_names,
+                    &["t".to_string()],
+                    "Argument col_names mirror the outer layout"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
 }

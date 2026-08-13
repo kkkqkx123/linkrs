@@ -81,6 +81,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::PatternApply(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
+            PlanNodeEnum::CorrelatedApply(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
             PlanNodeEnum::RollUpApply(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }

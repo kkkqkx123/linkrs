@@ -402,6 +402,10 @@ impl RequiredPropertyAnalyzer {
                 self.propagate(n.left_input(), &passed, map);
                 self.propagate(n.right_input(), &[], map);
             }
+            CorrelatedApply(n) => {
+                self.propagate(n.left_input(), &passed, map);
+                self.propagate(n.right_input(), &[], map);
+            }
             RollUpApply(n) => {
                 self.propagate(n.left_input(), &passed, map);
                 self.propagate(n.right_input(), &[], map);

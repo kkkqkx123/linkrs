@@ -289,6 +289,7 @@ pub enum JoinOperator {
         right_consumed: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
+        output_done: bool,
     },
     SemiJoin {
         join_condition: Option<Expression>,
@@ -392,6 +393,7 @@ impl JoinOperator {
                     memory_budget.clone(),
                 ),
                 right_col_names: Vec::new(),
+                output_done: false,
             },
             super::spec::JoinSpec::SemiJoin { join_condition } => Self::SemiJoin {
                 join_condition: join_condition.clone(),
@@ -597,11 +599,13 @@ impl JoinOperator {
                 right_consumed,
                 memory_tracker,
                 right_col_names,
+                output_done,
             } => cross_semi_join::next_cross_join(
                 all_left_rows,
                 all_right_rows,
                 left_consumed,
                 right_consumed,
+                output_done,
                 &mut JoinCtx {
                     base,
                     left,

@@ -111,6 +111,16 @@ pub struct QueryBindings {
     pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
 }
 
+impl std::fmt::Debug for QueryBindings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryBindings")
+            .field("parameters", &self.parameters)
+            .field("space_name", &self.space_name)
+            .field("query_id", &self.query_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl QueryBindings {
     /// Build bindings from an [`ExecutionContext`] and a transaction scope.
     pub fn from_context(

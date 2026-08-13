@@ -411,6 +411,48 @@ impl ArenaPlanAssembler {
         Ok((fid, op_id))
     }
 
+    /// Create a new fragment holding one apply operator that consumes only
+    /// `child_fid` (the left/outer input).  Used by unary-input apply
+    /// operators such as `CorrelatedApply`, whose right subtree is embedded
+    /// in the spec and rebuilt per row at runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_apply_op(
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        child_fid: FragmentId,
+        node_id: i64,
+        spec: ApplySpec,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        let op_id = op_alloc.allocate();
+        let fid = frag_alloc.allocate();
+        let explain_name = super::super::metadata::apply_explain_name(&spec);
+        operators.push(PhysicalOperatorSpec {
+            operator_id: op_id,
+            logical_node_id: Some(LogicalNodeId(node_id)),
+            spec: OperatorKindSpec::Apply(spec),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            choice_reason: None,
+            explain_name,
+        });
+        fragments.push(FragmentSpec {
+            id: fid,
+            kind: FragmentKind::Streaming,
+            operators: vec![op_id],
+            root_operator: op_id,
+            inputs: vec![child_fid],
+            output: None,
+            exchange_layout: None,
+        });
+        Ok((fid, op_id))
+    }
+
     pub(super) fn push_sink_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,

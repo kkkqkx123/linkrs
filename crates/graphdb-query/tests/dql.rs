@@ -15,6 +15,8 @@
 #[path = "dql/aggregation.rs"]
 mod aggregation;
 mod common;
+#[path = "dql/constant_folding.rs"]
+mod constant_folding;
 #[path = "dql/fetch.rs"]
 mod fetch;
 #[path = "dql/find_path.rs"]
@@ -27,8 +29,6 @@ mod lookup;
 mod match_query;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
-#[path = "dql/constant_folding.rs"]
-mod constant_folding;
 #[path = "dql/set_operations.rs"]
 mod set_operations;
 #[path = "dql/subgraph.rs"]

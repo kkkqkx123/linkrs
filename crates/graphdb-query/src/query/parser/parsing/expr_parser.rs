@@ -1043,10 +1043,7 @@ fn parse_pattern_string(ctx: &mut ParseContext<'_>) -> Result<String, ParseError
     loop {
         let terminator = matches!(
             ctx.current_token().kind,
-            TokenKind::RBrace
-                | TokenKind::Where
-                | TokenKind::Return
-                | TokenKind::Match
+            TokenKind::RBrace | TokenKind::Where | TokenKind::Return | TokenKind::Match
         );
         if terminator {
             break;
@@ -1155,7 +1152,11 @@ mod tests {
         for input in ["m->'key'", "m->>\"key\"", "m#>'a.b'", "m#>>\"a.b\""] {
             let ctx = &mut ParseContext::new(input);
             let result = parse_expression(ctx);
-            assert!(result.is_ok(), "parse failed for {input}: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "parse failed for {input}: {:?}",
+                result.err()
+            );
             let parse_result = result.expect("JSON access parsing should succeed");
             assert!(matches!(parse_result.expr, Expression::Binary { .. }));
         }
@@ -1269,7 +1270,10 @@ mod tests {
         match parse_result.expr {
             Expression::Exists { body } => {
                 assert_eq!(body.patterns.len(), 1);
-                assert_eq!(body.patterns[0], "( a : person ) - [ : knows ] -> ( b : person )");
+                assert_eq!(
+                    body.patterns[0],
+                    "( a : person ) - [ : knows ] -> ( b : person )"
+                );
                 assert!(body.where_clause.is_none());
             }
             other => panic!("expected Expression::Exists, got {:?}", other),
@@ -1289,7 +1293,11 @@ mod tests {
         ] {
             let ctx = &mut ParseContext::new(input);
             let result = parse_expression(ctx);
-            assert!(result.is_ok(), "parse failed for {input}: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "parse failed for {input}: {:?}",
+                result.err()
+            );
             let parse_result = result.expect("EXISTS parsing should succeed");
             let body = match parse_result.expr {
                 Expression::Exists { body } => body,
@@ -1297,7 +1305,8 @@ mod tests {
             };
             for pattern_str in &body.patterns {
                 let mut ctx = &mut ParseContext::new(pattern_str);
-                let mut parser = crate::query::parser::parsing::traversal_parser::TraversalParser::new();
+                let mut parser =
+                    crate::query::parser::parsing::traversal_parser::TraversalParser::new();
                 let pattern = parser.parse_pattern(&mut ctx);
                 assert!(
                     pattern.is_ok(),

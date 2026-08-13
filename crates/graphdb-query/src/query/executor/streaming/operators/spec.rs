@@ -17,6 +17,7 @@ use crate::core::types::user::PasswordInfo;
 use crate::core::types::PropertyDef;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
+use crate::query::executor::streaming::plan::types::PhysicalPlan;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::parser::ast::vector::VectorDistance;
 use crate::storage::ScanPredicate;
@@ -141,7 +142,9 @@ pub enum SourceSpec {
         output_layout: Arc<SlotLayout>,
     },
     /// Produces one singleton row from which correlated apply can pull.
-    Argument,
+    /// `col_names` mirrors the outer (left) layout so the emitted chunk slots
+    /// align with the correlation frame read at runtime.
+    Argument { col_names: Vec<String> },
     /// Unary property retrieval: reads properties from the input entity IDs.
     ///
     /// Unlike the source-variant GetProp (which is a zero-input stub),
@@ -499,6 +502,13 @@ pub enum ApplySpec {
     PatternApply {
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
+        anti: bool,
+    },
+    CorrelatedApply {
+        /// Self-contained right subtree (rooted at an `Argument` source),
+        /// re-executed once per outer row with the outer row bound as the
+        /// correlation frame.
+        sub_plan: Arc<PhysicalPlan>,
         anti: bool,
     },
     RollUpApply {
@@ -948,7 +958,7 @@ pub fn operator_cardinality_shape_key(
     let join_types = |kind: &str| key(kind, None);
     match spec {
         OperatorKindSpec::Source(source) => match source {
-            SourceSpec::Start | SourceSpec::Argument => None,
+            SourceSpec::Start | SourceSpec::Argument { .. } => None,
             SourceSpec::ScanVertices { col_names, .. } => {
                 key("ScanVertices", col_names.first().map(String::as_str))
             }
@@ -1002,6 +1012,7 @@ pub fn operator_cardinality_shape_key(
         OperatorKindSpec::Apply(spec) => match spec {
             ApplySpec::Apply { .. } => key("Apply", None),
             ApplySpec::PatternApply { .. } => key("PatternApply", None),
+            ApplySpec::CorrelatedApply { .. } => key("CorrelatedApply", None),
             ApplySpec::RollUpApply { .. } => key("RollUpApply", None),
         },
         OperatorKindSpec::Set(spec) => match spec {

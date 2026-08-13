@@ -28,9 +28,9 @@ pub use data_modification::{
     VertexUpdateInfo,
 };
 pub use graph_operations::{
-    AggregateNode, ApplyKind, ApplyNode, AssignNode, DataCollectNode, DedupNode, IntersectNode,
-    MaterializeNode, MinusNode, PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode,
-    UnwindNode, WindowFunctionSpec, WindowNode,
+    AggregateNode, ApplyKind, ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode,
+    DedupNode, IntersectNode, MaterializeNode, MinusNode, PatternApplyNode, RemoveNode,
+    RollUpApplyNode, UnionNode, UnwindNode, WindowFunctionSpec, WindowNode,
 };
 pub use join::{
     AntiJoinNode, CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode,

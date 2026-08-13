@@ -377,6 +377,7 @@ fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool
         Remove(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Materialize(n) => changed |= apply_decisions(n.input_mut(), decisions),
         PatternApply(n) => changed |= apply_decisions(n.input_mut(), decisions),
+        CorrelatedApply(n) => changed |= apply_decisions(n.input_mut(), decisions),
         RollUpApply(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Traverse(n) => changed |= apply_decisions(n.input_mut(), decisions),
         PipeDeleteVertices(n) => changed |= apply_decisions(n.input_mut(), decisions),

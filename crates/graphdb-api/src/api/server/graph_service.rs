@@ -1230,10 +1230,7 @@ impl<
                 .and_then(|row| row.into_iter().next())
                 .ok_or_else(|| format!("LET expression '{}' returned no value", expr))?,
             _ => {
-                return Err(format!(
-                    "LET expression '{}' could not be evaluated",
-                    expr
-                ));
+                return Err(format!("LET expression '{}' could not be evaluated", expr));
             }
         };
         session.set_variable(name, value);
@@ -1511,7 +1508,10 @@ mod tests {
 
     #[test]
     fn parse_begin_access_mode_variants() {
-        assert_eq!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN"), Ok(None));
+        assert_eq!(
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN"),
+            Ok(None)
+        );
         assert_eq!(
             GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION"),
             Ok(None)
@@ -1537,6 +1537,8 @@ mod tests {
             Ok(Some(true))
         );
         assert!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ").is_err());
-        assert!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err());
+        assert!(
+            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err()
+        );
     }
 }

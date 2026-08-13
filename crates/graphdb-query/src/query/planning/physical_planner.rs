@@ -696,6 +696,19 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             PlanNodeEnum::PatternApply(node)
         }
 
+        LogicalNodeEnum::CorrelatedApply(n) => {
+            let input = convert_logical_to_physical(n.left_input().clone());
+            let right_input = convert_logical_to_physical(n.right_input().clone());
+            let mut node = crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode::new(
+                input, right_input, n.is_anti_predicate,
+            ).expect("Failed to construct CorrelatedApplyNode");
+            if let Some(var) = n.output_var() {
+                node.set_output_var(var.to_string());
+            }
+            node.set_col_names(n.col_names().to_vec());
+            PlanNodeEnum::CorrelatedApply(node)
+        }
+
         LogicalNodeEnum::RollUpApply(n) => {
             let input =
                 convert_logical_to_physical(*n.input.expect("RollUpApplyNode missing input"));

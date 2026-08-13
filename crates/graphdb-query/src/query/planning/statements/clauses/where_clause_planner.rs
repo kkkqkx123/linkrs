@@ -67,8 +67,25 @@ impl ClausePlanner for WhereClausePlanner {
 
         let mut plan = input_plan;
         for spec in &specs {
-            let planned = exists_planner::plan_subquery(spec, &qctx, space_id, &space_name)?;
-            plan = exists_planner::wrap_pattern_apply(plan, &planned, spec.negated)?;
+            // The outer columns become the Argument layout of a correlated
+            // right subtree; for the key-based path they are unused.
+            let outer_col_names = plan
+                .root()
+                .as_ref()
+                .map(|root| root.col_names().to_vec())
+                .unwrap_or_default();
+            let planned = exists_planner::plan_subquery(
+                spec,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+            )?;
+            plan = if planned.correlated {
+                exists_planner::wrap_correlated_apply(plan, &planned, spec.negated)?
+            } else {
+                exists_planner::wrap_pattern_apply(plan, &planned, spec.negated)?
+            };
         }
 
         if !exists_planner::is_trivially_true(&residual_expr) {
@@ -87,9 +104,7 @@ fn plan_simple_filter(
     input_plan: SubPlan,
 ) -> Result<SubPlan, PlannerError> {
     let input_node = input_plan.root().as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed(
-            "The WHERE clause requires an input plan".to_string(),
-        )
+        PlannerError::PlanGenerationFailed("The WHERE clause requires an input plan".to_string())
     })?;
 
     let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
@@ -117,9 +132,7 @@ fn plan_simple_filter_with(
     input_plan: SubPlan,
 ) -> Result<SubPlan, PlannerError> {
     let input_node = input_plan.root().as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed(
-            "The WHERE clause requires an input plan".to_string(),
-        )
+        PlannerError::PlanGenerationFailed("The WHERE clause requires an input plan".to_string())
     })?;
 
     let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;

@@ -106,7 +106,7 @@ impl SourceState {
                 state: NeighborScanState::Init,
             },
             SourceSpec::IndexScan { .. } => SourceState::IndexScan { cursor: None },
-            SourceSpec::Argument => SourceState::Argument,
+            SourceSpec::Argument { .. } => SourceState::Argument,
             SourceSpec::GetProp {
                 entity_slot,
                 prop_names,

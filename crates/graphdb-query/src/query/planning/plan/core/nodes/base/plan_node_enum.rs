@@ -45,8 +45,8 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
-    ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
-    RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
+    ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
+    PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 pub use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -181,6 +181,7 @@ pub enum PlanNodeEnum {
     Remove(RemoveNode),
     PatternApply(PatternApplyNode),
     RollUpApply(RollUpApplyNode),
+    CorrelatedApply(CorrelatedApplyNode),
     Union(UnionNode),
     Minus(MinusNode),
     Intersect(IntersectNode),
@@ -290,6 +291,7 @@ crate::define_enum_is_methods! {
     (Remove, is_remove),
     (PatternApply, is_pattern_apply),
     (RollUpApply, is_roll_up_apply),
+    (CorrelatedApply, is_correlated_apply),
     (Union, is_union),
     (Minus, is_minus),
     (Intersect, is_intersect),
@@ -387,6 +389,7 @@ crate::define_enum_as_methods! {
     (Remove, as_remove, RemoveNode),
     (PatternApply, as_pattern_apply, PatternApplyNode),
     (RollUpApply, as_roll_up_apply, RollUpApplyNode),
+    (CorrelatedApply, as_correlated_apply, CorrelatedApplyNode),
     (Union, as_union, UnionNode),
     (Minus, as_minus, MinusNode),
     (Intersect, as_intersect, IntersectNode),
@@ -483,6 +486,7 @@ crate::define_enum_as_mut_methods! {
     (Remove, as_remove_mut, RemoveNode),
     (PatternApply, as_pattern_apply_mut, PatternApplyNode),
     (RollUpApply, as_roll_up_apply_mut, RollUpApplyNode),
+    (CorrelatedApply, as_correlated_apply_mut, CorrelatedApplyNode),
     (Union, as_union_mut, UnionNode),
     (Minus, as_minus_mut, MinusNode),
     (Intersect, as_intersect_mut, IntersectNode),
@@ -583,6 +587,7 @@ crate::define_enum_type_name! {
     (Remove, "Remove"),
     (PatternApply, "PatternApply"),
     (RollUpApply, "RollUpApply"),
+    (CorrelatedApply, "CorrelatedApply"),
     (Union, "Union"),
     (Minus, "Minus"),
     (Intersect, "Intersect"),
@@ -682,6 +687,7 @@ crate::define_enum_category! {
     (Remove, PlanNodeCategory::DataProcessing),
     (PatternApply, PlanNodeCategory::DataProcessing),
     (RollUpApply, PlanNodeCategory::DataProcessing),
+    (CorrelatedApply, PlanNodeCategory::DataProcessing),
     (Union, PlanNodeCategory::DataProcessing),
     (Minus, PlanNodeCategory::DataProcessing),
     (Intersect, PlanNodeCategory::DataProcessing),
@@ -781,6 +787,7 @@ crate::define_enum_describe! {
     (Remove, "Remove"),
     (PatternApply, "PatternApply"),
     (RollUpApply, "RollUpApply"),
+    (CorrelatedApply, "CorrelatedApply"),
     (Union, "Union"),
     (Minus, "Minus"),
     (Intersect, "Intersect"),

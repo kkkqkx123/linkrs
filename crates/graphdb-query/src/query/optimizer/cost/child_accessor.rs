@@ -132,6 +132,13 @@ impl ChildAccessor for PlanNodeEnum {
                     None
                 }
             }
+            PlanNodeEnum::CorrelatedApply(n) => {
+                if index == 0 {
+                    Some(n.input_mut())
+                } else {
+                    None
+                }
+            }
             PlanNodeEnum::RollUpApply(n) => {
                 if index == 0 {
                     Some(n.input_mut())

@@ -59,9 +59,7 @@ impl FoldConstantsRule {
             Expression::Function { name, args, .. } => {
                 !IMPURE_FUNCTIONS.contains(&name.as_str()) && args.iter().all(Self::is_pure)
             }
-            Expression::Binary { left, right, .. } => {
-                Self::is_pure(left) && Self::is_pure(right)
-            }
+            Expression::Binary { left, right, .. } => Self::is_pure(left) && Self::is_pure(right),
             Expression::Unary { operand, .. } => Self::is_pure(operand),
             Expression::List(items) => items.iter().all(Self::is_pure),
             Expression::Map(pairs) => pairs.iter().all(|(_, v)| Self::is_pure(v)),
@@ -137,9 +135,7 @@ impl FoldConstantsRule {
                     .iter()
                     .map(|(c, v)| (Self::fold_expression(c), Self::fold_expression(v)))
                     .collect(),
-                default: default
-                    .as_ref()
-                    .map(|e| Box::new(Self::fold_expression(e))),
+                default: default.as_ref().map(|e| Box::new(Self::fold_expression(e))),
             },
             Expression::TypeCast {
                 expression,
@@ -148,10 +144,7 @@ impl FoldConstantsRule {
                 expression: Box::new(Self::fold_expression(expression)),
                 target_type: target_type.clone(),
             },
-            Expression::Subscript {
-                collection,
-                index,
-            } => Expression::Subscript {
+            Expression::Subscript { collection, index } => Expression::Subscript {
                 collection: Box::new(Self::fold_expression(collection)),
                 index: Box::new(Self::fold_expression(index)),
             },
@@ -191,10 +184,7 @@ impl FoldConstantsRule {
     }
 
     /// Register a folded expression in the rewrite context.
-    fn register_folded(
-        ctx: &RewriteContext,
-        folded: Expression,
-    ) -> ContextualExpression {
+    fn register_folded(ctx: &RewriteContext, folded: Expression) -> ContextualExpression {
         let meta = ExpressionMeta::new(folded);
         let id = ctx.expr_context().register_expression(meta);
         ContextualExpression::new(id, ctx.expr_context())
@@ -270,20 +260,23 @@ impl RewriteRule for FoldConstantsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
     use crate::core::types::expr::analysis_utils::is_evaluable;
-    use crate::core::types::expr::ExpressionMeta;
     use crate::core::types::expr::ExpressionAnalysisContext;
+    use crate::core::types::expr::ExpressionMeta;
     use crate::core::types::operators::BinaryOperator;
     use crate::core::types::ContextualExpression;
+    use crate::core::Value;
+    use crate::core::YieldColumn;
     use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::query::planning::plan::core::nodes::operation::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::ProjectNode;
-    use crate::core::YieldColumn;
     use std::sync::Arc;
 
-    fn contextual(expr_ctx: &Arc<ExpressionAnalysisContext>, expr: Expression) -> ContextualExpression {
+    fn contextual(
+        expr_ctx: &Arc<ExpressionAnalysisContext>,
+        expr: Expression,
+    ) -> ContextualExpression {
         let meta = ExpressionMeta::new(expr);
         let id = expr_ctx.register_expression(meta);
         ContextualExpression::new(id, expr_ctx.clone())
@@ -383,11 +376,7 @@ mod tests {
         let mut ctx = RewriteContext::new();
         let result = rule.apply(&mut ctx, &node).expect("apply should succeed");
         let result = result.expect("filter with constant condition must fold");
-        let new_node = result
-            .new_nodes
-            .first()
-            .cloned()
-            .expect("replacement node");
+        let new_node = result.new_nodes.first().cloned().expect("replacement node");
         match new_node {
             PlanNodeEnum::Filter(f) => {
                 let folded = f
@@ -429,11 +418,7 @@ mod tests {
         let mut ctx = RewriteContext::new();
         let result = rule.apply(&mut ctx, &node).expect("apply should succeed");
         let result = result.expect("project with constant column must fold");
-        let new_node = result
-            .new_nodes
-            .first()
-            .cloned()
-            .expect("replacement node");
+        let new_node = result.new_nodes.first().cloned().expect("replacement node");
         match new_node {
             PlanNodeEnum::Project(p) => {
                 let folded = p.columns()[0]

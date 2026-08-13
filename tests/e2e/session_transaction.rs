@@ -42,7 +42,11 @@ fn test_begin_read_only_consistent_snapshot_across_statements() {
     assert_query_ok(result, "BEGIN READ ONLY should succeed");
 
     // Statement 1 inside the transaction: pre-existing vertex is visible.
-    assert_eq!(count_persons(&mut db, "person"), 1, "statement 1 should see p1");
+    assert_eq!(
+        count_persons(&mut db, "person"),
+        1,
+        "statement 1 should see p1"
+    );
 
     // Concurrent auto-commit write from another session commits after the
     // snapshot was taken.
@@ -60,7 +64,11 @@ fn test_begin_read_only_consistent_snapshot_across_statements() {
     // Commit ends the snapshot; the new vertex becomes visible.
     let result = db.execute_query("COMMIT");
     assert_query_ok(result, "COMMIT should succeed");
-    assert_eq!(count_persons(&mut db, "person"), 2, "post-COMMIT should see p2");
+    assert_eq!(
+        count_persons(&mut db, "person"),
+        2,
+        "post-COMMIT should see p2"
+    );
 }
 
 /// DML inside a `BEGIN READ ONLY` transaction must be rejected.
@@ -82,7 +90,11 @@ fn test_read_only_transaction_rejects_dml() {
     assert_query_err(result, "INSERT inside a read-only transaction must fail");
 
     // The transaction is still usable for reads after the rejected write.
-    assert_eq!(count_persons(&mut db, "person"), 0, "no data may be written");
+    assert_eq!(
+        count_persons(&mut db, "person"),
+        0,
+        "no data may be written"
+    );
 
     let result = db.execute_query("ROLLBACK");
     assert_query_ok(result, "ROLLBACK should succeed");

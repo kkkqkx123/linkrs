@@ -21,9 +21,9 @@ use super::logical_nodes::control_flow::{
     LogicalPassThroughNode, LogicalRollbackNode, LogicalSelectNode,
 };
 use super::logical_nodes::graph_ops::{
-    LogicalApplyNode, LogicalAssignNode, LogicalDataCollectNode, LogicalIntersectNode,
-    LogicalMaterializeNode, LogicalMinusNode, LogicalPatternApplyNode, LogicalRemoveNode,
-    LogicalRollUpApplyNode, LogicalUnionNode, LogicalUnwindNode,
+    LogicalApplyNode, LogicalAssignNode, LogicalCorrelatedApplyNode, LogicalDataCollectNode,
+    LogicalIntersectNode, LogicalMaterializeNode, LogicalMinusNode, LogicalPatternApplyNode,
+    LogicalRemoveNode, LogicalRollUpApplyNode, LogicalUnionNode, LogicalUnwindNode,
 };
 use super::logical_nodes::join::{
     LogicalCrossJoinNode, LogicalFullOuterJoinNode, LogicalInnerJoinNode, LogicalLeftJoinNode,
@@ -96,6 +96,7 @@ pub enum LogicalNodeEnum {
     Remove(LogicalRemoveNode),
     PatternApply(LogicalPatternApplyNode),
     RollUpApply(LogicalRollUpApplyNode),
+    CorrelatedApply(LogicalCorrelatedApplyNode),
     Union(LogicalUnionNode),
     Minus(LogicalMinusNode),
     Intersect(LogicalIntersectNode),
@@ -165,6 +166,7 @@ impl LogicalNodeEnum {
             Self::Remove(n) => n.id(),
             Self::PatternApply(n) => n.id(),
             Self::RollUpApply(n) => n.id(),
+            Self::CorrelatedApply(n) => n.id(),
             Self::Union(n) => n.id(),
             Self::Minus(n) => n.id(),
             Self::Intersect(n) => n.id(),
@@ -228,6 +230,7 @@ impl LogicalNodeEnum {
             Self::Remove(_) => "Remove",
             Self::PatternApply(_) => "PatternApply",
             Self::RollUpApply(_) => "RollUpApply",
+            Self::CorrelatedApply(_) => "CorrelatedApply",
             Self::Union(_) => "Union",
             Self::Minus(_) => "Minus",
             Self::Intersect(_) => "Intersect",
@@ -291,6 +294,7 @@ impl LogicalNodeEnum {
             Self::Remove(n) => n.col_names(),
             Self::PatternApply(n) => n.col_names(),
             Self::RollUpApply(n) => n.col_names(),
+            Self::CorrelatedApply(n) => n.col_names(),
             Self::Union(n) => n.col_names(),
             Self::Minus(n) => n.col_names(),
             Self::Intersect(n) => n.col_names(),

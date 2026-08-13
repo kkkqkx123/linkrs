@@ -257,7 +257,7 @@ impl SourceOperator {
                 cursor: None,
                 edge_type_names: std::collections::HashMap::new(),
             },
-            super::spec::SourceSpec::Argument => Self::Argument,
+            super::spec::SourceSpec::Argument { .. } => Self::Argument,
             super::spec::SourceSpec::GetProp {
                 space_name,
                 entity_slot,

@@ -5,9 +5,12 @@ use crate::core::{NullType, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::query::executor::streaming::instance::QueryBindings;
 use crate::query::executor::streaming::join_helpers::evaluate_join_key;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::{ApplyKind, ApplySpec};
+use crate::query::executor::streaming::plan::materializer::PhysicalPlanMaterializer;
+use crate::query::executor::streaming::plan::types::PhysicalPlan;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
@@ -22,6 +25,19 @@ pub enum ApplyOperator {
     PatternApply {
         hash_keys: Vec<crate::core::types::expr::Expression>,
         probe_keys: Vec<crate::core::types::expr::Expression>,
+        anti: bool,
+        right_rows: Option<Vec<Vec<Value>>>,
+        right_layout: Option<Arc<SlotLayout>>,
+        memory_tracker: MemoryTracker,
+    },
+    CorrelatedApply {
+        /// Self-contained right subtree (rooted at an `Argument` source),
+        /// re-executed per outer row with the outer row bound as the
+        /// correlation frame.
+        sub_plan: Arc<PhysicalPlan>,
+        /// Bindings with the parameter maps stripped, cached for the per-row
+        /// nested materialization.
+        bindings: Box<QueryBindings>,
         anti: bool,
         right_rows: Option<Vec<Vec<Value>>>,
         right_layout: Option<Arc<SlotLayout>>,
@@ -61,6 +77,12 @@ impl ApplyOperator {
                 right_layout: None,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
+            ApplySpec::CorrelatedApply { .. } => {
+                // `CorrelatedApply` carries a nested physical plan and the
+                // stripped bindings, neither available from a spec alone; the
+                // materializer constructs it via the literal variant.
+                unreachable!("CorrelatedApply is constructed by the materializer")
+            }
             ApplySpec::RollUpApply {
                 compare_columns,
                 collect_column,
@@ -78,6 +100,7 @@ impl ApplyOperator {
         match self {
             Self::Apply { memory_tracker, .. }
             | Self::PatternApply { memory_tracker, .. }
+            | Self::CorrelatedApply { memory_tracker, .. }
             | Self::RollUpApply { memory_tracker, .. } => memory_tracker,
         }
     }
@@ -89,7 +112,12 @@ impl ApplyOperator {
         right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         left.open()?;
-        right.open()?;
+        // CorrelatedApply keeps only the left input; the right placeholder
+        // (`SourceOperator::Start`) is never executed because the nested right
+        // subtree is re-materialized per outer row at runtime.
+        if !matches!(self, Self::CorrelatedApply { .. }) {
+            right.open()?;
+        }
         base.lifecycle.mark_opened();
         Ok(())
     }
@@ -198,23 +226,73 @@ impl ApplyOperator {
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
                         base.ensure_not_cancelled()?;
-                        let left_key = evaluate_join_key(
-                            &left_row,
-                            left_chunk.layout.clone(),
-                            hash_keys,
-                        )?;
+                        let left_key =
+                            evaluate_join_key(&left_row, left_chunk.layout.clone(), hash_keys)?;
                         let mut exists = false;
                         for right_row in right_rows {
-                            let right_key = evaluate_join_key(
-                                right_row,
-                                right_layout.clone(),
-                                probe_keys,
-                            )?;
+                            let right_key =
+                                evaluate_join_key(right_row, right_layout.clone(), probe_keys)?;
                             if keys_match(&left_key, &right_key) {
                                 exists = true;
                                 break;
                             }
                         }
+                        if exists != *anti {
+                            output.push(left_row);
+                        }
+                    }
+                    if !output.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            output,
+                            Arc::clone(&output_layout),
+                        )));
+                    }
+                }
+            }
+            Self::CorrelatedApply {
+                sub_plan,
+                bindings,
+                anti,
+                ..
+            } => {
+                let rt = base.runtime.clone().ok_or_else(|| {
+                    QueryError::execution(
+                        "CorrelatedApply requires an execution runtime".to_string(),
+                    )
+                })?;
+                let output_layout = Arc::clone(&base.output_layout);
+                loop {
+                    let Some(mut left_chunk) = left.advance()? else {
+                        return Ok(None);
+                    };
+                    left_chunk.materialize_selection_by("CorrelatedApply");
+                    let mut output = Vec::new();
+                    for left_row in left_chunk.rows {
+                        base.ensure_not_cancelled()?;
+                        // Bind this outer row as the correlation frame consumed
+                        // by the Argument source at the root of the right
+                        // subtree. The right subtree has a single Argument
+                        // consumer, so overwriting the previous frame is safe
+                        // (the frame is `Mutex::take`n on the first read).
+                        rt.set_correlation_frame(left_chunk.layout.clone(), left_row.clone());
+                        // Re-materialize the self-contained right subtree fresh
+                        // for this row, sharing the parent runtime so storage,
+                        // parameter values, and the correlation frame resolve
+                        // against the same execution context.
+                        let (mut sub_exec, _) =
+                            PhysicalPlanMaterializer::materialize(sub_plan, bindings)?;
+                        sub_exec.set_chunk_size(bindings.chunk_size);
+                        sub_exec.set_runtime(Some(rt.clone()));
+                        sub_exec.open()?;
+                        let mut exists = false;
+                        while let Some(mut sub_chunk) = sub_exec.advance()? {
+                            sub_chunk.materialize_selection_by("CorrelatedApply");
+                            if !sub_chunk.rows.is_empty() {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        sub_exec.close()?;
                         if exists != *anti {
                             output.push(left_row);
                         }
@@ -325,6 +403,12 @@ impl ApplyOperator {
                 memory_tracker,
                 ..
             }
+            | Self::CorrelatedApply {
+                right_rows,
+                right_layout,
+                memory_tracker,
+                ..
+            }
             | Self::RollUpApply {
                 right_rows,
                 right_layout,
@@ -410,7 +494,11 @@ fn keys_match(left: &[Value], right: &[Value]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::ContextualExpression;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::runtime::ExecutionRuntime;
+    use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+    use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 
     fn scan(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
         let layout = Arc::new(SlotLayout::from_names(&col_names));
@@ -520,6 +608,178 @@ mod tests {
         assert_eq!(
             chunk.layout.names(),
             vec!["planned_left".to_string(), "planned_right".to_string()]
+        );
+    }
+
+    /// Build a self-contained right subtree rooted at an `Argument` source:
+    /// `Filter(condition) -> CrossJoin(Argument(col_names = ["id"]), Start)`.
+    /// When `condition` is `None` the filter is omitted, so the subtree is
+    /// non-empty for every correlation frame.
+    fn build_sub_plan(condition: Option<ContextualExpression>) -> Arc<PhysicalPlan> {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::query::executor::base::ExecutionContext;
+        use crate::query::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
+        use crate::query::executor::streaming::plan::context::PhysicalPlanBuildContext;
+        use crate::query::executor::streaming::plan::validator::PhysicalPlanValidator;
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::control_flow::ArgumentNode;
+        use crate::query::planning::plan::core::nodes::join::CrossJoinNode;
+        use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+
+        let mut argument = ArgumentNode::new(-2, "_correlated_apply");
+        argument.set_col_names(vec!["id".to_string()]);
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let cross = CrossJoinNode::new(PlanNodeEnum::Argument(argument), start)
+            .expect("cross join should build");
+        let node = match condition {
+            Some(condition) => PlanNodeEnum::Filter(
+                FilterNode::new(cross.into_enum(), condition).expect("filter should build"),
+            ),
+            None => cross.into_enum(),
+        };
+
+        let mut ctx = PhysicalPlanBuildContext::new();
+        let exec_ctx = ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
+        let plan =
+            PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("sub-plan should build");
+        let plan = Arc::new(plan);
+        PhysicalPlanValidator::validate(&plan).expect("sub-plan should validate");
+        plan
+    }
+
+    fn correlated_bindings() -> QueryBindings {
+        QueryBindings {
+            parameters: Arc::new(std::collections::HashMap::new()),
+            parameter_frame: None,
+            space_name: None,
+            storage: None,
+            bound_snapshot: None,
+            memory_budget: MemoryBudget::default_budget(),
+            max_workers: 1,
+            chunk_size: 1024,
+            max_buffered_chunks: 4,
+            query_id: 1,
+            cancel_token: None,
+            session_id: None,
+            user_name: None,
+            query_text: None,
+            transaction:
+                crate::query::executor::streaming::transaction_scope::TransactionScope::None,
+            shared_scheduler: None,
+            partition_count: 0,
+            arena: None,
+            feedback_history: None,
+            columnar_policy: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
+        }
+    }
+
+    fn execute_correlated_apply(
+        sub_plan: Arc<PhysicalPlan>,
+        anti: bool,
+        left_rows: Vec<Vec<Value>>,
+    ) -> Result<Vec<Vec<Value>>, QueryError> {
+        let left = scan(left_rows, vec!["id".to_string()]);
+        let right = StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start);
+        let budget = MemoryBudget::default_budget();
+        let operator = ApplyOperator::CorrelatedApply {
+            sub_plan,
+            bindings: Box::new(correlated_bindings()),
+            anti,
+            right_rows: None,
+            right_layout: None,
+            memory_tracker: MemoryTracker::new(budget),
+        };
+        let mut executor = StreamingExecutor::Apply(
+            OperatorBase::new(3),
+            Box::new(left),
+            Box::new(right),
+            operator,
+        );
+        executor.set_chunk_size(1024);
+        executor.set_runtime(Some(Arc::new(ExecutionRuntime::default_budget())));
+        executor.open()?;
+        let mut rows = Vec::new();
+        while let Some(mut chunk) = executor.advance()? {
+            chunk.materialize_selection_by("CorrelatedApply");
+            rows.extend(chunk.rows);
+        }
+        executor.close()?;
+        Ok(rows)
+    }
+
+    #[test]
+    fn correlated_apply_semi_and_anti_use_right_subtree_existence() {
+        let sub_plan = build_sub_plan(None);
+
+        let semi = execute_correlated_apply(
+            sub_plan.clone(),
+            false,
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+        )
+        .expect("semi correlated apply should execute");
+        assert_eq!(
+            semi,
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+            "semi keeps rows whose right subtree is non-empty"
+        );
+
+        let anti = execute_correlated_apply(
+            sub_plan,
+            true,
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+        )
+        .expect("anti correlated apply should execute");
+        assert!(
+            anti.is_empty(),
+            "anti drops rows whose right subtree is non-empty"
+        );
+    }
+
+    #[test]
+    fn correlated_apply_binds_the_frame_per_row() {
+        // Filter that only passes the frame whose `id` equals 2. The left
+        // input carries two rows, so the per-row frame must differ.
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::operators::BinaryOperator;
+        use crate::core::types::{ContextualExpression, ExpressionMeta};
+        use crate::core::Expression;
+
+        let condition_expr = Expression::binary(
+            Expression::variable("id"),
+            BinaryOperator::Equal,
+            Expression::literal(crate::core::Value::Int(2)),
+        );
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_id = expr_ctx.register_expression(ExpressionMeta::new(condition_expr));
+        let condition = ContextualExpression::new(expr_id, expr_ctx);
+        let sub_plan = build_sub_plan(Some(condition));
+
+        let semi = execute_correlated_apply(
+            sub_plan.clone(),
+            false,
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+        )
+        .expect("semi correlated apply should execute");
+        assert_eq!(
+            semi,
+            vec![vec![Value::Int(2)]],
+            "only the row whose bound frame satisfies the filter is kept"
+        );
+
+        let anti = execute_correlated_apply(
+            sub_plan,
+            true,
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]],
+        )
+        .expect("anti correlated apply should execute");
+        assert_eq!(
+            anti,
+            vec![vec![Value::Int(1)]],
+            "anti keeps only rows whose bound frame makes the subtree empty"
         );
     }
 }

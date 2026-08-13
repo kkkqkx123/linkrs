@@ -620,9 +620,8 @@ mod tests {
 
     #[test]
     fn test_unnest_anti_produces_anti_join() {
-        let pattern_apply =
-            PatternApplyNode::new(test_scan(), test_scan(), vec![], vec![], true)
-                .expect("pattern apply should build");
+        let pattern_apply = PatternApplyNode::new(test_scan(), test_scan(), vec![], vec![], true)
+            .expect("pattern apply should build");
 
         let transformed = SubqueryUnnestingOptimizer::new()
             .unnest(pattern_apply)

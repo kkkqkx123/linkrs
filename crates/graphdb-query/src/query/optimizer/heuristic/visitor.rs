@@ -24,8 +24,8 @@ use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
 };
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
-    ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
-    RollUpApplyNode, UnionNode, UnwindNode,
+    ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
+    PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 use crate::query::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -209,6 +209,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_dedup => DedupNode, Dedup,
         visit_unwind => UnwindNode, Unwind,
         visit_pattern_apply => PatternApplyNode, PatternApply,
+        visit_correlated_apply => CorrelatedApplyNode, CorrelatedApply,
         visit_roll_up_apply => RollUpApplyNode, RollUpApply,
         visit_data_collect => DataCollectNode, DataCollect,
         visit_assign => AssignNode, Assign,

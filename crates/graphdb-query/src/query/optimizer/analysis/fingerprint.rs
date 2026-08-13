@@ -239,6 +239,9 @@ impl FingerprintCalculator {
             PlanNodeEnum::PatternApply(n) => {
                 self.hash_single_input(n, hasher);
             }
+            PlanNodeEnum::CorrelatedApply(n) => {
+                self.hash_single_input(n, hasher);
+            }
             PlanNodeEnum::RollUpApply(n) => {
                 self.hash_single_input(n, hasher);
             }

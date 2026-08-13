@@ -268,7 +268,9 @@ impl<'a> ParseContext<'a> {
         if self.next_token.is_none() {
             self.next_token = Some(self.lexer.next_token());
         }
-        self.next_token.as_ref().expect("lookahead buffer should be filled")
+        self.next_token
+            .as_ref()
+            .expect("lookahead buffer should be filled")
     }
 
     pub fn match_token(&mut self, expected: TokenKind) -> bool {
