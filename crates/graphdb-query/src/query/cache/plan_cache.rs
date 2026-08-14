@@ -1053,7 +1053,12 @@ impl ParameterizedQueryHandler {
     /// Create a new parametric query processor.
     pub fn new() -> Self {
         Self {
-            placeholder_pattern: regex::Regex::new(r"\$(\d+|[a-zA-Z_][a-zA-Z0-9_]*)")
+            // Query parameters use `@name` (session variables use `$name`
+            // and are never treated as parameters here). Numeric `$N`
+            // placeholders are kept for prepared-statement compatibility;
+            // RANK suffixes (`@2`) are excluded because only identifiers
+            // count as parameters.
+            placeholder_pattern: regex::Regex::new(r"@([a-zA-Z_][a-zA-Z0-9_]*)|\$(\d+)")
                 .expect("Placeholder regex compilation failed"),
         }
     }
@@ -1079,7 +1084,13 @@ impl ParameterizedQueryHandler {
 
         for (idx, cap) in self.placeholder_pattern.captures_iter(query).enumerate() {
             let full_match = cap.get(0).expect("Full match should exist");
-            let param_str = cap.get(1).expect("Parameter group should exist").as_str();
+            // Group 1 captures `@name` parameters, group 2 captures `$N`
+            // numeric placeholders.
+            let param_str = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .expect("Parameter group should exist")
+                .as_str();
 
             // Skip the left-hand side of a variable assignment, e.g.
             // `$result = GO ...` defines a session variable instead of
@@ -1205,7 +1216,7 @@ mod tests {
     fn test_parameterized_query_handler() {
         let handler = ParameterizedQueryHandler::new();
 
-        let params = handler.extract_params("SELECT * FROM users WHERE id = $1 AND name = $name");
+        let params = handler.extract_params("SELECT * FROM users WHERE id = $1 AND name = @name");
 
         assert_eq!(params.len(), 2);
         assert_eq!(params[0].index, 1);

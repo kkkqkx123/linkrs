@@ -1,27 +1,25 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::MigrateAction;
-use crate::storage::QueryStorage;
 
 pub(super) fn execute_show_stats(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowStats {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
-    base.lifecycle.mark_closed();
 
     if let Some(storage_lock) = storage {
         let reader = storage_lock.read();
@@ -82,20 +80,21 @@ pub(super) fn execute_show_stats(
 }
 
 pub(super) fn execute_show_configs(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    _space_name: &str,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowConfigs {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
-    base.lifecycle.mark_closed();
     Ok(Some(super::make_single_row(
         super::make_single_col_schema("module", "string"),
         vec![Value::string("graphdb")],
@@ -103,20 +102,21 @@ pub(super) fn execute_show_configs(
 }
 
 pub(super) fn execute_show_queries(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    _space_name: &str,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowQueries {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
-    base.lifecycle.mark_closed();
     Ok(Some(super::make_single_row(
         super::make_single_col_schema("queries", "string"),
         vec![],
@@ -124,20 +124,21 @@ pub(super) fn execute_show_queries(
 }
 
 pub(super) fn execute_show_sessions(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    _space_name: &str,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::ShowSessions {
+        storage,
+        space_name: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
-    base.lifecycle.mark_closed();
     Ok(Some(super::make_single_row(
         super::make_single_col_schema("sessions", "string"),
         vec![],
@@ -145,21 +146,23 @@ pub(super) fn execute_show_sessions(
 }
 
 pub(super) fn execute_analyze(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    analyze_target: &str,
-    target_name: &Option<String>,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::Analyze {
+        storage,
+        space_name,
+        analyze_target,
+        target_name,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
-    let result = match analyze_target {
+    let result = match analyze_target.as_str() {
         "space" => {
             if let Some(lock) = storage {
                 let reader = lock.read();
@@ -184,7 +187,7 @@ pub(super) fn execute_analyze(
             } else {
                 Ok(Some(super::make_manage_result(
                     "analyze",
-                    Some(space_name),
+                    Some(space_name.as_str()),
                     "no-storage",
                 )))
             }
@@ -202,24 +205,26 @@ pub(super) fn execute_analyze(
             analyze_target
         ))),
     };
-    base.lifecycle.mark_closed();
     result
 }
 
 pub(super) fn execute_migrate(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    action: &MigrateAction,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::Migrate {
+        storage,
+        space_name,
+        action,
+        migration_data: _,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let result = match action {
         MigrateAction::MigrateSpace => {
             if let Some(lock) = storage {
@@ -244,6 +249,5 @@ pub(super) fn execute_migrate(
             }
         }
     };
-    base.lifecycle.mark_closed();
     result
 }

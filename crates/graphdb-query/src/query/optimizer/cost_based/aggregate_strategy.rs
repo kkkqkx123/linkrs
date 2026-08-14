@@ -611,7 +611,7 @@ impl AggregateStrategySelector {
 }
 
 // =====================================================================
-// Logical-plan variant (P3: PlanNodeEnum logic/physical separation).
+// Logical-plan variant (PlanNodeEnum logic/physical separation).
 //
 // The aggregation strategy decision is taken on the pure logical tree
 // (`LogicalNodeEnum`) and emits the same `aggregate:` note as the physical

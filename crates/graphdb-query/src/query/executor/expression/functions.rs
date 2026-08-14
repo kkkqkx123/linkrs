@@ -229,6 +229,32 @@ impl BuiltinFunction {
         }
     }
 
+    /// Whether the function is deterministic and free of side effects.
+    ///
+    /// Non-pure functions (`rand*`, `now`, `current_date`, ...) must never be
+    /// constant-folded: folding would evaluate them once at plan time and bake
+    /// a stale result into the plan. Purity defaults to `true`; every
+    /// non-pure variant is listed explicitly. The conservative direction
+    /// lives on the folding side: functions that are not registered at all
+    /// are never folded.
+    pub fn is_pure(&self) -> bool {
+        match self {
+            BuiltinFunction::Math(f) => !matches!(
+                f,
+                MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64
+            ),
+            BuiltinFunction::DateTime(f) => !matches!(
+                f,
+                DateTimeFunction::Now
+                    | DateTimeFunction::TimeStamp
+                    | DateTimeFunction::CurrentDate
+                    | DateTimeFunction::CurrentTimestamp
+            ),
+            BuiltinFunction::Utility(f) => !matches!(f, UtilityFunction::GenRandomUuid),
+            _ => true,
+        }
+    }
+
     /// Get function description
     pub fn description(&self) -> &str {
         match self {

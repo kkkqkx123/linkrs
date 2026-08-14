@@ -26,11 +26,23 @@ pub trait ExpressionContext {
     /// Obtain the value of the variable
     fn get_variable(&self, name: &str) -> Option<Value>;
 
-    /// Obtain the value of a query parameter (`$name`).
+    /// Obtain the value of a query parameter (`@name`).
     /// Default implementation returns `None` — contexts without parameter
     /// support simply ignore parameter references.
     fn get_parameter(&self, _name: &str) -> Option<Value> {
         None
+    }
+
+    /// Obtain the value of a session variable (`$name`).
+    ///
+    /// Default implementation reports an error: an undefined session
+    /// variable is a query error, not NULL. Row contexts backed by a
+    /// session snapshot override this to return the actual value.
+    fn get_session_variable(&self, name: &str) -> Result<Value, ExpressionError> {
+        Err(ExpressionError::type_error(format!(
+            "Session variable `{}` is not defined in this context",
+            name
+        )))
     }
 
     /// Obtain the value of a variable by slot ID (fast path).
@@ -73,6 +85,34 @@ pub trait ExpressionContext {
         let _ = body;
         Err(ExpressionError::type_error(
             "Subquery execution not supported in this context",
+        ))
+    }
+
+    /// EXISTS semantics: whether the subquery produces at least one row.
+    ///
+    /// Default implementation runs [`Self::execute_subquery`] and tests for
+    /// a non-empty result; streaming contexts override it to short-circuit
+    /// and to cache non-correlated results.
+    fn execute_exists(&mut self, body: &SubqueryBody) -> Result<bool, ExpressionError> {
+        let results = self.execute_subquery(body)?;
+        Ok(!results.is_empty())
+    }
+
+    /// IN semantics: whether `value` occurs in the subquery result.
+    ///
+    /// A NULL left operand, or NULL values inside the result set, never
+    /// match — consistent with the conjunctive `keys_match` path.
+    fn contains_subquery(
+        &mut self,
+        body: &SubqueryBody,
+        value: &Value,
+    ) -> Result<Value, ExpressionError> {
+        if value.is_null() {
+            return Ok(Value::Bool(false));
+        }
+        let results = self.execute_subquery(body)?;
+        Ok(Value::Bool(
+            results.iter().any(|v| !v.is_null() && v == value),
         ))
     }
 

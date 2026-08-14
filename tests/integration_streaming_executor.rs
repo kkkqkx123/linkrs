@@ -13,16 +13,29 @@ use graphdb::query::executor::streaming::chunk::DataChunk;
 use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::executor::StreamingExecutor;
 use graphdb::query::executor::streaming::operators::base::OperatorBase;
-use graphdb::query::executor::streaming::operators::blocking::BlockingOperator;
-use graphdb::query::executor::streaming::operators::join_operator::HashJoinBuildSide;
-use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
-use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
-use graphdb::query::executor::streaming::operators::source_operator::SourceOperator;
-use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperator;
-use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperatorState;
+use graphdb::query::executor::streaming::operators::blocking::{
+    BlockingOperator, BlockingOperatorKind,
+};
+use graphdb::query::executor::streaming::operators::join_operator::{
+    HashJoinBuildSide, JoinOperator, JoinOperatorKind,
+};
+use graphdb::query::executor::streaming::operators::set_operator::{SetOperator, SetOperatorKind};
+use graphdb::query::executor::streaming::operators::source_operator::{
+    SourceOperator, SourceOperatorKind,
+};
+use graphdb::query::executor::streaming::operators::spec::BuildSide;
+use graphdb::query::executor::streaming::operators::unary_operator::{
+    UnaryOperator, UnaryOperatorKind, UnaryOperatorState,
+};
+use graphdb::query::executor::streaming::slot::SlotLayout;
+use std::sync::Arc;
+
+fn empty_layout() -> Arc<SlotLayout> {
+    Arc::new(SlotLayout::new(vec![]))
+}
 
 fn unary_state() -> UnaryOperatorState {
-    UnaryOperatorState { parameters: None }
+    UnaryOperatorState::default()
 }
 
 // ============ Test Helpers ============
@@ -34,22 +47,28 @@ fn create_scan_executor(rows: usize) -> StreamingExecutor {
 
     StreamingExecutor::Source(
         OperatorBase::new(0),
-        SourceOperator::ScanVertices {
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-        },
+        SourceOperator::new(
+            SourceOperatorKind::ScanVertices {
+                buffer,
+                current_index: 0,
+                col_names: vec![],
+            },
+            empty_layout(),
+        ),
     )
 }
 
 fn scan_vertices(data: Vec<Vec<Value>>) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
-        SourceOperator::ScanVertices {
-            buffer: data,
-            current_index: 0,
-            col_names: vec![],
-        },
+        SourceOperator::new(
+            SourceOperatorKind::ScanVertices {
+                buffer: data,
+                current_index: 0,
+                col_names: vec![],
+            },
+            empty_layout(),
+        ),
     )
 }
 
@@ -76,11 +95,14 @@ fn test_scan_edges_lifecycle() {
     ];
     let mut executor = StreamingExecutor::Source(
         OperatorBase::new(0),
-        SourceOperator::ScanEdges {
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-        },
+        SourceOperator::new(
+            SourceOperatorKind::ScanEdges {
+                buffer,
+                current_index: 0,
+                col_names: vec![],
+            },
+            empty_layout(),
+        ),
     );
     assert!(verify_executor_lifecycle(&mut executor).is_ok());
 }
@@ -93,10 +115,13 @@ fn test_filter_in_chain() {
     let mut filter = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     filter.open().unwrap();
     let chunk = filter.advance().unwrap();
@@ -110,11 +135,14 @@ fn test_project_in_chain() {
     let mut project = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Project {
-            output_expressions: vec![Expression::Literal(Value::Int(0))],
-            output_col_names: vec![],
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Project {
+                output_expressions: vec![Expression::Literal(Value::Int(0))],
+                output_col_names: vec![],
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     project.open().unwrap();
     let chunk = project.advance().unwrap();
@@ -131,12 +159,15 @@ fn test_limit_in_chain() {
     let mut limit = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 10,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 10,
+                skipped: 0,
+                consumed: 0,
+            },
+            empty_layout(),
+        ),
     );
     limit.open().unwrap();
     let chunk = limit.advance().unwrap();
@@ -164,10 +195,13 @@ fn test_distinct_in_chain() {
     let mut distinct = StreamingExecutor::Blocking(
         OperatorBase::new(0),
         scan,
-        BlockingOperator::Distinct {
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            state: None,
-        },
+        BlockingOperator::new(
+            BlockingOperatorKind::Distinct {
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                state: None,
+            },
+            empty_layout(),
+        ),
     );
     distinct.open().unwrap();
     let chunk = distinct.advance().unwrap();
@@ -183,10 +217,13 @@ fn test_pipeline_scan_filter() {
     let mut pipeline = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
@@ -200,14 +237,17 @@ fn test_pipeline_scan_project() {
     let mut pipeline = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Project {
-            output_expressions: vec![
-                Expression::Literal(Value::Int(0)),
-                Expression::Literal(Value::string("const")),
-            ],
-            output_col_names: vec![],
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Project {
+                output_expressions: vec![
+                    Expression::Literal(Value::Int(0)),
+                    Expression::Literal(Value::string("const")),
+                ],
+                output_col_names: vec![],
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
@@ -221,12 +261,15 @@ fn test_pipeline_scan_limit() {
     let mut pipeline = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 5,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 5,
+                skipped: 0,
+                consumed: 0,
+            },
+            empty_layout(),
+        ),
     );
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
@@ -246,19 +289,25 @@ fn test_pipeline_scan_filter_project() {
     let filter = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
     let mut pipeline = StreamingExecutor::Unary(
         OperatorBase::new(0),
         filter,
-        UnaryOperator::Project {
-            output_expressions: vec![Expression::Literal(Value::Int(42))],
-            output_col_names: vec![],
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Project {
+                output_expressions: vec![Expression::Literal(Value::Int(42))],
+                output_col_names: vec![],
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
@@ -272,20 +321,26 @@ fn test_pipeline_scan_filter_limit() {
     let filter = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
     let mut pipeline = StreamingExecutor::Unary(
         OperatorBase::new(0),
         filter,
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 8,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 8,
+                skipped: 0,
+                consumed: 0,
+            },
+            empty_layout(),
+        ),
     );
     pipeline.open().unwrap();
     let result = pipeline.advance().unwrap();
@@ -313,12 +368,15 @@ fn test_sort_in_chain() {
     let mut sort = StreamingExecutor::Blocking(
         OperatorBase::new(0),
         scan,
-        BlockingOperator::Sort {
-            sort_expressions: vec![Expression::Literal(Value::Int(0))],
-            sort_directions: vec![SortDirection::Ascending],
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            state: None,
-        },
+        BlockingOperator::new(
+            BlockingOperatorKind::Sort {
+                sort_expressions: vec![Expression::Literal(Value::Int(0))],
+                sort_directions: vec![SortDirection::Ascending],
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                state: None,
+            },
+            empty_layout(),
+        ),
     );
     sort.open().unwrap();
     let result = sort.advance().unwrap();
@@ -338,16 +396,19 @@ fn test_aggregate_in_chain() {
     let mut agg = StreamingExecutor::Blocking(
         OperatorBase::new(0),
         scan,
-        BlockingOperator::Aggregate {
-            group_by_expressions: vec![Expression::Literal(Value::Int(0))],
-            aggregate_functions: vec![(
-                AggregateFunction::Count(None),
-                Expression::Literal(Value::Int(1)),
-            )],
-            output_col_names: vec![],
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            state: None,
-        },
+        BlockingOperator::new(
+            BlockingOperatorKind::Aggregate {
+                group_by_expressions: vec![Expression::Literal(Value::Int(0))],
+                aggregate_functions: vec![(
+                    AggregateFunction::Count(None),
+                    Expression::Literal(Value::Int(1)),
+                )],
+                output_col_names: vec![],
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                state: None,
+            },
+            empty_layout(),
+        ),
     );
     agg.open().unwrap();
     let result = agg.advance().unwrap();
@@ -366,15 +427,19 @@ fn test_hash_join_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        JoinOperator::HashJoin {
-            join_condition: None,
-            hash_keys: vec![],
-            probe_keys: vec![],
-            build_side: HashJoinBuildSide::new(),
-            left_consumed: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            right_col_names: vec![],
-        },
+        JoinOperator::new(
+            JoinOperatorKind::HashJoin {
+                join_condition: None,
+                hash_keys: vec![],
+                probe_keys: vec![],
+                build_side: HashJoinBuildSide::new(),
+                build_done: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                right_col_names: vec![],
+                build_side_select: BuildSide::Left,
+            },
+            empty_layout(),
+        ),
     );
     join.open().unwrap();
     let _result = join.advance().unwrap();
@@ -390,13 +455,16 @@ fn test_nested_loop_join_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        JoinOperator::NestedLoopJoin {
-            join_condition: None,
-            build_side_tuples: vec![],
-            left_consumed: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            right_col_names: vec![],
-        },
+        JoinOperator::new(
+            JoinOperatorKind::NestedLoopJoin {
+                join_condition: None,
+                build_side_tuples: vec![],
+                build_done: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                right_col_names: vec![],
+            },
+            empty_layout(),
+        ),
     );
     join.open().unwrap();
     let _result = join.advance().unwrap();
@@ -414,11 +482,14 @@ fn test_union_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        SetOperator::Union {
-            seen_rows: std::collections::HashSet::new(),
-            left_consumed: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-        },
+        SetOperator::new(
+            SetOperatorKind::Union {
+                seen_rows: std::collections::HashSet::new(),
+                left_consumed: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            },
+            empty_layout(),
+        ),
     );
     union.open().unwrap();
     let result = union.advance().unwrap();
@@ -435,14 +506,17 @@ fn test_intersect_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        SetOperator::Intersect {
-            left_rows: Vec::new(),
-            right_rows: std::collections::HashSet::new(),
-            left_buffered: false,
-            right_buffered: false,
-            emitted: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-        },
+        SetOperator::new(
+            SetOperatorKind::Intersect {
+                left_rows: Vec::new(),
+                right_rows: std::collections::HashSet::new(),
+                left_buffered: false,
+                right_buffered: false,
+                emitted: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            },
+            empty_layout(),
+        ),
     );
     intersect.open().unwrap();
     let _result = intersect.advance().unwrap();
@@ -461,11 +535,14 @@ fn test_except_in_chain() {
         OperatorBase::new(0),
         left,
         right,
-        SetOperator::Except {
-            exclude_rows: std::collections::HashSet::new(),
-            right_buffered: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-        },
+        SetOperator::new(
+            SetOperatorKind::Except {
+                exclude_rows: std::collections::HashSet::new(),
+                right_buffered: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            },
+            empty_layout(),
+        ),
     );
     except.open().unwrap();
     let result = except.advance().unwrap();
@@ -481,29 +558,38 @@ fn test_complex_pipeline_4step() {
     let filter = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
     let project = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         filter,
-        UnaryOperator::Project {
-            output_expressions: vec![Expression::Literal(Value::string("col"))],
-            output_col_names: vec![],
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Project {
+                output_expressions: vec![Expression::Literal(Value::string("col"))],
+                output_col_names: vec![],
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
     let mut limit = StreamingExecutor::Unary(
         OperatorBase::new(0),
         project,
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 5,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 5,
+                skipped: 0,
+                consumed: 0,
+            },
+            empty_layout(),
+        ),
     );
     limit.open().unwrap();
     let result = limit.advance().unwrap();
@@ -517,30 +603,39 @@ fn test_union_of_filtered_scans() {
     let left = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         left_scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
     let right_scan = Box::new(create_scan_executor(10));
     let right = Box::new(StreamingExecutor::Unary(
         OperatorBase::new(0),
         right_scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     ));
 
     let mut union = StreamingExecutor::Set(
         OperatorBase::new(0),
         left,
         right,
-        SetOperator::Union {
-            seen_rows: std::collections::HashSet::new(),
-            left_consumed: false,
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-        },
+        SetOperator::new(
+            SetOperatorKind::Union {
+                seen_rows: std::collections::HashSet::new(),
+                left_consumed: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            },
+            empty_layout(),
+        ),
     );
     union.open().unwrap();
     let result = union.advance().unwrap();
@@ -556,10 +651,13 @@ fn test_filter_with_empty_input() {
     let mut filter = StreamingExecutor::Unary(
         OperatorBase::new(0),
         empty_scan,
-        UnaryOperator::Filter {
-            predicate: Expression::Literal(Value::Bool(true)),
-            state: unary_state(),
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Filter {
+                predicate: Expression::Literal(Value::Bool(true)),
+                state: unary_state(),
+            },
+            empty_layout(),
+        ),
     );
     filter.open().unwrap();
     let result = filter.advance().unwrap();
@@ -573,12 +671,15 @@ fn test_limit_zero() {
     let mut limit = StreamingExecutor::Unary(
         OperatorBase::new(0),
         scan,
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 0,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 0,
+                skipped: 0,
+                consumed: 0,
+            },
+            empty_layout(),
+        ),
     );
     limit.open().unwrap();
     let result = limit.advance().unwrap();
@@ -598,10 +699,13 @@ fn test_distinct_all_same() {
     let mut distinct = StreamingExecutor::Blocking(
         OperatorBase::new(0),
         scan,
-        BlockingOperator::Distinct {
-            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-            state: None,
-        },
+        BlockingOperator::new(
+            BlockingOperatorKind::Distinct {
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                state: None,
+            },
+            empty_layout(),
+        ),
     );
     distinct.open().unwrap();
     let result = distinct.advance().unwrap();

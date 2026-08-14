@@ -653,7 +653,19 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             ctx.next_token();
             let var_name = ctx.expect_identifier()?;
             let mut span = ctx.merge_span(start_pos, ctx.current_position());
-            let mut expr = Expression::Parameter(var_name);
+            let mut expr = Expression::session_variable(var_name);
+            if ctx.match_token(TokenKind::Dot) {
+                let prop_name = ctx.expect_identifier()?;
+                expr = Expression::property(expr, prop_name);
+                span = ctx.merge_span(start_pos, ctx.current_position());
+            }
+            Ok(ParseResult { expr, span })
+        }
+        TokenKind::At => {
+            ctx.next_token();
+            let param_name = ctx.expect_identifier()?;
+            let mut span = ctx.merge_span(start_pos, ctx.current_position());
+            let mut expr = Expression::parameter(param_name);
             if ctx.match_token(TokenKind::Dot) {
                 let prop_name = ctx.expect_identifier()?;
                 expr = Expression::property(expr, prop_name);
@@ -1025,10 +1037,10 @@ fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, Parse
     }
 
     Ok(SubqueryBody {
+        id: 0,
         patterns,
         where_clause,
         return_expr,
-        is_correlated: false,
     })
 }
 

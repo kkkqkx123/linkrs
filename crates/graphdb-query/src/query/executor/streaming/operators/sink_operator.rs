@@ -13,11 +13,13 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::{QueryStorage, StorageWriter};
 
 #[derive(Debug)]
-pub enum SinkOperator {
+pub enum SinkOperatorKind {
     InsertVertices {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -103,11 +105,20 @@ pub enum SinkOperator {
     },
 }
 
-fn make_modify_result(
-    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
-    op: &str,
-    count: u64,
-) -> DataChunk {
+/// Sink operator.
+///
+/// Wraps [`SinkOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct SinkOperator {
+    pub kind: SinkOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
+fn make_modify_result(output_layout: Arc<SlotLayout>, op: &str, count: u64) -> DataChunk {
     let row = vec![Value::string(op), Value::BigInt(count as i64)];
     DataChunk::new_with_layout(vec![row], output_layout)
 }
@@ -123,7 +134,7 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
 /// otherwise parameter resolution fails with "Undefined parameter".
 fn row_context(
     row: Vec<Value>,
-    layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    layout: Arc<SlotLayout>,
     params: Option<Arc<HashMap<String, Value>>>,
 ) -> ValueRowContext {
     match params {
@@ -169,15 +180,16 @@ impl SinkOperator {
     pub fn from_spec(
         spec: &super::spec::SinkSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             super::spec::SinkSpec::InsertVertices {
                 space_name,
                 vertex_properties,
                 tags,
                 tag_property_names,
                 if_not_exists,
-            } => Self::InsertVertices {
+            } => SinkOperatorKind::InsertVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_properties: vertex_properties.clone(),
@@ -194,7 +206,7 @@ impl SinkOperator {
                 edge_type,
                 edge_properties,
                 if_not_exists,
-            } => Self::InsertEdges {
+            } => SinkOperatorKind::InsertEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
@@ -211,7 +223,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
-            } => Self::UpdateVertices {
+            } => SinkOperatorKind::UpdateVertices {
                 storage,
                 space_name: space_name.clone(),
                 tag_name: tag_name.clone(),
@@ -229,7 +241,7 @@ impl SinkOperator {
                 updates,
                 condition,
                 is_upsert,
-            } => Self::UpdateEdges {
+            } => SinkOperatorKind::UpdateEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
@@ -244,7 +256,7 @@ impl SinkOperator {
             super::spec::SinkSpec::DeleteVertices {
                 space_name,
                 vertex_id_col,
-            } => Self::DeleteVertices {
+            } => SinkOperatorKind::DeleteVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
@@ -256,7 +268,7 @@ impl SinkOperator {
                 src_col,
                 dst_col,
                 edge_type,
-            } => Self::DeleteEdges {
+            } => SinkOperatorKind::DeleteEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
@@ -268,7 +280,7 @@ impl SinkOperator {
             super::spec::SinkSpec::PipeDeleteVertices {
                 space_name,
                 vertex_id_col,
-            } => Self::PipeDeleteVertices {
+            } => SinkOperatorKind::PipeDeleteVertices {
                 storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
@@ -280,7 +292,7 @@ impl SinkOperator {
                 src_col,
                 dst_col,
                 edge_type,
-            } => Self::PipeDeleteEdges {
+            } => SinkOperatorKind::PipeDeleteEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
@@ -293,7 +305,7 @@ impl SinkOperator {
                 space_name,
                 tag_names,
                 vertex_ids,
-            } => Self::DeleteTags {
+            } => SinkOperatorKind::DeleteTags {
                 storage,
                 space_name: space_name.clone(),
                 tag_names: tag_names.clone(),
@@ -301,15 +313,38 @@ impl SinkOperator {
                 rows_deleted: 0,
                 summary_returned: false,
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: SinkOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
     }
 
     /// Check that the transaction scope allows writes.
     ///
     /// M0.4: requires a transaction scope for DML operations.  Absent scope
     /// is rejected to prevent unbounded writes outside any transaction.
-    fn check_write_permission(base: &OperatorBase) -> Result<(), QueryError> {
-        let rt = base.runtime.as_ref().ok_or_else(|| {
+    fn check_write_permission(&self) -> Result<(), QueryError> {
+        let rt = self.runtime.as_ref().ok_or_else(|| {
             QueryError::execution(
                 "DML requires an execution runtime with transaction scope".to_string(),
             )
@@ -327,36 +362,27 @@ impl SinkOperator {
         Ok(())
     }
 
-    pub fn open(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            SinkOperator::InsertVertices { .. }
-            | SinkOperator::InsertEdges { .. }
-            | SinkOperator::UpdateVertices { .. }
-            | SinkOperator::UpdateEdges { .. }
-            | SinkOperator::DeleteVertices { .. }
-            | SinkOperator::DeleteEdges { .. }
-            | SinkOperator::PipeDeleteVertices { .. }
-            | SinkOperator::PipeDeleteEdges { .. }
-            | SinkOperator::DeleteTags { .. } => {
-                Self::check_write_permission(base)?;
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        self.check_write_permission()?;
+        match &mut self.kind {
+            SinkOperatorKind::InsertVertices { .. }
+            | SinkOperatorKind::InsertEdges { .. }
+            | SinkOperatorKind::UpdateVertices { .. }
+            | SinkOperatorKind::UpdateEdges { .. }
+            | SinkOperatorKind::DeleteVertices { .. }
+            | SinkOperatorKind::DeleteEdges { .. }
+            | SinkOperatorKind::PipeDeleteVertices { .. }
+            | SinkOperatorKind::PipeDeleteEdges { .. }
+            | SinkOperatorKind::DeleteTags { .. } => {
                 input.open()?;
-                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            SinkOperator::InsertVertices {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        match &mut self.kind {
+            SinkOperatorKind::InsertVertices {
                 storage,
                 space_name,
                 vertex_properties,
@@ -370,19 +396,16 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "InsertVertices not opened".to_string(),
-                    ));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
-                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
                             let mut context =
@@ -436,16 +459,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "insert_vertices",
                     *rows_inserted,
                 )))
             }
 
-            SinkOperator::InsertEdges {
+            SinkOperatorKind::InsertEdges {
                 storage,
                 space_name,
                 src_col,
@@ -460,17 +482,16 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("InsertEdges not opened".to_string()));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
-                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
                             let mut context =
@@ -514,16 +535,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "insert_edges",
                     *rows_inserted,
                 )))
             }
 
-            SinkOperator::UpdateVertices {
+            SinkOperatorKind::UpdateVertices {
                 storage,
                 space_name,
                 tag_name,
@@ -537,19 +557,16 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "UpdateVertices not opened".to_string(),
-                    ));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
-                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
                             let mut context =
@@ -636,16 +653,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "update_vertices",
                     *rows_updated,
                 )))
             }
 
-            SinkOperator::UpdateEdges {
+            SinkOperatorKind::UpdateEdges {
                 storage,
                 space_name,
                 src_col,
@@ -661,17 +677,16 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("UpdateEdges not opened".to_string()));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
-                        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+                        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
 
                         for row in &chunk.rows {
                             let mut context =
@@ -744,16 +759,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "update_edges",
                     *rows_updated,
                 )))
             }
 
-            SinkOperator::DeleteVertices {
+            SinkOperatorKind::DeleteVertices {
                 storage,
                 space_name,
                 vertex_id_col,
@@ -763,11 +777,6 @@ impl SinkOperator {
             } => {
                 if *summary_returned {
                     return Ok(None);
-                }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "DeleteVertices not opened".to_string(),
-                    ));
                 }
 
                 while let Some(mut chunk) = input.advance()? {
@@ -795,16 +804,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "delete_vertices",
                     *rows_deleted,
                 )))
             }
 
-            SinkOperator::DeleteEdges {
+            SinkOperatorKind::DeleteEdges {
                 storage,
                 space_name,
                 src_col,
@@ -817,13 +825,12 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("DeleteEdges not opened".to_string()));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -854,16 +861,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "delete_edges",
                     *rows_deleted,
                 )))
             }
 
-            SinkOperator::PipeDeleteEdges {
+            SinkOperatorKind::PipeDeleteEdges {
                 storage,
                 space_name,
                 src_col,
@@ -876,15 +882,12 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "PipeDeleteEdges not opened".to_string(),
-                    ));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -915,16 +918,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "delete_edges",
                     *rows_deleted,
                 )))
             }
 
-            SinkOperator::PipeDeleteVertices {
+            SinkOperatorKind::PipeDeleteVertices {
                 storage,
                 space_name,
                 vertex_id_col,
@@ -935,15 +937,12 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "PipeDeleteVertices not opened".to_string(),
-                    ));
-                }
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Sink");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let layout = chunk.get_layout();
@@ -967,16 +966,15 @@ impl SinkOperator {
                     }
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "pipe_delete_vertices",
                     *rows_deleted,
                 )))
             }
 
-            SinkOperator::DeleteTags {
+            SinkOperatorKind::DeleteTags {
                 storage,
                 space_name,
                 tag_names,
@@ -988,11 +986,10 @@ impl SinkOperator {
                 if *summary_returned {
                     return Ok(None);
                 }
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("DeleteTags not opened".to_string()));
-                }
 
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = self.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 if let Some(storage_lock) = storage {
                     if let Some(ref ids) = vertex_ids {
                         let mut writer = storage_lock.write();
@@ -1017,10 +1014,9 @@ impl SinkOperator {
                     *rows_deleted += count;
                 }
 
-                base.lifecycle.mark_exhausted();
                 *summary_returned = true;
                 Ok(Some(make_modify_result(
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                     "delete_tags",
                     *rows_deleted,
                 )))
@@ -1028,40 +1024,11 @@ impl SinkOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            SinkOperator::InsertVertices { .. }
-            | SinkOperator::InsertEdges { .. }
-            | SinkOperator::UpdateVertices { .. }
-            | SinkOperator::UpdateEdges { .. }
-            | SinkOperator::DeleteVertices { .. }
-            | SinkOperator::DeleteEdges { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_stopped();
-                }
-                Ok(())
-            }
-            SinkOperator::PipeDeleteVertices { .. }
-            | SinkOperator::PipeDeleteEdges { .. }
-            | SinkOperator::DeleteTags { .. } => {
-                base.lifecycle.mark_stopped();
-                Ok(())
-            }
-        }
+    pub fn stop(&mut self) -> Result<(), QueryError> {
+        Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            base.lifecycle.mark_closed();
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 }

@@ -10,7 +10,6 @@ use super::super::state::{
 use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::utils::Arena;
-
 /// Explicit operator lifecycle state machine.
 ///
 /// # Transitions
@@ -44,12 +43,6 @@ impl OperatorLifecycle {
 
     pub fn is_exhausted(self) -> bool {
         matches!(self, Self::Exhausted)
-    }
-
-    /// Whether the operator is in a state that allows closing.
-    /// Everything except `Closed` needs cleanup.
-    pub fn can_close(self) -> bool {
-        !matches!(self, Self::Closed)
     }
 
     pub fn mark_opened(&mut self) {
@@ -104,6 +97,10 @@ pub struct OperatorBase {
     /// this for chunks they construct themselves, including empty-result
     /// paths, rather than inferring schema from data rows.
     pub output_layout: Arc<SlotLayout>,
+    /// Set when a `reset()` call degraded to the transitional `close + open`
+    /// fallback for this operator (see `StreamingExecutor::reset`). Surfaced
+    /// in EXPLAIN as `reset:fallback` so un-resettable paths stay auditable.
+    pub reset_used_fallback: bool,
 }
 
 impl OperatorBase {
@@ -117,6 +114,7 @@ impl OperatorBase {
             chunk_size: 1024,
             physical_operator_id: PhysicalOperatorId(plan_node_id.unsigned_abs() as usize),
             output_layout: Arc::new(SlotLayout::new(Vec::new())),
+            reset_used_fallback: false,
         }
     }
 
@@ -280,6 +278,12 @@ impl OperatorBase {
     /// Return a reference to the bumpalo arena, if configured.
     pub fn arena(&self) -> Option<&Arc<Mutex<Arena>>> {
         self.runtime.as_ref().and_then(|rt| rt.arena())
+    }
+
+    /// Reset the lifecycle to `New` so a `close + open` sequence can run
+    /// again on the same operator instance (reset fallback path).
+    pub fn mark_new(&mut self) {
+        self.lifecycle = OperatorLifecycle::New;
     }
 }
 

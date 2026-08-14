@@ -246,6 +246,7 @@ impl ExpressionPrecomputationOptimizer {
             Expression::Literal(_) => true,
             Expression::Variable(_) => true,
             Expression::Parameter(_) => true, // Parameters are deterministic within a query
+            Expression::SessionVariable(_) => true, // Session variables are snapshot-fixed per statement
             Expression::Label(_) => true,
             Expression::Vector(_) => true, // Vector literals are deterministic
             Expression::Exists { .. } => false, // Subqueries are not deterministic

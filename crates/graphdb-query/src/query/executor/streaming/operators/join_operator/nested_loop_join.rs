@@ -6,27 +6,31 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorLifecycle;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 
-use super::{build_combined_names, close_common, JoinCtx};
+use super::build_combined_names;
 
 pub(super) fn next_nested_loop_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
-    left_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    build_done: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
-    if !*left_consumed {
+    if !*build_done {
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
             chunk.materialize_selection_by("NestedLoopJoin");
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
             }
@@ -36,7 +40,7 @@ pub(super) fn next_nested_loop_join(
             }
         }
         *right_col_names = captured_right_names;
-        *left_consumed = true;
+        *build_done = true;
     }
 
     while let Some(mut left_chunk) = left.advance()? {
@@ -80,7 +84,7 @@ pub(super) fn next_nested_loop_join(
         if !result_rows.is_empty() {
             return Ok(Some(DataChunk::new_with_layout(
                 result_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(output_layout),
             )));
         }
     }
@@ -89,11 +93,10 @@ pub(super) fn next_nested_loop_join(
 }
 
 pub(super) fn close(
-    lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     build_side_tuples: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        build_side_tuples.clear();
-    })
+    memory_tracker.reset();
+    build_side_tuples.clear();
+    Ok(())
 }

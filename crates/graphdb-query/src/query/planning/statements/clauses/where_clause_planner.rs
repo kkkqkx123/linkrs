@@ -57,13 +57,52 @@ impl ClausePlanner for WhereClausePlanner {
         let residual_expr =
             condition_expr.map(|e| exists_planner::extract_conjunctive_exists(&e, &mut specs));
 
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names = input_plan
+            .root()
+            .as_ref()
+            .map(|root| root.col_names().to_vec())
+            .unwrap_or_default();
+
+        // Unified entry for expression-level EXISTS / IN: any subquery left
+        // in the residual condition (OR positions, containers, ...) is
+        // compiled here and attached to the residual filter node. Compilation
+        // failure returns a precise PlannerError instead of leaking to the
+        // runtime "not supported" path.
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut residual_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let residual_expr = match &residual_expr {
+            Some(residual) => {
+                let (planned_expr, subqueries) = exists_planner::plan_expression_subqueries(
+                    residual.clone(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &outer_col_names,
+                    &mut id_alloc,
+                )?;
+                residual_subqueries = subqueries;
+                Some(planned_expr)
+            }
+            None => None,
+        };
+
         if specs.is_empty() {
-            return plan_simple_filter(condition, input_plan);
+            // No conjunctive subqueries: the classic filter path is unchanged
+            // when the residual is also subquery-free.
+            if residual_subqueries.is_empty() {
+                return plan_simple_filter(condition, input_plan);
+            }
+            let Some(residual_expr) = residual_expr else {
+                return plan_simple_filter(condition, input_plan);
+            };
+            let context = condition.context().clone();
+            let residual_ctx = exists_planner::to_contextual(residual_expr, &context);
+            return plan_simple_filter_with(residual_ctx, input_plan, residual_subqueries);
         }
 
         let residual_expr = residual_expr.expect("residual exists alongside specs");
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
         let mut plan = input_plan;
         for spec in &specs {
@@ -91,7 +130,7 @@ impl ClausePlanner for WhereClausePlanner {
         if !exists_planner::is_trivially_true(&residual_expr) {
             let context = condition.context().clone();
             let residual_ctx = exists_planner::to_contextual(residual_expr, &context);
-            plan = plan_simple_filter_with(residual_ctx, plan)?;
+            plan = plan_simple_filter_with(residual_ctx, plan, residual_subqueries)?;
         }
 
         Ok(plan)
@@ -126,16 +165,19 @@ fn plan_simple_filter(
     })
 }
 
-/// Apply a prepared filter condition on top of a plan.
+/// Apply a prepared filter condition on top of a plan, carrying any
+/// expression-level subqueries compiled for the condition.
 fn plan_simple_filter_with(
     condition: ContextualExpression,
     input_plan: SubPlan,
+    subqueries: Vec<exists_planner::PlannedSubquery>,
 ) -> Result<SubPlan, PlannerError> {
     let input_node = input_plan.root().as_ref().ok_or_else(|| {
         PlannerError::PlanGenerationFailed("The WHERE clause requires an input plan".to_string())
     })?;
 
-    let filter_node = FilterNode::new(input_node.clone(), condition.clone())?;
+    let filter_node =
+        FilterNode::new(input_node.clone(), condition.clone())?.with_subqueries(subqueries);
     let logical_root = wrap_logical(&input_plan, |input| {
         LogicalNodeEnum::Filter(LogicalFilterNode {
             id: next_node_id(),

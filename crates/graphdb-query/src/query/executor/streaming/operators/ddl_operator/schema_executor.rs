@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::types::edge::EdgeTypeInfo;
 use crate::core::types::index::{Index, IndexConfig, IndexType};
@@ -9,25 +7,26 @@ use crate::core::types::space::SpaceInfo;
 use crate::core::types::tag::TagInfo;
 use crate::core::{NullType, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::{
     EdgeManageCommand, IndexManageCommand, SpaceManageCommand, TagManageCommand,
 };
-use crate::storage::{QueryStorage, StorageSchemaOps};
+use crate::storage::StorageSchemaOps;
 
 pub(super) fn execute_space_manage(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    command: &SpaceManageCommand,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::SpaceManage {
+        storage,
+        command,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let space_name = match command {
         SpaceManageCommand::Create { space_name, .. }
         | SpaceManageCommand::Drop { space_name }
@@ -206,24 +205,25 @@ pub(super) fn execute_space_manage(
             Ok(Some(DataChunk::new(rows, schema)))
         }
     };
-    base.lifecycle.mark_closed();
     result
 }
 
 pub(super) fn execute_tag_manage(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    command: &TagManageCommand,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::TagManage {
+        storage,
+        space_name,
+        command,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let tag_name = match command {
         TagManageCommand::Create { tag_name, .. }
         | TagManageCommand::Alter { tag_name, .. }
@@ -421,24 +421,25 @@ pub(super) fn execute_tag_manage(
             }
         }
     };
-    base.lifecycle.mark_closed();
     result
 }
 
 pub(super) fn execute_edge_manage(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    command: &EdgeManageCommand,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::EdgeManage {
+        storage,
+        space_name,
+        command,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let edge_type = match command {
         EdgeManageCommand::Create { edge_name, .. }
         | EdgeManageCommand::Alter { edge_name, .. }
@@ -598,24 +599,25 @@ pub(super) fn execute_edge_manage(
             Ok(Some(DataChunk::new(rows, schema)))
         }
     };
-    base.lifecycle.mark_closed();
     result
 }
 
 pub(super) fn execute_index_manage(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    command: &IndexManageCommand,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::IndexManage {
+        storage,
+        space_name,
+        command,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let index_name = match command {
         IndexManageCommand::CreateTagIndex { index_name, .. }
         | IndexManageCommand::DropTagIndex { index_name }
@@ -925,17 +927,21 @@ pub(super) fn execute_index_manage(
             Ok(())
         }),
     };
-    base.lifecycle.mark_closed();
     result
 }
 
 pub(super) fn execute_delete_index(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    index_name: &str,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::DeleteIndex {
+        storage,
+        space_name,
+        index_name,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
@@ -949,7 +955,6 @@ pub(super) fn execute_delete_index(
             .map(|_| ())
             .map_err(|error| QueryError::execution(error.to_string()))
     });
-    base.lifecycle.mark_closed();
     result
 }
 

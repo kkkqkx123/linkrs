@@ -8,11 +8,15 @@ use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node_with_deps;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::query::planning::statements::clauses::exists_planner::PlannedSubquery;
 
 define_plan_node_with_deps! {
     pub struct FilterNode {
         condition: ContextualExpression,
         condition_serializable: Option<SerializableExpression>,
+        // Expression-level EXISTS / IN subqueries compiled for this filter
+        // Pre-execution only; never serialized.
+        subqueries: Vec<PlannedSubquery>,
     }
     enum: Filter
     input: SingleInputNode
@@ -32,10 +36,22 @@ impl FilterNode {
             deps: vec![input],
             condition,
             condition_serializable: None,
+            subqueries: Vec::new(),
             output_var: None,
             col_names,
             column_types: vec![],
         })
+    }
+
+    /// Attach expression-level subqueries to this filter.
+    pub fn with_subqueries(mut self, subqueries: Vec<PlannedSubquery>) -> Self {
+        self.subqueries = subqueries;
+        self
+    }
+
+    /// Expression-level subqueries compiled for this filter.
+    pub fn subqueries(&self) -> &[PlannedSubquery] {
+        &self.subqueries
     }
 
     /// Obtain the filtering criteria

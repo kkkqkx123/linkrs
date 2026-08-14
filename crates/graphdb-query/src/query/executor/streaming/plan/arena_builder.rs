@@ -238,6 +238,7 @@ mod tests {
 
         let bindings = QueryBindings {
             parameters: Arc::new(std::collections::HashMap::new()),
+            session_variables: Arc::new(std::collections::HashMap::new()),
             parameter_frame: None,
             space_name: None,
             storage: None,

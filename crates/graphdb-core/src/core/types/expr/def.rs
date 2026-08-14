@@ -139,8 +139,16 @@ pub enum Expression {
 
     /// Query parameter expression
     ///
-    /// Used to represent query parameters, e.g. `$param`.
+    /// Used to represent query parameters, e.g. `@param`.
     Parameter(String),
+
+    /// Session variable expression
+    ///
+    /// Used to represent session-scoped variables, e.g. `$name`.
+    /// Resolved from the session variable snapshot at execution time;
+    /// distinct from [`Expression::Parameter`] so EXPLAIN, type inference
+    /// and error reporting can tell the two apart.
+    SessionVariable(String),
 
     /// Vector literal expression
     ///
@@ -189,12 +197,13 @@ pub enum Expression {
 /// Represents a mini-query: MATCH pattern [WHERE condition] RETURN expression
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubqueryBody {
+    /// Planner-assigned stable identity. 0 at parse time; assigned
+    /// monotonically during planning. Runtime dispatches on this id.
+    pub id: u64,
     /// Pattern elements (triples like `a:Person-[:KNOWS]->b:Person`)
     pub patterns: Vec<String>,
     /// WHERE clause expression
     pub where_clause: Option<Box<Expression>>,
     /// RETURN expression (single expression for scalar subquery)
     pub return_expr: Option<Box<Expression>>,
-    /// Whether this is a correlated subquery (references outer variables)
-    pub is_correlated: bool,
 }

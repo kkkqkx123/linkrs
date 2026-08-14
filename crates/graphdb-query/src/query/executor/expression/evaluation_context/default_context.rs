@@ -28,6 +28,9 @@ pub struct DefaultExpressionContext {
     variables: HashMap<String, Value>,
     /// Query parameter name → value map (resolves `Expression::Parameter`).
     parameters: Option<Arc<HashMap<String, Value>>>,
+    /// Session variable name → value snapshot (resolves
+    /// `Expression::SessionVariable`).
+    session_variables: Option<Arc<HashMap<String, Value>>>,
     /// Optional graph storage for graph algorithm functions
     storage: Option<Arc<RwLock<dyn StorageReader>>>,
     /// Space name for graph storage access
@@ -40,6 +43,7 @@ impl DefaultExpressionContext {
         Self {
             variables: HashMap::new(),
             parameters: None,
+            session_variables: None,
             storage: None,
             space: String::new(),
         }
@@ -50,6 +54,7 @@ impl DefaultExpressionContext {
         Self {
             variables: HashMap::new(),
             parameters: None,
+            session_variables: None,
             storage: Some(storage),
             space,
         }
@@ -59,6 +64,13 @@ impl DefaultExpressionContext {
     /// references resolve at evaluation time.
     pub fn with_parameters(mut self, parameters: Arc<HashMap<String, Value>>) -> Self {
         self.parameters = Some(parameters);
+        self
+    }
+
+    /// Attach a session variable snapshot so `Expression::SessionVariable`
+    /// references resolve at evaluation time.
+    pub fn with_session_variables(mut self, variables: Arc<HashMap<String, Value>>) -> Self {
+        self.session_variables = Some(variables);
         self
     }
 
@@ -86,6 +98,7 @@ impl DefaultExpressionContext {
         Self {
             variables: ctx.variables.read().clone(),
             parameters: None,
+            session_variables: None,
             storage: None,
             space: String::new(),
         }
@@ -127,6 +140,21 @@ impl crate::query::executor::expression::evaluator::traits::ExpressionContext
         self.parameters
             .as_ref()
             .and_then(|params| params.get(name).cloned())
+    }
+
+    fn get_session_variable(
+        &self,
+        name: &str,
+    ) -> Result<Value, crate::query::executor::expression::ExpressionError> {
+        self.session_variables
+            .as_ref()
+            .and_then(|vars| vars.get(name).cloned())
+            .ok_or_else(|| {
+                crate::query::executor::expression::ExpressionError::type_error(format!(
+                    "Session variable `{}` is not defined",
+                    name
+                ))
+            })
     }
 
     fn get_function(

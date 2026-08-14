@@ -7,8 +7,9 @@ use crate::core::types::expr::Expression;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::query_registry::CancelToken;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 
 use super::super::runtime::ExecutionRuntime;
@@ -20,16 +21,6 @@ mod expand;
 mod subgraph;
 mod traverse;
 
-pub(super) struct GraphCtx<'a> {
-    pub(super) storage: &'a Option<Arc<RwLock<dyn QueryStorage>>>,
-    pub(super) space_name: &'a str,
-    pub(super) edge_types: &'a [String],
-    pub(super) direction: EdgeDirection,
-    pub(super) base: &'a mut OperatorBase,
-    pub(super) input: &'a mut StreamingExecutor,
-    pub(super) is_recursive: bool,
-}
-
 pub(super) struct ExpandCtx<'a> {
     pub(super) space_name: &'a str,
     pub(super) edge_types: &'a [String],
@@ -40,7 +31,7 @@ pub(super) struct ExpandCtx<'a> {
 }
 
 #[derive(Debug)]
-pub enum GraphOperator {
+pub enum GraphOperatorKind {
     Expand {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -105,42 +96,56 @@ pub enum GraphOperator {
     },
 }
 
+/// Graph operator.
+///
+/// Wraps [`GraphOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct GraphOperator {
+    pub kind: GraphOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl GraphOperator {
-    pub fn bind_runtime(&mut self, runtime: &ExecutionRuntime) {
+    pub fn bind_runtime(&mut self, runtime: &Arc<ExecutionRuntime>) {
         let storage = runtime.storage.clone();
         let space_name = runtime.query_id().space_name.unwrap_or_default();
-        match self {
-            Self::Expand {
+        self.runtime = Some(Arc::clone(runtime));
+        match &mut self.kind {
+            GraphOperatorKind::Expand {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::ExpandAll {
+            | GraphOperatorKind::ExpandAll {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::Traverse {
+            | GraphOperatorKind::Traverse {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::TraverseAll {
+            | GraphOperatorKind::TraverseAll {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::BiExpand {
+            | GraphOperatorKind::BiExpand {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::BiTraverse {
+            | GraphOperatorKind::BiTraverse {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::Subgraph {
+            | GraphOperatorKind::Subgraph {
                 storage: target_storage,
                 space_name: target_space,
                 ..
@@ -155,14 +160,15 @@ impl GraphOperator {
         spec: &GraphSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             GraphSpec::Expand {
                 edge_types,
                 direction,
                 filter_expr,
                 ..
-            } => Self::Expand {
+            } => GraphOperatorKind::Expand {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
@@ -179,7 +185,7 @@ impl GraphOperator {
                 count_only,
                 emit_raw_ids,
                 lightweight_source,
-            } => Self::ExpandAll {
+            } => GraphOperatorKind::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
@@ -198,7 +204,7 @@ impl GraphOperator {
                 min_depth,
                 max_depth,
                 filter_expr,
-            } => Self::Traverse {
+            } => GraphOperatorKind::Traverse {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
@@ -211,7 +217,7 @@ impl GraphOperator {
             GraphSpec::BiExpand {
                 edge_types,
                 direction,
-            } => Self::BiExpand {
+            } => GraphOperatorKind::BiExpand {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
@@ -222,7 +228,7 @@ impl GraphOperator {
                 direction,
                 min_depth,
                 max_depth,
-            } => Self::BiTraverse {
+            } => GraphOperatorKind::BiTraverse {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
@@ -231,195 +237,96 @@ impl GraphOperator {
                 max_depth: *max_depth,
                 visited: VisitedSet::new(),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: GraphOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::Expand { .. }
-            | Self::ExpandAll { .. }
-            | Self::Traverse { .. }
-            | Self::TraverseAll { .. }
-            | Self::BiExpand { .. }
-            | Self::BiTraverse { .. }
-            | Self::Subgraph { .. } => {
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        match &mut self.kind {
+            GraphOperatorKind::Expand { .. }
+            | GraphOperatorKind::ExpandAll { .. }
+            | GraphOperatorKind::Traverse { .. }
+            | GraphOperatorKind::TraverseAll { .. }
+            | GraphOperatorKind::BiExpand { .. }
+            | GraphOperatorKind::BiTraverse { .. }
+            | GraphOperatorKind::Subgraph { .. } => {
                 input.open()?;
-                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::Expand {
-                storage,
-                space_name,
-                edge_types,
-                direction,
-                filter_expr,
-            } => expand::handle(
-                &*storage,
-                &*space_name,
-                &*edge_types,
-                *direction,
-                &*filter_expr,
-                base,
-                input,
-            ),
-
-            Self::ExpandAll {
-                storage,
-                space_name,
-                edge_types,
-                direction,
-                filter_expr,
-                col_names,
-                src_vids,
-                step_limit,
-                count_only,
-                emit_raw_ids,
-                lightweight_source,
-            } => expand::handle_all(
-                &*filter_expr,
-                col_names.clone(),
-                src_vids.clone(),
-                *step_limit,
-                *count_only,
-                *emit_raw_ids,
-                *lightweight_source,
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: *direction,
-                    base,
-                    input,
-                    is_recursive: false,
-                },
-            ),
-
-            Self::Traverse {
-                storage,
-                space_name,
-                edge_types,
-                direction,
-                min_depth,
-                max_depth,
-                visited,
-                ..
-            } => traverse::handle_traverse(
-                *min_depth,
-                *max_depth,
-                visited,
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: *direction,
-                    base,
-                    input,
-                    is_recursive: true,
-                },
-            ),
-
-            Self::TraverseAll { .. } => traverse::handle_traverse_all(base, input),
-
-            Self::BiExpand {
-                storage,
-                space_name,
-                edge_types,
-                ..
-            } => traverse::handle_bi_expand(&*storage, &*space_name, &*edge_types, base, input),
-
-            Self::BiTraverse {
-                storage,
-                space_name,
-                edge_types,
-                min_depth,
-                max_depth,
-                visited,
-                ..
-            } => traverse::handle_bi_traverse(
-                *min_depth,
-                *max_depth,
-                visited,
-                &mut GraphCtx {
-                    storage,
-                    space_name,
-                    edge_types,
-                    direction: EdgeDirection::Both,
-                    base,
-                    input,
-                    is_recursive: true,
-                },
-            ),
-
-            Self::Subgraph {
-                storage,
-                space_name,
-                steps,
-                direction,
-                edge_types,
-            } => subgraph::handle(
-                &*storage,
-                &*space_name,
-                *steps,
-                *direction,
-                &*edge_types,
-                base,
-                input,
-            ),
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        let op: &mut GraphOperator = self;
+        if matches!(&op.kind, GraphOperatorKind::Expand { .. }) {
+            return expand::handle(op, input);
         }
+        if matches!(&op.kind, GraphOperatorKind::ExpandAll { .. }) {
+            return expand::handle_all(op, input);
+        }
+        if matches!(&op.kind, GraphOperatorKind::Traverse { .. }) {
+            return traverse::handle_traverse(op, input);
+        }
+        if matches!(&op.kind, GraphOperatorKind::TraverseAll { .. }) {
+            return traverse::handle_traverse_all(op, input);
+        }
+        if matches!(&op.kind, GraphOperatorKind::BiExpand { .. }) {
+            return traverse::handle_bi_expand(op, input);
+        }
+        if matches!(&op.kind, GraphOperatorKind::BiTraverse { .. }) {
+            return traverse::handle_bi_traverse(op, input);
+        }
+        if matches!(&op.kind, GraphOperatorKind::Subgraph { .. }) {
+            return subgraph::handle(op, input);
+        }
+        unreachable!("graph_operator::next called for an unknown kind")
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            match self {
-                Self::Expand { .. }
-                | Self::ExpandAll { .. }
-                | Self::Traverse { .. }
-                | Self::TraverseAll { .. }
-                | Self::BiExpand { .. }
-                | Self::BiTraverse { .. }
-                | Self::Subgraph { .. } => {
-                    base.lifecycle.mark_stopped();
-                }
-            }
-        }
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            match self {
-                Self::Expand { .. }
-                | Self::ExpandAll { .. }
-                | Self::Traverse { .. }
-                | Self::TraverseAll { .. }
-                | Self::BiExpand { .. }
-                | Self::BiTraverse { .. }
-                | Self::Subgraph { .. } => {
-                    base.lifecycle.mark_closed();
-                }
-            }
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
+    }
+
+    /// Reset per-run graph state (visited sets) and rewind the input so the
+    /// graph operator re-produces the same traversal.
+    pub fn reset(&mut self, input: &mut StreamingExecutor) -> Result<bool, QueryError> {
+        match &mut self.kind {
+            GraphOperatorKind::Traverse { visited, .. }
+            | GraphOperatorKind::TraverseAll { visited, .. }
+            | GraphOperatorKind::BiTraverse { visited, .. } => {
+                *visited = VisitedSet::new();
+            }
+            GraphOperatorKind::Expand { .. }
+            | GraphOperatorKind::ExpandAll { .. }
+            | GraphOperatorKind::BiExpand { .. }
+            | GraphOperatorKind::Subgraph { .. } => {}
+        }
+        input.reset()?;
+        Ok(false)
     }
 }

@@ -129,6 +129,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         }
         Expression::PathBuild(exprs) => exprs.iter().any(requires_runtime_context),
         Expression::Parameter(_) => true,
+        Expression::SessionVariable(_) => true,
         Expression::Vector(_) => false,
         Expression::WindowFunction { args, .. } => args.iter().any(requires_runtime_context),
         Expression::Exists { .. } => true,

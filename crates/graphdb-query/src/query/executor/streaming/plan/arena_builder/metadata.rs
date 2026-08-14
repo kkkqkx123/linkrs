@@ -447,7 +447,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         OperatorKindSpec::Unary(UnarySpec::Project {
             output_col_names, ..
         }) => SlotLayout::from_names(output_col_names),
-        OperatorKindSpec::Unary(UnarySpec::Assign { assignments }) => {
+        OperatorKindSpec::Unary(UnarySpec::Assign { assignments, .. }) => {
             layout_with_added_names(&input, assignments.iter().map(|(name, _)| name.clone()))
         }
         OperatorKindSpec::Unary(UnarySpec::Remove { columns_to_remove }) => {

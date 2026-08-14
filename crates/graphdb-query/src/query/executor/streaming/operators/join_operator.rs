@@ -11,22 +11,14 @@ use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::FullOuterJoinPhase;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::executor::streaming::operators::base::OperatorLifecycle;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 mod cross_semi_join;
 mod hash_join;
 mod merge_join;
 mod nested_loop_join;
-
-pub(super) struct JoinCtx<'a> {
-    pub(super) base: &'a mut OperatorBase,
-    pub(super) left: &'a mut StreamingExecutor,
-    pub(super) right: &'a mut StreamingExecutor,
-    pub(super) memory_tracker: &'a mut MemoryTracker,
-    pub(super) right_col_names: &'a mut Vec<String>,
-}
 
 fn build_combined_names(
     left_col_names: &[String],
@@ -120,21 +112,6 @@ fn evaluate_join_key(
     Ok(JoinKeyValue::Multi(key))
 }
 
-fn close_common(
-    lifecycle: &mut OperatorLifecycle,
-    memory_tracker: &mut MemoryTracker,
-    clear: impl FnOnce(),
-) -> Result<(), QueryError> {
-    if lifecycle.can_close() {
-        memory_tracker.reset();
-        clear();
-        lifecycle.mark_closed();
-        Ok(())
-    } else {
-        Ok(())
-    }
-}
-
 /// Columnar build side for hash joins.
 ///
 /// Build rows are accumulated column-major (one `Vec<Value>` per input
@@ -225,43 +202,45 @@ impl HashJoinBuildSide {
 }
 
 #[derive(Debug)]
-pub enum JoinOperator {
+pub enum JoinOperatorKind {
     HashJoin {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
         build_side: HashJoinBuildSide,
-        left_consumed: bool,
+        build_done: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
+        build_side_select: super::spec::BuildSide,
     },
     HashLeftJoin {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
         build_side: HashJoinBuildSide,
-        left_consumed: bool,
+        build_done: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
+        build_side_select: super::spec::BuildSide,
     },
     NestedLoopJoin {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
-        left_consumed: bool,
+        build_done: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
     },
     InnerJoin {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
-        left_consumed: bool,
+        build_done: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
     },
     LeftJoin {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
-        left_consumed: bool,
+        build_done: bool,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
     },
@@ -300,70 +279,112 @@ pub enum JoinOperator {
     },
 }
 
+/// Join operator.
+///
+/// Wraps [`JoinOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct JoinOperator {
+    pub kind: JoinOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl JoinOperator {
+    pub fn new(kind: JoinOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
+        }
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
     pub fn from_spec(
         spec: &super::spec::JoinSpec,
         memory_budget: &crate::query::executor::base::MemoryBudget,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             super::spec::JoinSpec::HashJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
-            } => Self::HashJoin {
+                build_side,
+            } => JoinOperatorKind::HashJoin {
                 join_condition: join_condition.clone(),
                 hash_keys: hash_keys.clone(),
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
-                left_consumed: false,
+                build_done: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 right_col_names: Vec::new(),
+                build_side_select: *build_side,
             },
             super::spec::JoinSpec::HashLeftJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
-            } => Self::HashLeftJoin {
+                build_side,
+            } => JoinOperatorKind::HashLeftJoin {
                 join_condition: join_condition.clone(),
                 hash_keys: hash_keys.clone(),
                 probe_keys: probe_keys.clone(),
                 build_side: HashJoinBuildSide::new(),
-                left_consumed: false,
+                build_done: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 right_col_names: Vec::new(),
+                build_side_select: *build_side,
             },
-            super::spec::JoinSpec::NestedLoopJoin { join_condition } => Self::NestedLoopJoin {
+            super::spec::JoinSpec::NestedLoopJoin { join_condition } => {
+                JoinOperatorKind::NestedLoopJoin {
+                    join_condition: join_condition.clone(),
+                    build_side_tuples: Vec::new(),
+                    build_done: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::spec::JoinSpec::InnerJoin { join_condition } => JoinOperatorKind::InnerJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
-                left_consumed: false,
+                build_done: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 right_col_names: Vec::new(),
             },
-            super::spec::JoinSpec::InnerJoin { join_condition } => Self::InnerJoin {
+            super::spec::JoinSpec::LeftJoin { join_condition } => JoinOperatorKind::LeftJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
-                left_consumed: false,
+                build_done: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 right_col_names: Vec::new(),
             },
-            super::spec::JoinSpec::LeftJoin { join_condition } => Self::LeftJoin {
-                join_condition: join_condition.clone(),
-                build_side_tuples: Vec::new(),
-                left_consumed: false,
-                memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
-                right_col_names: Vec::new(),
-            },
-            super::spec::JoinSpec::RightJoin { join_condition } => Self::RightJoin {
+            super::spec::JoinSpec::RightJoin { join_condition } => JoinOperatorKind::RightJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
                 right_consumed: false,
@@ -372,19 +393,21 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::spec::JoinSpec::FullOuterJoin { join_condition } => Self::FullOuterJoin {
-                join_condition: join_condition.clone(),
-                left_rows: Vec::new(),
-                right_rows: Vec::new(),
-                matched_right_indices: std::collections::HashSet::new(),
-                result_iter: None,
-                phase: FullOuterJoinPhase::BuildingRight,
-                memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
-                right_col_names: Vec::new(),
-            },
-            super::spec::JoinSpec::CrossJoin => Self::CrossJoin {
+            super::spec::JoinSpec::FullOuterJoin { join_condition } => {
+                JoinOperatorKind::FullOuterJoin {
+                    join_condition: join_condition.clone(),
+                    left_rows: Vec::new(),
+                    right_rows: Vec::new(),
+                    matched_right_indices: std::collections::HashSet::new(),
+                    result_iter: None,
+                    phase: FullOuterJoinPhase::BuildingRight,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::spec::JoinSpec::CrossJoin => JoinOperatorKind::CrossJoin {
                 all_left_rows: Vec::new(),
                 all_right_rows: Vec::new(),
                 left_consumed: false,
@@ -395,7 +418,7 @@ impl JoinOperator {
                 right_col_names: Vec::new(),
                 output_done: false,
             },
-            super::spec::JoinSpec::SemiJoin { join_condition } => Self::SemiJoin {
+            super::spec::JoinSpec::SemiJoin { join_condition } => JoinOperatorKind::SemiJoin {
                 join_condition: join_condition.clone(),
                 right_rows: Vec::new(),
                 right_consumed: false,
@@ -404,153 +427,140 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-        }
+        };
+        Self::new(kind, output_layout)
     }
 
     pub fn memory_tracker(&self) -> &MemoryTracker {
-        match self {
-            Self::HashJoin { memory_tracker, .. }
-            | Self::HashLeftJoin { memory_tracker, .. }
-            | Self::NestedLoopJoin { memory_tracker, .. }
-            | Self::InnerJoin { memory_tracker, .. }
-            | Self::LeftJoin { memory_tracker, .. }
-            | Self::RightJoin { memory_tracker, .. }
-            | Self::FullOuterJoin { memory_tracker, .. }
-            | Self::CrossJoin { memory_tracker, .. }
-            | Self::SemiJoin { memory_tracker, .. } => memory_tracker,
+        match &self.kind {
+            JoinOperatorKind::HashJoin { memory_tracker, .. }
+            | JoinOperatorKind::HashLeftJoin { memory_tracker, .. }
+            | JoinOperatorKind::NestedLoopJoin { memory_tracker, .. }
+            | JoinOperatorKind::InnerJoin { memory_tracker, .. }
+            | JoinOperatorKind::LeftJoin { memory_tracker, .. }
+            | JoinOperatorKind::RightJoin { memory_tracker, .. }
+            | JoinOperatorKind::FullOuterJoin { memory_tracker, .. }
+            | JoinOperatorKind::CrossJoin { memory_tracker, .. }
+            | JoinOperatorKind::SemiJoin { memory_tracker, .. } => memory_tracker,
         }
     }
 
     pub fn open(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::HashJoin { .. }
-            | Self::HashLeftJoin { .. }
-            | Self::NestedLoopJoin { .. }
-            | Self::InnerJoin { .. }
-            | Self::LeftJoin { .. }
-            | Self::RightJoin { .. }
-            | Self::FullOuterJoin { .. }
-            | Self::CrossJoin { .. }
-            | Self::SemiJoin { .. } => {
-                left.open()?;
-                right.open()?;
-                base.lifecycle.mark_opened();
-                Ok(())
-            }
-        }
+        left.open()?;
+        right.open()?;
+        Ok(())
     }
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::HashJoin {
+        let runtime = &self.runtime;
+        let output_layout = &self.output_layout;
+        match &mut self.kind {
+            JoinOperatorKind::HashJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
                 build_side,
-                left_consumed,
+                build_done,
                 memory_tracker,
                 right_col_names,
+                build_side_select,
             } => hash_join::next_hash_join(
                 join_condition,
                 hash_keys,
                 probe_keys,
                 build_side,
-                left_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                build_done,
+                memory_tracker,
+                right_col_names,
+                *build_side_select,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::HashLeftJoin {
+            JoinOperatorKind::HashLeftJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
                 build_side,
-                left_consumed,
+                build_done,
                 memory_tracker,
                 right_col_names,
+                build_side_select,
             } => hash_join::next_hash_left_join(
                 join_condition,
                 hash_keys,
                 probe_keys,
                 build_side,
-                left_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                build_done,
+                memory_tracker,
+                right_col_names,
+                *build_side_select,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::NestedLoopJoin {
+            JoinOperatorKind::NestedLoopJoin {
                 join_condition,
                 build_side_tuples,
-                left_consumed,
+                build_done,
                 memory_tracker,
                 right_col_names,
             } => nested_loop_join::next_nested_loop_join(
                 join_condition,
                 build_side_tuples,
-                left_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                build_done,
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::InnerJoin {
+            JoinOperatorKind::InnerJoin {
                 join_condition,
                 build_side_tuples,
-                left_consumed,
+                build_done,
                 memory_tracker,
                 right_col_names,
             } => merge_join::next_inner_join(
                 join_condition,
                 build_side_tuples,
-                left_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                build_done,
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::LeftJoin {
+            JoinOperatorKind::LeftJoin {
                 join_condition,
                 build_side_tuples,
-                left_consumed,
+                build_done,
                 memory_tracker,
                 right_col_names,
             } => merge_join::next_left_join(
                 join_condition,
                 build_side_tuples,
-                left_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                build_done,
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::RightJoin {
+            JoinOperatorKind::RightJoin {
                 join_condition,
                 build_side_tuples,
                 right_consumed,
@@ -560,15 +570,14 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 right_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::FullOuterJoin {
+            JoinOperatorKind::FullOuterJoin {
                 join_condition,
                 left_rows,
                 right_rows,
@@ -584,15 +593,14 @@ impl JoinOperator {
                 matched_right_indices,
                 result_iter,
                 phase,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::CrossJoin {
+            JoinOperatorKind::CrossJoin {
                 all_left_rows,
                 all_right_rows,
                 left_consumed,
@@ -606,15 +614,14 @@ impl JoinOperator {
                 left_consumed,
                 right_consumed,
                 output_done,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
-            Self::SemiJoin {
+            JoinOperatorKind::SemiJoin {
                 join_condition,
                 right_rows,
                 right_consumed,
@@ -624,103 +631,173 @@ impl JoinOperator {
                 join_condition,
                 right_rows,
                 right_consumed,
-                &mut JoinCtx {
-                    base,
-                    left,
-                    right,
-                    memory_tracker,
-                    right_col_names,
-                },
+                memory_tracker,
+                right_col_names,
+                left,
+                right,
+                runtime,
+                output_layout,
             ),
         }
     }
 
-    pub fn stop(
+    pub fn stop(&mut self) -> Result<(), QueryError> {
+        Ok(())
+    }
+
+    /// Reset per-run join state (hash tables, buffered sides, phase flags)
+    /// and rewind both inputs so the join re-produces the same result set.
+    pub fn reset(
         &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::HashJoin { .. }
-            | Self::HashLeftJoin { .. }
-            | Self::NestedLoopJoin { .. }
-            | Self::InnerJoin { .. }
-            | Self::LeftJoin { .. }
-            | Self::RightJoin { .. }
-            | Self::FullOuterJoin { .. }
-            | Self::CrossJoin { .. }
-            | Self::SemiJoin { .. } => {
-                base.lifecycle.mark_stopped();
-                Ok(())
+        left: &mut StreamingExecutor,
+        right: &mut StreamingExecutor,
+    ) -> Result<bool, QueryError> {
+        match &mut self.kind {
+            JoinOperatorKind::HashJoin {
+                build_side,
+                build_done,
+                right_col_names,
+                ..
+            }
+            | JoinOperatorKind::HashLeftJoin {
+                build_side,
+                build_done,
+                right_col_names,
+                ..
+            } => {
+                *build_side = HashJoinBuildSide::new();
+                *build_done = false;
+                right_col_names.clear();
+            }
+            JoinOperatorKind::NestedLoopJoin {
+                build_side_tuples,
+                build_done,
+                right_col_names,
+                ..
+            }
+            | JoinOperatorKind::InnerJoin {
+                build_side_tuples,
+                build_done,
+                right_col_names,
+                ..
+            }
+            | JoinOperatorKind::LeftJoin {
+                build_side_tuples,
+                build_done,
+                right_col_names,
+                ..
+            } => {
+                build_side_tuples.clear();
+                *build_done = false;
+                right_col_names.clear();
+            }
+            JoinOperatorKind::RightJoin {
+                build_side_tuples,
+                right_consumed,
+                right_col_names,
+                ..
+            } => {
+                build_side_tuples.clear();
+                *right_consumed = false;
+                right_col_names.clear();
+            }
+            JoinOperatorKind::FullOuterJoin {
+                left_rows,
+                right_rows,
+                matched_right_indices,
+                result_iter,
+                phase,
+                right_col_names,
+                ..
+            } => {
+                left_rows.clear();
+                right_rows.clear();
+                matched_right_indices.clear();
+                *result_iter = None;
+                *phase = FullOuterJoinPhase::BuildingRight;
+                right_col_names.clear();
+            }
+            JoinOperatorKind::CrossJoin {
+                all_left_rows,
+                all_right_rows,
+                left_consumed,
+                right_consumed,
+                right_col_names,
+                output_done,
+                ..
+            } => {
+                all_left_rows.clear();
+                all_right_rows.clear();
+                *left_consumed = false;
+                *right_consumed = false;
+                right_col_names.clear();
+                *output_done = false;
+            }
+            JoinOperatorKind::SemiJoin {
+                right_rows,
+                right_consumed,
+                right_col_names,
+                ..
+            } => {
+                right_rows.clear();
+                *right_consumed = false;
+                right_col_names.clear();
             }
         }
+        left.reset()?;
+        right.reset()?;
+        Ok(false)
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::HashJoin {
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        match &mut self.kind {
+            JoinOperatorKind::HashJoin {
                 build_side,
                 memory_tracker,
                 ..
-            } => hash_join::close(&mut base.lifecycle, memory_tracker, build_side),
-            Self::HashLeftJoin {
+            } => hash_join::close(memory_tracker, build_side),
+            JoinOperatorKind::HashLeftJoin {
                 build_side,
                 memory_tracker,
                 ..
-            } => hash_join::close(&mut base.lifecycle, memory_tracker, build_side),
-            Self::NestedLoopJoin {
+            } => hash_join::close(memory_tracker, build_side),
+            JoinOperatorKind::NestedLoopJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
-            Self::InnerJoin {
+            } => nested_loop_join::close(memory_tracker, build_side_tuples),
+            JoinOperatorKind::InnerJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
-            Self::LeftJoin {
+            } => nested_loop_join::close(memory_tracker, build_side_tuples),
+            JoinOperatorKind::LeftJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
-            Self::RightJoin {
+            } => nested_loop_join::close(memory_tracker, build_side_tuples),
+            JoinOperatorKind::RightJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
-            Self::FullOuterJoin {
+            } => nested_loop_join::close(memory_tracker, build_side_tuples),
+            JoinOperatorKind::FullOuterJoin {
                 left_rows,
                 right_rows,
                 memory_tracker,
                 ..
-            } => merge_join::close_full_outer(
-                &mut base.lifecycle,
-                memory_tracker,
-                left_rows,
-                right_rows,
-            ),
-            Self::CrossJoin {
+            } => merge_join::close_full_outer(memory_tracker, left_rows, right_rows),
+            JoinOperatorKind::CrossJoin {
                 all_left_rows,
                 all_right_rows,
                 memory_tracker,
                 ..
-            } => cross_semi_join::close_cross(
-                &mut base.lifecycle,
-                memory_tracker,
-                all_left_rows,
-                all_right_rows,
-            ),
-            Self::SemiJoin {
+            } => cross_semi_join::close_cross(memory_tracker, all_left_rows, all_right_rows),
+            JoinOperatorKind::SemiJoin {
                 right_rows,
                 memory_tracker,
                 ..
-            } => cross_semi_join::close_semi(&mut base.lifecycle, memory_tracker, right_rows),
+            } => cross_semi_join::close_semi(memory_tracker, right_rows),
         }
     }
 

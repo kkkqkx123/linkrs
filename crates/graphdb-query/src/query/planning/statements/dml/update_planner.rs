@@ -10,6 +10,7 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,6 +95,35 @@ impl Planner for UpdatePlanner {
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let update_stmt = self.extract_update_stmt(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in
+        // UPDATE SET values or the UPDATE WHERE condition are rejected at
+        // planning time with a precise error.
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &update_stmt.set_clause.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        if let Some(where_cond) = &update_stmt.where_clause {
+            if let Some(expr_meta) = where_cond.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
 
         // Get current space name from query context
         let space_name = qctx

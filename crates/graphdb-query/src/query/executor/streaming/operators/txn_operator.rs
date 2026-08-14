@@ -4,37 +4,77 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::transaction_scope::{
     SessionTransactionController, TransactionCommandResult,
 };
 
-/// Transaction command operator.
+/// Transaction command operator kind.
 ///
 /// Validates state transitions through the [`SessionTransactionController`]
 /// and produces a structured result chunk.  The actual TransactionManager
 /// operations (begin/commit/rollback) are performed by the API layer before
 /// this operator runs.
 #[derive(Debug)]
-pub enum TxnOperator {
+pub enum TxnOperatorKind {
     BeginTransaction { emitted: bool },
     Commit { emitted: bool },
     Rollback { emitted: bool },
 }
 
+/// Transaction command operator.
+///
+/// Wraps [`TxnOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct TxnOperator {
+    pub kind: TxnOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl TxnOperator {
-    pub fn from_spec(spec: &super::spec::TxnSpec) -> Self {
-        match spec {
-            super::spec::TxnSpec::BeginTransaction => {
-                TxnOperator::BeginTransaction { emitted: false }
-            }
-            super::spec::TxnSpec::Commit => TxnOperator::Commit { emitted: false },
-            super::spec::TxnSpec::Rollback => TxnOperator::Rollback { emitted: false },
+    pub fn new(kind: TxnOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    fn controller(base: &OperatorBase) -> Result<Arc<SessionTransactionController>, QueryError> {
-        base.runtime
+    pub fn from_spec(spec: &super::spec::TxnSpec, output_layout: Arc<SlotLayout>) -> Self {
+        let kind = match spec {
+            super::spec::TxnSpec::BeginTransaction => {
+                TxnOperatorKind::BeginTransaction { emitted: false }
+            }
+            super::spec::TxnSpec::Commit => TxnOperatorKind::Commit { emitted: false },
+            super::spec::TxnSpec::Rollback => TxnOperatorKind::Rollback { emitted: false },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    fn controller(
+        runtime: &Option<Arc<ExecutionRuntime>>,
+    ) -> Result<Arc<SessionTransactionController>, QueryError> {
+        runtime
             .as_ref()
             .and_then(|rt| rt.session_controller())
             .ok_or_else(|| {
@@ -44,28 +84,27 @@ impl TxnOperator {
             })
     }
 
-    pub fn open(
-        &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        input.open()?;
-        _base.lifecycle.mark_opened();
-        Ok(())
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        input.open()
     }
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         _input: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::BeginTransaction { emitted } => {
+        let Self {
+            kind,
+            runtime,
+            output_layout,
+            config: _,
+        } = self;
+        match kind {
+            TxnOperatorKind::BeginTransaction { emitted } => {
                 if *emitted {
                     return Ok(None);
                 }
                 *emitted = true;
-                let ctrl = Self::controller(base)?;
+                let ctrl = Self::controller(runtime)?;
                 // The API layer should have already created the transaction.
                 // We validate that begin_tracking succeeds (no state conflict).
                 let result = ctrl.current_scope();
@@ -74,68 +113,53 @@ impl TxnOperator {
                         transaction_id, ..
                     } => Ok(Some(
                         TransactionCommandResult::begin(transaction_id)
-                            .into_data_chunk(Arc::clone(&base.output_layout)),
+                            .into_data_chunk(Arc::clone(output_layout)),
                     )),
                     _ => Err(QueryError::execution(
                         "BEGIN: no active transaction found; API layer must call begin before executing this plan".to_string(),
                     )),
                 }
             }
-            Self::Commit { emitted } => {
+            TxnOperatorKind::Commit { emitted } => {
                 if *emitted {
                     return Ok(None);
                 }
                 *emitted = true;
-                let ctrl = Self::controller(base)?;
+                let ctrl = Self::controller(runtime)?;
                 let txn_id = ctrl.begin_commit()?;
                 ctrl.commit_finalize();
                 Ok(Some(
                     TransactionCommandResult::commit(txn_id)
-                        .into_data_chunk(Arc::clone(&base.output_layout)),
+                        .into_data_chunk(Arc::clone(output_layout)),
                 ))
             }
-            Self::Rollback { emitted } => {
+            TxnOperatorKind::Rollback { emitted } => {
                 if *emitted {
                     return Ok(None);
                 }
                 *emitted = true;
-                let ctrl = Self::controller(base)?;
+                let ctrl = Self::controller(runtime)?;
                 let txn_id = ctrl.begin_rollback()?;
                 ctrl.rollback_finalize();
                 Ok(Some(
                     TransactionCommandResult::rollback(txn_id)
-                        .into_data_chunk(Arc::clone(&base.output_layout)),
+                        .into_data_chunk(Arc::clone(output_layout)),
                 ))
             }
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            base.lifecycle.mark_closed();
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 }
 
 impl TransactionCommandResult {
-    fn into_data_chunk(
-        self,
-        output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
-    ) -> DataChunk {
+    fn into_data_chunk(self, output_layout: Arc<SlotLayout>) -> DataChunk {
         let message = Value::string(self.message);
         let command = Value::string(self.command);
         DataChunk::new_with_layout(vec![vec![command, message]], output_layout)
@@ -145,25 +169,33 @@ impl TransactionCommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::query::executor::streaming::operators::spec::TxnSpec;
     use crate::query::executor::streaming::runtime::ExecutionRuntime;
 
     fn input() -> StreamingExecutor {
         StreamingExecutor::Source(
             OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: Vec::new(),
-                current_index: 0,
-                col_names: Vec::new(),
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: Vec::new(),
+                    current_index: 0,
+                    col_names: Vec::new(),
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         )
     }
 
     #[test]
     fn transaction_command_requires_controller() {
         let input = input();
-        let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
+        let operator = TxnOperator::from_spec(
+            &TxnSpec::BeginTransaction,
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
         executor.open().expect("should open");
         let result = executor.advance();
@@ -178,7 +210,10 @@ mod tests {
     #[test]
     fn transaction_command_emits_once() {
         let input = input();
-        let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
+        let operator = TxnOperator::from_spec(
+            &TxnSpec::BeginTransaction,
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 
         let ctrl = Arc::new(SessionTransactionController::new());
@@ -202,7 +237,8 @@ mod tests {
     #[test]
     fn test_commit_without_active_transaction() {
         let input = input();
-        let operator = TxnOperator::from_spec(&TxnSpec::Commit);
+        let operator =
+            TxnOperator::from_spec(&TxnSpec::Commit, Arc::new(SlotLayout::new(Vec::new())));
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 
         let ctrl = Arc::new(SessionTransactionController::new());

@@ -222,6 +222,11 @@ impl Expression {
         Expression::Parameter(name.into())
     }
 
+    /// Create a session variable expression
+    pub fn session_variable(name: impl Into<String>) -> Self {
+        Expression::SessionVariable(name.into())
+    }
+
     /// Create a vector literal expression
     pub fn vector(data: Vec<f32>) -> Self {
         Expression::Vector(data)

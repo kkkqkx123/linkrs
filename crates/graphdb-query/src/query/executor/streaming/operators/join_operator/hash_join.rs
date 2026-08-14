@@ -7,23 +7,31 @@ use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::SplitRowContext;
-use crate::query::executor::streaming::operators::base::OperatorLifecycle;
+use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::query::executor::streaming::operators::spec::BuildSide;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-use super::{build_combined_names, close_common, evaluate_join_key, HashJoinBuildSide, JoinCtx};
+use super::{build_combined_names, evaluate_join_key, HashJoinBuildSide};
 
+/// Drain the build input into the columnar build side.
+///
+/// `build_input` is the physical child selected by [`BuildSide`]: the right
+/// child for the default right-build form, the left child for the
+/// left-build form.
 fn build_side_loop(
     hash_keys: &mut [Expression],
     build_side: &mut HashJoinBuildSide,
-    ctx: &mut JoinCtx,
-    left_consumed: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    build_input: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    build_done: &mut bool,
 ) -> Result<(), QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let right = &mut *ctx.right;
-    while let Some(mut chunk) = right.advance()? {
-        base.ensure_not_cancelled()?;
+    while let Some(mut chunk) = build_input.advance()? {
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         // The build side materializes any propagated selection — it must
         // hash every (visible) build row once, so there is no benefit in
         // carrying a selection into the build store.
@@ -37,7 +45,7 @@ fn build_side_loop(
         }
         build_side.insert_chunk(&mut chunk, &col_names, hash_keys)?;
     }
-    *left_consumed = true;
+    *build_done = true;
     Ok(())
 }
 
@@ -46,39 +54,59 @@ pub(super) fn next_hash_join(
     hash_keys: &mut [Expression],
     probe_keys: &mut [Expression],
     build_side: &mut HashJoinBuildSide,
-    left_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    build_done: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    side: BuildSide,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !*left_consumed {
-        build_side_loop(hash_keys, build_side, ctx, left_consumed)?;
+    debug_assert_eq!(
+        probe_keys.len(),
+        hash_keys.len(),
+        "hash join probe/hash key widths must match"
+    );
+    let (build_input, probe_input): (&mut StreamingExecutor, &mut StreamingExecutor) = match side {
+        BuildSide::Left => (left, right),
+        BuildSide::Right => (right, left),
+    };
+    if !*build_done {
+        build_side_loop(
+            hash_keys,
+            build_side,
+            memory_tracker,
+            right_col_names,
+            build_input,
+            runtime,
+            build_done,
+        )?;
     }
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right_col_names = &mut *ctx.right_col_names;
 
-    while let Some(mut left_chunk) = left.advance()? {
-        let left_col_names = left_chunk.col_names();
+    while let Some(mut probe_chunk) = probe_input.advance()? {
+        let probe_col_names = probe_chunk.col_names();
         let mut result_rows = Vec::new();
 
         let combined_layout = if join_condition.is_some() {
             let fallback_width = right_col_names.len();
-            let names = build_combined_names(&left_col_names, right_col_names, fallback_width);
+            let names = build_combined_names(&probe_col_names, right_col_names, fallback_width);
             Some(Arc::new(SlotLayout::from_names(&names)))
         } else {
             None
         };
-        left_chunk.materialize_columns();
-        let left_cols = left_chunk.columns.as_deref();
+        probe_chunk.materialize_columns();
+        let probe_cols = probe_chunk.columns.as_deref();
         // The probe side consumes the child's selection vector — only
         // visible rows are probed, while the materialized columnar cache
         // stays valid across the Filter boundary (no re-transpose).
-        for row_idx in left_chunk.visible_indices() {
-            let left_row = &left_chunk.rows[row_idx];
+        for row_idx in probe_chunk.visible_indices() {
+            let probe_row = &probe_chunk.rows[row_idx];
             let probe_key = evaluate_join_key(
-                left_row,
-                &left_col_names,
+                probe_row,
+                &probe_col_names,
                 probe_keys,
-                left_cols.map(|c| (c, row_idx)),
+                probe_cols.map(|c| (c, row_idx)),
             )?;
 
             if let Some(right_indices) = build_side.matching(&probe_key) {
@@ -88,13 +116,14 @@ pub(super) fn next_hash_join(
                     for &right_idx in right_indices {
                         let right_row = build_side.row_at(right_idx);
                         let mut split_ctx =
-                            SplitRowContext::new(left_row, &right_row, Arc::clone(layout));
+                            SplitRowContext::new(probe_row, &right_row, Arc::clone(layout));
                         if matches!(
                             ExpressionEvaluator::evaluate(condition, &mut split_ctx),
                             Ok(Value::Bool(b)) if b
                         ) {
-                            let mut combined = Vec::with_capacity(left_row.len() + right_row.len());
-                            combined.extend_from_slice(left_row);
+                            let mut combined =
+                                Vec::with_capacity(probe_row.len() + right_row.len());
+                            combined.extend_from_slice(probe_row);
                             combined.extend_from_slice(&right_row);
                             result_rows.push(combined);
                         }
@@ -102,7 +131,7 @@ pub(super) fn next_hash_join(
                 } else {
                     for &right_idx in right_indices {
                         let right_row = build_side.row_at(right_idx);
-                        let mut joined_row = left_row.clone();
+                        let mut joined_row = probe_row.clone();
                         joined_row.extend(right_row);
                         result_rows.push(joined_row);
                     }
@@ -113,7 +142,7 @@ pub(super) fn next_hash_join(
         if !result_rows.is_empty() {
             return Ok(Some(DataChunk::new_with_layout(
                 result_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(output_layout),
             )));
         }
     }
@@ -126,37 +155,57 @@ pub(super) fn next_hash_left_join(
     hash_keys: &mut [Expression],
     probe_keys: &mut [Expression],
     build_side: &mut HashJoinBuildSide,
-    left_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    build_done: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    side: BuildSide,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !*left_consumed {
-        build_side_loop(hash_keys, build_side, ctx, left_consumed)?;
+    debug_assert_eq!(
+        probe_keys.len(),
+        hash_keys.len(),
+        "hash left join probe/hash key widths must match"
+    );
+    let (build_input, probe_input): (&mut StreamingExecutor, &mut StreamingExecutor) = match side {
+        BuildSide::Left => (left, right),
+        BuildSide::Right => (right, left),
+    };
+    if !*build_done {
+        build_side_loop(
+            hash_keys,
+            build_side,
+            memory_tracker,
+            right_col_names,
+            build_input,
+            runtime,
+            build_done,
+        )?;
     }
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right_col_names = &mut *ctx.right_col_names;
 
-    while let Some(mut left_chunk) = left.advance()? {
-        let left_col_names = left_chunk.col_names();
+    while let Some(mut probe_chunk) = probe_input.advance()? {
+        let probe_col_names = probe_chunk.col_names();
         let mut result_rows = Vec::new();
 
         let combined_layout = if join_condition.is_some() {
             let fallback_width = right_col_names.len();
-            let names = build_combined_names(&left_col_names, right_col_names, fallback_width);
+            let names = build_combined_names(&probe_col_names, right_col_names, fallback_width);
             Some(Arc::new(SlotLayout::from_names(&names)))
         } else {
             None
         };
-        left_chunk.materialize_columns();
-        let left_cols = left_chunk.columns.as_deref();
+        probe_chunk.materialize_columns();
+        let probe_cols = probe_chunk.columns.as_deref();
         // Consume the child's selection vector (see next_hash_join).
-        for row_idx in left_chunk.visible_indices() {
-            let left_row = &left_chunk.rows[row_idx];
+        for row_idx in probe_chunk.visible_indices() {
+            let probe_row = &probe_chunk.rows[row_idx];
             let probe_key = evaluate_join_key(
-                left_row,
-                &left_col_names,
+                probe_row,
+                &probe_col_names,
                 probe_keys,
-                left_cols.map(|c| (c, row_idx)),
+                probe_cols.map(|c| (c, row_idx)),
             )?;
 
             if let Some(right_indices) = build_side.matching(&probe_key) {
@@ -166,7 +215,7 @@ pub(super) fn next_hash_left_join(
                     for &right_idx in right_indices {
                         let right_row = build_side.row_at(right_idx);
                         let mut split_ctx =
-                            SplitRowContext::new(left_row, &right_row, Arc::clone(layout));
+                            SplitRowContext::new(probe_row, &right_row, Arc::clone(layout));
                         let satisfied =
                             match ExpressionEvaluator::evaluate(condition, &mut split_ctx) {
                                 Ok(Value::Bool(b)) => b,
@@ -180,8 +229,9 @@ pub(super) fn next_hash_left_join(
                                 }
                             };
                         if satisfied {
-                            let mut combined = Vec::with_capacity(left_row.len() + right_row.len());
-                            combined.extend_from_slice(left_row);
+                            let mut combined =
+                                Vec::with_capacity(probe_row.len() + right_row.len());
+                            combined.extend_from_slice(probe_row);
                             combined.extend_from_slice(&right_row);
                             result_rows.push(combined);
                         }
@@ -189,17 +239,16 @@ pub(super) fn next_hash_left_join(
                 } else {
                     for &right_idx in right_indices {
                         let right_row = build_side.row_at(right_idx);
-                        let mut joined_row = left_row.clone();
+                        let mut joined_row = probe_row.clone();
                         joined_row.extend(right_row);
                         result_rows.push(joined_row);
                     }
                 }
             } else {
-                let mut unmatched_row = left_row.clone();
-                let right_width = base
-                    .output_layout
+                let mut unmatched_row = probe_row.clone();
+                let right_width = output_layout
                     .len()
-                    .checked_sub(left_row.len())
+                    .checked_sub(probe_row.len())
                     .ok_or_else(|| {
                         QueryError::execution(
                             "HashLeftJoin planned output layout is narrower than its left input"
@@ -216,7 +265,7 @@ pub(super) fn next_hash_left_join(
         if !result_rows.is_empty() {
             return Ok(Some(DataChunk::new_with_layout(
                 result_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(output_layout),
             )));
         }
     }
@@ -225,11 +274,10 @@ pub(super) fn next_hash_left_join(
 }
 
 pub(super) fn close(
-    lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     build_side: &mut HashJoinBuildSide,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        build_side.clear();
-    })
+    memory_tracker.reset();
+    build_side.clear();
+    Ok(())
 }

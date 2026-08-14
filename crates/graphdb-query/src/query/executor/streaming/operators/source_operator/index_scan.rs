@@ -5,13 +5,9 @@ use crate::core::error::QueryError;
 use crate::core::types::MAX_TIMESTAMP;
 use crate::core::wal::EntityRef;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
-use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::state::GlobalState;
-use crate::storage::{
-    open_index_cursor, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, QueryStorage,
-};
+use crate::storage::{open_index_cursor, IndexPredicate, IndexRow, IndexScanPlan, QueryStorage};
 use parking_lot::RwLock;
 
 use super::super::spec::{BoundIndexPredicate, IndexProjection};
@@ -20,12 +16,13 @@ use super::util::{
     make_flat_edge_row, make_flat_vertex_row, reserve_memory, storage_error,
 };
 use super::SourceOperator;
+use super::SourceOperatorKind;
 
 /// Open the `IndexScan` source: build the physical scan plan and open the
 /// cursor.
-pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
-    match op {
-        SourceOperator::IndexScan {
+pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
+    let state = match &mut op.kind {
+        SourceOperatorKind::IndexScan {
             storage,
             space_name,
             index_id,
@@ -50,52 +47,28 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                 Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
                     storage_error("IndexScan", "open cursor", space_name, error)
                 })?);
-            base.insert_state(GlobalState::Source(SourceState::IndexScan { cursor: None }));
+            GlobalState::Source(SourceState::IndexScan { cursor: None })
         }
         _ => unreachable!("index_scan::open called for a non-index source"),
-    }
+    };
+    op.insert_state(state);
     Ok(())
 }
 
 /// Emit the next chunk from the index cursor, resolving row IDs back to
 /// entities and handling covering rows.
-pub(crate) fn next(
-    op: &mut SourceOperator,
-    base: &mut OperatorBase,
-) -> Result<Option<DataChunk>, QueryError> {
-    match op {
-        SourceOperator::IndexScan {
-            storage,
-            space_name,
-            output_layout,
-            projection,
-            cursor,
-            edge_type_names,
-            ..
-        } => {
-            let vertex_projection = match projection {
-                IndexProjection::Columns(cols) => cols.clone(),
-                _ => Vec::new(),
-            };
-            let storage = storage
-                .as_ref()
-                .ok_or_else(|| QueryError::execution("IndexScan requires storage".to_string()))?;
-            let context = IndexScanContext {
-                storage,
-                space_name,
-                edge_type_names,
-            };
-            next_index_chunk(
-                context,
-                cursor,
-                output_layout,
-                base,
-                "IndexScan",
-                &vertex_projection,
-            )
-        }
-        _ => unreachable!("index_scan::next called for a non-index source"),
+pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    if !matches!(&op.kind, SourceOperatorKind::IndexScan { .. }) {
+        unreachable!("index_scan::next called for a non-index source");
     }
+    let vertex_projection = match &op.kind {
+        SourceOperatorKind::IndexScan { projection, .. } => match projection {
+            IndexProjection::Columns(cols) => cols.clone(),
+            _ => Vec::new(),
+        },
+        _ => unreachable!("index_scan::next called for a non-index source"),
+    };
+    next_index_chunk(op, "IndexScan", &vertex_projection)
 }
 
 fn build_index_scan_plan(
@@ -158,26 +131,44 @@ pub(crate) struct IndexScanContext<'a> {
 }
 
 fn next_index_chunk(
-    context: IndexScanContext<'_>,
-    cursor: &mut Option<Box<dyn IndexCursor<Row = IndexRow>>>,
-    output_layout: &Arc<SlotLayout>,
-    base: &mut OperatorBase,
+    op: &mut SourceOperator,
     source: &str,
     vertex_projection: &[String],
 ) -> Result<Option<DataChunk>, QueryError> {
+    let SourceOperatorKind::IndexScan {
+        storage,
+        space_name,
+        output_layout,
+        cursor,
+        edge_type_names,
+        ..
+    } = &mut op.kind
+    else {
+        unreachable!("next_index_chunk called for a non-index source");
+    };
+    let storage = storage
+        .as_ref()
+        .ok_or_else(|| QueryError::execution("IndexScan requires storage".to_string()))?;
     let IndexScanContext {
         storage,
         space_name,
         edge_type_names,
-    } = context;
+    } = IndexScanContext {
+        storage,
+        space_name,
+        edge_type_names,
+    };
+    let output_layout = &*output_layout;
     loop {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = op.runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         let mut index_cursor = match cursor.take() {
             Some(cursor) => cursor,
             None => return Ok(None),
         };
         let rows = index_cursor
-            .next_batch(base.chunk_size)
+            .next_batch(op.config.chunk_size)
             .map_err(|error| storage_error(source, "read cursor", space_name, error))?;
         let exhausted = index_cursor.is_exhausted();
         let mut output_rows = Vec::with_capacity(rows.len());
@@ -291,9 +282,9 @@ fn next_index_chunk(
 
         *cursor = Some(index_cursor);
         if !output_rows.is_empty() {
-            let reservation = reserve_memory(base, &output_rows)?;
+            let reservation = reserve_memory(&op.runtime, &output_rows)?;
             let chunk = attach_columnar_stats(
-                base,
+                &op.runtime,
                 DataChunk::new_with_layout(output_rows, output_layout.clone()),
             );
             let chunk = if let Some(reservation) = reservation {
@@ -342,10 +333,15 @@ mod tests {
     use crate::core::types::storage_ids::VertexId;
     use crate::core::types::EdgeTypeInfo;
     use crate::core::Edge;
+
     use crate::core::Value;
     use crate::query::executor::base::MemoryBudget;
-    use crate::query::executor::streaming::operators::base::OperatorBase;
+    use crate::query::executor::streaming::operators::source_operator::{
+        OperatorConfig, PhysicalOperatorId,
+    };
     use crate::query::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
+    use crate::query::executor::streaming::slot::SlotLayout;
+    use crate::storage::IndexCursor;
     use crate::storage::{IndexRow, MockStorage, StorageError};
 
     /// FNV-1a matching the storage index write path (`stable_hash`).
@@ -410,6 +406,14 @@ mod tests {
         ))
     }
 
+    fn test_config() -> OperatorConfig {
+        OperatorConfig {
+            chunk_size: 1024,
+            partition_id: None,
+            physical_operator_id: PhysicalOperatorId(0),
+        }
+    }
+
     #[test]
     fn covering_index_edge_rows_do_not_require_a_table_fetch() {
         let row = make_flat_covering_edge_row(
@@ -447,27 +451,31 @@ mod tests {
                 .collect(),
         )]);
 
-        let mut source = SourceOperator::IndexScan {
-            storage: Some(storage),
-            space_name: "test".to_string(),
-            index_name: "knows_idx".to_string(),
-            index_id: 1,
-            predicate: BoundIndexPredicate::Equal {
-                column: "since".to_string(),
-                value: Value::Int(2024),
+        let output_layout = Arc::new(SlotLayout::from_names(&["KNOWS".to_string()]));
+        let mut source = SourceOperator::new(
+            SourceOperatorKind::IndexScan {
+                storage: Some(storage),
+                space_name: "test".to_string(),
+                index_name: "knows_idx".to_string(),
+                index_id: 1,
+                predicate: BoundIndexPredicate::Equal {
+                    column: "since".to_string(),
+                    value: Value::Int(2024),
+                },
+                projection: IndexProjection::RowIdOnly,
+                output_layout: output_layout.clone(),
+                partition_range: None,
+                cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::RowId(
+                    knows_edge_entity_ref(7),
+                )]))),
+                edge_type_names: std::collections::HashMap::new(),
             },
-            projection: IndexProjection::RowIdOnly,
-            output_layout: Arc::new(SlotLayout::from_names(&["KNOWS".to_string()])),
-            partition_range: None,
-            cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::RowId(
-                knows_edge_entity_ref(7),
-            )]))),
-            edge_type_names: std::collections::HashMap::new(),
-        };
-        let mut base = OperatorBase::new(0).with_runtime(Some(test_runtime()));
+            output_layout,
+        );
+        source.inject_context(Some(&test_runtime()), test_config());
 
         let chunk = source
-            .next(&mut base)
+            .next()
             .expect("pull should succeed")
             .expect("chunk should be Some");
         assert_eq!(chunk.len(), 1);
@@ -488,31 +496,35 @@ mod tests {
             .write()
             .set_edge_types(vec![EdgeTypeInfo::new("KNOWS".to_string())]);
 
-        let mut source = SourceOperator::IndexScan {
-            storage: Some(storage),
-            space_name: "test".to_string(),
-            index_name: "knows_idx".to_string(),
-            index_id: 1,
-            predicate: BoundIndexPredicate::Equal {
-                column: "since".to_string(),
-                value: Value::Int(2024),
+        let output_layout = Arc::new(SlotLayout::from_names(&[
+            "KNOWS".to_string(),
+            "KNOWS.since".to_string(),
+        ]));
+        let mut source = SourceOperator::new(
+            SourceOperatorKind::IndexScan {
+                storage: Some(storage),
+                space_name: "test".to_string(),
+                index_name: "knows_idx".to_string(),
+                index_id: 1,
+                predicate: BoundIndexPredicate::Equal {
+                    column: "since".to_string(),
+                    value: Value::Int(2024),
+                },
+                projection: IndexProjection::Columns(vec!["since".to_string()]),
+                output_layout: output_layout.clone(),
+                partition_range: None,
+                cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
+                    entity_ref: knows_edge_entity_ref(3),
+                    columns: vec![("since".to_string(), Value::Int(2024))],
+                }]))),
+                edge_type_names: std::collections::HashMap::new(),
             },
-            projection: IndexProjection::Columns(vec!["since".to_string()]),
-            output_layout: Arc::new(SlotLayout::from_names(&[
-                "KNOWS".to_string(),
-                "KNOWS.since".to_string(),
-            ])),
-            partition_range: None,
-            cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
-                entity_ref: knows_edge_entity_ref(3),
-                columns: vec![("since".to_string(), Value::Int(2024))],
-            }]))),
-            edge_type_names: std::collections::HashMap::new(),
-        };
-        let mut base = OperatorBase::new(0).with_runtime(Some(test_runtime()));
+            output_layout,
+        );
+        source.inject_context(Some(&test_runtime()), test_config());
 
         let chunk = source
-            .next(&mut base)
+            .next()
             .expect("pull should succeed")
             .expect("chunk should be Some");
         assert_eq!(chunk.len(), 1);
@@ -586,35 +598,39 @@ mod tests {
         let storage = Arc::new(RwLock::new(
             MockStorage::new().expect("MockStorage should be created"),
         ));
-        let mut source = SourceOperator::IndexScan {
-            storage: Some(storage),
-            space_name: "test".to_string(),
-            index_name: "person_idx".to_string(),
-            index_id: 1,
-            predicate: BoundIndexPredicate::Equal {
-                column: "name".to_string(),
-                value: Value::string("Alice"),
+        let output_layout = Arc::new(SlotLayout::from_names(&[
+            "v".to_string(),
+            "v.name".to_string(),
+            "v.age".to_string(),
+        ]));
+        let mut source = SourceOperator::new(
+            SourceOperatorKind::IndexScan {
+                storage: Some(storage),
+                space_name: "test".to_string(),
+                index_name: "person_idx".to_string(),
+                index_id: 1,
+                predicate: BoundIndexPredicate::Equal {
+                    column: "name".to_string(),
+                    value: Value::string("Alice"),
+                },
+                projection: IndexProjection::Columns(vec!["name".to_string(), "age".to_string()]),
+                output_layout: output_layout.clone(),
+                partition_range: None,
+                cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
+                    entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
+                    columns: vec![
+                        ("name".to_string(), Value::string("Alice")),
+                        ("age".to_string(), Value::BigInt(30)),
+                    ],
+                }]))),
+                edge_type_names: std::collections::HashMap::new(),
             },
-            projection: IndexProjection::Columns(vec!["name".to_string(), "age".to_string()]),
-            output_layout: Arc::new(SlotLayout::from_names(&[
-                "v".to_string(),
-                "v.name".to_string(),
-                "v.age".to_string(),
-            ])),
-            partition_range: None,
-            cursor: Some(Box::new(FakeIndexCursor::new(vec![IndexRow::Covering {
-                entity_ref: EntityRef::Vertex(VertexId::from_int64(7)),
-                columns: vec![
-                    ("name".to_string(), Value::string("Alice")),
-                    ("age".to_string(), Value::BigInt(30)),
-                ],
-            }]))),
-            edge_type_names: std::collections::HashMap::new(),
-        };
-        let mut base = OperatorBase::new(0).with_runtime(Some(test_runtime()));
+            output_layout,
+        );
+        source.inject_context(Some(&test_runtime()), test_config());
 
         let chunk = source
-            .next(&mut base)
+            .next()
             .expect("pull should succeed")
             .expect("chunk should be Some");
         assert_eq!(chunk.len(), 1);

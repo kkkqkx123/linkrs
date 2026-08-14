@@ -1499,7 +1499,7 @@ mod tests {
         let mut plan = ExecutionPlan::new(Some(root.clone()));
 
         // Attach the pure logical plan — the CBO decision phases must
-        // consume it (P3 step 1).
+        // consume it.
         let logical_plan = LogicalPlan::from_plan_node(&root).expect("conversion should succeed");
         plan.set_logical_plan(logical_plan);
 

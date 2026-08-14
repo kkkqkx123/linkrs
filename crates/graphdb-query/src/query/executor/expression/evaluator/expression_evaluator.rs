@@ -306,9 +306,10 @@ impl ExpressionEvaluator {
             Expression::Parameter(name) => context
                 .get_parameter(name)
                 .ok_or_else(|| ExpressionError::undefined_parameter(name)),
+            Expression::SessionVariable(name) => context.get_session_variable(name),
             Expression::Exists { body } => {
-                let results = context.execute_subquery(body)?;
-                Ok(Value::Bool(!results.is_empty()))
+                let exists = context.execute_exists(body)?;
+                Ok(Value::Bool(exists))
             }
             Expression::In {
                 expr,
@@ -316,8 +317,10 @@ impl ExpressionEvaluator {
                 negated,
             } => {
                 let value = Self::evaluate_recursive(expr, context)?;
-                let results = context.execute_subquery(subquery)?;
-                let found = results.contains(&value);
+                let found = matches!(
+                    context.contains_subquery(subquery, &value)?,
+                    Value::Bool(true)
+                );
                 Ok(Value::Bool(if *negated { !found } else { found }))
             }
         }

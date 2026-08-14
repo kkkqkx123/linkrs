@@ -10,7 +10,8 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::join_helpers::{
     evaluate_join_key, evaluate_residual_condition,
 };
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;
@@ -53,6 +54,9 @@ pub struct HashShuffleJoinOperator {
     pub left_schema: Vec<String>,
     pub right_schema: Vec<String>,
     pub memory_tracker: MemoryTracker,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
     buckets: Vec<Bucket>,
     phase: ShufflePhase,
 }
@@ -68,6 +72,7 @@ impl HashShuffleJoinOperator {
         left_schema: Vec<String>,
         right_schema: Vec<String>,
         memory_tracker: MemoryTracker,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
         let mut buckets = Vec::with_capacity(bucket_count);
         for _ in 0..bucket_count {
@@ -89,24 +94,38 @@ impl HashShuffleJoinOperator {
             left_schema,
             right_schema,
             memory_tracker,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
             buckets,
             phase: ShufflePhase::Building,
         }
     }
 
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
     pub fn open(
         &mut self,
-        base: &mut OperatorBase,
-        left_trees: &mut [StreamingExecutor],
-        right_trees: &mut [StreamingExecutor],
+        left: &mut [StreamingExecutor],
+        right: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
-        for tree in left_trees.iter_mut() {
+        for tree in left.iter_mut() {
             tree.open()?;
         }
-        for tree in right_trees.iter_mut() {
+        for tree in right.iter_mut() {
             tree.open()?;
         }
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
@@ -134,14 +153,15 @@ impl HashShuffleJoinOperator {
 
     fn read_all_trees(
         &mut self,
-        base: &mut OperatorBase,
         left_trees: &mut [StreamingExecutor],
         right_trees: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         for tree in left_trees.iter_mut() {
             while let Some(mut chunk) = tree.advance()? {
                 chunk.materialize_selection_by("ShuffleJoin");
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = &self.runtime {
+                    rt.ensure_not_cancelled()?;
+                }
                 let col_names = chunk.col_names();
                 for row in &chunk.rows {
                     self.memory_tracker.try_reserve_row(row)?;
@@ -158,7 +178,9 @@ impl HashShuffleJoinOperator {
         for tree in right_trees.iter_mut() {
             while let Some(mut chunk) = tree.advance()? {
                 chunk.materialize_selection_by("ShuffleJoin");
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = &self.runtime {
+                    rt.ensure_not_cancelled()?;
+                }
                 let col_names = chunk.col_names();
                 for row in &chunk.rows {
                     self.memory_tracker.try_reserve_row(row)?;
@@ -177,14 +199,13 @@ impl HashShuffleJoinOperator {
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         left_trees: &mut [StreamingExecutor],
         right_trees: &mut [StreamingExecutor],
     ) -> Result<Option<DataChunk>, QueryError> {
         loop {
             match self.phase {
                 ShufflePhase::Building => {
-                    self.read_all_trees(base, left_trees, right_trees)?;
+                    self.read_all_trees(left_trees, right_trees)?;
                     self.phase = ShufflePhase::Processing(0);
                 }
                 ShufflePhase::Processing(current) => {
@@ -192,9 +213,7 @@ impl HashShuffleJoinOperator {
                         self.phase = ShufflePhase::Exhausted;
                         return Ok(None);
                     }
-                    if let Some(chunk) =
-                        self.process_bucket_chunked(current, &base.output_layout)?
-                    {
+                    if let Some(chunk) = self.process_bucket_chunked(current)? {
                         return Ok(Some(chunk));
                     }
                     self.release_bucket(current);
@@ -218,8 +237,8 @@ impl HashShuffleJoinOperator {
     fn process_bucket_chunked(
         &mut self,
         bucket_idx: usize,
-        output_layout: &Arc<SlotLayout>,
     ) -> Result<Option<DataChunk>, QueryError> {
+        let output_layout = &self.output_layout;
         let bucket = &mut self.buckets[bucket_idx];
 
         if bucket.right_hash.is_none() && !bucket.right_rows.is_empty() {
@@ -379,30 +398,14 @@ impl HashShuffleJoinOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _left_trees: &mut [StreamingExecutor],
-        _right_trees: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _left_trees: &mut [StreamingExecutor],
-        _right_trees: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            self.memory_tracker.reset();
-            self.buckets.clear();
-            base.lifecycle.mark_closed();
-            Ok(())
-        } else {
-            Ok(())
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        self.memory_tracker.reset();
+        self.buckets.clear();
+        Ok(())
     }
 
     pub fn memory_tracker(&self) -> &MemoryTracker {

@@ -1,38 +1,39 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::{EdgeDirection, Value};
+use crate::core::Value;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::QueryStorage;
 
 use super::common;
-use super::{ExpandCtx, GraphCtx};
+use super::{ExpandCtx, GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    edge_types: &[String],
-    direction: EdgeDirection,
-    filter_expr: &Option<Expression>,
-    base: &mut OperatorBase,
+    op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("Expand not opened".to_string()));
-    }
-
-    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+    let GraphOperatorKind::Expand {
+        storage,
+        space_name,
+        edge_types,
+        direction,
+        filter_expr,
+    } = &mut op.kind
+    else {
+        unreachable!("expand::handle called for a non-expand graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let edge_types = &*edge_types;
+    let direction = *direction;
+    let filter_expr = &*filter_expr;
+    let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             if let Some(output) = common::expand_on_chunk(
                 chunk,
-                Arc::clone(&base.output_layout),
+                Arc::clone(&op.output_layout),
                 &*reader,
                 Vec::new(),
                 1,
@@ -82,7 +83,7 @@ pub(super) fn handle(
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(
                     rows,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&op.output_layout),
                 )));
             }
         }
@@ -90,31 +91,42 @@ pub(super) fn handle(
     Ok(None)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_all(
-    filter_expr: &Option<Expression>,
-    col_names: Vec<String>,
-    src_vids: Vec<Value>,
-    step_limit: u32,
-    count_only: bool,
-    emit_raw_ids: bool,
-    lightweight_source: bool,
-    ctx: &mut GraphCtx,
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let storage = ctx.storage;
-    let space_name = ctx.space_name;
-    let edge_types = ctx.edge_types;
-    let direction = ctx.direction;
-    let base = &mut *ctx.base;
-    let input = &mut *ctx.input;
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("ExpandAll not opened".to_string()));
-    }
+    let GraphOperatorKind::ExpandAll {
+        storage,
+        space_name,
+        edge_types,
+        direction,
+        filter_expr,
+        col_names,
+        src_vids,
+        step_limit,
+        count_only,
+        emit_raw_ids,
+        lightweight_source,
+    } = &mut op.kind
+    else {
+        unreachable!("expand::handle_all called for a non-expand-all graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let edge_types = &*edge_types;
+    let direction = *direction;
+    let filter_expr = &*filter_expr;
+    let col_names = col_names.clone();
+    let src_vids = src_vids.clone();
+    let step_limit = *step_limit;
+    let count_only = *count_only;
+    let emit_raw_ids = *emit_raw_ids;
+    let lightweight_source = *lightweight_source;
 
     let use_fast_path =
-        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && !ctx.is_recursive;
+        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && !emit_raw_ids;
 
-    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+    let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
@@ -137,7 +149,7 @@ pub(super) fn handle_all(
                     let out_row = vec![Value::BigInt(count)];
                     return Ok(Some(DataChunk::new_with_layout(
                         vec![out_row],
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&op.output_layout),
                     )));
                 }
                 continue;
@@ -146,7 +158,7 @@ pub(super) fn handle_all(
             let expand_result = if use_fast_path {
                 common::expand_single_step(
                     chunk,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&op.output_layout),
                     &*reader,
                     src_vids.clone(),
                     emit_raw_ids,
@@ -163,7 +175,7 @@ pub(super) fn handle_all(
             } else {
                 common::expand_on_chunk(
                     chunk,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&op.output_layout),
                     &*reader,
                     src_vids.clone(),
                     step_limit,
@@ -209,7 +221,7 @@ pub(super) fn handle_all(
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(
                     rows,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&op.output_layout),
                 )));
             }
         }

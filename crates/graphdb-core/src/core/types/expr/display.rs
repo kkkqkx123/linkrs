@@ -204,7 +204,8 @@ impl Expression {
                     .join(", ");
                 format!("PATH({})", items_str)
             }
-            Expression::Parameter(name) => format!("${}", name),
+            Expression::Parameter(name) => format!("@{}", name),
+            Expression::SessionVariable(name) => format!("${}", name),
             Expression::Vector(data) => {
                 format!(
                     "VECTOR[{}]",

@@ -24,6 +24,7 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -399,6 +400,23 @@ impl<
     }
 
     pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<ExecutionResult, String> {
+        self.execute_with_params(session_id, stmt, None, None).await
+    }
+
+    /// Execute a query with client-supplied query parameters (`@name`
+    /// references) and/or session variables (`$name` references).
+    ///
+    /// `session_variables` supplied here replace the session-managed snapshot
+    /// (set via `LET $name = expr`) for this statement; pass `None` to use the
+    /// snapshot. Parameters are bound to `@name` references only and are fully
+    /// decoupled from session variables.
+    pub async fn execute_with_params(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
+    ) -> Result<ExecutionResult, String> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -429,7 +447,13 @@ impl<
         }
 
         // Perform a regular query using core layer QueryApi
-        let mut result = self.execute_query_with_permission(session_id, stmt, space_id);
+        let mut result = self.execute_query_with_permission(
+            session_id,
+            stmt,
+            space_id,
+            parameters,
+            session_variables,
+        );
 
         // Handle SpaceSwitched result from USE statement
         // The core QueryApi converts SpaceSwitched to a DataSet with space_name/space_id columns,
@@ -500,10 +524,8 @@ impl<
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
-            parameters: Some(filter_session_parameters(
-                session.variables_snapshot(),
-                stmt,
-            )),
+            parameters: None,
+            session_variables: Some(session.variables_snapshot()),
             query_id: Some(query_id as u64),
         };
 
@@ -550,6 +572,8 @@ impl<
         session_id: i64,
         stmt: &str,
         space_id: i64,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
     ) -> Result<ExecutionResult, String> {
         let session = self
             .session_manager
@@ -601,17 +625,17 @@ impl<
         };
 
         // Use core layer QueryApi to execute query. Session variables are
-        // injected as parameters, filtered to the ones the statement actually
-        // references (the plan validator rejects unknown parameters).
+        // injected through the dedicated session_variables channel (captured
+        // once per statement), fully decoupled from query parameters.
+        // Client-supplied session variables replace the session snapshot;
+        // otherwise the snapshot (set via `LET $name = expr`) is used.
         let query_request = crate::api::core::QueryRequest {
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: session.current_transaction(),
-            parameters: Some(filter_session_parameters(
-                session.variables_snapshot(),
-                stmt,
-            )),
+            parameters,
+            session_variables: session_variables.or_else(|| Some(session.variables_snapshot())),
             query_id: None,
         };
 
@@ -1221,7 +1245,8 @@ impl<
         let (name, expr) = Self::parse_let_statement(stmt)?;
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
         let evaluate_stmt = format!("RETURN ({})", expr);
-        let result = self.execute_query_with_permission(session.id(), &evaluate_stmt, space_id)?;
+        let result =
+            self.execute_query_with_permission(session.id(), &evaluate_stmt, space_id, None, None)?;
         let value = match result {
             ExecutionResult::DataSet { data, .. } => data
                 .rows
@@ -1266,54 +1291,6 @@ impl<
         }
         Ok((name.to_string(), expr.to_string()))
     }
-}
-
-/// Collect the `$name` parameter references from a statement by lexing it.
-///
-/// Only a `Dollar` token directly followed by an identifier counts; string
-/// literals and the nGQL refs `$^` / `$$` / `$-` (distinct tokens) are
-/// excluded. Malformed input simply yields the references found so far.
-fn statement_parameter_names(stmt: &str) -> Vec<String> {
-    use graphdb_query::query::parser::core::TokenKind;
-    use graphdb_query::query::parser::lexing::Lexer;
-
-    let mut lexer = Lexer::new(stmt);
-    let mut params = Vec::new();
-    let mut expect_dollar_name = false;
-    loop {
-        let token = lexer.next_token();
-        match token.kind {
-            TokenKind::Eof => break,
-            TokenKind::Dollar => expect_dollar_name = true,
-            TokenKind::Identifier(name) if expect_dollar_name => {
-                if !params.iter().any(|p: &String| p == &name) {
-                    params.push(name);
-                }
-                expect_dollar_name = false;
-            }
-            _ => expect_dollar_name = false,
-        }
-    }
-    params
-}
-
-/// Restrict a session-variable snapshot to the parameters referenced by the
-/// statement, so unrelated session variables do not trip plan validation.
-/// Referenced names that have no session value default to NULL.
-fn filter_session_parameters(
-    variables: std::collections::HashMap<String, crate::core::Value>,
-    stmt: &str,
-) -> std::collections::HashMap<String, crate::core::Value> {
-    let referenced = statement_parameter_names(stmt);
-    let mut filtered = std::collections::HashMap::with_capacity(referenced.len());
-    for name in referenced {
-        let value = variables
-            .get(&name)
-            .cloned()
-            .unwrap_or(crate::core::Value::Null(Default::default()));
-        filtered.insert(name, value);
-    }
-    filtered
 }
 
 impl<S> GraphService<S>
@@ -1387,6 +1364,7 @@ where
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         let outcomes = self
@@ -1477,6 +1455,7 @@ where
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         let outcomes =

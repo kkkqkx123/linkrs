@@ -6,11 +6,10 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorLifecycle;
-
-use super::close_common;
-use super::JoinCtx;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 
 pub(super) fn next_cross_join(
     all_left_rows: &mut Vec<Vec<Value>>,
@@ -18,22 +17,24 @@ pub(super) fn next_cross_join(
     left_consumed: &mut bool,
     right_consumed: &mut bool,
     output_done: &mut bool,
-    ctx: &mut JoinCtx,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
     // The full cartesian product is emitted in a single chunk; subsequent
     // pulls must report exhaustion instead of re-emitting it forever.
     if *output_done {
         return Ok(None);
     }
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
     if !*left_consumed {
         while let Some(mut chunk) = left.advance()? {
             chunk.materialize_selection_by("CrossSemiJoin");
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             for row in &chunk.rows {
                 memory_tracker.try_reserve_row(row)?;
             }
@@ -46,7 +47,9 @@ pub(super) fn next_cross_join(
         let mut captured_right_names = Vec::new();
         while let Some(mut chunk) = right.advance()? {
             chunk.materialize_selection_by("CrossSemiJoin");
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             if captured_right_names.is_empty() {
                 captured_right_names = chunk.col_names();
             }
@@ -66,7 +69,9 @@ pub(super) fn next_cross_join(
 
     let mut result_rows = Vec::new();
     for left_row in all_left_rows.iter() {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         for right_row in all_right_rows.iter() {
             let mut joined_row = left_row.clone();
             joined_row.extend(right_row.clone());
@@ -80,7 +85,7 @@ pub(super) fn next_cross_join(
     } else {
         Ok(Some(DataChunk::new_with_layout(
             result_rows,
-            Arc::clone(&base.output_layout),
+            Arc::clone(output_layout),
         )))
     }
 }
@@ -89,16 +94,19 @@ pub(super) fn next_semi_join(
     join_condition: &mut Option<Expression>,
     right_rows: &mut Vec<Vec<Value>>,
     right_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    memory_tracker: &mut MemoryTracker,
+    _right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
     if !*right_consumed {
         while let Some(mut chunk) = right.advance()? {
             chunk.materialize_selection_by("CrossSemiJoin");
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             for row in chunk.rows {
                 memory_tracker.try_reserve_row(&row)?;
                 right_rows.push(row);
@@ -140,7 +148,7 @@ pub(super) fn next_semi_join(
         if !result_rows.is_empty() {
             return Ok(Some(DataChunk::new_with_layout(
                 result_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(output_layout),
             )));
         }
     }
@@ -149,23 +157,21 @@ pub(super) fn next_semi_join(
 }
 
 pub(super) fn close_cross(
-    lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     all_left_rows: &mut Vec<Vec<Value>>,
     all_right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        all_left_rows.clear();
-        all_right_rows.clear();
-    })
+    memory_tracker.reset();
+    all_left_rows.clear();
+    all_right_rows.clear();
+    Ok(())
 }
 
 pub(super) fn close_semi(
-    lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        right_rows.clear();
-    })
+    memory_tracker.reset();
+    right_rows.clear();
+    Ok(())
 }

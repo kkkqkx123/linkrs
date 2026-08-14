@@ -199,6 +199,17 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             }
         }
 
+        // Expression-level subqueries: Filter/Project/Assign hosts
+        // surface the number of compiled subqueries as `subquery: N`.
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(unary_spec) =
+            &op_spec.spec
+        {
+            let count = unary_spec.subquery_runners().len();
+            if count > 0 {
+                pairs.push(Pair::new("subquery", count.to_string()));
+            }
+        }
+
         if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable {
             threshold,
         } = &props.memory_policy

@@ -16,6 +16,7 @@ impl MemoryEstimatable for Expression {
             Expression::Variable(name) => base_size + estimate_string_memory(name),
             Expression::Label(name) => base_size + estimate_string_memory(name),
             Expression::Parameter(name) => base_size + estimate_string_memory(name),
+            Expression::SessionVariable(name) => base_size + estimate_string_memory(name),
 
             // Unary operations: base size + operand
             Expression::Unary { operand, .. } => base_size + operand.estimate_memory(),
@@ -211,7 +212,8 @@ impl Expression {
                 }
                 Expression::Variable(name)
                 | Expression::Label(name)
-                | Expression::Parameter(name) => {
+                | Expression::Parameter(name)
+                | Expression::SessionVariable(name) => {
                     total += name.capacity();
                 }
 

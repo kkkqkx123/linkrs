@@ -156,16 +156,56 @@ impl UtilStmtParser {
         // The FETCH PROP ON <tag> <ids> syntax is supported.
         let _with_props = ctx.match_token(TokenKind::Prop);
 
-        let target = if ctx.match_token(TokenKind::On) {
-            // Check for * (all tags)
-            let tag_name = if ctx.match_token(TokenKind::Star) {
-                None // None means all tags
-            } else {
-                Some(ctx.expect_identifier()?)
-            };
+        // `->` is an edge arrow inside FETCH, not the JSON access operator
+        // (`expr -> 'key'` postfix JSON get), so expression parsing must not
+        // consume `src -> dst` as a JSON get.
+        let target = ctx.with_edge_syntax_mode(|ctx| {
+            if ctx.match_token(TokenKind::On) {
+                // Check for * (all tags)
+                let tag_name = if ctx.match_token(TokenKind::Star) {
+                    None // None means all tags
+                } else {
+                    Some(ctx.expect_identifier()?)
+                };
 
-            let first_expr = self.parse_expression(ctx)?;
-            if ctx.check_token(TokenKind::Arrow) {
+                let first_expr = self.parse_expression(ctx)?;
+                if ctx.check_token(TokenKind::Arrow) {
+                    ctx.expect_token(TokenKind::Arrow)?;
+                    let dst = self.parse_expression(ctx)?;
+                    let rank = if ctx.match_token(TokenKind::At) {
+                        Some(self.parse_expression(ctx)?)
+                    } else {
+                        None
+                    };
+                    Ok(FetchTarget::Edges {
+                        src: first_expr,
+                        dst,
+                        edge_type: tag_name.expect("Edge type name is required"),
+                        rank,
+                        properties: None,
+                    })
+                } else {
+                    let mut ids = vec![first_expr];
+                    while ctx.match_token(TokenKind::Comma) {
+                        ids.push(self.parse_expression(ctx)?);
+                    }
+                    Ok(FetchTarget::Vertices {
+                        tag_name,
+                        ids,
+                        properties: None,
+                    })
+                }
+            } else if ctx.match_token(TokenKind::Tag) {
+                let tag_name = Some(ctx.expect_identifier()?);
+                let ids = self.parse_expression_list(ctx)?;
+                Ok(FetchTarget::Vertices {
+                    tag_name,
+                    ids,
+                    properties: None,
+                })
+            } else if ctx.match_token(TokenKind::Edge) {
+                let edge_type = ctx.expect_identifier()?;
+                let src = self.parse_expression(ctx)?;
                 ctx.expect_token(TokenKind::Arrow)?;
                 let dst = self.parse_expression(ctx)?;
                 let rank = if ctx.match_token(TokenKind::At) {
@@ -173,57 +213,22 @@ impl UtilStmtParser {
                 } else {
                     None
                 };
-                FetchTarget::Edges {
-                    src: first_expr,
+                Ok(FetchTarget::Edges {
+                    src,
                     dst,
-                    edge_type: tag_name.expect("Edge type name is required"),
+                    edge_type,
                     rank,
                     properties: None,
-                }
+                })
             } else {
-                let mut ids = vec![first_expr];
-                while ctx.match_token(TokenKind::Comma) {
-                    ids.push(self.parse_expression(ctx)?);
-                }
-                FetchTarget::Vertices {
-                    tag_name,
+                let ids = self.parse_expression_list(ctx)?;
+                Ok(FetchTarget::Vertices {
+                    tag_name: None,
                     ids,
                     properties: None,
-                }
+                })
             }
-        } else if ctx.match_token(TokenKind::Tag) {
-            let tag_name = Some(ctx.expect_identifier()?);
-            let ids = self.parse_expression_list(ctx)?;
-            FetchTarget::Vertices {
-                tag_name,
-                ids,
-                properties: None,
-            }
-        } else if ctx.match_token(TokenKind::Edge) {
-            let edge_type = ctx.expect_identifier()?;
-            let src = self.parse_expression(ctx)?;
-            ctx.expect_token(TokenKind::Arrow)?;
-            let dst = self.parse_expression(ctx)?;
-            let rank = if ctx.match_token(TokenKind::At) {
-                Some(self.parse_expression(ctx)?)
-            } else {
-                None
-            };
-            FetchTarget::Edges {
-                src,
-                dst,
-                edge_type,
-                rank,
-                properties: None,
-            }
-        } else {
-            let ids = self.parse_expression_list(ctx)?;
-            FetchTarget::Vertices {
-                tag_name: None,
-                ids,
-                properties: None,
-            }
-        };
+        })?;
 
         Ok(Stmt::Fetch(FetchStmt {
             span: start_span,

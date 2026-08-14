@@ -205,6 +205,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
 
@@ -251,6 +252,47 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: Some(params),
+            session_variables: None,
+            query_id: None,
+        };
+
+        let mut query_api = self.db.query_api.write();
+        let result = if self.auto_commit {
+            let storage = self
+                .db
+                .storage
+                .read()
+                .bind_auto_commit_context()
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            query_api.execute_with_operation_storage(query, ctx, storage)?
+        } else {
+            query_api.execute(query, ctx)?
+        };
+
+        // Detect USE <space> results and persist space context
+        self.update_space_from_result(&result);
+
+        Ok(QueryResult::from_core(result))
+    }
+
+    /// Execute a query with both query parameters (`@name` references) and
+    /// session variables (`$name` references).
+    ///
+    /// The two channels are fully independent: a parameter and a session
+    /// variable with the same name coexist without conflict.
+    pub fn execute_with_params_and_variables(
+        &self,
+        query: &str,
+        params: HashMap<String, Value>,
+        session_variables: HashMap<String, Value>,
+    ) -> CoreResult<QueryResult> {
+        let ctx = QueryRequest {
+            space_id: *self.space_id.read(),
+            space_name: self.space_name.read().clone(),
+            auto_commit: self.auto_commit,
+            transaction_id: None,
+            parameters: Some(params),
+            session_variables: Some(session_variables),
             query_id: None,
         };
 

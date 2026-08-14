@@ -15,6 +15,7 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -108,6 +109,24 @@ impl DeletePlanner {
         }
 
         let delete_stmt = self.extract_delete_stmt(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in the
+        // DELETE WHERE condition are rejected at planning time with a precise
+        // error.
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        if let Some(where_cond) = &delete_stmt.where_clause {
+            if let Some(expr_meta) = where_cond.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 

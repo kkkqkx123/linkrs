@@ -13,6 +13,7 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -145,6 +146,49 @@ impl Planner for InsertPlanner {
 
         // Extract the INSERT statement
         let insert_stmt = self.extract_insert_stmt(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in
+        // INSERT value expressions are rejected at planning time with a
+        // precise error.
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        match &insert_stmt.target {
+            InsertTarget::Vertices { values, .. } => {
+                for row in values {
+                    for expr in std::iter::once(&row.vid).chain(row.tag_values.iter().flatten()) {
+                        if let Some(expr_meta) = expr.expression() {
+                            exists_planner::check_expression_subqueries(
+                                expr_meta.inner(),
+                                &qctx,
+                                check_space_id,
+                                &check_space_name,
+                                &outer_col_names,
+                            )?;
+                        }
+                    }
+                }
+            }
+            InsertTarget::Edge { edges, .. } => {
+                for (src, dst, rank, prop_values) in edges {
+                    for expr in std::iter::once(src)
+                        .chain(std::iter::once(dst))
+                        .chain(rank.iter())
+                        .chain(prop_values.iter())
+                    {
+                        if let Some(expr_meta) = expr.expression() {
+                            exists_planner::check_expression_subqueries(
+                                expr_meta.inner(),
+                                &qctx,
+                                check_space_id,
+                                &check_space_name,
+                                &outer_col_names,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
 
         // Create a Parameter Node
         let arg_node = ArgumentNode::new(next_node_id(), "insert_args");

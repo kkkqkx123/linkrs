@@ -286,6 +286,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let params: HashMap<String, crate::core::Value> =
             query_context.request_context().parameters.clone();
+        let session_variables: HashMap<String, crate::core::Value> =
+            query_context.request_context().session_variables.clone();
 
         let mut context = ExecutionContext {
             max_workers: self
@@ -299,6 +301,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .max_buffered_chunks
                 .max(1),
             parameters: Arc::new(params),
+            session_variables: Arc::new(session_variables),
             ..ExecutionContext::default()
         };
         context.shared_scheduler = self.shared_scheduler.clone();

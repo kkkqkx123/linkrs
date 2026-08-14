@@ -8,11 +8,15 @@ use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::SerializableExpression;
 use crate::core::YieldColumn;
 use crate::define_plan_node_with_deps;
+use crate::query::planning::statements::clauses::exists_planner::PlannedSubquery;
 
 define_plan_node_with_deps! {
     pub struct ProjectNode {
         columns: Vec<YieldColumn>,
         columns_serializable: Option<Vec<SerializableExpression>>,
+        // Expression-level EXISTS / IN subqueries compiled for this project
+        // Pre-execution only; never serialized.
+        subqueries: Vec<PlannedSubquery>,
     }
     enum: Project
     input: SingleInputNode
@@ -32,10 +36,22 @@ impl ProjectNode {
             deps: vec![input],
             columns,
             columns_serializable: None,
+            subqueries: Vec::new(),
             output_var: None,
             col_names,
             column_types: vec![],
         })
+    }
+
+    /// Attach expression-level subqueries to this projection.
+    pub fn with_subqueries(mut self, subqueries: Vec<PlannedSubquery>) -> Self {
+        self.subqueries = subqueries;
+        self
+    }
+
+    /// Expression-level subqueries compiled for this projection.
+    pub fn subqueries(&self) -> &[PlannedSubquery] {
+        &self.subqueries
     }
 
     /// Obtain the projection column

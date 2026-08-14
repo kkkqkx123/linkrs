@@ -154,11 +154,11 @@ async fn test_session_variable_transaction_rollback_restores() {
         graphdb::core::Value::Int(1),
         "ROLLBACK restores the pre-transaction variable"
     );
-    let data = exec(&service, sid, "RETURN $y").await;
-    assert_eq!(
-        first_scalar(&data),
-        graphdb::core::Value::Null(Default::default()),
-        "variable assigned inside a rolled-back transaction is undefined"
+    let err = exec_err(&service, sid, "RETURN $y").await;
+    assert!(
+        err.contains("Session variable `y` is not defined"),
+        "variable assigned inside a rolled-back transaction is undefined: {}",
+        err
     );
 }
 
@@ -200,11 +200,11 @@ async fn test_session_variable_rollback_to_savepoint() {
         graphdb::core::Value::Int(2),
         "ROLLBACK TO SAVEPOINT restores the value at the savepoint"
     );
-    let data = exec(&service, sid, "RETURN $z").await;
-    assert_eq!(
-        first_scalar(&data),
-        graphdb::core::Value::Null(Default::default()),
-        "variable assigned after the savepoint is undefined"
+    let err = exec_err(&service, sid, "RETURN $z").await;
+    assert!(
+        err.contains("Session variable `z` is not defined"),
+        "variable assigned after the savepoint is undefined: {}",
+        err
     );
 
     exec(&service, sid, "COMMIT").await;
@@ -232,5 +232,36 @@ async fn test_session_variable_let_errors() {
         err.contains("Invalid session variable name"),
         "got: {}",
         err
+    );
+}
+
+/// EXPLAIN surfaces `$name` in rendered expressions (the physical plan's
+/// `hash_keys` / `probe_keys` stringify session variables as `$name`).
+#[tokio::test]
+async fn test_explain_shows_session_variable_reference() {
+    let (service, sid) = setup().await;
+
+    exec(&service, sid, "LET $x = 'Alice'").await;
+    let data = exec(
+        &service,
+        sid,
+        "EXPLAIN MATCH (t:Person) WHERE EXISTS { MATCH (p:Person) WHERE p.name == $x } RETURN t.name",
+    )
+    .await;
+
+    let joined: String = data
+        .rows
+        .iter()
+        .flat_map(|row| row.iter())
+        .filter_map(|v| match v {
+            graphdb::core::Value::String(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined.contains("$x"),
+        "EXPLAIN must surface the session variable reference, got: {}",
+        joined
     );
 }

@@ -235,7 +235,7 @@ fn test_session_execute_with_params() {
 
     let result = session
         .execute_with_params(
-            "MATCH (p:person) WHERE p.name == $name RETURN p.age",
+            "MATCH (p:person) WHERE p.name == @name RETURN p.age",
             params,
         )
         .expect("parameterized query should succeed");
@@ -249,7 +249,7 @@ fn test_session_execute_with_params() {
 
     let result2 = session
         .execute_with_params(
-            "MATCH (p:person) WHERE p.name == $name RETURN p.age",
+            "MATCH (p:person) WHERE p.name == @name RETURN p.age",
             params2,
         )
         .expect("parameterized query should succeed with different param value");
@@ -279,6 +279,38 @@ fn test_session_execute_with_params_unknown_param() {
     assert!(
         result.is_err(),
         "unknown parameter for non-parameterized query should fail"
+    );
+}
+
+/// Query parameters (`@name`) and session variables (`$name`) share the
+/// namespace independently: same name, distinct values, no conflict.
+#[test]
+fn test_session_param_and_variable_same_name_coexist() {
+    let test_db = create_test_database();
+    let db = &test_db.db;
+    let mut session = db.session().expect("create session failed");
+
+    session
+        .create_space("coexist_space", SpaceConfig::default())
+        .expect("create space failed");
+    session
+        .use_space("coexist_space")
+        .expect("use space failed");
+
+    let mut params = HashMap::new();
+    params.insert("x".to_string(), Value::Int(10));
+    let mut variables = HashMap::new();
+    variables.insert("x".to_string(), Value::Int(100));
+
+    let result = session
+        .execute_with_params_and_variables("RETURN @x + $x", params, variables)
+        .expect("same-name parameter and session variable should coexist");
+    assert_eq!(result.len(), 1, "should return exactly one row");
+    let row = result.first().expect("row should exist");
+    assert_eq!(
+        row.get_by_index(0),
+        Some(&Value::Int(110)),
+        "@x (parameter) and $x (session variable) must resolve independently"
     );
 }
 

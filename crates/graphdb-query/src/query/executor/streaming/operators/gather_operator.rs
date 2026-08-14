@@ -11,14 +11,15 @@ use crate::query::executor::streaming::executor::{
     SortDirection, StreamingExecutor, ValueRowContext,
 };
 use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;
 
-/// Internal merge cursor state. It is public only because `GatherOperator` is
-/// a public enum; callers should use [`GatherOperator::merge_sort`] instead
+/// Internal merge cursor state. It is public only because `GatherOperatorKind`
+/// is a public enum; callers should use [`GatherOperator::merge_sort`] instead
 /// of constructing this state directly.
 #[doc(hidden)]
 #[derive(Debug)]
@@ -29,7 +30,7 @@ pub enum MergeInputState {
 }
 
 #[derive(Debug)]
-pub enum GatherOperator {
+pub enum GatherOperatorKind {
     Concatenate {
         current_index: usize,
         col_names: Option<Vec<String>>,
@@ -46,38 +47,76 @@ pub enum GatherOperator {
     },
 }
 
+/// Gather operator.
+///
+/// Wraps [`GatherOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct GatherOperator {
+    pub kind: GatherOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl GatherOperator {
-    pub fn concatenate() -> Self {
-        Self::Concatenate {
-            current_index: 0,
-            col_names: None,
-            handle: None,
+    pub fn new(kind: GatherOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn concatenate(output_layout: Arc<SlotLayout>) -> Self {
+        Self::new(
+            GatherOperatorKind::Concatenate {
+                current_index: 0,
+                col_names: None,
+                handle: None,
+            },
+            output_layout,
+        )
     }
 
     pub fn merge_sort(
         sort_expressions: Vec<Expression>,
         sort_directions: Vec<SortDirection>,
         limit: Option<usize>,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        Self::MergeSort {
-            sort_expressions,
-            sort_directions,
-            inputs: Vec::new(),
-            col_names: None,
-            limit,
-            emitted: 0,
-            handle: None,
-        }
+        Self::new(
+            GatherOperatorKind::MergeSort {
+                sort_expressions,
+                sort_directions,
+                inputs: Vec::new(),
+                col_names: None,
+                limit,
+                emitted: 0,
+                handle: None,
+            },
+            output_layout,
+        )
     }
 
-    pub fn open(
-        &mut self,
-        base: &mut OperatorBase,
-        children: &mut Vec<StreamingExecutor>,
-    ) -> Result<(), QueryError> {
-        let handle = match self {
-            Self::Concatenate {
+    pub fn open(&mut self, children: &mut Vec<StreamingExecutor>) -> Result<(), QueryError> {
+        let handle = match &mut self.kind {
+            GatherOperatorKind::Concatenate {
                 current_index,
                 col_names,
                 handle,
@@ -86,7 +125,7 @@ impl GatherOperator {
                 *col_names = None;
                 std::mem::take(handle)
             }
-            Self::MergeSort {
+            GatherOperatorKind::MergeSort {
                 inputs,
                 col_names,
                 emitted,
@@ -104,7 +143,7 @@ impl GatherOperator {
 
         // Try parallel path via the runtime's morsel worker pool.
         if handle.is_none() {
-            if let Some(rt) = base.runtime.clone() {
+            if let Some(rt) = self.runtime.clone() {
                 let pool = rt.worker_pool.lock().clone();
                 if let Some(pool) = pool {
                     if children.len() > 1 && pool.max_workers() > 1 {
@@ -125,7 +164,6 @@ impl GatherOperator {
                         );
                         pool.submit(batch);
                         Self::set_handle(self, Some(h));
-                        base.lifecycle.mark_opened();
                         return Ok(());
                     }
                 }
@@ -139,24 +177,32 @@ impl GatherOperator {
                 return Err(close_error.unwrap_or(error));
             }
         }
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         children: &mut [StreamingExecutor],
     ) -> Result<Option<DataChunk>, QueryError> {
-        base.ensure_not_cancelled()?;
-        match self {
-            Self::Concatenate {
+        if let Some(rt) = self.runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
+        let Self {
+            kind,
+            runtime,
+            output_layout,
+            ..
+        } = self;
+        match kind {
+            GatherOperatorKind::Concatenate {
                 current_index,
                 col_names,
                 handle,
             } => {
                 while *current_index < input_count(children, handle) {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(chunk) = advance_input_blocking(children, handle, *current_index)? {
                         if chunk.is_empty() {
                             continue;
@@ -164,14 +210,14 @@ impl GatherOperator {
                         validate_schema(*current_index, &chunk, col_names)?;
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                     *current_index += 1;
                 }
                 Ok(None)
             }
-            Self::MergeSort {
+            GatherOperatorKind::MergeSort {
                 sort_expressions,
                 sort_directions,
                 inputs,
@@ -186,12 +232,14 @@ impl GatherOperator {
 
                 let mut result_rows = Vec::with_capacity(CHUNK_SIZE);
                 while result_rows.len() < CHUNK_SIZE {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if limit.is_some_and(|value| *emitted >= value) {
                         break;
                     }
                     match next_merge_row(
-                        base,
+                        runtime,
                         children,
                         handle,
                         sort_expressions,
@@ -212,64 +260,52 @@ impl GatherOperator {
                 } else {
                     Ok(Some(DataChunk::new_with_layout(
                         result_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(output_layout),
                     )))
                 }
             }
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _children: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         if let Some(mut handle) = Self::take_handle(self) {
             return handle.stop_and_join();
         }
-        base.lifecycle.mark_stopped();
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _children: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
-        if let Self::MergeSort {
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        if let GatherOperatorKind::MergeSort {
             inputs,
             col_names,
             emitted,
             ..
-        } = self
+        } = &mut self.kind
         {
             inputs.clear();
             *col_names = None;
             *emitted = 0;
         }
-        if let Self::Concatenate { col_names, .. } = self {
+        if let GatherOperatorKind::Concatenate { col_names, .. } = &mut self.kind {
             *col_names = None;
         }
-        let parallel_result = if let Some(mut handle) = Self::take_handle(self) {
-            handle.stop_and_join()
-        } else {
-            Ok(())
-        };
-        base.lifecycle.mark_closed();
-        parallel_result
+        if let Some(mut handle) = Self::take_handle(self) {
+            return handle.stop_and_join();
+        }
+        Ok(())
     }
 
     fn set_handle(op: &mut Self, h: Option<PartitionHandle>) {
-        match op {
-            Self::Concatenate { handle, .. } | Self::MergeSort { handle, .. } => *handle = h,
+        match &mut op.kind {
+            GatherOperatorKind::Concatenate { handle, .. }
+            | GatherOperatorKind::MergeSort { handle, .. } => *handle = h,
         }
     }
 
     fn take_handle(op: &mut Self) -> Option<PartitionHandle> {
-        match op {
-            Self::Concatenate { ref mut handle, .. } | Self::MergeSort { ref mut handle, .. } => {
-                handle.take()
-            }
+        match &mut op.kind {
+            GatherOperatorKind::Concatenate { handle, .. }
+            | GatherOperatorKind::MergeSort { handle, .. } => handle.take(),
         }
     }
 }
@@ -296,7 +332,7 @@ fn advance_input(
 }
 
 /// Advance one input using the blocking drain fast path (used by
-/// [`GatherOperator::Concatenate`], which reads one partition at a time).
+/// [`GatherOperatorKind::Concatenate`], which reads one partition at a time).
 fn advance_input_blocking(
     children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
@@ -312,7 +348,7 @@ fn advance_input_blocking(
 }
 
 fn next_merge_row(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
     children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
     sort_expressions: &[Expression],
@@ -323,7 +359,9 @@ fn next_merge_row(
     let mut best_child = None;
 
     for index in 0..input_count(children, handle) {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         fill_input(index, children, handle, inputs, col_names)?;
         let MergeInputState::Buffered { chunk, row_index } = &inputs[index] else {
             continue;
@@ -479,20 +517,25 @@ fn close_children(children: &mut [StreamingExecutor]) -> Option<QueryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
 
     fn source(values: &[i64], column: &str) -> StreamingExecutor {
         let layout = Arc::new(SlotLayout::from_names(&[column.to_string()]));
         StreamingExecutor::Source(
-            OperatorBase::new(1).with_output_layout(layout),
-            SourceOperator::ScanVertices {
-                buffer: values
-                    .iter()
-                    .map(|value| vec![Value::BigInt(*value)])
-                    .collect(),
-                current_index: 0,
-                col_names: vec![column.to_string()],
-            },
+            OperatorBase::new(1).with_output_layout(layout.clone()),
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: values
+                        .iter()
+                        .map(|value| vec![Value::BigInt(*value)])
+                        .collect(),
+                    current_index: 0,
+                    col_names: vec![column.to_string()],
+                },
+                layout,
+            ),
         )
     }
 
@@ -501,12 +544,13 @@ mod tests {
         StreamingExecutor::Gather(
             OperatorBase::new(i64::MIN)
                 .with_global(true)
-                .with_output_layout(layout),
+                .with_output_layout(layout.clone()),
             children,
             GatherOperator::merge_sort(
                 vec![Expression::Variable("value".to_string())],
                 vec![SortDirection::Ascending],
                 limit,
+                layout,
             ),
         )
     }
@@ -572,11 +616,11 @@ mod tests {
 
     #[test]
     fn concatenate_rejects_incompatible_partition_schema() {
+        let layout = Arc::new(SlotLayout::from_names(&["id".to_string()]));
         let mut executor = StreamingExecutor::Gather(
-            OperatorBase::new(10)
-                .with_output_layout(Arc::new(SlotLayout::from_names(&["id".to_string()]))),
+            OperatorBase::new(10).with_output_layout(layout.clone()),
             vec![source(&[1], "id"), source(&[2], "other_id")],
-            GatherOperator::concatenate(),
+            GatherOperator::concatenate(layout),
         );
 
         executor.open().expect("open gather");

@@ -7,7 +7,9 @@ use crate::api::embedded::config::DatabaseConfig;
 use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
-use crate::search::{FulltextConfig, FulltextIndexManager, SyncFailurePolicy};
+#[cfg(feature = "fulltext-search")]
+use crate::search::FulltextIndexManager;
+use crate::search::{FulltextConfig, SyncFailurePolicy};
 use crate::storage::{GraphStorage, StorageClient};
 use crate::sync::{SyncConfig, SyncManager};
 use crate::transaction::wal::SyncPolicy;
@@ -251,11 +253,15 @@ impl GraphDatabase<GraphStorage> {
             #[cfg(not(feature = "fulltext-search"))]
             {
                 #[cfg(feature = "qdrant")]
-                setup_sync_with_vector_only(vector_runtime.handle())?
+                setup_sync_with_vector_only(vector_runtime.handle())?;
+                #[cfg(not(feature = "qdrant"))]
+                (None, None)
             }
         } else {
             #[cfg(feature = "qdrant")]
-            setup_sync_with_vector_only(vector_runtime.handle())?
+            setup_sync_with_vector_only(vector_runtime.handle())?;
+            #[cfg(not(feature = "qdrant"))]
+            (None, None)
         };
 
         if let (Some(path), Some(manager)) =

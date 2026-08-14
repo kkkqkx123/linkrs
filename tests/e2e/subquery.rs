@@ -331,3 +331,367 @@ fn test_explain_shows_correlated_apply() {
         anti
     );
 }
+
+// ---------------------------------------------------------------------------
+// Expression-level EXISTS / IN execute from Filter/Project hosts (WHERE
+// residual, RETURN, WITH assignments, HAVING); ORDER BY / UNWIND / DML
+// value positions are still refused at planning time.
+// ---------------------------------------------------------------------------
+
+/// Assert that `query` fails at planning time with the precise
+/// expression-level subquery error (mentioning the conjunctive-WHERE
+/// alternative) instead of reaching the runtime "not supported" path.
+fn assert_expression_subquery_rejected(db: &mut crate::common::TestDb, query: &str) {
+    let err = db
+        .execute_query(query)
+        .expect_err("expression-level EXISTS/IN must fail at planning time");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("EXISTS/IN subquery cannot be planned"),
+        "expected precise planning error for `{query}`, got: {msg}"
+    );
+    assert!(
+        msg.contains("conjunctive WHERE"),
+        "expected conjunctive-WHERE hint for `{query}`, got: {msg}"
+    );
+}
+
+/// WHERE residual: EXISTS / IN under OR (non-conjunctive positions) execute
+/// per row via the Filter's SubqueryExecutor.
+#[test]
+fn test_where_or_exists_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.age = 30 OR EXISTS { MATCH (p:person) } RETURN t.name",
+        )
+        .expect("OR-side EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4, "EXISTS is true, so every row matches");
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.age = 30 OR NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
+        )
+        .expect("OR-side NOT EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } OR t.age > 20 RETURN t.name",
+        )
+        .expect("OR-side IN should execute and succeed");
+    assert_eq!(result.rows.len(), 4, "every name appears in the result set");
+
+    // A conjunctive EXISTS plus a residual OR-side subquery also executes.
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) } AND (t.age = 30 OR t.name IN { MATCH (p2:person) RETURN p2.name }) RETURN t.name",
+        )
+        .expect("conjunctive + residual subqueries should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+}
+
+/// OR-side subqueries honor the OR semantics: a false left side keeps the
+/// subquery result decisive.
+#[test]
+fn test_where_or_exists_false_left() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    // The EXISTS side is empty, so only the (false) left side decides: no
+    // row matches.
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.age = 100 OR EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
+        )
+        .expect("OR-side EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 0, "neither side matches");
+
+    // NOT EXISTS of the same empty subquery is true for every row.
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.age = 100 OR NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
+        )
+        .expect("OR-side NOT EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4, "NOT EXISTS holds for everyone");
+}
+
+/// RETURN positions: plain, container-nested, CASE-branched EXISTS / IN.
+#[test]
+fn test_return_exists_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query("MATCH (t:person) RETURN EXISTS { MATCH (p:person) } AS x")
+        .expect("RETURN EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(
+            value,
+            &Value::Bool(true),
+            "every row sees a non-empty subquery"
+        );
+    }
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) RETURN NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } AS x",
+        )
+        .expect("RETURN NOT EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(value, &Value::Bool(true));
+    }
+
+    let result = db
+        .execute_query("MATCH (t:person) RETURN t.age IN { MATCH (p:person) RETURN p.age } AS x")
+        .expect("RETURN IN should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(value, &Value::Bool(true), "every age appears in the set");
+    }
+
+    let result = db
+        .execute_query("MATCH (t:person) RETURN [EXISTS { MATCH (p:person) }] AS x")
+        .expect("container-nested EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) RETURN CASE WHEN EXISTS { MATCH (p:person) } THEN 1 ELSE 0 END AS x",
+        )
+        .expect("CASE-branched EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(value, &Value::Int(1));
+    }
+}
+
+/// RETURN NOT IN with a NULL left operand or NULL values in the result set:
+/// NULL never matches.
+#[test]
+fn test_return_in_null_semantics() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) RETURN t.name AS name, t.name NOT IN { MATCH (p:person) WHERE p.age == 35 RETURN p.name } AS x",
+        )
+        .expect("RETURN NOT IN should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    let carol = result
+        .rows
+        .iter()
+        .find(|row| row.values.get("name") == Some(&Value::string("Carol")))
+        .expect("Carol row present");
+    assert_eq!(
+        carol.values.get("x"),
+        Some(&Value::Bool(false)),
+        "Carol IS in the result set"
+    );
+
+    // A name absent from the result set yields NOT IN = true.
+    let dave = result
+        .rows
+        .iter()
+        .find(|row| row.values.get("name") == Some(&Value::string("Dave")))
+        .expect("Dave row present");
+    assert_eq!(
+        dave.values.get("x"),
+        Some(&Value::Bool(true)),
+        "Dave is not in the result set"
+    );
+}
+
+/// Correlated expression-level subqueries: the current row is bound as the
+/// correlation frame and the sub-plan is re-executed per row.
+#[test]
+fn test_return_correlated_in_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) RETURN t.age IN { MATCH (p:person) WHERE p.age > t.age RETURN p.age } AS x",
+        )
+        .expect("correlated RETURN IN should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().last().expect("boolean column");
+        assert_eq!(
+            value,
+            &Value::Bool(false),
+            "no age is strictly greater than itself"
+        );
+    }
+
+    // Correlated EXISTS inside an OR position.
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE t.age = 20 OR EXISTS { MATCH (p:person) WHERE p.age > t.age } RETURN t.name",
+        )
+        .expect("OR-side correlated EXISTS should execute and succeed");
+    // Dave matches via the OR side (age == 20); Alice, Bob and Dave have a
+    // strictly older person; Carol has neither.
+    assert_eq!(result.rows.len(), 3);
+}
+
+/// WITH assignments carry expression-level subqueries through the Project
+/// node.
+#[test]
+fn test_with_assign_exists_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query("MATCH (t:person) WITH EXISTS { MATCH (p:person) } AS x RETURN x")
+        .expect("WITH assignment EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(value, &Value::Bool(true));
+    }
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WITH t.age IN { MATCH (p:person) RETURN p.age } AS x RETURN x",
+        )
+        .expect("WITH assignment IN should execute and succeed");
+    assert_eq!(result.rows.len(), 4);
+    for row in &result.rows {
+        let value = row.values.values().next().expect("one column");
+        assert_eq!(value, &Value::Bool(true));
+    }
+}
+
+/// HAVING (GROUP BY) carries expression-level subqueries through the HAVING
+/// Filter node.
+#[test]
+fn test_having_exists_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) RETURN t.age, count(*) AS c GROUP BY t.age HAVING EXISTS { MATCH (p:person) }",
+        )
+        .expect("HAVING EXISTS should execute and succeed");
+    assert_eq!(result.rows.len(), 4, "every age group is retained");
+}
+
+/// ORDER BY expressions carry expression-level subqueries too — the Sort
+/// host is not wired yet, so they stay rejected at planning time.
+#[test]
+fn test_order_by_exists_rejected_at_planning() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    assert_expression_subquery_rejected(
+        &mut db,
+        "MATCH (t:person) RETURN t.name ORDER BY EXISTS { MATCH (p:person) }",
+    );
+}
+
+/// UNWIND list expressions carry expression-level subqueries too. The UNWIND
+/// pipeline converts through the bound-expression path, whose converter
+/// refuses EXISTS with its own precise planning-time error.
+#[test]
+fn test_unwind_exists_rejected_at_planning() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let err = db
+        .execute_query("UNWIND [EXISTS { MATCH (p:person) }] AS x RETURN x")
+        .expect_err("UNWIND with EXISTS must fail at planning time");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Exists") || msg.contains("cannot be planned"),
+        "UNWIND must be refused at planning time, got: {msg}"
+    );
+}
+
+/// DML value expressions (SET / UPDATE / INSERT / MERGE) carry
+/// expression-level subqueries too.
+#[test]
+fn test_dml_values_rejected_at_planning() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    assert_expression_subquery_rejected(&mut db, "SET 1.age = EXISTS { MATCH (p:person) }");
+    assert_expression_subquery_rejected(&mut db, "UPDATE 1 SET age = EXISTS { MATCH (p:person) }");
+    assert_expression_subquery_rejected(
+        &mut db,
+        "INSERT VERTEX person(name) VALUES 'p9': (EXISTS { MATCH (p:person) })",
+    );
+    assert_expression_subquery_rejected(
+        &mut db,
+        "MERGE (n:person) ON CREATE SET n.name = EXISTS { MATCH (p:person) }",
+    );
+}
+
+/// EXPLAIN surfaces the expression-level subquery count on the hosting
+/// Filter / Project operators (`subquery: N`).
+#[test]
+fn test_explain_shows_expression_subqueries() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let mut joined = |query: &str| {
+        let result = db.execute_query(query).expect("EXPLAIN should succeed");
+        result
+            .rows
+            .iter()
+            .flat_map(|row| row.values.values())
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let where_or = joined(
+        "EXPLAIN MATCH (t:person) WHERE t.age = 30 OR EXISTS { MATCH (p:person) } RETURN t.name",
+    );
+    assert!(
+        where_or.contains("subquery:1"),
+        "expected `subquery: 1` on the residual Filter, got: {}",
+        where_or
+    );
+
+    let ret = joined("EXPLAIN MATCH (t:person) RETURN EXISTS { MATCH (p:person) } AS x");
+    assert!(
+        ret.contains("subquery:1"),
+        "expected `subquery: 1` on the RETURN Project, got: {}",
+        ret
+    );
+
+    let plain = joined("EXPLAIN MATCH (t:person) RETURN t.name");
+    assert!(
+        !plain.contains("subquery:"),
+        "plain plan must not carry subquery annotations, got: {}",
+        plain
+    );
+}
+
+/// Conjunctive WHERE subqueries still plan and execute (P1/P2 regression).
+#[test]
+fn test_conjunctive_where_still_executes() {
+    let mut db = create_test_db();
+    setup_person_graph(&mut db);
+
+    let result = db
+        .execute_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age == 30 } RETURN t.name",
+        )
+        .expect("conjunctive EXISTS must still execute");
+    assert_eq!(result.rows.len(), 4);
+}

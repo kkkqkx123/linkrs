@@ -340,7 +340,7 @@ fn child_rows_of_impl(
 }
 
 // =====================================================================
-// Logical-plan variant (P3: PlanNodeEnum logic/physical separation).
+// Logical-plan variant (PlanNodeEnum logic/physical separation).
 //
 // Mirrors `estimate_node_output_rows` on the pure logical tree, so cost
 // decisions taken on the `LogicalPlan` (e.g. aggregate strategy) share the

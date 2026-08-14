@@ -51,6 +51,9 @@ use super::transaction_scope::TransactionScope;
 pub struct QueryBindings {
     /// Prepared-statement parameter values (name → value map for validation).
     pub parameters: Arc<HashMap<String, Value>>,
+    /// Session variable snapshot (name → value map), captured once per
+    /// statement at the API layer and resolved by `Expression::SessionVariable`.
+    pub session_variables: Arc<HashMap<String, Value>>,
     /// M1.4: slot-indexed parameter frame for hot-path access.
     pub parameter_frame: Option<ParameterFrame>,
     /// Target space name.
@@ -129,6 +132,7 @@ impl QueryBindings {
     ) -> Self {
         Self {
             parameters: context.parameters.clone(),
+            session_variables: context.session_variables.clone(),
             parameter_frame: None,
             space_name: context.space_name.clone(),
             storage: context.storage.clone(),
@@ -394,7 +398,7 @@ impl QueryExecutionInstance {
                     // the loop can correct their row counts.
                     let condition_key = match &operator.spec {
                         super::plan::types::OperatorKindSpec::Unary(
-                            super::operators::spec::UnarySpec::Filter { predicate },
+                            super::operators::spec::UnarySpec::Filter { predicate, .. },
                         ) => Some(crate::query::optimizer::cost::selectivity::condition_key(
                             feedback.space.as_deref(),
                             predicate,

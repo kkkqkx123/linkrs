@@ -34,6 +34,7 @@ pub mod spill;
 pub mod state;
 pub mod stream;
 pub mod stream_result;
+pub mod subquery;
 pub mod transaction_scope;
 
 pub use chunk::{ChunkView, DataChunk, RowPool};

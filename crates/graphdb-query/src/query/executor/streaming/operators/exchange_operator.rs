@@ -13,22 +13,31 @@ use crate::query::executor::streaming::executor::{
     SortDirection, StreamingExecutor, ValueRowContext,
 };
 use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::operators::spec::ExchangeSpec;
 use crate::query::executor::streaming::operators::state::{ExchangeState, MergeInputState};
 use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;
 
+/// Exchange operator.
+///
+/// Wraps [`ExchangeState`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
 #[derive(Debug)]
 pub struct ExchangeOperator {
     pub state: ExchangeState,
     pub(crate) handle: Option<PartitionHandle>,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
 }
 
 impl ExchangeOperator {
-    pub fn from_spec(spec: &ExchangeSpec) -> Self {
+    pub fn from_spec(spec: &ExchangeSpec, output_layout: Arc<SlotLayout>) -> Self {
         let state = match spec {
             ExchangeSpec::Concatenate { .. } => ExchangeState::Concatenate {
                 current_index: 0,
@@ -72,17 +81,33 @@ impl ExchangeOperator {
                 col_names: None,
             },
         };
+        Self::new(state, output_layout)
+    }
+
+    pub fn new(kind: ExchangeState, output_layout: Arc<SlotLayout>) -> Self {
         Self {
-            state,
+            state: kind,
             handle: None,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        children: &mut Vec<StreamingExecutor>,
-    ) -> Result<(), QueryError> {
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn open(&mut self, children: &mut Vec<StreamingExecutor>) -> Result<(), QueryError> {
         match &mut self.state {
             ExchangeState::Concatenate { .. } => {}
             ExchangeState::MergeSort {
@@ -131,12 +156,12 @@ impl ExchangeOperator {
             }
         }
 
-        let runtime = base.runtime.clone();
+        let runtime = self.runtime.clone();
         if let Some(rt) = &runtime {
             let pool = rt.worker_pool.lock().clone();
             if let Some(pool) = pool {
                 if children.len() > 1 && pool.max_workers() > 1 {
-                    let max_buffered = base.chunk_size.clamp(1, 10);
+                    let max_buffered = self.config.chunk_size.clamp(1, 10);
                     let (batch, receivers, error_rx) =
                         PartitionBatch::new(std::mem::take(children), rt.clone(), max_buffered);
                     let batch = Arc::new(batch);
@@ -150,7 +175,6 @@ impl ExchangeOperator {
                     );
                     pool.submit(batch);
                     self.handle = Some(handle);
-                    base.lifecycle.mark_opened();
                     return Ok(());
                 }
             }
@@ -159,23 +183,25 @@ impl ExchangeOperator {
         for child in children.iter_mut() {
             child.open()?;
         }
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         children: &mut [StreamingExecutor],
     ) -> Result<Option<DataChunk>, QueryError> {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = self.runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         match &mut self.state {
             ExchangeState::Concatenate {
                 current_index,
                 col_names,
             } => {
                 while *current_index < input_count(children, &self.handle) {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(chunk) = advance_input(children, &mut self.handle, *current_index)?
                     {
                         if chunk.is_empty() {
@@ -184,7 +210,7 @@ impl ExchangeOperator {
                         validate_schema(*current_index, &chunk, col_names)?;
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                     *current_index += 1;
@@ -205,12 +231,14 @@ impl ExchangeOperator {
 
                 let mut result_rows = Vec::with_capacity(CHUNK_SIZE);
                 while result_rows.len() < CHUNK_SIZE {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if limit.is_some_and(|value| *emitted >= value) {
                         break;
                     }
                     match next_merge_row(
-                        base,
+                        &self.runtime,
                         children,
                         &mut self.handle,
                         sort_expressions,
@@ -231,7 +259,7 @@ impl ExchangeOperator {
                 } else {
                     Ok(Some(DataChunk::new_with_layout(
                         result_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )))
                 }
             }
@@ -253,13 +281,15 @@ impl ExchangeOperator {
                         buckets,
                         hash_expressions,
                         col_names,
-                        base,
+                        &self.runtime,
                     )?;
                 }
 
                 // Phase 2: emit rows bucket by bucket.
                 while *current_bucket < *num_partitions {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if *current_row < buckets[*current_bucket].len() {
                         let mut result_rows = Vec::with_capacity(CHUNK_SIZE);
                         while *current_row < buckets[*current_bucket].len()
@@ -270,7 +300,7 @@ impl ExchangeOperator {
                         }
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                     *current_bucket += 1;
@@ -290,7 +320,9 @@ impl ExchangeOperator {
                     let count = input_count(children, &self.handle);
                     for i in 0..count {
                         loop {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
                             match advance_input(children, &mut self.handle, i)? {
                                 Some(chunk) if !chunk.is_empty() => buffered_chunks.push(chunk),
                                 Some(_) => continue,
@@ -307,7 +339,9 @@ impl ExchangeOperator {
                 // Phase 2: emit rows for the current consumer.
                 let mut result_rows = Vec::with_capacity(CHUNK_SIZE);
                 while *chunk_index < buffered_chunks.len() && result_rows.len() < CHUNK_SIZE {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     let chunk = &buffered_chunks[*chunk_index];
                     while *row_index < chunk.rows.len() && result_rows.len() < CHUNK_SIZE {
                         result_rows.push(chunk.rows[*row_index].clone());
@@ -323,7 +357,7 @@ impl ExchangeOperator {
                     return Ok(None);
                 }
                 let result =
-                    DataChunk::new_with_layout(result_rows, Arc::clone(&base.output_layout));
+                    DataChunk::new_with_layout(result_rows, Arc::clone(&self.output_layout));
 
                 // Advance consumer. When all consumers have been served, reset
                 // chunk tracking so the next consumer starts from the beginning.
@@ -343,7 +377,9 @@ impl ExchangeOperator {
                     let mut all_rows = Vec::new();
                     let mut col_names: Option<Vec<String>> = None;
                     loop {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         match advance_input(children, &mut self.handle, 0)? {
                             Some(mut chunk) => {
                                 chunk.materialize_selection_by("Exchange");
@@ -361,7 +397,7 @@ impl ExchangeOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         all_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
                 Ok(None)
@@ -376,7 +412,9 @@ impl ExchangeOperator {
                     let count = input_count(children, &self.handle);
                     for i in 0..count {
                         loop {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
                             match advance_input(children, &mut self.handle, i)? {
                                 Some(mut chunk) => {
                                     chunk.materialize_selection_by("Exchange");
@@ -403,34 +441,24 @@ impl ExchangeOperator {
 
                 Ok(Some(DataChunk::new_with_layout(
                     result_rows,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&self.output_layout),
                 )))
             }
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _children: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             return handle.stop_and_join();
         }
-        base.lifecycle.mark_stopped();
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _children: &mut [StreamingExecutor],
-    ) -> Result<(), QueryError> {
+    pub fn close(&mut self) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             let _ = handle.stop_and_join();
             self.handle = None;
         }
-        base.lifecycle.mark_closed();
         Ok(())
     }
 }
@@ -446,12 +474,14 @@ fn drain_and_partition(
     buckets: &mut [Vec<Vec<Value>>],
     hash_expressions: &[Expression],
     col_names: &mut Option<Vec<String>>,
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
 ) -> Result<(), QueryError> {
     let count = input_count(children, handle);
     for i in 0..count {
         loop {
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             match advance_input(children, handle, i)? {
                 Some(mut chunk) => {
                     chunk.materialize_selection_by("Exchange");
@@ -515,7 +545,7 @@ fn advance_input(
 }
 
 fn next_merge_row(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
     children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
     sort_expressions: &[Expression],
@@ -526,7 +556,9 @@ fn next_merge_row(
     let mut best_child = None;
 
     for index in 0..input_count(children, handle) {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         fill_input(index, children, handle, inputs, col_names)?;
         let MergeInputState::Buffered { chunk, row_index } = &inputs[index] else {
             continue;
@@ -675,28 +707,36 @@ fn validate_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
 
     fn source(values: &[i64], column: &str) -> StreamingExecutor {
         let layout = Arc::new(SlotLayout::from_names(&[column.to_string()]));
         StreamingExecutor::Source(
-            OperatorBase::new(1).with_output_layout(layout),
-            SourceOperator::ScanVertices {
-                buffer: values.iter().map(|v| vec![Value::BigInt(*v)]).collect(),
-                current_index: 0,
-                col_names: vec![column.to_string()],
-            },
+            OperatorBase::new(1).with_output_layout(layout.clone()),
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: values.iter().map(|v| vec![Value::BigInt(*v)]).collect(),
+                    current_index: 0,
+                    col_names: vec![column.to_string()],
+                },
+                layout,
+            ),
         )
     }
 
     #[test]
     fn test_repartition_hash_partitions_rows_by_hash() {
-        let _op = ExchangeOperator::from_spec(&ExchangeSpec::RepartitionHash {
-            num_partitions: 3,
-            hash_expressions: vec![Expression::Variable("value".to_string())],
-            input_layout: None,
-            output_layout: None,
-        });
+        let _op = ExchangeOperator::from_spec(
+            &ExchangeSpec::RepartitionHash {
+                num_partitions: 3,
+                hash_expressions: vec![Expression::Variable("value".to_string())],
+                input_layout: None,
+                output_layout: None,
+            },
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
 
         // Manually test the partition logic
         let col_names = vec!["value".to_string()];
@@ -725,7 +765,10 @@ mod tests {
 
     #[test]
     fn test_broadcast_state_from_spec() {
-        let op = ExchangeOperator::from_spec(&ExchangeSpec::Broadcast { num_consumers: 4 });
+        let op = ExchangeOperator::from_spec(
+            &ExchangeSpec::Broadcast { num_consumers: 4 },
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         match op.state {
             ExchangeState::Broadcast {
                 num_consumers,
@@ -743,7 +786,10 @@ mod tests {
 
     #[test]
     fn test_barrier_state_from_spec() {
-        let op = ExchangeOperator::from_spec(&ExchangeSpec::Barrier);
+        let op = ExchangeOperator::from_spec(
+            &ExchangeSpec::Barrier,
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         match op.state {
             ExchangeState::Barrier { passed } => {
                 assert!(!passed);
@@ -754,7 +800,10 @@ mod tests {
 
     #[test]
     fn test_materialize_state_from_spec() {
-        let op = ExchangeOperator::from_spec(&ExchangeSpec::Materialize { child_count: 2 });
+        let op = ExchangeOperator::from_spec(
+            &ExchangeSpec::Materialize { child_count: 2 },
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         match op.state {
             ExchangeState::Materialize { rows, position, .. } => {
                 assert!(rows.is_empty());
@@ -768,18 +817,21 @@ mod tests {
     fn test_merge_sort_honors_limit() {
         let mut children = vec![source(&[1, 3], "value"), source(&[2, 4], "value")];
 
-        let mut base = OperatorBase::new(10);
-        let mut op = ExchangeOperator::from_spec(&ExchangeSpec::MergeSort {
-            sort_expressions: vec![Expression::Variable("value".to_string())],
-            sort_directions: vec![SortDirection::Ascending],
-            limit: Some(3),
-        });
+        let layout = Arc::new(SlotLayout::new(Vec::new()));
+        let mut op = ExchangeOperator::from_spec(
+            &ExchangeSpec::MergeSort {
+                sort_expressions: vec![Expression::Variable("value".to_string())],
+                sort_directions: vec![SortDirection::Ascending],
+                limit: Some(3),
+            },
+            layout,
+        );
 
         // Open exchange operator (initializes merge state) and children.
-        op.open(&mut base, &mut children).unwrap();
+        op.open(&mut children).unwrap();
 
         let mut all_values = Vec::new();
-        while let Some(chunk) = op.next(&mut base, &mut children).unwrap() {
+        while let Some(chunk) = op.next(&mut children).unwrap() {
             for row in chunk.rows {
                 if let Some(Value::BigInt(v)) = row.first() {
                     all_values.push(*v);
@@ -787,7 +839,7 @@ mod tests {
             }
         }
 
-        op.close(&mut base, &mut children).unwrap();
+        op.close().unwrap();
         assert_eq!(all_values, vec![1, 2, 3]);
     }
 }

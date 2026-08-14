@@ -21,6 +21,7 @@ use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwi
 use crate::query::planning::plan::PlanNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 
 /// UNWIND statement planner
@@ -130,9 +131,36 @@ impl Planner for UnwindPlanner {
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
         let (expression, variable, return_columns) = self.extract_unwind_info(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in the
+        // UNWIND list expression (or its RETURN projection) are rejected at
+        // planning time with a precise error.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        if let Some(expr_meta) = expression.expression() {
+            exists_planner::check_expression_subqueries(
+                expr_meta.inner(),
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+            )?;
+        }
+        if let Some(columns) = &return_columns {
+            for col in columns {
+                if let Some(expr_meta) = col.expression.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        space_id,
+                        &space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        }
 
         let arg_node = ArgumentNode::new(next_node_id(), "unwind_input");
 

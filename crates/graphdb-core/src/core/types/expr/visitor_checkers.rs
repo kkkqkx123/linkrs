@@ -761,6 +761,7 @@ impl WildcardReplacer {
                     .collect(),
             ),
             Expression::Parameter(name) => Expression::Parameter(name.clone()),
+            Expression::SessionVariable(name) => Expression::SessionVariable(name.clone()),
             Expression::Vector(data) => Expression::Vector(data.clone()),
             Expression::Exists { body } => Expression::Exists { body: body.clone() },
             Expression::In {

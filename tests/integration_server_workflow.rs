@@ -314,6 +314,7 @@ fn test_complete_storage_to_query_workflow() {
         auto_commit: true,
         transaction_id: None,
         parameters: None,
+        session_variables: None,
         query_id: None,
     };
 

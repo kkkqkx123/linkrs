@@ -375,7 +375,9 @@ mod tests {
     use crate::query::executor::streaming::executor::StreamingExecutor;
     use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::query::executor::streaming::runtime::QueryIdentity;
+    use crate::query::executor::streaming::slot::SlotLayout;
 
     fn create_test_stream(count: usize) -> StreamingQueryResult {
         let mut engine = StreamingExecutionEngine::new();
@@ -394,11 +396,14 @@ mod tests {
 
         let scan = StreamingExecutor::Source(
             OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer,
-                current_index: 0,
-                col_names: vec!["id".to_string()],
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer,
+                    current_index: 0,
+                    col_names: vec!["id".to_string()],
+                },
+                Arc::new(SlotLayout::from_names(&["id".to_string()])),
+            ),
         );
         engine.register_executor(0, scan);
         let stream = engine.into_stream().unwrap();

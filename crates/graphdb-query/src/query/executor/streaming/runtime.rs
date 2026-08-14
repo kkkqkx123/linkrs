@@ -9,7 +9,6 @@ use parking_lot::RwLock;
 
 use super::plan::types::PhysicalOperatorId;
 use super::query_registry::{CancelToken, QueryId, QueryRegistry};
-use super::slot::SlotLayout;
 use super::spill::SpillManager;
 use super::state::StateArenaSet;
 use super::transaction_scope::{CancelReason, SessionTransactionController, TransactionScope};
@@ -711,16 +710,14 @@ pub struct ExecutionRuntime {
     /// stored in [`OperatorBase::physical_operator_id`](super::operators::base::OperatorBase).
     pub state_arenas: Vec<Mutex<StateArenaSet>>,
 
-    /// Correlation frame for [`Argument`](super::operators::source_operator::SourceOperator::Argument)
-    /// sources inside Apply right subtrees.
-    ///
-    /// `Apply` sets this before pulling from its right child; `Argument`
-    /// reads the current row and layout to produce output.
-    correlation_frame: Mutex<Option<(Arc<SlotLayout>, Vec<Value>)>>,
-
     /// Runtime parameter name→value map, bound at materialization time.
     /// Operators read this to resolve `Expression::Parameter` references.
     pub parameter_values: Option<Arc<HashMap<String, Value>>>,
+
+    /// Runtime session variable name→value snapshot, bound at materialization
+    /// time. Operators read this to resolve `Expression::SessionVariable`
+    /// references.
+    pub session_variable_values: Option<Arc<HashMap<String, Value>>>,
 
     /// Per-query bumpalo arena for executor temporary allocations.
     pub arena: Option<Arc<Mutex<Arena>>>,
@@ -777,8 +774,8 @@ impl ExecutionRuntime {
             #[cfg(feature = "qdrant")]
             vector_coordinator,
             state_arenas: vec![Mutex::new(StateArenaSet::new())],
-            correlation_frame: Mutex::new(None),
             parameter_values: None,
+            session_variable_values: None,
             arena: Some(Arc::new(Mutex::new(Arena::new()))),
             columnar_stats: Arc::new(ColumnarStats::new()),
             columnar_policy: None,
@@ -878,6 +875,16 @@ impl ExecutionRuntime {
     /// Return the parameter name→value map, if bound.
     pub fn parameter_values(&self) -> Option<Arc<HashMap<String, Value>>> {
         self.parameter_values.clone()
+    }
+
+    /// Set the session variable snapshot for this execution instance.
+    pub fn set_session_variable_values(&mut self, values: Arc<HashMap<String, Value>>) {
+        self.session_variable_values = Some(values);
+    }
+
+    /// Return the session variable snapshot, if bound.
+    pub fn session_variable_values(&self) -> Option<Arc<HashMap<String, Value>>> {
+        self.session_variable_values.clone()
     }
 
     /// Set the transaction scope for this execution.
@@ -1136,27 +1143,6 @@ impl ExecutionRuntime {
     pub fn set_max_buffered_chunks(&self, chunks: usize) {
         self.max_buffered_chunks
             .store(chunks.max(1), Ordering::Relaxed);
-    }
-
-    // ── Correlation frame (for Argument / Apply) ──
-
-    /// Set the correlation row that [`Argument`] sources will read.
-    ///
-    /// Called by `ApplyOperator` before pulling from the right subtree.
-    pub fn set_correlation_frame(&self, layout: Arc<SlotLayout>, row: Vec<Value>) {
-        *self.correlation_frame.lock() = Some((layout, row));
-    }
-
-    /// Take the current correlation frame, if any.
-    ///
-    /// Called by `SourceOperator::Argument` on each `next()` call.
-    pub fn take_correlation_frame(&self) -> Option<(Arc<SlotLayout>, Vec<Value>)> {
-        self.correlation_frame.lock().take()
-    }
-
-    /// Clear the correlation frame (used after right subtree evaluation).
-    pub fn clear_correlation_frame(&self) {
-        *self.correlation_frame.lock() = None;
     }
 }
 

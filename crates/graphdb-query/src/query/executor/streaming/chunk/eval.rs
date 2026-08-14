@@ -10,8 +10,8 @@ use crate::query::executor::expression::ExpressionError;
 use crate::query::executor::streaming::chunk::core::DataChunk;
 use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::slot::SlotId;
+use crate::query::executor::streaming::subquery::EvalEnv;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::typed::{
     typed_binary_batch, typed_cast_batch, typed_column_batch, typed_literal_batch,
@@ -24,7 +24,7 @@ impl DataChunk {
     pub fn evaluate_expressions(
         &mut self,
         expressions: &[Expression],
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<Vec<Vec<Value>>, ExpressionError> {
         if self.rows.is_empty() {
             return Ok(vec![Vec::new(); expressions.len()]);
@@ -68,7 +68,7 @@ impl DataChunk {
         }
         let mut results = Vec::with_capacity(expressions.len());
         for expr in expressions {
-            results.push(self.evaluate_expression(expr, params)?);
+            results.push(self.evaluate_expression(expr, env)?);
         }
         Ok(results)
     }
@@ -76,12 +76,12 @@ impl DataChunk {
     pub fn evaluate_expression(
         &mut self,
         expression: &Expression,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<Vec<Value>, ExpressionError> {
         if self.rows.is_empty() {
             return Ok(Vec::new());
         }
-        if let Ok((result, typed_hit)) = self.try_evaluate_columnar(expression, params) {
+        if let Ok((result, typed_hit)) = self.try_evaluate_columnar(expression, env) {
             self.count_columnar(true);
             if typed_hit {
                 self.count_typed_hit();
@@ -95,16 +95,16 @@ impl DataChunk {
              columnar path but fell back to per-row evaluation",
             expression
         );
-        self.evaluate_expression_per_row(expression, params)
+        self.evaluate_expression_per_row(expression, env)
     }
 
     pub fn evaluate_expression_visible(
         &mut self,
         expression: &Expression,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<Vec<Value>, ExpressionError> {
         let Some(sel) = self.selection().map(|s| s.to_vec()) else {
-            return self.evaluate_expression(expression, params);
+            return self.evaluate_expression(expression, env);
         };
         let slot: Option<SlotId> = match expression {
             Expression::Variable(name) => self.layout.slot_id(name),
@@ -135,8 +135,8 @@ impl DataChunk {
         let mut out = Vec::with_capacity(sel.len());
         for &i in &sel {
             let row = &self.rows[i];
-            let mut ctx = match params {
-                Some(p) => BorrowedRowContext::with_parameters(row, layout.clone(), p.clone()),
+            let mut ctx = match env {
+                Some(env) => BorrowedRowContext::with_env(row, layout.clone(), env),
                 None => BorrowedRowContext::new(row, layout.clone()),
             };
             out.push(ExpressionEvaluator::evaluate(expression, &mut ctx)?);
@@ -149,12 +149,12 @@ impl DataChunk {
     fn try_evaluate_columnar(
         &mut self,
         expression: &Expression,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<(Vec<Value>, bool), ExpressionError> {
         let mut col_cache: HashMap<String, Vec<Value>> = HashMap::new();
         self.collect_variables(expression, &mut col_cache);
         let mut typed_hit = false;
-        let result = self.eval_with_cache(expression, &col_cache, params, &mut typed_hit)?;
+        let result = self.eval_with_cache(expression, &col_cache, env, &mut typed_hit)?;
         Ok((result, typed_hit))
     }
 
@@ -191,10 +191,10 @@ impl DataChunk {
         &mut self,
         expression: &Expression,
         col_cache: &HashMap<String, Vec<Value>>,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
         typed_used: &mut bool,
     ) -> Result<Vec<Value>, ExpressionError> {
-        if let Some(batch) = self.try_eval_typed_batch(expression, params)? {
+        if let Some(batch) = self.try_eval_typed_batch(expression, env)? {
             *typed_used = true;
             return Ok(batch.into_values());
         }
@@ -214,14 +214,15 @@ impl DataChunk {
             }
 
             Expression::Parameter(name) => {
-                let val = params
+                let val = env
+                    .and_then(|env| env.params.as_ref())
                     .and_then(|p| p.get(name).cloned())
                     .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
                 Ok(vec![val; self.rows.len()])
             }
 
             Expression::Unary { op, operand } => {
-                let values = self.eval_with_cache(operand, col_cache, params, typed_used)?;
+                let values = self.eval_with_cache(operand, col_cache, env, typed_used)?;
                 values
                     .into_iter()
                     .map(|v| UnaryOperationEvaluator::evaluate(op, &v))
@@ -229,8 +230,8 @@ impl DataChunk {
             }
 
             Expression::Binary { left, op, right } => {
-                let left_values = self.eval_with_cache(left, col_cache, params, typed_used)?;
-                let right_values = self.eval_with_cache(right, col_cache, params, typed_used)?;
+                let left_values = self.eval_with_cache(left, col_cache, env, typed_used)?;
+                let right_values = self.eval_with_cache(right, col_cache, env, typed_used)?;
                 left_values
                     .into_iter()
                     .zip(right_values)
@@ -242,7 +243,7 @@ impl DataChunk {
                 expression,
                 target_type,
             } => {
-                let values = self.eval_with_cache(expression, col_cache, params, typed_used)?;
+                let values = self.eval_with_cache(expression, col_cache, env, typed_used)?;
                 values
                     .into_iter()
                     .map(|v| ExpressionEvaluator::eval_type_cast(&v, target_type))
@@ -275,13 +276,13 @@ impl DataChunk {
     fn evaluate_expression_per_row(
         &self,
         expression: &Expression,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<Vec<Value>, ExpressionError> {
         let layout = self.get_layout();
         let mut results = Vec::with_capacity(self.rows.len());
         for row in &self.rows {
-            let mut ctx = match params {
-                Some(p) => BorrowedRowContext::with_parameters(row, layout.clone(), p.clone()),
+            let mut ctx = match env {
+                Some(env) => BorrowedRowContext::with_env(row, layout.clone(), env),
                 None => BorrowedRowContext::new(row, layout.clone()),
             };
             results.push(ExpressionEvaluator::evaluate(expression, &mut ctx)?);
@@ -294,12 +295,13 @@ impl DataChunk {
     fn try_eval_typed_batch(
         &mut self,
         expression: &Expression,
-        params: Option<&Arc<HashMap<String, Value>>>,
+        env: Option<&EvalEnv>,
     ) -> Result<Option<TypedBatch>, ExpressionError> {
         match expression {
             Expression::Literal(v) => Ok(typed_literal_batch(v, self.rows.len())),
             Expression::Parameter(name) => {
-                let val = params
+                let val = env
+                    .and_then(|env| env.params.as_ref())
                     .and_then(|p| p.get(name).cloned())
                     .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
                 Ok(typed_literal_batch(&val, self.rows.len()))
@@ -327,16 +329,16 @@ impl DataChunk {
                 Ok(self.typed_column(slot).and_then(typed_column_batch))
             }
             Expression::Unary { op, operand } => {
-                let Some(batch) = self.try_eval_typed_batch(operand, params)? else {
+                let Some(batch) = self.try_eval_typed_batch(operand, env)? else {
                     return Ok(None);
                 };
                 Ok(typed_unary_batch(op, batch))
             }
             Expression::Binary { left, op, right } => {
-                let Some(left_batch) = self.try_eval_typed_batch(left, params)? else {
+                let Some(left_batch) = self.try_eval_typed_batch(left, env)? else {
                     return Ok(None);
                 };
-                let Some(right_batch) = self.try_eval_typed_batch(right, params)? else {
+                let Some(right_batch) = self.try_eval_typed_batch(right, env)? else {
                     return Ok(None);
                 };
                 Ok(typed_binary_batch(op, &left_batch, &right_batch))
@@ -345,7 +347,7 @@ impl DataChunk {
                 expression,
                 target_type,
             } => {
-                let Some(batch) = self.try_eval_typed_batch(expression, params)? else {
+                let Some(batch) = self.try_eval_typed_batch(expression, env)? else {
                     return Ok(None);
                 };
                 Ok(typed_cast_batch(batch, target_type))

@@ -6,6 +6,7 @@ use crate::core::types::expr::contextual::ContextualExpression;
 use crate::define_plan_node_with_deps;
 use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
+use crate::query::planning::statements::clauses::exists_planner::PlannedSubquery;
 
 define_plan_node_with_deps! {
     pub struct UnionNode {
@@ -142,6 +143,9 @@ impl DataCollectNode {
 define_plan_node_with_deps! {
     pub struct AssignNode {
         assignments: Vec<(String, ContextualExpression)>,
+        // Expression-level EXISTS / IN subqueries compiled for this assign
+        // Pre-execution only; never serialized.
+        subqueries: Vec<PlannedSubquery>,
     }
     enum: Assign
     input: SingleInputNode
@@ -159,6 +163,7 @@ impl AssignNode {
             input: Some(Box::new(input.clone())),
             deps: vec![input],
             assignments,
+            subqueries: Vec::new(),
             output_var: None,
             col_names,
             column_types: vec![],
@@ -167,6 +172,17 @@ impl AssignNode {
 
     pub fn assignments(&self) -> &[(String, ContextualExpression)] {
         &self.assignments
+    }
+
+    /// Attach expression-level subqueries to this assign.
+    pub fn with_subqueries(mut self, subqueries: Vec<PlannedSubquery>) -> Self {
+        self.subqueries = subqueries;
+        self
+    }
+
+    /// Expression-level subqueries compiled for this assign.
+    pub fn subqueries(&self) -> &[PlannedSubquery] {
+        &self.subqueries
     }
 }
 

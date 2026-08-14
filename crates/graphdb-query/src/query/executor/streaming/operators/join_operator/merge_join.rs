@@ -8,37 +8,63 @@ use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::FullOuterJoinPhase;
+use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorLifecycle;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 
-use super::{build_combined_names, close_common, JoinCtx};
+use super::build_combined_names;
+
+/// Drain the right child into the build side for the symmetric inner/left
+/// merge joins. `build_done` mirrors the design rename of the legacy
+/// `left_consumed` flag: the phase it guards is the build phase.
+fn drain_build_side(
+    build_side_tuples: &mut Vec<Vec<Value>>,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    build_done: &mut bool,
+) -> Result<(), QueryError> {
+    let mut captured_right_names = Vec::new();
+    while let Some(mut chunk) = right.advance()? {
+        chunk.materialize_selection_by("MergeJoin");
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
+        if captured_right_names.is_empty() {
+            captured_right_names = chunk.col_names();
+        }
+        for row in chunk.rows {
+            memory_tracker.try_reserve_row(&row)?;
+            build_side_tuples.push(row);
+        }
+    }
+    *right_col_names = captured_right_names;
+    *build_done = true;
+    Ok(())
+}
 
 pub(super) fn next_inner_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
-    left_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    build_done: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
-    if !*left_consumed {
-        let mut captured_right_names = Vec::new();
-        while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection_by("MergeJoin");
-            base.ensure_not_cancelled()?;
-            if captured_right_names.is_empty() {
-                captured_right_names = chunk.col_names();
-            }
-            for row in chunk.rows {
-                memory_tracker.try_reserve_row(&row)?;
-                build_side_tuples.push(row);
-            }
-        }
-        *right_col_names = captured_right_names;
-        *left_consumed = true;
+    if !*build_done {
+        drain_build_side(
+            build_side_tuples,
+            memory_tracker,
+            right_col_names,
+            right,
+            runtime,
+            build_done,
+        )?;
     }
 
     while let Some(mut left_chunk) = left.advance()? {
@@ -73,7 +99,7 @@ pub(super) fn next_inner_join(
         if !result_rows.is_empty() {
             return Ok(Some(DataChunk::new_with_layout(
                 result_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(output_layout),
             )));
         }
     }
@@ -84,29 +110,23 @@ pub(super) fn next_inner_join(
 pub(super) fn next_left_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
-    left_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    build_done: &mut bool,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
-    if !*left_consumed {
-        let mut captured_right_names = Vec::new();
-        while let Some(mut chunk) = right.advance()? {
-            chunk.materialize_selection_by("MergeJoin");
-            base.ensure_not_cancelled()?;
-            if captured_right_names.is_empty() {
-                captured_right_names = chunk.col_names();
-            }
-            for row in chunk.rows {
-                memory_tracker.try_reserve_row(&row)?;
-                build_side_tuples.push(row);
-            }
-        }
-        *right_col_names = captured_right_names;
-        *left_consumed = true;
+    if !*build_done {
+        drain_build_side(
+            build_side_tuples,
+            memory_tracker,
+            right_col_names,
+            right,
+            runtime,
+            build_done,
+        )?;
     }
 
     while let Some(mut left_chunk) = left.advance()? {
@@ -141,16 +161,16 @@ pub(super) fn next_left_join(
 
             if !matched {
                 let mut unmatched_row = left_row.clone();
-                let right_width = base
-                    .output_layout
-                    .len()
-                    .checked_sub(left_row.len())
-                    .ok_or_else(|| {
-                        QueryError::execution(
-                            "LeftJoin planned output layout is narrower than its left input"
-                                .to_string(),
-                        )
-                    })?;
+                let right_width =
+                    output_layout
+                        .len()
+                        .checked_sub(left_row.len())
+                        .ok_or_else(|| {
+                            QueryError::execution(
+                                "LeftJoin planned output layout is narrower than its left input"
+                                    .to_string(),
+                            )
+                        })?;
                 for _ in 0..right_width {
                     unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                 }
@@ -163,7 +183,7 @@ pub(super) fn next_left_join(
         }
         return Ok(Some(DataChunk::new_with_layout(
             result_rows,
-            Arc::clone(&base.output_layout),
+            Arc::clone(output_layout),
         )));
     }
     Ok(None)
@@ -173,18 +193,20 @@ pub(super) fn next_right_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
     right_consumed: &mut bool,
-    ctx: &mut JoinCtx,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
     if !*right_consumed {
         let mut captured_left_names = Vec::new();
         while let Some(mut chunk) = left.advance()? {
             chunk.materialize_selection_by("MergeJoin");
-            base.ensure_not_cancelled()?;
+            if let Some(rt) = runtime.as_ref() {
+                rt.ensure_not_cancelled()?;
+            }
             if captured_left_names.is_empty() {
                 captured_left_names = chunk.col_names();
             }
@@ -229,8 +251,7 @@ pub(super) fn next_right_join(
 
             if !matched {
                 let mut unmatched_row = Vec::new();
-                let left_width = base
-                    .output_layout
+                let left_width = output_layout
                     .len()
                     .checked_sub(right_row.len())
                     .ok_or_else(|| {
@@ -252,7 +273,7 @@ pub(super) fn next_right_join(
         }
         return Ok(Some(DataChunk::new_with_layout(
             result_rows,
-            Arc::clone(&base.output_layout),
+            Arc::clone(output_layout),
         )));
     }
     Ok(None)
@@ -265,20 +286,22 @@ pub(super) fn next_full_outer_join(
     matched_right_indices: &mut HashSet<usize>,
     result_iter: &mut Option<std::vec::IntoIter<Vec<Value>>>,
     phase: &mut FullOuterJoinPhase,
-    ctx: &mut JoinCtx,
+    memory_tracker: &mut MemoryTracker,
+    right_col_names: &mut Vec<String>,
+    left: &mut StreamingExecutor,
+    right: &mut StreamingExecutor,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let memory_tracker = &mut *ctx.memory_tracker;
-    let right_col_names = &mut *ctx.right_col_names;
-    let base = &mut *ctx.base;
-    let left = &mut *ctx.left;
-    let right = &mut *ctx.right;
     loop {
         match phase {
             FullOuterJoinPhase::BuildingRight => {
                 let mut captured_right_names = Vec::new();
                 while let Some(mut chunk) = left.advance()? {
                     chunk.materialize_selection_by("MergeJoin");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -286,7 +309,9 @@ pub(super) fn next_full_outer_join(
                 }
                 while let Some(mut chunk) = right.advance()? {
                     chunk.materialize_selection_by("MergeJoin");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if captured_right_names.is_empty() {
                         captured_right_names = chunk.col_names();
                     }
@@ -303,7 +328,9 @@ pub(super) fn next_full_outer_join(
                 let mut all_results = Vec::new();
 
                 for left_row in left_rows.iter() {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     let mut matched = false;
                     for (right_idx, right_row) in right_rows.iter().enumerate() {
                         let condition_satisfied = if let Some(condition) = join_condition {
@@ -337,12 +364,15 @@ pub(super) fn next_full_outer_join(
 
                     if !matched {
                         let mut unmatched_row = left_row.clone();
-                        let right_width = base.output_layout.len().checked_sub(left_row.len()).ok_or_else(|| {
-                            QueryError::execution(
-                                "FullOuterJoin planned output layout is narrower than its left input"
-                                    .to_string(),
-                            )
-                        })?;
+                        let right_width = output_layout
+                            .len()
+                            .checked_sub(left_row.len())
+                            .ok_or_else(|| {
+                                QueryError::execution(
+                                    "FullOuterJoin planned output layout is narrower than its left input"
+                                        .to_string(),
+                                )
+                            })?;
                         for _ in 0..right_width {
                             unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                         }
@@ -357,7 +387,7 @@ pub(super) fn next_full_outer_join(
                         *result_iter = Some(rows.into_iter());
                         return Ok(Some(DataChunk::new_with_layout(
                             result_iter.as_mut().unwrap().collect::<Vec<_>>(),
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 }
@@ -369,7 +399,7 @@ pub(super) fn next_full_outer_join(
                     if !rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                     *result_iter = None;
@@ -379,12 +409,15 @@ pub(super) fn next_full_outer_join(
                 for (right_idx, right_row) in right_rows.iter().enumerate() {
                     if !matched_right_indices.contains(&right_idx) {
                         let mut row = Vec::new();
-                        let left_width = base.output_layout.len().checked_sub(right_row.len()).ok_or_else(|| {
-                            QueryError::execution(
-                                "FullOuterJoin planned output layout is narrower than its right input"
-                                    .to_string(),
-                            )
-                        })?;
+                        let left_width = output_layout
+                            .len()
+                            .checked_sub(right_row.len())
+                            .ok_or_else(|| {
+                                QueryError::execution(
+                                    "FullOuterJoin planned output layout is narrower than its right input"
+                                        .to_string(),
+                                )
+                            })?;
                         for _ in 0..left_width {
                             row.push(Value::Null(crate::core::value::NullType::Null));
                         }
@@ -398,7 +431,7 @@ pub(super) fn next_full_outer_join(
                 }
                 return Ok(Some(DataChunk::new_with_layout(
                     unmatched,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(output_layout),
                 )));
             }
         }
@@ -406,13 +439,12 @@ pub(super) fn next_full_outer_join(
 }
 
 pub(super) fn close_full_outer(
-    lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     left_rows: &mut Vec<Vec<Value>>,
     right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        left_rows.clear();
-        right_rows.clear();
-    })
+    memory_tracker.reset();
+    left_rows.clear();
+    right_rows.clear();
+    Ok(())
 }

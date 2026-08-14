@@ -12,6 +12,7 @@ use crate::query::planning::plan::core::nodes::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -172,6 +173,7 @@ impl GroupByPlanner {
             | Expression::TagProperty { .. }
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
+            | Expression::SessionVariable(_)
             | Expression::Vector(_)
             | Expression::Exists { .. }
             | Expression::In { .. }
@@ -203,6 +205,44 @@ impl Planner for GroupByPlanner {
             .iter()
             .map(|item| item.to_expression_string())
             .collect();
+
+        // Unified entry for expression-level EXISTS / IN. GROUP BY yield
+        // expressions run inside the blocking aggregate operator (no subquery
+        // executor yet), so they are refused at planning time with a precise
+        // error; HAVING subqueries are compiled here and attached to the
+        // HAVING Filter node.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names = group_keys.clone();
+        for item in &group_by_stmt.yield_clause.items {
+            if let Some(expr_meta) = item.expression.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        let mut having_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let having_clause = group_by_stmt.having_clause.clone().map(|mut expr| {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut expr,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut exists_planner::SubqueryIdAllocator::new(),
+            )?;
+            having_subqueries = subqueries;
+            Ok::<_, PlannerError>(expr)
+        });
+        let having_clause = match having_clause {
+            Some(Ok(expr)) => Some(expr),
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
 
         // Extract the aggregate functions with distinct flags and filters
         let mut aggregation_functions = Vec::new();
@@ -296,14 +336,15 @@ impl Planner for GroupByPlanner {
         let mut final_node = PlanNodeEnum::Aggregate(aggregate_node);
 
         // If there is a HAVING clause, add a FilterNode.
-        if let Some(ref having_expr) = group_by_stmt.having_clause {
-            let filter_node =
-                FilterNode::new(final_node.clone(), having_expr.clone()).map_err(|e| {
+        if let Some(having_expr) = having_clause {
+            let filter_node = FilterNode::new(final_node.clone(), having_expr.clone())
+                .map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!(
                         "Failed to create FilterNode: {}",
                         e
                     ))
-                })?;
+                })?
+                .with_subqueries(having_subqueries);
             final_node = PlanNodeEnum::Filter(filter_node);
         }
 

@@ -134,6 +134,11 @@ impl Expression {
         matches!(self, Expression::Parameter(_))
     }
 
+    /// Checks if it is a session variable expression
+    pub fn is_session_variable(&self) -> bool {
+        matches!(self, Expression::SessionVariable(_))
+    }
+
     /// Get the parameter name (if it is a parameter)
     pub fn as_parameter(&self) -> Option<&str> {
         match self {
@@ -226,6 +231,14 @@ impl Expression {
     pub fn as_parameter_name(&self) -> Option<String> {
         match self {
             Expression::Parameter(name) => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get the session variable name (if it is a session variable expression)
+    pub fn as_session_variable_name(&self) -> Option<String> {
+        match self {
+            Expression::SessionVariable(name) => Some(name.clone()),
             _ => None,
         }
     }

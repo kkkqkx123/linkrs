@@ -27,6 +27,7 @@ use crate::query::planning::plan::logical::logical_nodes::operation::{
 use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
@@ -135,11 +136,11 @@ impl ClausePlanner for ReturnClausePlanner {
 
     fn transform_clause(
         &self,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
         stmt: &Stmt,
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
-        let yield_columns = extract_return_columns(stmt)?;
+        let mut yield_columns = extract_return_columns(stmt)?;
 
         let input_node = input_plan.root().as_ref().ok_or_else(|| {
             PlannerError::PlanGenerationFailed(
@@ -147,6 +148,22 @@ impl ClausePlanner for ReturnClausePlanner {
             )
         })?;
 
+        // Unified entry for expression-level EXISTS / IN.
+        //
+        // Plain yield expressions are compiled here and their subqueries are
+        // attached to the RETURN Project node; HAVING subqueries attach to
+        // the HAVING Filter node. Aggregate / window expression paths run
+        // inside blocking operators that do not yet host a subquery executor,
+        // so their yield positions are still refused at planning time with a
+        // precise error instead of leaking to the runtime "not supported"
+        // path.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names = input_plan
+            .root()
+            .as_ref()
+            .map(|root| root.col_names().to_vec())
+            .unwrap_or_default();
         let has_aggregate = yield_columns.iter().any(|col| {
             if let Some(expr_meta) = col.expression.expression() {
                 expression_contains_aggregate(expr_meta.inner())
@@ -154,7 +171,6 @@ impl ClausePlanner for ReturnClausePlanner {
                 false
             }
         });
-
         let has_window = yield_columns.iter().any(|col| {
             if let Some(expr_meta) = col.expression.expression() {
                 expression_contains_window_function(expr_meta.inner())
@@ -162,6 +178,49 @@ impl ClausePlanner for ReturnClausePlanner {
                 false
             }
         });
+
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut yield_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        if has_aggregate || has_window {
+            for col in &yield_columns {
+                if let Some(expr_meta) = col.expression.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        space_id,
+                        &space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        } else {
+            for col in &mut yield_columns {
+                let subqueries = exists_planner::plan_contextual_subqueries(
+                    &mut col.expression,
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &outer_col_names,
+                    &mut id_alloc,
+                )?;
+                yield_subqueries.extend(subqueries);
+            }
+        }
+        let mut having_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let having_expr = extract_having_clause(stmt)
+            .map(|mut expr| {
+                let subqueries = exists_planner::plan_contextual_subqueries(
+                    &mut expr,
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &outer_col_names,
+                    &mut id_alloc,
+                )?;
+                having_subqueries = subqueries;
+                Ok::<_, PlannerError>(expr)
+            })
+            .transpose()?;
 
         if has_aggregate {
             let (group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters) =
@@ -206,7 +265,8 @@ impl ClausePlanner for ReturnClausePlanner {
                 }
             }
 
-            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?;
+            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?
+                .with_subqueries(yield_subqueries.clone());
             let project_logical = wrap_logical(&input_plan, |input| {
                 LogicalNodeEnum::Project(LogicalProjectNode {
                     id: next_node_id(),
@@ -257,14 +317,15 @@ impl ClausePlanner for ReturnClausePlanner {
             });
 
             // Apply HAVING clause filter if present
-            if let Some(having_expr) = extract_having_clause(stmt) {
+            if let Some(having_expr) = having_expr {
                 let filter_node = FilterNode::new(final_node.clone(), having_expr.clone())
                     .map_err(|e| {
                         PlannerError::PlanGenerationFailed(format!(
                             "Failed to create FilterNode for HAVING: {}",
                             e
                         ))
-                    })?;
+                    })?
+                    .with_subqueries(having_subqueries);
                 final_node = PlanNodeEnum::Filter(filter_node);
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Filter(LogicalFilterNode {
@@ -357,7 +418,8 @@ impl ClausePlanner for ReturnClausePlanner {
                 }
             }
 
-            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?;
+            let project_node = ProjectNode::new(input_node.clone(), project_columns.clone())?
+                .with_subqueries(yield_subqueries.clone());
             let window_node = WindowNode::new(
                 project_node.clone().into_enum(),
                 window_specs.clone(),
@@ -434,7 +496,8 @@ impl ClausePlanner for ReturnClausePlanner {
                 logical_root,
             })
         } else {
-            let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?;
+            let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?
+                .with_subqueries(yield_subqueries);
 
             let mut final_node = if self.distinct {
                 match DedupNode::new(project_node.clone().into_enum()) {

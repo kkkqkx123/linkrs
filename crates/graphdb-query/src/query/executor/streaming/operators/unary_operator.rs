@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::error::QueryError;
@@ -8,16 +7,18 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{selection_propagation_enabled, DataChunk};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::executor::streaming::subquery::{EvalEnv, SubqueryExecutor};
 
 #[derive(Debug, Default)]
 pub struct UnaryOperatorState {
-    pub parameters: Option<Arc<HashMap<String, Value>>>,
+    pub env: EvalEnv,
 }
 
 #[derive(Debug)]
-pub enum UnaryOperator {
+pub enum UnaryOperatorKind {
     Filter {
         predicate: Expression,
         state: UnaryOperatorState,
@@ -67,40 +68,60 @@ pub enum UnaryOperator {
     },
 }
 
+/// Unary operator.
+///
+/// Wraps [`UnaryOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct UnaryOperator {
+    pub kind: UnaryOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
-    pub fn from_spec(spec: &super::spec::UnarySpec) -> Self {
-        let state = UnaryOperatorState { parameters: None };
-        match spec {
-            super::spec::UnarySpec::Filter { predicate } => Self::Filter {
+    pub fn from_spec(spec: &super::spec::UnarySpec, output_layout: Arc<SlotLayout>) -> Self {
+        let state = UnaryOperatorState::default();
+        let kind = match spec {
+            super::spec::UnarySpec::Filter {
+                predicate,
+                subquery_runners: _,
+            } => UnaryOperatorKind::Filter {
                 predicate: predicate.clone(),
                 state,
             },
             super::spec::UnarySpec::Project {
                 output_expressions,
                 output_col_names,
-            } => Self::Project {
+                subquery_runners: _,
+            } => UnaryOperatorKind::Project {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
                 state,
             },
-            super::spec::UnarySpec::Limit { offset, limit } => Self::Limit {
+            super::spec::UnarySpec::Limit { offset, limit } => UnaryOperatorKind::Limit {
                 offset: *offset,
                 limit: *limit,
                 skipped: 0,
                 consumed: 0,
             },
-            super::spec::UnarySpec::Assign { assignments } => Self::Assign {
+            super::spec::UnarySpec::Assign {
+                assignments,
+                subquery_runners: _,
+            } => UnaryOperatorKind::Assign {
                 assignments: assignments.clone(),
                 state,
             },
-            super::spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
+            super::spec::UnarySpec::Remove { columns_to_remove } => UnaryOperatorKind::Remove {
                 columns_to_remove: columns_to_remove.clone(),
             },
             super::spec::UnarySpec::Unwind {
                 unwind_column,
                 list_expression,
-            } => Self::Unwind {
+            } => UnaryOperatorKind::Unwind {
                 unwind_column: unwind_column.clone(),
                 list_expression: list_expression.clone(),
                 col_index: None,
@@ -115,7 +136,7 @@ impl UnaryOperator {
                 entity_var,
                 entity_expr,
                 prop_names,
-            } => Self::AppendVertices {
+            } => UnaryOperatorKind::AppendVertices {
                 entity_var: entity_var.clone(),
                 entity_expr: entity_expr.clone(),
                 prop_names: prop_names.clone(),
@@ -123,63 +144,90 @@ impl UnaryOperator {
                 space_name: space_name.clone(),
                 state,
             },
-            super::spec::UnarySpec::Sample { count } => Self::Sample {
+            super::spec::UnarySpec::Sample { count } => UnaryOperatorKind::Sample {
                 count: *count,
                 consumed: 0,
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: UnaryOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
-        let storage = base.runtime.as_ref().and_then(|rt| rt.storage.clone());
-        match self {
-            Self::Filter { state, .. }
-            | Self::Project { state, .. }
-            | Self::Assign { state, .. }
-            | Self::AppendVertices { state, .. } => {
-                state.parameters = params;
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    /// Inject the hosting operator's expression-level subquery executor into
+    /// the Filter/Project/Assign state. Called by the materializer
+    /// after `from_spec`; no-op for the other unary kinds.
+    pub fn set_subquery_executor(&mut self, executor: Arc<SubqueryExecutor>) {
+        match &mut self.kind {
+            UnaryOperatorKind::Filter { state, .. }
+            | UnaryOperatorKind::Project { state, .. }
+            | UnaryOperatorKind::Assign { state, .. } => {
+                state.env.subquery_executor = Some(executor);
             }
             _ => {}
         }
-        if let Self::AppendVertices {
+    }
+
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        let params = self.runtime.as_ref().and_then(|rt| rt.parameter_values());
+        let session_variables = self
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.session_variable_values());
+        let storage = self.runtime.as_ref().and_then(|rt| rt.storage.clone());
+        match &mut self.kind {
+            UnaryOperatorKind::Filter { state, .. }
+            | UnaryOperatorKind::Project { state, .. }
+            | UnaryOperatorKind::Assign { state, .. }
+            | UnaryOperatorKind::AppendVertices { state, .. } => {
+                state.env.params = params;
+                state.env.session_variables = session_variables;
+            }
+            _ => {}
+        }
+        if let UnaryOperatorKind::AppendVertices {
             storage: target, ..
-        } = self
+        } = &mut self.kind
         {
             *target = storage;
         }
-        match self {
-            Self::Filter { .. }
-            | Self::Project { .. }
-            | Self::Limit { .. }
-            | Self::Dedup { .. }
-            | Self::Assign { .. }
-            | Self::Remove { .. }
-            | Self::Unwind { .. }
-            | Self::AppendVertices { .. }
-            | Self::Sample { .. } => {
-                input.open()?;
-                base.lifecycle.mark_opened();
-                Ok(())
-            }
-        }
+        input.open()?;
+        Ok(())
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::Filter { predicate, state } => loop {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        let Self {
+            kind,
+            runtime,
+            output_layout,
+            ..
+        } = self;
+        match kind {
+            UnaryOperatorKind::Filter { predicate, state } => loop {
                 match input.advance()? {
                     Some(mut chunk) => {
                         let results = chunk
-                            .evaluate_expression(predicate, state.parameters.as_ref())
+                            .evaluate_expression(predicate, Some(&state.env))
                             .map_err(|e| {
                                 QueryError::execution(format!(
                                     "Filter predicate evaluation failed: {}",
@@ -235,40 +283,38 @@ impl UnaryOperator {
                     None => return Ok(None),
                 }
             },
-            Self::Project {
+            UnaryOperatorKind::Project {
                 output_expressions,
                 output_col_names: _,
                 state,
             } => loop {
                 if let Some(mut chunk) = input.advance()? {
-                    let params = state.parameters.as_ref();
                     // When the child carries a selection vector, evaluate
                     // each output expression only for the visible rows — the
                     // output chunk is fully materialized (small).
                     if chunk.selection().is_some() {
                         let mut columns = Vec::with_capacity(output_expressions.len());
                         for expr in output_expressions.iter() {
-                            let col =
-                                chunk
-                                    .evaluate_expression_visible(expr, params)
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "Project expression evaluation failed: {}",
-                                            e
-                                        ))
-                                    })?;
+                            let col = chunk
+                                .evaluate_expression_visible(expr, Some(&state.env))
+                                .map_err(|e| {
+                                    QueryError::execution(format!(
+                                        "Project expression evaluation failed: {}",
+                                        e
+                                    ))
+                                })?;
                             columns.push(col);
                         }
                         if !columns.is_empty() && !columns[0].is_empty() {
                             return Ok(Some(DataChunk::from_columns(
                                 columns,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(output_layout),
                             )));
                         }
                         continue;
                     }
                     let columns = chunk
-                        .evaluate_expressions(output_expressions, params)
+                        .evaluate_expressions(output_expressions, Some(&state.env))
                         .map_err(|e| {
                             QueryError::execution(format!(
                                 "Project expression evaluation failed: {}",
@@ -278,14 +324,14 @@ impl UnaryOperator {
                     if !columns.is_empty() && !columns[0].is_empty() {
                         return Ok(Some(DataChunk::from_columns(
                             columns,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 } else {
                     return Ok(None);
                 }
             },
-            Self::Limit {
+            UnaryOperatorKind::Limit {
                 offset,
                 limit,
                 skipped,
@@ -328,7 +374,7 @@ impl UnaryOperator {
                     return Ok(Some(chunk.with_selection(vis)));
                 }
             }
-            Self::Dedup { seen_rows } => {
+            UnaryOperatorKind::Dedup { seen_rows } => {
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Dedup");
                     let mut result_rows = vec![];
@@ -340,20 +386,19 @@ impl UnaryOperator {
                     if !result_rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 }
                 Ok(None)
             }
-            Self::Assign { assignments, state } => loop {
+            UnaryOperatorKind::Assign { assignments, state } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Assign");
-                    let params = state.parameters.as_ref();
                     // Batch-evaluate all assignment expressions first
                     let mut new_cols: Vec<Vec<Value>> = Vec::with_capacity(assignments.len());
                     for (_col_name, expr) in assignments.iter() {
-                        let col = match chunk.evaluate_expression(expr, params) {
+                        let col = match chunk.evaluate_expression(expr, Some(&state.env)) {
                             Ok(col) => col,
                             Err(_) => {
                                 vec![Value::Null(crate::core::value::NullType::Null); chunk.len()]
@@ -373,14 +418,14 @@ impl UnaryOperator {
                         chunk.typed_columns = None;
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 } else {
                     return Ok(None);
                 }
             },
-            Self::Remove { columns_to_remove } => loop {
+            UnaryOperatorKind::Remove { columns_to_remove } => loop {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Remove");
                     let col_names = chunk.col_names();
@@ -403,14 +448,14 @@ impl UnaryOperator {
                     if !result_rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 } else {
                     return Ok(None);
                 }
             },
-            Self::Unwind {
+            UnaryOperatorKind::Unwind {
                 unwind_column,
                 list_expression,
                 col_index,
@@ -420,7 +465,9 @@ impl UnaryOperator {
                 current_unwind_index,
                 input_done,
             } => loop {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 if *current_row_index >= all_rows.len() && !*input_done {
                     match input.advance()? {
                         Some(mut chunk) => {
@@ -473,13 +520,13 @@ impl UnaryOperator {
                 if let Some(result_row) = result_row {
                     return Ok(Some(DataChunk::new_with_layout(
                         vec![result_row],
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(output_layout),
                     )));
                 }
                 *current_row_index += 1;
                 *current_unwind_index = 0;
             },
-            Self::AppendVertices {
+            UnaryOperatorKind::AppendVertices {
                 entity_var: _,
                 entity_expr,
                 prop_names,
@@ -498,7 +545,7 @@ impl UnaryOperator {
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
-                        let mut ctx = if let Some(ref params) = state.parameters {
+                        let mut ctx = if let Some(ref params) = state.env.params {
                             ValueRowContext::with_parameters(
                                 row.clone(),
                                 layout.clone(),
@@ -550,14 +597,14 @@ impl UnaryOperator {
                     if !result_rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(output_layout),
                         )));
                     }
                 } else {
                     return Ok(None);
                 }
             },
-            Self::Sample { count, consumed } => {
+            UnaryOperatorKind::Sample { count, consumed } => {
                 if *consumed >= *count {
                     return Ok(None);
                 }
@@ -574,7 +621,7 @@ impl UnaryOperator {
                             if !rows.is_empty() {
                                 return Ok(Some(DataChunk::new_with_layout(
                                     rows,
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(output_layout),
                                 )));
                             } else {
                                 continue;
@@ -587,23 +634,52 @@ impl UnaryOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            base.lifecycle.mark_closed();
+    /// Reset this operator's per-run counters/buffers and rewind the input.
+    ///
+    /// Stateless operators (Filter/Project/Assign/Remove/AppendVertices)
+    /// are no-ops beyond rewinding the input; Limit/Sample reset their
+    /// counters; Dedup clears its seen-set; Unwind clears its input buffer.
+    pub fn reset(&mut self, input: &mut StreamingExecutor) -> Result<bool, QueryError> {
+        match &mut self.kind {
+            UnaryOperatorKind::Limit {
+                skipped, consumed, ..
+            } => {
+                *skipped = 0;
+                *consumed = 0;
+            }
+            UnaryOperatorKind::Dedup { seen_rows } => seen_rows.clear(),
+            UnaryOperatorKind::Unwind {
+                col_index,
+                layout,
+                all_rows,
+                current_row_index,
+                current_unwind_index,
+                input_done,
+                ..
+            } => {
+                *col_index = None;
+                *layout = None;
+                all_rows.clear();
+                *current_row_index = 0;
+                *current_unwind_index = 0;
+                *input_done = false;
+            }
+            UnaryOperatorKind::Sample { consumed, .. } => *consumed = 0,
+            UnaryOperatorKind::Filter { .. }
+            | UnaryOperatorKind::Project { .. }
+            | UnaryOperatorKind::Assign { .. }
+            | UnaryOperatorKind::Remove { .. }
+            | UnaryOperatorKind::AppendVertices { .. } => {}
         }
+        input.reset()?;
+        Ok(false)
+    }
+
+    pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 }
@@ -628,9 +704,10 @@ mod tests {
     use crate::core::types::storage_ids::VertexId;
     use crate::core::{Tag, Vertex};
     use crate::query::executor::base::MemoryBudget;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::query::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
-    use crate::query::executor::streaming::slot::SlotLayout;
     use crate::storage::StorageWriter;
     use parking_lot::RwLock;
 
@@ -645,6 +722,20 @@ mod tests {
             None,
             #[cfg(feature = "qdrant")]
             None,
+        ))
+    }
+
+    fn scan_source(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> Box<StreamingExecutor> {
+        Box::new(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows,
+                    current_index: 0,
+                    col_names,
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         ))
     }
 
@@ -670,25 +761,21 @@ mod tests {
         let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
 
         // Input row: [vid]
-        let input = Box::new(StreamingExecutor::Source(
-            OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::string("1")]],
-                current_index: 0,
-                col_names: vec!["vid".to_string()],
-            },
-        ));
+        let input = scan_source(vec![vec![Value::string("1")]], vec!["vid".to_string()]);
         let mut append = StreamingExecutor::Unary(
             OperatorBase::new(0),
             input,
-            UnaryOperator::AppendVertices {
-                entity_var: "v".to_string(),
-                entity_expr: Expression::Variable("vid".to_string()),
-                prop_names: vec!["name".to_string(), "age".to_string()],
-                storage: None,
-                space_name: "test".to_string(),
-                state: UnaryOperatorState { parameters: None },
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::AppendVertices {
+                    entity_var: "v".to_string(),
+                    entity_expr: Expression::Variable("vid".to_string()),
+                    prop_names: vec!["name".to_string(), "age".to_string()],
+                    storage: None,
+                    space_name: "test".to_string(),
+                    state: UnaryOperatorState::default(),
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         );
         append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
         append.open().expect("open should succeed");
@@ -721,25 +808,21 @@ mod tests {
         .expect("insert vertex");
         let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
 
-        let input = Box::new(StreamingExecutor::Source(
-            OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::Int(7)]],
-                current_index: 0,
-                col_names: vec!["vid".to_string()],
-            },
-        ));
+        let input = scan_source(vec![vec![Value::Int(7)]], vec!["vid".to_string()]);
         let mut append = StreamingExecutor::Unary(
             OperatorBase::new(0),
             input,
-            UnaryOperator::AppendVertices {
-                entity_var: "v".to_string(),
-                entity_expr: Expression::Variable("vid".to_string()),
-                prop_names: vec![],
-                storage: None,
-                space_name: "test".to_string(),
-                state: UnaryOperatorState { parameters: None },
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::AppendVertices {
+                    entity_var: "v".to_string(),
+                    entity_expr: Expression::Variable("vid".to_string()),
+                    prop_names: vec![],
+                    storage: None,
+                    space_name: "test".to_string(),
+                    state: UnaryOperatorState::default(),
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         );
         append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
         append.open().expect("open should succeed");
@@ -760,25 +843,24 @@ mod tests {
         let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(
             crate::storage::MockStorage::new().expect("MockStorage should be created"),
         ));
-        let input = Box::new(StreamingExecutor::Source(
-            OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::string("missing")]],
-                current_index: 0,
-                col_names: vec!["vid".to_string()],
-            },
-        ));
+        let input = scan_source(
+            vec![vec![Value::string("missing")]],
+            vec!["vid".to_string()],
+        );
         let mut append = StreamingExecutor::Unary(
             OperatorBase::new(0),
             input,
-            UnaryOperator::AppendVertices {
-                entity_var: "v".to_string(),
-                entity_expr: Expression::Variable("vid".to_string()),
-                prop_names: vec!["name".to_string()],
-                storage: None,
-                space_name: "test".to_string(),
-                state: UnaryOperatorState { parameters: None },
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::AppendVertices {
+                    entity_var: "v".to_string(),
+                    entity_expr: Expression::Variable("vid".to_string()),
+                    prop_names: vec!["name".to_string()],
+                    storage: None,
+                    space_name: "test".to_string(),
+                    state: UnaryOperatorState::default(),
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         );
         append.base_mut().runtime = Some(runtime_with_storage(storage.clone()));
         append.open().expect("open should succeed");
@@ -790,25 +872,21 @@ mod tests {
 
     #[test]
     fn append_vertices_without_storage_fails() {
-        let input = Box::new(StreamingExecutor::Source(
-            OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::Int(1)]],
-                current_index: 0,
-                col_names: vec!["vid".to_string()],
-            },
-        ));
+        let input = scan_source(vec![vec![Value::Int(1)]], vec!["vid".to_string()]);
         let mut append = StreamingExecutor::Unary(
             OperatorBase::new(0),
             input,
-            UnaryOperator::AppendVertices {
-                entity_var: "v".to_string(),
-                entity_expr: Expression::Variable("vid".to_string()),
-                prop_names: vec!["name".to_string()],
-                storage: None,
-                space_name: "test".to_string(),
-                state: UnaryOperatorState { parameters: None },
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::AppendVertices {
+                    entity_var: "v".to_string(),
+                    entity_expr: Expression::Variable("vid".to_string()),
+                    prop_names: vec!["name".to_string()],
+                    storage: None,
+                    space_name: "test".to_string(),
+                    state: UnaryOperatorState::default(),
+                },
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
         );
         append.open().expect("open should succeed");
         let error = append.advance().expect_err("storage required");

@@ -181,7 +181,10 @@ fn build_chain_group(
                 continue;
             }
         }
-        child_fid = push_global_op(operators, fragments, op_alloc, frag_alloc, child_fid, op)?.0;
+        child_fid = push_global_op(
+            operators, fragments, op_alloc, frag_alloc, child_fid, op, exec_ctx,
+        )?
+        .0;
     }
 
     let root_operator = fragments
@@ -239,7 +242,11 @@ fn build_partition_local_fragments(
         for op in &chain.local {
             match op {
                 PlanNodeEnum::Filter(filter) => {
-                    let spec = build_filter_spec(filter)?;
+                    let subquery_runners = super::assembler::build_subquery_runner_specs(
+                        filter.subqueries(),
+                        exec_ctx,
+                    )?;
+                    let spec = build_filter_spec(filter, subquery_runners)?;
                     fid = ArenaPlanAssembler::push_unary_op(
                         operators,
                         fragments,
@@ -251,7 +258,11 @@ fn build_partition_local_fragments(
                     .0;
                 }
                 PlanNodeEnum::Project(project) => {
-                    let spec = build_project_spec(project)?;
+                    let subquery_runners = super::assembler::build_subquery_runner_specs(
+                        project.subqueries(),
+                        exec_ctx,
+                    )?;
+                    let spec = build_project_spec(project, subquery_runners)?;
                     fid = ArenaPlanAssembler::push_unary_op(
                         operators,
                         fragments,
@@ -787,10 +798,13 @@ fn push_global_op(
     frag_alloc: &mut ArenaFragmentAllocator,
     child_fid: FragmentId,
     op: &PlanNodeEnum,
+    exec_ctx: &ExecutionContext,
 ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
     match op {
         PlanNodeEnum::Filter(filter) => {
-            let spec = build_filter_spec(filter)?;
+            let subquery_runners =
+                super::assembler::build_subquery_runner_specs(filter.subqueries(), exec_ctx)?;
+            let spec = build_filter_spec(filter, subquery_runners)?;
             ArenaPlanAssembler::push_global_unary_op(
                 operators,
                 fragments,
@@ -802,7 +816,9 @@ fn push_global_op(
             )
         }
         PlanNodeEnum::Project(project) => {
-            let spec = build_project_spec(project)?;
+            let subquery_runners =
+                super::assembler::build_subquery_runner_specs(project.subqueries(), exec_ctx)?;
+            let spec = build_project_spec(project, subquery_runners)?;
             ArenaPlanAssembler::push_global_unary_op(
                 operators,
                 fragments,

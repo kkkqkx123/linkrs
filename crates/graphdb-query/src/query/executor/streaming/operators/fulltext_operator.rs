@@ -7,10 +7,12 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 #[cfg(feature = "fulltext-search")]
 use crate::query::executor::streaming::operators::ddl_operator::make_single_row;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::operators::spec::FulltextManageCommand;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::QueryStorage;
@@ -31,7 +33,7 @@ fn fulltext_command_info(cmd: &FulltextManageCommand) -> (&'static str, Option<&
 }
 
 fn make_manage_result(
-    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    output_layout: Arc<SlotLayout>,
     action: &str,
     name: Option<&str>,
     status: &str,
@@ -46,7 +48,7 @@ fn make_manage_result(
 }
 
 #[derive(Debug)]
-pub enum FulltextOperator {
+pub enum FulltextOperatorKind {
     FulltextManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -88,18 +90,32 @@ pub enum FulltextOperator {
     },
 }
 
+/// Fulltext operator.
+///
+/// Wraps [`FulltextOperatorKind`] with the runtime context injected at
+/// `open()`. Lifecycle state is owned exclusively by the executor; operators
+/// never write it.
+#[derive(Debug)]
+pub struct FulltextOperator {
+    pub kind: FulltextOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl FulltextOperator {
     /// Create a FulltextOperator from an immutable spec.
     pub fn from_spec(
         spec: &super::spec::FulltextSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             super::spec::FulltextSpec::FulltextManage {
                 space_name,
                 command,
-            } => FulltextOperator::FulltextManage {
+            } => FulltextOperatorKind::FulltextManage {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 command: command.clone(),
@@ -113,7 +129,7 @@ impl FulltextOperator {
                 search_query,
                 tag_name,
                 field_name,
-            } => FulltextOperator::FulltextSearch {
+            } => FulltextOperatorKind::FulltextSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 space_id: *space_id,
@@ -131,7 +147,7 @@ impl FulltextOperator {
                 search_query,
                 tag_name,
                 field_name,
-            } => FulltextOperator::FulltextLookup {
+            } => FulltextOperatorKind::FulltextLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 space_id: *space_id,
@@ -148,7 +164,7 @@ impl FulltextOperator {
                 match_field,
                 tag_name,
                 field_name,
-            } => FulltextOperator::MatchFulltext {
+            } => FulltextOperatorKind::MatchFulltext {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 match_expr: match_expr.clone(),
@@ -158,44 +174,53 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager: fulltext_manager.clone(),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: FulltextOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            FulltextOperator::FulltextManage { .. }
-            | FulltextOperator::FulltextSearch { .. }
-            | FulltextOperator::FulltextLookup { .. }
-            | FulltextOperator::MatchFulltext { .. } => {
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        match &mut self.kind {
+            FulltextOperatorKind::FulltextManage { .. }
+            | FulltextOperatorKind::FulltextSearch { .. }
+            | FulltextOperatorKind::FulltextLookup { .. }
+            | FulltextOperatorKind::MatchFulltext { .. } => {
                 input.open()?;
-                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            FulltextOperator::FulltextManage {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        match &mut self.kind {
+            FulltextOperatorKind::FulltextManage {
                 storage: _storage,
                 space_name: _space_name,
                 command,
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager,
             } => {
-                if !base.lifecycle.is_opened() {
-                    return Ok(None);
-                }
-                base.lifecycle.mark_closed();
-
                 #[cfg(feature = "fulltext-search")]
                 {
                     use crate::query::executor::streaming::operators::spec::FulltextManageCommand::*;
@@ -222,14 +247,14 @@ impl FulltextOperator {
                                     })?;
                                 }
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "create_fulltext_index",
                                     Some(index_name.as_str()),
                                     "created",
                                 ))
                             } else {
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "create_fulltext_index",
                                     Some(index_name.as_str()),
                                     "no-manager",
@@ -266,14 +291,14 @@ impl FulltextOperator {
                                     })?;
                                 }
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "drop_fulltext_index",
                                     Some(index_name.as_str()),
                                     "dropped",
                                 ))
                             } else {
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "drop_fulltext_index",
                                     Some(index_name.as_str()),
                                     "no-manager",
@@ -316,7 +341,7 @@ impl FulltextOperator {
                                     ))
                                 } else {
                                     Some(make_manage_result(
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                         "describe_fulltext_index",
                                         Some(index_name.as_str()),
                                         "not-found",
@@ -324,7 +349,7 @@ impl FulltextOperator {
                                 }
                             } else {
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "describe_fulltext_index",
                                     Some(index_name.as_str()),
                                     "no-manager",
@@ -383,11 +408,11 @@ impl FulltextOperator {
                                     .collect();
                                 Some(DataChunk::new_with_layout(
                                     rows,
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                 ))
                             } else {
                                 Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "show_fulltext_indexes",
                                     None,
                                     "no-manager",
@@ -408,7 +433,7 @@ impl FulltextOperator {
                 {
                     let (name, index_name) = fulltext_command_info(command);
                     Ok(Some(make_manage_result(
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                         name,
                         index_name,
                         "fulltext-search feature disabled",
@@ -416,7 +441,7 @@ impl FulltextOperator {
                 }
             }
 
-            FulltextOperator::FulltextSearch {
+            FulltextOperatorKind::FulltextSearch {
                 search_query,
                 space_id,
                 tag_name,
@@ -427,12 +452,6 @@ impl FulltextOperator {
             } => {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&search_query, &space_id, &tag_name, &field_name);
-
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "FulltextSearch not opened".to_string(),
-                    ));
-                }
 
                 #[cfg(feature = "fulltext-search")]
                 {
@@ -456,7 +475,7 @@ impl FulltextOperator {
                         } else {
                             Ok(Some(DataChunk::new_with_layout(
                                 rows,
-                                base.output_layout.clone(),
+                                self.output_layout.clone(),
                             )))
                         };
                     }
@@ -469,7 +488,7 @@ impl FulltextOperator {
                 Ok(None)
             }
 
-            FulltextOperator::FulltextLookup {
+            FulltextOperatorKind::FulltextLookup {
                 search_query,
                 space_id,
                 tag_name,
@@ -480,12 +499,6 @@ impl FulltextOperator {
             } => {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&search_query, &space_id, &tag_name, &field_name);
-
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "FulltextLookup not opened".to_string(),
-                    ));
-                }
 
                 #[cfg(feature = "fulltext-search")]
                 {
@@ -509,7 +522,7 @@ impl FulltextOperator {
                         } else {
                             Ok(Some(DataChunk::new_with_layout(
                                 rows,
-                                base.output_layout.clone(),
+                                self.output_layout.clone(),
                             )))
                         };
                     }
@@ -522,7 +535,7 @@ impl FulltextOperator {
                 Ok(None)
             }
 
-            FulltextOperator::MatchFulltext {
+            FulltextOperatorKind::MatchFulltext {
                 match_expr,
                 tag_name,
                 field_name,
@@ -532,12 +545,6 @@ impl FulltextOperator {
             } => {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&match_expr, &tag_name, &field_name);
-
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution(
-                        "MatchFulltext not opened".to_string(),
-                    ));
-                }
 
                 #[cfg(feature = "fulltext-search")]
                 {
@@ -554,13 +561,12 @@ impl FulltextOperator {
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
                         }
-                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
                             Ok(Some(DataChunk::new_with_layout(
                                 rows,
-                                base.output_layout.clone(),
+                                self.output_layout.clone(),
                             )))
                         };
                     }
@@ -568,48 +574,18 @@ impl FulltextOperator {
 
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("Fulltext");
-                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.lifecycle.mark_closed();
                 Ok(None)
             }
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            FulltextOperator::FulltextManage { .. }
-            | FulltextOperator::FulltextSearch { .. }
-            | FulltextOperator::FulltextLookup { .. }
-            | FulltextOperator::MatchFulltext { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_stopped();
-                }
-                Ok(())
-            }
-        }
+    pub fn stop(&mut self) -> Result<(), QueryError> {
+        Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            FulltextOperator::FulltextManage { .. }
-            | FulltextOperator::FulltextSearch { .. }
-            | FulltextOperator::FulltextLookup { .. }
-            | FulltextOperator::MatchFulltext { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        Ok(())
     }
 }

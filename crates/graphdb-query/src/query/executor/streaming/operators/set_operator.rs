@@ -6,10 +6,12 @@ use crate::core::Value;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
-pub enum SetOperator {
+pub enum SetOperatorKind {
     Union {
         seen_rows: HashSet<String>,
         left_consumed: bool,
@@ -38,18 +40,35 @@ pub enum SetOperator {
     },
 }
 
+/// Set operator.
+///
+/// Wraps [`SetOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct SetOperator {
+    pub kind: SetOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl SetOperator {
-    pub fn from_spec(spec: &super::spec::SetSpec, budget: &MemoryBudget) -> Self {
-        match spec {
-            super::spec::SetSpec::Union => Self::Union {
+    pub fn from_spec(
+        spec: &super::spec::SetSpec,
+        budget: &MemoryBudget,
+        output_layout: Arc<SlotLayout>,
+    ) -> Self {
+        let kind = match spec {
+            super::spec::SetSpec::Union => SetOperatorKind::Union {
                 seen_rows: std::collections::HashSet::new(),
                 left_consumed: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::spec::SetSpec::UnionAll => Self::UnionAll {
+            super::spec::SetSpec::UnionAll => SetOperatorKind::UnionAll {
                 left_consumed: false,
             },
-            super::spec::SetSpec::Intersect => Self::Intersect {
+            super::spec::SetSpec::Intersect => SetOperatorKind::Intersect {
                 left_rows: Vec::new(),
                 right_rows: std::collections::HashSet::new(),
                 left_buffered: false,
@@ -57,26 +76,49 @@ impl SetOperator {
                 emitted: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::spec::SetSpec::Except => Self::Except {
+            super::spec::SetSpec::Except => SetOperatorKind::Except {
                 exclude_rows: std::collections::HashSet::new(),
                 right_buffered: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::spec::SetSpec::Minus => Self::Minus {
+            super::spec::SetSpec::Minus => SetOperatorKind::Minus {
                 exclude_rows: std::collections::HashSet::new(),
                 right_buffered: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: SetOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
-        match self {
-            Self::Union { memory_tracker, .. }
-            | Self::Intersect { memory_tracker, .. }
-            | Self::Except { memory_tracker, .. }
-            | Self::Minus { memory_tracker, .. } => memory_tracker,
-            Self::UnionAll { .. } => {
+        match &self.kind {
+            SetOperatorKind::Union { memory_tracker, .. }
+            | SetOperatorKind::Intersect { memory_tracker, .. }
+            | SetOperatorKind::Except { memory_tracker, .. }
+            | SetOperatorKind::Minus { memory_tracker, .. } => memory_tracker,
+            SetOperatorKind::UnionAll { .. } => {
                 panic!("memory_tracker called on variant without memory tracking")
             }
         }
@@ -84,23 +126,17 @@ impl SetOperator {
 
     pub fn open(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::Union { .. }
-            | Self::UnionAll { .. }
-            | Self::Intersect { .. }
-            | Self::Except { .. } => {
+        match &mut self.kind {
+            SetOperatorKind::Union { .. }
+            | SetOperatorKind::UnionAll { .. }
+            | SetOperatorKind::Intersect { .. }
+            | SetOperatorKind::Except { .. }
+            | SetOperatorKind::Minus { .. } => {
                 left.open()?;
                 right.open()?;
-                base.lifecycle.mark_opened();
-                Ok(())
-            }
-            Self::Minus { .. } => {
-                left.open()?;
-                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -108,18 +144,19 @@ impl SetOperator {
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::Union {
+        match &mut self.kind {
+            SetOperatorKind::Union {
                 seen_rows,
                 left_consumed,
                 memory_tracker,
                 ..
             } => loop {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = self.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 if !*left_consumed {
                     if let Some(mut chunk) = left.advance()? {
                         chunk.materialize_selection_by("Set");
@@ -135,7 +172,7 @@ impl SetOperator {
                         if !result_rows.is_empty() {
                             return Ok(Some(DataChunk::new_with_layout(
                                 result_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                         continue;
@@ -158,7 +195,7 @@ impl SetOperator {
                     if !result_rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             result_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                     continue;
@@ -166,14 +203,14 @@ impl SetOperator {
                 return Ok(None);
             },
 
-            Self::UnionAll { left_consumed, .. } => loop {
+            SetOperatorKind::UnionAll { left_consumed, .. } => loop {
                 if !*left_consumed {
                     if let Some(mut chunk) = left.advance()? {
                         chunk.materialize_selection_by("Set");
                         if !chunk.is_empty() {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk.rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                     } else {
@@ -186,7 +223,7 @@ impl SetOperator {
                     if !chunk.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk.rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                 } else {
@@ -194,7 +231,7 @@ impl SetOperator {
                 }
             },
 
-            Self::Intersect {
+            SetOperatorKind::Intersect {
                 left_rows,
                 right_rows,
                 left_buffered,
@@ -209,7 +246,9 @@ impl SetOperator {
                 if !*left_buffered {
                     while let Some(mut chunk) = left.advance()? {
                         chunk.materialize_selection_by("Set");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
                         }
@@ -221,7 +260,9 @@ impl SetOperator {
                 if !*right_buffered {
                     while let Some(mut chunk) = right.advance()? {
                         chunk.materialize_selection_by("Set");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
@@ -243,18 +284,20 @@ impl SetOperator {
                     *emitted = true;
                     Ok(Some(DataChunk::new_with_layout(
                         result_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )))
                 }
             }
 
-            Self::Except {
+            SetOperatorKind::Except {
                 exclude_rows,
                 right_buffered,
                 memory_tracker,
                 ..
             } => loop {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = self.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 if !*right_buffered {
                     while let Some(mut chunk) = right.advance()? {
                         chunk.materialize_selection_by("Set");
@@ -280,35 +323,37 @@ impl SetOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         result_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
                 return Ok(None);
             },
 
-            Self::Minus {
+            SetOperatorKind::Minus {
                 exclude_rows,
                 right_buffered,
                 memory_tracker,
                 ..
             } => {
                 if !*right_buffered {
-                    right.open()?;
                     while let Some(mut chunk) = right.advance()? {
                         chunk.materialize_selection_by("Set");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
                             exclude_rows.insert(row_str);
                         }
                     }
-                    right.close()?;
                     *right_buffered = true;
                 }
 
                 loop {
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if let Some(mut chunk) = left.advance()? {
                         chunk.materialize_selection_by("Set");
                         let mut result_rows = Vec::new();
@@ -321,7 +366,7 @@ impl SetOperator {
                         if !result_rows.is_empty() {
                             return Ok(Some(DataChunk::new_with_layout(
                                 result_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                         continue;
@@ -332,94 +377,104 @@ impl SetOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
+    /// Reset per-run set state (seen/exclude sets, buffered sides, phase
+    /// flags) and rewind both inputs so the set operation re-runs cleanly.
+    pub fn reset(
         &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::Union {
+        left: &mut StreamingExecutor,
+        right: &mut StreamingExecutor,
+    ) -> Result<bool, QueryError> {
+        match &mut self.kind {
+            SetOperatorKind::Union {
+                seen_rows,
+                left_consumed,
+                ..
+            } => {
+                seen_rows.clear();
+                *left_consumed = false;
+            }
+            SetOperatorKind::UnionAll { left_consumed } => *left_consumed = false,
+            SetOperatorKind::Intersect {
+                left_rows,
+                right_rows,
+                left_buffered,
+                right_buffered,
+                emitted,
+                ..
+            } => {
+                left_rows.clear();
+                right_rows.clear();
+                *left_buffered = false;
+                *right_buffered = false;
+                *emitted = false;
+            }
+            SetOperatorKind::Except {
+                exclude_rows,
+                right_buffered,
+                ..
+            }
+            | SetOperatorKind::Minus {
+                exclude_rows,
+                right_buffered,
+                ..
+            } => {
+                exclude_rows.clear();
+                *right_buffered = false;
+            }
+        }
+        left.reset()?;
+        right.reset()?;
+        Ok(false)
+    }
+
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        match &mut self.kind {
+            SetOperatorKind::Union {
                 seen_rows,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    seen_rows.clear();
-                    base.lifecycle.mark_closed();
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                memory_tracker.reset();
+                seen_rows.clear();
             }
-            Self::UnionAll { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_closed();
-                    Ok(())
-                } else {
-                    Ok(())
-                }
-            }
-            Self::Intersect {
+            SetOperatorKind::UnionAll { .. } => {}
+            SetOperatorKind::Intersect {
                 left_rows,
                 right_rows,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    left_rows.clear();
-                    right_rows.clear();
-                    base.lifecycle.mark_closed();
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                memory_tracker.reset();
+                left_rows.clear();
+                right_rows.clear();
             }
-            Self::Except {
+            SetOperatorKind::Except {
                 exclude_rows,
                 memory_tracker,
                 ..
-            } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    exclude_rows.clear();
-                    base.lifecycle.mark_closed();
-                    Ok(())
-                } else {
-                    Ok(())
-                }
             }
-            Self::Minus {
+            | SetOperatorKind::Minus {
                 exclude_rows,
                 memory_tracker,
                 ..
             } => {
                 memory_tracker.reset();
                 exclude_rows.clear();
-                base.lifecycle.mark_closed();
-                Ok(())
             }
         }
+        Ok(())
     }
 
     pub fn spill_with_manager(
         &mut self,
         sm: &crate::query::executor::streaming::spill::SpillManager,
     ) -> Result<(), crate::core::error::QueryError> {
-        match self {
-            Self::Union {
+        match &mut self.kind {
+            SetOperatorKind::Union {
                 seen_rows,
                 memory_tracker,
                 ..
@@ -436,7 +491,7 @@ impl SetOperator {
                 }
                 Ok(())
             }
-            Self::Intersect {
+            SetOperatorKind::Intersect {
                 left_rows,
                 right_rows,
                 memory_tracker,
@@ -453,12 +508,12 @@ impl SetOperator {
                 }
                 Ok(())
             }
-            Self::Except {
+            SetOperatorKind::Except {
                 exclude_rows,
                 memory_tracker,
                 ..
             }
-            | Self::Minus {
+            | SetOperatorKind::Minus {
                 exclude_rows,
                 memory_tracker,
                 ..
@@ -469,7 +524,7 @@ impl SetOperator {
                 }
                 Ok(())
             }
-            Self::UnionAll { .. } => Ok(()),
+            SetOperatorKind::UnionAll { .. } => Ok(()),
         }
     }
 

@@ -10,19 +10,28 @@
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
-use graphdb_query::query::executor::streaming::operators::source_operator::SourceOperator;
-use graphdb_query::query::executor::streaming::operators::unary_operator::UnaryOperator;
+use graphdb_query::query::executor::streaming::operators::source_operator::{
+    SourceOperator, SourceOperatorKind,
+};
+use graphdb_query::query::executor::streaming::operators::unary_operator::{
+    UnaryOperator, UnaryOperatorKind,
+};
+use graphdb_query::query::executor::streaming::slot::SlotLayout;
+use std::sync::Arc;
 
 // ── Helpers ──
 
 fn make_scan(data: Vec<Vec<Value>>) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
-        SourceOperator::ScanVertices {
-            buffer: data,
-            current_index: 0,
-            col_names: vec![],
-        },
+        SourceOperator::new(
+            SourceOperatorKind::ScanVertices {
+                buffer: data,
+                current_index: 0,
+                col_names: vec![],
+            },
+            Arc::new(SlotLayout::from_names(&[])),
+        ),
     )
 }
 
@@ -60,12 +69,15 @@ fn contract_multi_chunk() {
     let exec = StreamingExecutor::Unary(
         OperatorBase::new(1),
         Box::new(scan),
-        UnaryOperator::Limit {
-            offset: 0,
-            limit: 50,
-            skipped: 0,
-            consumed: 0,
-        },
+        UnaryOperator::new(
+            UnaryOperatorKind::Limit {
+                offset: 0,
+                limit: 50,
+                skipped: 0,
+                consumed: 0,
+            },
+            Arc::new(SlotLayout::from_names(&[])),
+        ),
     );
     let rows = collect_all(exec);
     assert_eq!(rows.len(), 50);

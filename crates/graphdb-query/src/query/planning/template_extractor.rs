@@ -298,6 +298,7 @@ impl ParameterizingTransformer {
             | Expression::TagProperty { .. }
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
+            | Expression::SessionVariable(_)
             | Expression::Vector(_)
             | Expression::Exists { .. }
             | Expression::In { .. }
@@ -1018,7 +1019,8 @@ impl TemplateExtractor {
                 )
             }
             Expression::Label(name) => name.clone(),
-            Expression::Parameter(name) => format!("${}", name),
+            Expression::Parameter(name) => format!("@{}", name),
+            Expression::SessionVariable(name) => format!("${}", name),
             _ => "...".to_string(),
         }
     }

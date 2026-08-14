@@ -5,31 +5,48 @@ use std::time::Instant;
 
 use super::chunk::DataChunk;
 use super::runtime::{ExecutionRuntime, OperatorProfile, OperatorProfileKey};
+use super::slot::SlotLayout;
 use crate::core::error::QueryError;
+use crate::core::Value;
 use crate::query::executor::base::{MemoryTracker, Spillable};
 
 pub use super::context::ValueRowContext;
 pub use super::helpers::{comparison, conversion};
 pub use super::operators::base::OperatorBase;
 use super::operators::base::OperatorLifecycle;
+use super::operators::source_operator::OperatorConfig;
 use super::operators::state::ExchangeState;
 
 use super::operators::apply_operator::ApplyOperator;
+use super::operators::apply_operator::ApplyOperatorKind;
 use super::operators::blocking::BlockingOperator;
+use super::operators::blocking::BlockingOperatorKind;
 use super::operators::ddl_operator::DdlOperator;
+use super::operators::ddl_operator::DdlOperatorKind;
 use super::operators::exchange_operator::ExchangeOperator;
 use super::operators::fulltext_operator::FulltextOperator;
+use super::operators::fulltext_operator::FulltextOperatorKind;
 use super::operators::gather_operator::GatherOperator;
+use super::operators::gather_operator::GatherOperatorKind;
 use super::operators::graph_operator::GraphOperator;
+use super::operators::graph_operator::GraphOperatorKind;
 use super::operators::join_operator::JoinOperator;
+use super::operators::join_operator::JoinOperatorKind;
 use super::operators::recursive_fragment_operator::RecursiveFragmentOperator;
+use super::operators::recursive_fragment_operator::RecursiveFragmentOperatorKind;
 use super::operators::set_operator::SetOperator;
+use super::operators::set_operator::SetOperatorKind;
 use super::operators::shuffle_join_operator::HashShuffleJoinOperator;
 use super::operators::sink_operator::SinkOperator;
+use super::operators::sink_operator::SinkOperatorKind;
 use super::operators::source_operator::SourceOperator;
+use super::operators::source_operator::SourceOperatorKind;
 use super::operators::txn_operator::TxnOperator;
+use super::operators::txn_operator::TxnOperatorKind;
 use super::operators::unary_operator::UnaryOperator;
+use super::operators::unary_operator::UnaryOperatorKind;
 use super::operators::vector_operator::VectorOperator;
+use super::operators::vector_operator::VectorOperatorKind;
 
 /// Sort direction for ORDER BY clause
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,11 +63,11 @@ pub enum FullOuterJoinPhase {
     EmitUnmatchedRight,
 }
 
-/// StreamingExecutor: 15-variant dispatch enum over domain-specific operators.
+/// StreamingExecutor: 16-variant dispatch enum over domain-specific operators.
 ///
-/// Each variant holds an OperatorBase (shared fields), zero or more child
-/// executors, and a domain-specific operator enum that implements the
-/// per-operator lifecycle logic.
+/// Each variant holds an OperatorBase (shared lifecycle/base fields), zero
+/// or more child executors, and a domain-specific operator wrapper that
+/// implements the per-operator lifecycle logic with zero-context methods.
 ///
 /// Gather/Exchange take N children (Vec) and merge their output via
 /// Concatenate or MergeSort mode. Exchange additionally uses the query-level
@@ -105,31 +122,156 @@ pub enum StreamingExecutor {
     ),
 }
 
-/// Dispatch to the correct operator's lifecycle method.
-macro_rules! dispatch {
-    ($self:expr, $method:ident) => {
+/// Dispatch `open` (all operators open their children themselves).
+macro_rules! dispatch_open {
+    ($self:expr) => {
         match $self {
-            Self::Source(base, op) => op.$method(base),
-            Self::Unary(base, child, op) => op.$method(base, child),
-            Self::Join(base, left, right, op) => op.$method(base, left, right),
-            Self::Set(base, left, right, op) => op.$method(base, left, right),
-            Self::Apply(base, left, right, op) => op.$method(base, left, right),
-            Self::Blocking(base, child, op) => op.$method(base, child),
-            Self::Graph(base, child, op) => op.$method(base, child),
-            Self::RecursiveFragment(base, child, op) => op.$method(base, child),
-            Self::Sink(base, child, op) => op.$method(base, child),
-            Self::Ddl(base, child, op) => op.$method(base, child),
-            Self::Fulltext(base, child, op) => op.$method(base, child),
-            Self::Vector(base, child, op) => op.$method(base, child),
-            Self::Txn(base, child, op) => op.$method(base, child),
-            Self::Gather(base, children, op) => op.$method(base, children),
-            Self::Exchange(base, children, op) => op.$method(base, children),
-            Self::HashShuffleJoin(base, left, right, op) => op.$method(base, left, right),
+            Self::Source(_, op) => op.open(),
+            Self::Unary(_, input, op) => op.open(input),
+            Self::Join(_, left, right, op) => op.open(left, right),
+            Self::Set(_, left, right, op) => op.open(left, right),
+            Self::Apply(_, left, right, op) => op.open(left, right),
+            Self::Blocking(_, input, op) => op.open(input),
+            Self::Graph(_, input, op) => op.open(input),
+            Self::RecursiveFragment(_, input, op) => op.open(input),
+            Self::Sink(_, input, op) => op.open(input),
+            Self::Ddl(_, input, op) => op.open(input),
+            Self::Fulltext(_, input, op) => op.open(input),
+            Self::Vector(_, input, op) => op.open(input),
+            Self::Txn(_, input, op) => op.open(input),
+            Self::Gather(_, children, op) => op.open(children),
+            Self::Exchange(_, children, op) => op.open(children),
+            Self::HashShuffleJoin(_, left, right, op) => op.open(left, right),
+        }
+    };
+}
+
+/// Dispatch `next` (same signature family as `open`).
+macro_rules! dispatch_next {
+    ($self:expr) => {
+        match $self {
+            Self::Source(_, op) => op.next(),
+            Self::Unary(_, input, op) => op.next(input),
+            Self::Join(_, left, right, op) => op.next(left, right),
+            Self::Set(_, left, right, op) => op.next(left, right),
+            Self::Apply(_, left, right, op) => op.next(left, right),
+            Self::Blocking(_, input, op) => op.next(input),
+            Self::Graph(_, input, op) => op.next(input),
+            Self::RecursiveFragment(_, input, op) => op.next(input),
+            Self::Sink(_, input, op) => op.next(input),
+            Self::Ddl(_, input, op) => op.next(input),
+            Self::Fulltext(_, input, op) => op.next(input),
+            Self::Vector(_, input, op) => op.next(input),
+            Self::Txn(_, input, op) => op.next(input),
+            Self::Gather(_, children, op) => op.next(children),
+            Self::Exchange(_, children, op) => op.next(children),
+            Self::HashShuffleJoin(_, left, right, op) => op.next(left, right),
+        }
+    };
+}
+
+/// Dispatch `reset`. Blocking operators fully re-create their state in
+/// `open()` and drop it in `close()`, so the close+open fallback is exact.
+/// The remaining operators (Sink/Gather/Exchange/…/Txn) do not appear inside
+/// resettable sub-plans; the fallback is a transitional audit point
+/// (EXPLAIN `reset:fallback`).
+macro_rules! dispatch_reset {
+    ($self:expr) => {
+        match $self {
+            Self::Source(_, op) => op.reset(),
+            Self::Unary(_, input, op) => op.reset(input),
+            Self::Join(_, left, right, op) => op.reset(left, right),
+            Self::Set(_, left, right, op) => op.reset(left, right),
+            Self::Apply(_, left, right, op) => op.reset(left, right),
+            Self::Graph(_, input, op) => op.reset(input),
+            Self::RecursiveFragment(_, input, op) => op.reset(input),
+            _ => $self.fallback_reset(),
+        }
+    };
+}
+
+/// Dispatch `stop`.
+macro_rules! dispatch_stop {
+    ($self:expr) => {
+        match $self {
+            Self::Source(_, op) => op.stop(),
+            Self::Unary(_, _, op) => op.stop(),
+            Self::Join(_, _, _, op) => op.stop(),
+            Self::Set(_, _, _, op) => op.stop(),
+            Self::Apply(_, _, _, op) => op.stop(),
+            Self::Blocking(_, _, op) => op.stop(),
+            Self::Graph(_, _, op) => op.stop(),
+            Self::RecursiveFragment(_, _, op) => op.stop(),
+            Self::Sink(_, _, op) => op.stop(),
+            Self::Ddl(_, _, op) => op.stop(),
+            Self::Fulltext(_, _, op) => op.stop(),
+            Self::Vector(_, _, op) => op.stop(),
+            Self::Txn(_, _, op) => op.stop(),
+            Self::Gather(_, _, op) => op.stop(),
+            Self::Exchange(_, _, op) => op.stop(),
+            Self::HashShuffleJoin(_, _, _, op) => op.stop(),
+        }
+    };
+}
+
+/// Dispatch `close`.
+macro_rules! dispatch_close {
+    ($self:expr) => {
+        match $self {
+            Self::Source(_, op) => op.close(),
+            Self::Unary(_, _, op) => op.close(),
+            Self::Join(_, _, _, op) => op.close(),
+            Self::Set(_, _, _, op) => op.close(),
+            Self::Apply(_, _, _, op) => op.close(),
+            Self::Blocking(_, _, op) => op.close(),
+            Self::Graph(_, _, op) => op.close(),
+            Self::RecursiveFragment(_, _, op) => op.close(),
+            Self::Sink(_, _, op) => op.close(),
+            Self::Ddl(_, _, op) => op.close(),
+            Self::Fulltext(_, _, op) => op.close(),
+            Self::Vector(_, _, op) => op.close(),
+            Self::Txn(_, _, op) => op.close(),
+            Self::Gather(_, _, op) => op.close(),
+            Self::Exchange(_, _, op) => op.close(),
+            Self::HashShuffleJoin(_, _, _, op) => op.close(),
         }
     };
 }
 
 impl StreamingExecutor {
+    /// Recursively inject the runtime and execution config into every
+    /// operator wrapper. `open()` derives the config from the base fields,
+    /// so callers only need `set_runtime`/`set_chunk_size`/`set_partition_id`
+    /// beforehand. Idempotent; safe to call on already-opened trees.
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        let runtime_ref = runtime.as_ref();
+        match self {
+            Self::Source(_, op) => op.inject_context(runtime_ref, config),
+            Self::Unary(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Join(_, _, _, op) => op.inject_context(runtime_ref, config),
+            Self::Set(_, _, _, op) => op.inject_context(runtime_ref, config),
+            Self::Apply(_, _, _, op) => op.inject_context(runtime_ref, config),
+            Self::Blocking(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Graph(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::RecursiveFragment(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Sink(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Ddl(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Fulltext(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Vector(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Txn(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Gather(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::Exchange(_, _, op) => op.inject_context(runtime_ref, config),
+            Self::HashShuffleJoin(_, _, _, op) => op.inject_context(runtime_ref, config),
+        }
+        for child in self.children_mut() {
+            child.inject_context(runtime.clone(), config);
+        }
+    }
+
     /// Recursively set the runtime on this operator and all children.
     pub fn set_runtime(&mut self, rt: Option<Arc<ExecutionRuntime>>) {
         if let (Self::Graph(_, _, operator), Some(runtime)) = (&mut *self, rt.as_ref()) {
@@ -191,30 +333,30 @@ impl StreamingExecutor {
     /// copy of the original logical tree.
     pub fn is_partition_local(&self) -> bool {
         match self {
-            Self::Source(
-                _,
-                SourceOperator::ScanVertices { .. }
-                | SourceOperator::StorageScanVertices { .. }
-                | SourceOperator::ScanEdges { .. }
-                | SourceOperator::StorageScanEdges { .. },
-            ) => true,
+            Self::Source(_, op) => matches!(
+                &op.kind,
+                SourceOperatorKind::ScanVertices { .. }
+                    | SourceOperatorKind::StorageScanVertices { .. }
+                    | SourceOperatorKind::ScanEdges { .. }
+                    | SourceOperatorKind::StorageScanEdges { .. }
+            ),
             Self::Unary(_, input, op) => {
                 matches!(
-                    op,
-                    UnaryOperator::Filter { .. }
-                        | UnaryOperator::Project { .. }
-                        | UnaryOperator::Assign { .. }
-                        | UnaryOperator::Remove { .. }
-                        | UnaryOperator::Unwind { .. }
-                        | UnaryOperator::AppendVertices { .. }
+                    &op.kind,
+                    UnaryOperatorKind::Filter { .. }
+                        | UnaryOperatorKind::Project { .. }
+                        | UnaryOperatorKind::Assign { .. }
+                        | UnaryOperatorKind::Remove { .. }
+                        | UnaryOperatorKind::Unwind { .. }
+                        | UnaryOperatorKind::AppendVertices { .. }
                 ) && input.is_partition_local()
             }
             Self::Blocking(_, input, op) => {
                 matches!(
-                    op,
-                    BlockingOperator::PartialAggregate { .. }
-                        | BlockingOperator::Distinct { .. }
-                        | BlockingOperator::TopN { .. }
+                    &op.kind,
+                    BlockingOperatorKind::PartialAggregate { .. }
+                        | BlockingOperatorKind::Distinct { .. }
+                        | BlockingOperatorKind::TopN { .. }
                 ) && input.is_partition_local()
             }
             Self::HashShuffleJoin(..) | Self::Exchange(..) | Self::RecursiveFragment(..) => false,
@@ -236,130 +378,131 @@ impl StreamingExecutor {
     pub fn operator_name(&self) -> &'static str {
         use StreamingExecutor::*;
         match self {
-            Source(_, op) => match op {
-                SourceOperator::ScanVertices { .. }
-                | SourceOperator::StorageScanVertices { .. }
-                | SourceOperator::StandaloneValues { .. } => "ScanVertices",
-                SourceOperator::ScanEdges { .. } | SourceOperator::StorageScanEdges { .. } => {
-                    "ScanEdges"
+            Source(_, op) => match &op.kind {
+                SourceOperatorKind::ScanVertices { .. }
+                | SourceOperatorKind::StorageScanVertices { .. }
+                | SourceOperatorKind::StandaloneValues { .. } => "ScanVertices",
+                SourceOperatorKind::ScanEdges { .. }
+                | SourceOperatorKind::StorageScanEdges { .. } => "ScanEdges",
+                SourceOperatorKind::GetVertices { .. } => "GetVertices",
+                SourceOperatorKind::GetEdges { .. } => "GetEdges",
+                SourceOperatorKind::GetNeighbors { .. } => "GetNeighbors",
+                SourceOperatorKind::IndexScan { .. } => "IndexScan",
+                SourceOperatorKind::Argument => "Argument",
+                SourceOperatorKind::GetProp { .. } => "GetProp",
+                SourceOperatorKind::Start => "Start",
+            },
+            Unary(_, _, op) => match &op.kind {
+                UnaryOperatorKind::Filter { .. } => "Filter",
+                UnaryOperatorKind::Project { .. } => "Project",
+                UnaryOperatorKind::Limit { .. } => "Limit",
+                UnaryOperatorKind::Dedup { .. } => "Dedup",
+                UnaryOperatorKind::Assign { .. } => "Assign",
+                UnaryOperatorKind::Remove { .. } => "Remove",
+                UnaryOperatorKind::Unwind { .. } => "Unwind",
+                UnaryOperatorKind::AppendVertices { .. } => "AppendVertices",
+                UnaryOperatorKind::Sample { .. } => "Sample",
+            },
+            Txn(_, _, op) => match &op.kind {
+                TxnOperatorKind::BeginTransaction { .. } => "BeginTransaction",
+                TxnOperatorKind::Commit { .. } => "Commit",
+                TxnOperatorKind::Rollback { .. } => "Rollback",
+            },
+            Join(_, _, _, op) => match &op.kind {
+                JoinOperatorKind::HashJoin { .. } => "HashJoin",
+                JoinOperatorKind::HashLeftJoin { .. } => "HashLeftJoin",
+                JoinOperatorKind::NestedLoopJoin { .. } => "NestedLoopJoin",
+                JoinOperatorKind::InnerJoin { .. } => "InnerJoin",
+                JoinOperatorKind::LeftJoin { .. } => "LeftJoin",
+                JoinOperatorKind::RightJoin { .. } => "RightJoin",
+                JoinOperatorKind::FullOuterJoin { .. } => "FullOuterJoin",
+                JoinOperatorKind::CrossJoin { .. } => "CrossJoin",
+                JoinOperatorKind::SemiJoin { .. } => "SemiJoin",
+            },
+            Set(_, _, _, op) => match &op.kind {
+                SetOperatorKind::Union { .. } => "Union",
+                SetOperatorKind::UnionAll { .. } => "UnionAll",
+                SetOperatorKind::Intersect { .. } => "Intersect",
+                SetOperatorKind::Except { .. } => "Except",
+                SetOperatorKind::Minus { .. } => "Minus",
+            },
+            Apply(_, _, _, op) => match &op.kind {
+                ApplyOperatorKind::Apply { .. } => "Apply",
+                ApplyOperatorKind::PatternApply { .. } => "PatternApply",
+                ApplyOperatorKind::CorrelatedApply { .. } => "CorrelatedApply",
+                ApplyOperatorKind::RollUpApply { .. } => "RollUpApply",
+            },
+            Blocking(_, _, op) => match &op.kind {
+                BlockingOperatorKind::Sort { .. } => "Sort",
+                BlockingOperatorKind::Aggregate { .. } => "Aggregate",
+                BlockingOperatorKind::GroupBy { .. } => "GroupBy",
+                BlockingOperatorKind::WindowFunction { .. } => "WindowFunction",
+                BlockingOperatorKind::Window { .. } => "Window",
+                BlockingOperatorKind::TopN { .. } => "TopN",
+                BlockingOperatorKind::Distinct { .. } => "Distinct",
+                BlockingOperatorKind::Materialize { .. } => "Materialize",
+                BlockingOperatorKind::DataCollect { .. } => "DataCollect",
+                BlockingOperatorKind::RollUpApply { .. } => "RollUpApply",
+                BlockingOperatorKind::PartialAggregate { .. } => "PartialAggregate",
+                BlockingOperatorKind::FinalAggregate { .. } => "FinalAggregate",
+            },
+            Graph(_, _, op) => match &op.kind {
+                GraphOperatorKind::Expand { .. } => "Expand",
+                GraphOperatorKind::ExpandAll { .. } => "ExpandAll",
+                GraphOperatorKind::Traverse { .. } => "Traverse",
+                GraphOperatorKind::TraverseAll { .. } => "TraverseAll",
+                GraphOperatorKind::BiExpand { .. } => "BiExpand",
+                GraphOperatorKind::BiTraverse { .. } => "BiTraverse",
+                GraphOperatorKind::Subgraph { .. } => "Subgraph",
+            },
+            RecursiveFragment(_, _, op) => match &op.kind {
+                RecursiveFragmentOperatorKind::ShortestPath { .. } => "RecursiveShortestPath",
+                RecursiveFragmentOperatorKind::MultiShortestPath { .. } => {
+                    "RecursiveMultiShortestPath"
                 }
-                SourceOperator::GetVertices { .. } => "GetVertices",
-                SourceOperator::GetEdges { .. } => "GetEdges",
-                SourceOperator::GetNeighbors { .. } => "GetNeighbors",
-                SourceOperator::IndexScan { .. } => "IndexScan",
-                SourceOperator::Argument => "Argument",
-                SourceOperator::GetProp { .. } => "GetProp",
-                SourceOperator::Start => "Start",
+                RecursiveFragmentOperatorKind::BFSShortest { .. } => "RecursiveBFSShortest",
+                RecursiveFragmentOperatorKind::AllPaths { .. } => "RecursiveAllPaths",
             },
-            Unary(_, _, op) => match op {
-                UnaryOperator::Filter { .. } => "Filter",
-                UnaryOperator::Project { .. } => "Project",
-                UnaryOperator::Limit { .. } => "Limit",
-                UnaryOperator::Dedup { .. } => "Dedup",
-                UnaryOperator::Assign { .. } => "Assign",
-                UnaryOperator::Remove { .. } => "Remove",
-                UnaryOperator::Unwind { .. } => "Unwind",
-                UnaryOperator::AppendVertices { .. } => "AppendVertices",
-                UnaryOperator::Sample { .. } => "Sample",
+            Sink(_, _, op) => match &op.kind {
+                SinkOperatorKind::InsertVertices { .. } => "InsertVertices",
+                SinkOperatorKind::InsertEdges { .. } => "InsertEdges",
+                SinkOperatorKind::UpdateVertices { .. } => "UpdateVertices",
+                SinkOperatorKind::UpdateEdges { .. } => "UpdateEdges",
+                SinkOperatorKind::DeleteVertices { .. } => "DeleteVertices",
+                SinkOperatorKind::DeleteEdges { .. } => "DeleteEdges",
+                SinkOperatorKind::PipeDeleteVertices { .. } => "PipeDeleteVertices",
+                SinkOperatorKind::PipeDeleteEdges { .. } => "PipeDeleteEdges",
+                SinkOperatorKind::DeleteTags { .. } => "DeleteTags",
             },
-            Txn(_, _, op) => match op {
-                TxnOperator::BeginTransaction { .. } => "BeginTransaction",
-                TxnOperator::Commit { .. } => "Commit",
-                TxnOperator::Rollback { .. } => "Rollback",
+            Ddl(_, _, op) => match &op.kind {
+                DdlOperatorKind::SpaceManage { .. } => "SpaceManage",
+                DdlOperatorKind::TagManage { .. } => "TagManage",
+                DdlOperatorKind::EdgeManage { .. } => "EdgeManage",
+                DdlOperatorKind::IndexManage { .. } => "IndexManage",
+                DdlOperatorKind::DeleteIndex { .. } => "DeleteIndex",
+                DdlOperatorKind::UserManage { .. } => "UserManage",
+                DdlOperatorKind::ShowStats { .. } => "ShowStats",
+                DdlOperatorKind::ShowConfigs { .. } => "ShowConfigs",
+                DdlOperatorKind::ShowQueries { .. } => "ShowQueries",
+                DdlOperatorKind::ShowSessions { .. } => "ShowSessions",
+                DdlOperatorKind::Analyze { .. } => "Analyze",
+                DdlOperatorKind::Migrate { .. } => "Migrate",
             },
-            Join(_, _, _, op) => match op {
-                JoinOperator::HashJoin { .. } => "HashJoin",
-                JoinOperator::HashLeftJoin { .. } => "HashLeftJoin",
-                JoinOperator::NestedLoopJoin { .. } => "NestedLoopJoin",
-                JoinOperator::InnerJoin { .. } => "InnerJoin",
-                JoinOperator::LeftJoin { .. } => "LeftJoin",
-                JoinOperator::RightJoin { .. } => "RightJoin",
-                JoinOperator::FullOuterJoin { .. } => "FullOuterJoin",
-                JoinOperator::CrossJoin { .. } => "CrossJoin",
-                JoinOperator::SemiJoin { .. } => "SemiJoin",
+            Fulltext(_, _, op) => match &op.kind {
+                FulltextOperatorKind::FulltextManage { .. } => "FulltextManage",
+                FulltextOperatorKind::FulltextSearch { .. } => "FulltextSearch",
+                FulltextOperatorKind::FulltextLookup { .. } => "FulltextLookup",
+                FulltextOperatorKind::MatchFulltext { .. } => "MatchFulltext",
             },
-            Set(_, _, _, op) => match op {
-                SetOperator::Union { .. } => "Union",
-                SetOperator::UnionAll { .. } => "UnionAll",
-                SetOperator::Intersect { .. } => "Intersect",
-                SetOperator::Except { .. } => "Except",
-                SetOperator::Minus { .. } => "Minus",
+            Vector(_, _, op) => match &op.kind {
+                VectorOperatorKind::VectorManage { .. } => "VectorManage",
+                VectorOperatorKind::VectorSearch { .. } => "VectorSearch",
+                VectorOperatorKind::VectorLookup { .. } => "VectorLookup",
+                VectorOperatorKind::VectorMatch { .. } => "VectorMatch",
             },
-            Apply(_, _, _, op) => match op {
-                ApplyOperator::Apply { .. } => "Apply",
-                ApplyOperator::PatternApply { .. } => "PatternApply",
-                ApplyOperator::CorrelatedApply { .. } => "CorrelatedApply",
-                ApplyOperator::RollUpApply { .. } => "RollUpApply",
-            },
-            Blocking(_, _, op) => match op {
-                BlockingOperator::Sort { .. } => "Sort",
-                BlockingOperator::Aggregate { .. } => "Aggregate",
-                BlockingOperator::GroupBy { .. } => "GroupBy",
-                BlockingOperator::WindowFunction { .. } => "WindowFunction",
-                BlockingOperator::Window { .. } => "Window",
-                BlockingOperator::TopN { .. } => "TopN",
-                BlockingOperator::Distinct { .. } => "Distinct",
-                BlockingOperator::Materialize { .. } => "Materialize",
-                BlockingOperator::DataCollect { .. } => "DataCollect",
-                BlockingOperator::RollUpApply { .. } => "RollUpApply",
-                BlockingOperator::PartialAggregate { .. } => "PartialAggregate",
-                BlockingOperator::FinalAggregate { .. } => "FinalAggregate",
-            },
-            Graph(_, _, op) => match op {
-                GraphOperator::Expand { .. } => "Expand",
-                GraphOperator::ExpandAll { .. } => "ExpandAll",
-                GraphOperator::Traverse { .. } => "Traverse",
-                GraphOperator::TraverseAll { .. } => "TraverseAll",
-                GraphOperator::BiExpand { .. } => "BiExpand",
-                GraphOperator::BiTraverse { .. } => "BiTraverse",
-                GraphOperator::Subgraph { .. } => "Subgraph",
-            },
-            RecursiveFragment(_, _, op) => match op {
-                RecursiveFragmentOperator::ShortestPath { .. } => "RecursiveShortestPath",
-                RecursiveFragmentOperator::MultiShortestPath { .. } => "RecursiveMultiShortestPath",
-                RecursiveFragmentOperator::BFSShortest { .. } => "RecursiveBFSShortest",
-                RecursiveFragmentOperator::AllPaths { .. } => "RecursiveAllPaths",
-            },
-            Sink(_, _, op) => match op {
-                SinkOperator::InsertVertices { .. } => "InsertVertices",
-                SinkOperator::InsertEdges { .. } => "InsertEdges",
-                SinkOperator::UpdateVertices { .. } => "UpdateVertices",
-                SinkOperator::UpdateEdges { .. } => "UpdateEdges",
-                SinkOperator::DeleteVertices { .. } => "DeleteVertices",
-                SinkOperator::DeleteEdges { .. } => "DeleteEdges",
-                SinkOperator::PipeDeleteVertices { .. } => "PipeDeleteVertices",
-                SinkOperator::PipeDeleteEdges { .. } => "PipeDeleteEdges",
-                SinkOperator::DeleteTags { .. } => "DeleteTags",
-            },
-            Ddl(_, _, op) => match op {
-                DdlOperator::SpaceManage { .. } => "SpaceManage",
-                DdlOperator::TagManage { .. } => "TagManage",
-                DdlOperator::EdgeManage { .. } => "EdgeManage",
-                DdlOperator::IndexManage { .. } => "IndexManage",
-                DdlOperator::DeleteIndex { .. } => "DeleteIndex",
-                DdlOperator::UserManage { .. } => "UserManage",
-                DdlOperator::ShowStats { .. } => "ShowStats",
-                DdlOperator::ShowConfigs { .. } => "ShowConfigs",
-                DdlOperator::ShowQueries { .. } => "ShowQueries",
-                DdlOperator::ShowSessions { .. } => "ShowSessions",
-                DdlOperator::Analyze { .. } => "Analyze",
-                DdlOperator::Migrate { .. } => "Migrate",
-            },
-            Fulltext(_, _, op) => match op {
-                FulltextOperator::FulltextManage { .. } => "FulltextManage",
-                FulltextOperator::FulltextSearch { .. } => "FulltextSearch",
-                FulltextOperator::FulltextLookup { .. } => "FulltextLookup",
-                FulltextOperator::MatchFulltext { .. } => "MatchFulltext",
-            },
-            Vector(_, _, op) => match op {
-                VectorOperator::VectorManage { .. } => "VectorManage",
-                VectorOperator::VectorSearch { .. } => "VectorSearch",
-                VectorOperator::VectorLookup { .. } => "VectorLookup",
-                VectorOperator::VectorMatch { .. } => "VectorMatch",
-            },
-            Gather(_, _, op) => match op {
-                GatherOperator::Concatenate { .. } => "Gather(Concatenate)",
-                GatherOperator::MergeSort { .. } => "Gather(MergeSort)",
+            Gather(_, _, op) => match &op.kind {
+                GatherOperatorKind::Concatenate { .. } => "Gather(Concatenate)",
+                GatherOperatorKind::MergeSort { .. } => "Gather(MergeSort)",
             },
             Exchange(_, _, op) => match &op.state {
                 ExchangeState::Concatenate { .. } => "Exchange(Concatenate)",
@@ -568,7 +711,6 @@ impl StreamingExecutor {
             | Self::RecursiveFragment(..)
             | Self::Sink(..)
             | Self::Txn(..)
-            | Self::Apply(..)
             | Self::Ddl(..)
             | Self::Fulltext(..)
             | Self::Vector(..)
@@ -576,8 +718,14 @@ impl StreamingExecutor {
             | Self::Exchange(..) => None,
             Self::Blocking(_, _, op) => Some(op.memory_tracker()),
             Self::Join(_, _, _, op) => Some(op.memory_tracker()),
-            Self::Set(_, _, _, SetOperator::UnionAll { .. }) => None,
-            Self::Set(_, _, _, op) => Some(op.memory_tracker()),
+            Self::Set(_, _, _, op) => {
+                if matches!(&op.kind, SetOperatorKind::UnionAll { .. }) {
+                    None
+                } else {
+                    Some(op.memory_tracker())
+                }
+            }
+            Self::Apply(_, _, _, op) => Some(op.memory_tracker()),
             Self::HashShuffleJoin(_, _, _, op) => Some(op.memory_tracker()),
         }
     }
@@ -585,6 +733,81 @@ impl StreamingExecutor {
     /// Whether this operator is in an opened state (can produce chunks).
     pub fn opened(&self) -> bool {
         self.base().lifecycle.is_opened()
+    }
+
+    // ── Reset protocol ──
+
+    /// Reset the executor so it re-produces the same logical stream as the
+    /// first run (for the same snapshot / correlation frame).
+    ///
+    /// Lifecycle: `open → (advance)* → reset → (advance)* → … → close`.
+    /// The executor instance is reused; no operator structs are rebuilt.
+    /// Operators without a native reset degrade to `close + open`
+    /// (`reset_used_fallback` is set, surfaced in EXPLAIN).
+    pub fn reset(&mut self) -> Result<(), QueryError> {
+        let used_fallback = dispatch_reset!(self)?;
+        self.base_mut().reset_used_fallback |= used_fallback;
+        self.restore_opened_lifecycle();
+        Ok(())
+    }
+
+    /// Transitional fallback: `close_tree + open` on the whole subtree.
+    /// Reuses the existing close/open semantics; never rebuilds operator
+    /// structs. Must not become the default path for commonly reset
+    /// operators — EXPLAIN marks it via `reset_used_fallback`.
+    fn fallback_reset(&mut self) -> Result<bool, QueryError> {
+        self.close_tree()?;
+        self.mark_tree_new();
+        self.open()?;
+        Ok(true)
+    }
+
+    /// Set every base lifecycle in this tree to `New` (before a re-open).
+    fn mark_tree_new(&mut self) {
+        self.base_mut().mark_new();
+        for child in self.children_mut() {
+            child.mark_tree_new();
+        }
+    }
+
+    /// Mark every base lifecycle in this tree as `Opened` (after a
+    /// successful open). Operators no longer touch lifecycle themselves;
+    /// the executor is the sole owner of the lifecycle state machine.
+    fn mark_tree_opened(&mut self) {
+        self.base_mut().lifecycle = OperatorLifecycle::Opened;
+        for child in self.children_mut() {
+            child.mark_tree_opened();
+        }
+    }
+
+    /// Restore `Opened` on operators that were opened/exhausted so they can
+    /// produce again after a reset.
+    fn restore_opened_lifecycle(&mut self) {
+        if matches!(
+            self.base().lifecycle,
+            OperatorLifecycle::Opened | OperatorLifecycle::Exhausted
+        ) {
+            self.base_mut().lifecycle = OperatorLifecycle::Opened;
+        }
+        for child in self.children_mut() {
+            child.restore_opened_lifecycle();
+        }
+    }
+
+    /// Inject a correlation frame into the `Argument` source of this
+    /// executor tree (the root of a correlated sub-plan). Each executor
+    /// instance owns its frame, so parallel partitions and nested
+    /// subqueries never interfere.
+    pub fn inject_correlation_frame(&mut self, layout: Arc<SlotLayout>, row: Vec<Value>) {
+        if let Self::Source(_, op) = self {
+            if matches!(&op.kind, SourceOperatorKind::Argument) {
+                op.frame = Some((layout, row));
+                return;
+            }
+        }
+        for child in self.children_mut() {
+            child.inject_correlation_frame(layout.clone(), row.clone());
+        }
     }
 
     // ── Lifecycle dispatch ──
@@ -605,8 +828,17 @@ impl StreamingExecutor {
             };
             rt.register_operator(&op);
         }
+        // Inject the runtime and execution config (derived from the base
+        // fields) into every operator wrapper before any operator code runs.
+        let runtime = self.base().runtime.clone();
+        let config = OperatorConfig {
+            chunk_size: self.base().chunk_size,
+            partition_id: self.base().partition_id,
+            physical_operator_id: self.base().physical_operator_id,
+        };
+        self.inject_context(runtime, config);
         let start = Instant::now();
-        let result = dispatch!(self, open);
+        let result = dispatch_open!(self);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("open", elapsed);
         if let Err(error) = result {
@@ -618,18 +850,21 @@ impl StreamingExecutor {
             }
             return Err(error);
         }
+        self.mark_tree_opened();
         Ok(())
     }
 
     /// Pull the next chunk.
     pub fn advance(&mut self) -> Result<Option<DataChunk>, QueryError> {
         self.ensure_not_cancelled()?;
-        if self.base().lifecycle.is_exhausted() {
+        // Operators no longer guard on lifecycle themselves; the executor
+        // enforces that only opened, non-exhausted executors produce.
+        if self.base().lifecycle.is_exhausted() || !self.base().lifecycle.is_opened() {
             return Ok(None);
         }
         let one_shot = matches!(self, Self::Ddl(..) | Self::Fulltext(..) | Self::Vector(..));
         let start = Instant::now();
-        let result = dispatch!(self, next);
+        let result = dispatch_next!(self);
         let elapsed = start.elapsed().as_micros() as u64;
         if let Ok(Some(ref chunk)) = result {
             self.record_profile_rows(chunk.len() as u64);
@@ -659,7 +894,7 @@ impl StreamingExecutor {
             return Ok(());
         }
         let start = Instant::now();
-        let result = dispatch!(self, stop);
+        let result = dispatch_stop!(self);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("stop", elapsed);
         if result.is_ok() {
@@ -678,7 +913,7 @@ impl StreamingExecutor {
         let spilled = self.spilled_size();
         let sc = self.spill_count();
         let start = Instant::now();
-        let result = dispatch!(self, close);
+        let result = dispatch_close!(self);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("close", elapsed);
         if peak > 0 {
@@ -795,7 +1030,11 @@ mod tests {
     };
     use crate::core::Value;
     use crate::query::executor::streaming::helpers::compare_values;
+    use crate::query::executor::streaming::operators::set_operator::SetOperatorKind;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
+    use crate::query::executor::streaming::operators::unary_operator::UnaryOperatorKind;
     use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+    use crate::query::executor::streaming::slot::SlotLayout;
     use std::sync::Arc;
 
     fn create_test_buffer() -> Vec<Vec<Value>> {
@@ -813,15 +1052,21 @@ mod tests {
     }
 
     fn scan_executor(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
-        use super::super::operators::source_operator::SourceOperator;
         StreamingExecutor::Source(
             OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: rows,
-                current_index: 0,
-                col_names,
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows,
+                    current_index: 0,
+                    col_names,
+                },
+                Arc::new(SlotLayout::new(vec![])),
+            ),
         )
+    }
+
+    fn empty_layout() -> Arc<SlotLayout> {
+        Arc::new(SlotLayout::new(vec![]))
     }
 
     #[test]
@@ -844,12 +1089,15 @@ mod tests {
         let mut executor = StreamingExecutor::Unary(
             OperatorBase::new(0),
             scan,
-            UnaryOperator::Limit {
-                offset: 0,
-                limit: 10,
-                skipped: 0,
-                consumed: 0,
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::Limit {
+                    offset: 0,
+                    limit: 10,
+                    skipped: 0,
+                    consumed: 0,
+                },
+                empty_layout(),
+            ),
         );
 
         executor.open().unwrap();
@@ -873,12 +1121,15 @@ mod tests {
         let mut executor = StreamingExecutor::Unary(
             OperatorBase::new(0),
             scan,
-            UnaryOperator::Limit {
-                offset: 2,
-                limit: 3,
-                skipped: 0,
-                consumed: 0,
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::Limit {
+                    offset: 2,
+                    limit: 3,
+                    skipped: 0,
+                    consumed: 0,
+                },
+                empty_layout(),
+            ),
         );
 
         executor.open().expect("limit should open");
@@ -939,33 +1190,42 @@ mod tests {
     fn failed_open_closes_children_opened_before_the_failure() {
         let left = StreamingExecutor::Source(
             OperatorBase::new(1),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::BigInt(1)]],
-                current_index: 0,
-                col_names: vec!["id".to_string()],
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: vec![vec![Value::BigInt(1)]],
+                    current_index: 0,
+                    col_names: vec!["id".to_string()],
+                },
+                empty_layout(),
+            ),
         );
         let right = StreamingExecutor::Source(
             OperatorBase::new(2),
-            SourceOperator::StorageScanVertices {
-                storage: None,
-                space_name: "test".to_string(),
-                limit: None,
-                partition_range: None,
-                col_names: vec![],
-                projected_properties: vec![],
-                predicate: Vec::new(),
-                tag: None,
-                cursor: None,
-            },
+            SourceOperator::new(
+                SourceOperatorKind::StorageScanVertices {
+                    storage: None,
+                    space_name: "test".to_string(),
+                    limit: None,
+                    partition_range: None,
+                    col_names: vec![],
+                    projected_properties: vec![],
+                    predicate: Vec::new(),
+                    tag: None,
+                    cursor: None,
+                },
+                empty_layout(),
+            ),
         );
         let mut executor = StreamingExecutor::Set(
             OperatorBase::new(3),
             Box::new(left),
             Box::new(right),
-            SetOperator::UnionAll {
-                left_consumed: false,
-            },
+            SetOperator::new(
+                SetOperatorKind::UnionAll {
+                    left_consumed: false,
+                },
+                empty_layout(),
+            ),
         );
 
         assert!(executor.open().is_err());
@@ -984,15 +1244,18 @@ mod tests {
         use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
         use std::sync::Arc;
 
-        // Build a runtime with a tiny memory budget so Sort spills immediately.
-        let budget = MemoryBudget::new(128); // ~3 rows before spill
+        // Build a runtime with a large memory budget (source chunk
+        // reservations must not fail) while the Sort tracker uses a tiny
+        // budget so the operator spills immediately.
+        let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
+        let tracker_budget = MemoryBudget::new(128); // ~3 rows before spill
         let rt = Arc::new(ExecutionRuntime::new(
             super::super::runtime::QueryIdentity {
                 query_id: 999,
                 session_id: None,
                 space_name: None,
             },
-            budget.clone(),
+            runtime_budget,
             None,
             #[cfg(feature = "fulltext-search")]
             None,
@@ -1014,7 +1277,7 @@ mod tests {
             OperatorBase::new(10)
                 .with_runtime(Some(rt.clone()))
                 .with_physical_operator_id(PhysicalOperatorId(42))
-                .with_output_layout(output_layout),
+                .with_output_layout(output_layout.clone()),
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::Sort {
@@ -1023,7 +1286,8 @@ mod tests {
                     )],
                     sort_directions: vec![SortDirection::Ascending],
                 },
-                &budget,
+                &tracker_budget,
+                output_layout,
             ),
         );
 
@@ -1066,14 +1330,16 @@ mod tests {
         use crate::query::executor::streaming::slot::SlotLayout;
         use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
-        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
+        let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
+        let tracker_budget = MemoryBudget::new(spill_budget);
         let rt = Arc::new(ExecutionRuntime::new(
             super::super::runtime::QueryIdentity {
                 query_id: 4243,
                 session_id: None,
                 space_name: None,
             },
-            budget.clone(),
+            runtime_budget.clone(),
             None,
             #[cfg(feature = "fulltext-search")]
             None,
@@ -1091,7 +1357,7 @@ mod tests {
             OperatorBase::new(10)
                 .with_runtime(Some(rt.clone()))
                 .with_physical_operator_id(PhysicalOperatorId(44))
-                .with_output_layout(output_layout),
+                .with_output_layout(output_layout.clone()),
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::Sort {
@@ -1100,7 +1366,8 @@ mod tests {
                     )],
                     sort_directions: vec![SortDirection::Ascending],
                 },
-                &budget,
+                &tracker_budget,
+                output_layout,
             ),
         );
 
@@ -1172,14 +1439,16 @@ mod tests {
         use crate::query::executor::streaming::slot::SlotLayout;
         use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
-        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
+        let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
+        let tracker_budget = MemoryBudget::new(spill_budget);
         let rt = Arc::new(ExecutionRuntime::new(
             super::super::runtime::QueryIdentity {
                 query_id: 4242,
                 session_id: None,
                 space_name: None,
             },
-            budget.clone(),
+            runtime_budget.clone(),
             None,
             #[cfg(feature = "fulltext-search")]
             None,
@@ -1197,7 +1466,7 @@ mod tests {
             OperatorBase::new(10)
                 .with_runtime(Some(rt.clone()))
                 .with_physical_operator_id(PhysicalOperatorId(43))
-                .with_output_layout(output_layout),
+                .with_output_layout(output_layout.clone()),
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::Aggregate {
@@ -1226,7 +1495,8 @@ mod tests {
                     ],
                     output_col_names: vec![],
                 },
-                &budget,
+                &tracker_budget,
+                output_layout,
             ),
         );
 
@@ -1297,14 +1567,16 @@ mod tests {
         use crate::query::executor::streaming::slot::SlotLayout;
         use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
-        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
+        let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
+        let tracker_budget = MemoryBudget::new(spill_budget);
         let rt = Arc::new(ExecutionRuntime::new(
             super::super::runtime::QueryIdentity {
                 query_id: 4244,
                 session_id: None,
                 space_name: None,
             },
-            budget.clone(),
+            runtime_budget.clone(),
             None,
             #[cfg(feature = "fulltext-search")]
             None,
@@ -1322,7 +1594,7 @@ mod tests {
             OperatorBase::new(10)
                 .with_runtime(Some(rt.clone()))
                 .with_physical_operator_id(PhysicalOperatorId(45))
-                .with_output_layout(output_layout),
+                .with_output_layout(output_layout.clone()),
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::GroupBy {
@@ -1330,7 +1602,8 @@ mod tests {
                         col_names[0].clone(),
                     )],
                 },
-                &budget,
+                &tracker_budget,
+                output_layout,
             ),
         );
 
@@ -1406,14 +1679,16 @@ mod tests {
         use crate::query::executor::streaming::slot::SlotLayout;
         use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
-        let budget = MemoryBudget::new(spill_budget_bytes.unwrap_or(512 * 1024 * 1024));
+        let spill_budget = spill_budget_bytes.unwrap_or(512 * 1024 * 1024);
+        let runtime_budget = MemoryBudget::new(512 * 1024 * 1024);
+        let tracker_budget = MemoryBudget::new(spill_budget);
         let rt = Arc::new(ExecutionRuntime::new(
             super::super::runtime::QueryIdentity {
                 query_id: 4245,
                 session_id: None,
                 space_name: None,
             },
-            budget.clone(),
+            runtime_budget.clone(),
             None,
             #[cfg(feature = "fulltext-search")]
             None,
@@ -1431,7 +1706,7 @@ mod tests {
             OperatorBase::new(10)
                 .with_runtime(Some(rt.clone()))
                 .with_physical_operator_id(PhysicalOperatorId(46))
-                .with_output_layout(output_layout),
+                .with_output_layout(output_layout.clone()),
             scan,
             BlockingOperator::from_spec(
                 &BlockingSpec::WindowFunction {
@@ -1446,7 +1721,8 @@ mod tests {
                     order_by_exprs: vec![Expression::variable(col_names[1].clone())],
                     order_by_directions: vec![SortDirection::Ascending],
                 },
-                &budget,
+                &tracker_budget,
+                output_layout,
             ),
         );
 
@@ -1504,5 +1780,186 @@ mod tests {
             "expected spill_count > 0, got {}",
             entry.spill_count
         );
+    }
+
+    // ── Reset protocol ──
+
+    fn pull_all(executor: &mut StreamingExecutor) -> Vec<Vec<Value>> {
+        let mut rows = Vec::new();
+        while let Some(mut chunk) = executor.advance().expect("advance should succeed") {
+            chunk.materialize_selection_by("reset-test");
+            rows.extend(chunk.rows);
+        }
+        rows
+    }
+
+    #[test]
+    fn stateless_filter_reset_repulls_identical_output() {
+        use crate::core::types::expr::Expression;
+        use crate::core::types::operators::BinaryOperator;
+
+        let scan = Box::new(scan_executor(
+            (1..=6).map(|v| vec![Value::BigInt(v)]).collect(),
+            vec!["v".to_string()],
+        ));
+        let predicate = Expression::binary(
+            Expression::variable("v"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(Value::BigInt(3)),
+        );
+        let mut executor = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            scan,
+            UnaryOperator::new(
+                UnaryOperatorKind::Filter {
+                    predicate,
+                    state: Default::default(),
+                },
+                empty_layout(),
+            ),
+        );
+
+        executor.open().expect("open should succeed");
+        let first = pull_all(&mut executor);
+        assert_eq!(
+            first,
+            vec![
+                vec![Value::BigInt(4)],
+                vec![Value::BigInt(5)],
+                vec![Value::BigInt(6)]
+            ]
+        );
+
+        executor.reset().expect("reset should succeed");
+        let second = pull_all(&mut executor);
+        assert_eq!(second, first, "stateless filter reset re-produces output");
+        executor.close().expect("close should succeed");
+    }
+
+    #[test]
+    fn buffered_unary_reset_clears_counters_and_seen_rows() {
+        let dedup_scan = Box::new(scan_executor(
+            vec![
+                vec![Value::BigInt(1)],
+                vec![Value::BigInt(1)],
+                vec![Value::BigInt(2)],
+            ],
+            vec!["v".to_string()],
+        ));
+        let mut dedup = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            dedup_scan,
+            UnaryOperator::new(
+                UnaryOperatorKind::Dedup {
+                    seen_rows: std::collections::HashSet::new(),
+                },
+                empty_layout(),
+            ),
+        );
+        dedup.open().expect("open should succeed");
+        let first = pull_all(&mut dedup);
+        assert_eq!(first, vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]]);
+        dedup.reset().expect("dedup reset should succeed");
+        let second = pull_all(&mut dedup);
+        assert_eq!(second, first, "dedup seen_rows must be cleared by reset");
+        dedup.close().expect("close should succeed");
+
+        let limit_scan = Box::new(scan_executor(
+            (0..10).map(|v| vec![Value::BigInt(v)]).collect(),
+            vec!["v".to_string()],
+        ));
+        let mut limit = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            limit_scan,
+            UnaryOperator::new(
+                UnaryOperatorKind::Limit {
+                    offset: 0,
+                    limit: 3,
+                    skipped: 0,
+                    consumed: 0,
+                },
+                empty_layout(),
+            ),
+        );
+        limit.open().expect("open should succeed");
+        let first = pull_all(&mut limit);
+        assert_eq!(first.len(), 3, "limit applies on the first run");
+        limit.reset().expect("limit reset should succeed");
+        let second = pull_all(&mut limit);
+        assert_eq!(second, first, "limit counters must be reset");
+        limit.close().expect("close should succeed");
+    }
+
+    #[test]
+    fn blocking_sort_reset_falls_back_to_close_open_and_marks_flag() {
+        use crate::core::types::expr::Expression;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::slot::SlotLayout;
+
+        let rows: Vec<Vec<Value>> = (0..6).map(|v| vec![Value::BigInt(5 - v)]).collect();
+        let scan = Box::new(scan_executor(rows, vec!["v".to_string()]));
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10).with_output_layout(output_layout.clone()),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::Sort {
+                    sort_expressions: vec![Expression::variable("v".to_string())],
+                    sort_directions: vec![SortDirection::Ascending],
+                },
+                &crate::query::executor::base::MemoryBudget::default_budget(),
+                output_layout,
+            ),
+        );
+
+        executor.open().expect("open should succeed");
+        let first = pull_all(&mut executor);
+        assert_eq!(first.len(), 6);
+        executor.reset().expect("reset should succeed");
+        assert!(
+            executor.base().reset_used_fallback,
+            "Blocking has no native reset yet; fallback must be flagged"
+        );
+        let second = pull_all(&mut executor);
+        assert_eq!(
+            second, first,
+            "fallback reset re-produces the sorted stream"
+        );
+        executor.close().expect("close should succeed");
+    }
+
+    #[test]
+    fn correlation_frames_are_isolated_per_executor_instance() {
+        use crate::query::executor::streaming::slot::SlotLayout;
+
+        let layout = Arc::new(SlotLayout::from_names(&["id".to_string()]));
+        let mut first = StreamingExecutor::Source(
+            OperatorBase::new(0).with_output_layout(layout.clone()),
+            SourceOperator::new(SourceOperatorKind::Argument, layout.clone()),
+        );
+        let mut second = StreamingExecutor::Source(
+            OperatorBase::new(1).with_output_layout(layout.clone()),
+            SourceOperator::new(SourceOperatorKind::Argument, layout.clone()),
+        );
+        first.open().expect("open should succeed");
+        second.open().expect("open should succeed");
+
+        first.inject_correlation_frame(layout.clone(), vec![Value::BigInt(10)]);
+        second.inject_correlation_frame(layout.clone(), vec![Value::BigInt(20)]);
+
+        let first_chunk = first.advance().expect("pull").expect("first frame row");
+        let second_chunk = second.advance().expect("pull").expect("second frame row");
+        assert_eq!(first_chunk.rows, vec![vec![Value::BigInt(10)]]);
+        assert_eq!(
+            second_chunk.rows,
+            vec![vec![Value::BigInt(20)]],
+            "frames must be private to each executor instance"
+        );
+
+        first.reset().expect("reset should succeed");
+        second.reset().expect("reset should succeed");
+        first.inject_correlation_frame(layout.clone(), vec![Value::BigInt(30)]);
+        let again = first.advance().expect("pull").expect("third frame row");
+        assert_eq!(again.rows, vec![vec![Value::BigInt(30)]]);
     }
 }

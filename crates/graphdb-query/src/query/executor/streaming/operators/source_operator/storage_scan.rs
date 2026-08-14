@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::{DataChunk, TypedColumn};
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::state::GlobalState;
 use crate::storage::open_edge_scan;
 use crate::storage::open_vertex_scan;
@@ -18,6 +19,7 @@ use super::util::{
     reserve_memory_with_extra, storage_error,
 };
 use super::SourceOperator;
+use super::SourceOperatorKind;
 
 /// Runtime switch: storage column-block scan mode (A1).
 ///
@@ -37,9 +39,9 @@ pub fn column_block_enabled() -> bool {
 
 /// Open the storage-backed scan source variants, creating the cursor that
 /// streams batches from storage.
-pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
-    match op {
-        SourceOperator::StorageScanVertices {
+pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
+    let state = match &mut op.kind {
+        SourceOperatorKind::StorageScanVertices {
             storage,
             space_name,
             limit,
@@ -76,16 +78,16 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                     storage_error("StorageScanVertices", "open cursor", space_name, error)
                 })?,
             );
-            base.insert_state(GlobalState::Source(SourceState::StorageScanVertices {
-                partition_id: base.partition_id.unwrap_or(0),
+            GlobalState::Source(SourceState::StorageScanVertices {
+                partition_id: op.config.partition_id.unwrap_or(0),
                 partition_range: partition_range.clone(),
                 cursor: None,
                 buffer: Vec::new(),
                 current_index: 0,
                 col_names: col_names.clone(),
-            }));
+            })
         }
-        SourceOperator::StorageScanEdges {
+        SourceOperatorKind::StorageScanEdges {
             storage,
             space_name,
             limit,
@@ -119,94 +121,96 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                     storage_error("StorageScanEdges", "open cursor", space_name, error)
                 })?,
             );
-            base.insert_state(GlobalState::Source(SourceState::StorageScanEdges {
-                partition_id: base.partition_id.unwrap_or(0),
+            GlobalState::Source(SourceState::StorageScanEdges {
+                partition_id: op.config.partition_id.unwrap_or(0),
                 partition_range: partition_range.clone(),
                 cursor: None,
                 buffer: Vec::new(),
                 current_index: 0,
                 col_names: col_names.clone(),
-            }));
+            })
         }
         _ => unreachable!("storage_scan::open called for a non-scan source"),
-    }
+    };
+    op.insert_state(state);
     Ok(())
 }
 
 /// Emit the next chunk from the storage cursor, translating rows into the
 /// single-entity column layout.
-pub(crate) fn next(
-    op: &mut SourceOperator,
-    base: &mut OperatorBase,
-) -> Result<Option<DataChunk>, QueryError> {
-    match op {
-        SourceOperator::StorageScanVertices {
-            space_name,
-            cursor,
+pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    let is_vertex_scan = matches!(&op.kind, SourceOperatorKind::StorageScanVertices { .. });
+    let flatten = match &op.kind {
+        SourceOperatorKind::StorageScanVertices {
             projected_properties,
             ..
-        } => {
-            if column_block_enabled() {
-                next_column_chunk(
-                    cursor,
-                    space_name,
-                    "StorageScanVertices",
-                    base,
-                    projected_properties,
-                )
-            } else {
-                let flatten = projected_properties.clone();
-                if flatten.is_empty() {
-                    next_cursor_chunk(
-                        cursor,
-                        space_name,
-                        "StorageScanVertices",
-                        base,
-                        move |vertex| make_flat_vertex_row(vertex, &flatten),
-                        |cur, batch_size| cur.next_batch(batch_size),
-                    )
-                } else {
-                    // Flat path: pull records directly from storage (skipping
-                    // per-row Vertex/HashMap boxing) and widen them into the flat
-                    // property layout.
-                    next_cursor_chunk(
-                        cursor,
-                        space_name,
-                        "StorageScanVertices",
-                        base,
-                        move |record| make_flat_vertex_record_row(record, &flatten),
-                        |cur, batch_size| cur.next_flat_batch(batch_size),
-                    )
-                }
-            }
         }
-        SourceOperator::StorageScanEdges {
-            space_name,
-            cursor,
+        | SourceOperatorKind::StorageScanEdges {
             projected_properties,
             ..
-        } => {
-            if column_block_enabled() {
-                next_edge_column_chunk(
-                    cursor,
-                    space_name,
-                    "StorageScanEdges",
-                    base,
-                    projected_properties,
-                )
-            } else {
-                let flatten = projected_properties.clone();
-                next_cursor_chunk(
-                    cursor,
-                    space_name,
-                    "StorageScanEdges",
-                    base,
-                    move |edge| make_flat_edge_row(edge, &flatten),
-                    |cur, batch_size| cur.next_batch(batch_size),
-                )
-            }
-        }
+        } => projected_properties.clone(),
         _ => unreachable!("storage_scan::next called for a non-scan source"),
+    };
+    if column_block_enabled() {
+        if is_vertex_scan {
+            return next_column_chunk(op, "StorageScanVertices", &flatten);
+        }
+        return next_edge_column_chunk(op, "StorageScanEdges", &flatten);
+    }
+    if is_vertex_scan {
+        let (cursor, space_name) = match &mut op.kind {
+            SourceOperatorKind::StorageScanVertices {
+                space_name, cursor, ..
+            } => (cursor, &*space_name),
+            _ => unreachable!("storage_scan::next called for a non-vertex scan"),
+        };
+        if flatten.is_empty() {
+            next_cursor_chunk_inner(
+                cursor,
+                space_name,
+                "StorageScanVertices",
+                &op.runtime,
+                op.config.chunk_size,
+                &op.output_layout,
+                move |vertex| make_flat_vertex_row(vertex, &flatten),
+                |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
+                    cur.next_batch(batch_size)
+                },
+            )
+        } else {
+            // Flat path: pull records directly from storage (skipping
+            // per-row Vertex/HashMap boxing) and widen them into the flat
+            // property layout.
+            next_cursor_chunk_inner(
+                cursor,
+                space_name,
+                "StorageScanVertices",
+                &op.runtime,
+                op.config.chunk_size,
+                &op.output_layout,
+                move |record| make_flat_vertex_record_row(record, &flatten),
+                |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
+                    cur.next_flat_batch(batch_size)
+                },
+            )
+        }
+    } else {
+        let (cursor, space_name) = match &mut op.kind {
+            SourceOperatorKind::StorageScanEdges {
+                space_name, cursor, ..
+            } => (cursor, &*space_name),
+            _ => unreachable!("storage_scan::next called for a non-edge scan"),
+        };
+        next_cursor_chunk_inner(
+            cursor,
+            space_name,
+            "StorageScanEdges",
+            &op.runtime,
+            op.config.chunk_size,
+            &op.output_layout,
+            move |edge| make_flat_edge_row(edge, &flatten),
+            |cur: &mut Box<dyn crate::storage::EdgeCursor>, batch_size| cur.next_batch(batch_size),
+        )
     }
 }
 
@@ -217,11 +221,13 @@ pub(crate) fn next(
 /// rows (fixed-size scalar columns only; NULL/mixed/string columns fall
 /// back), and the extra typed allocation is accounted in the chunk's memory
 /// reservation.
-fn next_cursor_chunk<C, R, FRow, FBatch>(
+fn next_cursor_chunk_inner<C, R, FRow, FBatch>(
     cursor: &mut Option<C>,
     space_name: &str,
     source: &str,
-    base: &mut OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    chunk_size: usize,
+    output_layout: &Arc<SlotLayout>,
     mut map_row: FRow,
     mut pull_batch: FBatch,
 ) -> Result<Option<DataChunk>, QueryError>
@@ -230,12 +236,14 @@ where
     FBatch: FnMut(&mut C, usize) -> Result<Vec<R>, StorageError>,
 {
     loop {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         let mut cur = match cursor.take() {
             Some(c) => c,
             None => return Ok(None),
         };
-        let batch = pull_batch(&mut cur, base.chunk_size)
+        let batch = pull_batch(&mut cur, chunk_size)
             .map_err(|error| storage_error(source, "read cursor", space_name, error))?;
         if batch.is_empty() {
             return Ok(None);
@@ -247,10 +255,10 @@ where
             // typed layout IS built eagerly here so the typed batch evaluator
             // and index-based access stay available across selection
             // boundaries.
-            let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
-            let typed_bytes = chunk.build_typed_columns(use_columnar_path(base));
-            let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
-            let chunk = attach_columnar_stats(base, chunk);
+            let mut chunk = DataChunk::new_with_layout(rows, Arc::clone(output_layout));
+            let typed_bytes = chunk.build_typed_columns(use_columnar_path(runtime));
+            let reservation = reserve_memory_with_extra(runtime, &chunk.rows, typed_bytes)?;
+            let chunk = attach_columnar_stats(runtime, chunk);
             let chunk = if let Some(r) = reservation {
                 chunk.with_memory_reservation(r)
             } else {
@@ -270,11 +278,11 @@ where
 /// [`ColumnarPolicy`] provides the adaptive decision.  The policy is only
 /// mutated between queries (stats merge at query completion), so the
 /// decision is stable for the whole query even though it is read per chunk.
-fn use_columnar_path(base: &OperatorBase) -> bool {
+fn use_columnar_path(runtime: &Option<Arc<ExecutionRuntime>>) -> bool {
     if !crate::query::executor::streaming::chunk::typed_columns_enabled() {
         return false;
     }
-    base.runtime
+    runtime
         .as_ref()
         .and_then(|runtime| runtime.columnar_policy())
         .is_none_or(|policy| policy.should_use_columnar())
@@ -287,24 +295,30 @@ fn use_columnar_path(base: &OperatorBase) -> bool {
 /// `Vec<Value>` materialization that `build_typed_columns` would re-read),
 /// and accounts the typed allocation in the chunk's memory reservation.
 fn next_column_chunk(
-    cursor: &mut Option<Box<dyn crate::storage::VertexCursor>>,
-    space_name: &str,
+    op: &mut SourceOperator,
     source: &str,
-    base: &mut OperatorBase,
     projected_properties: &[String],
 ) -> Result<Option<DataChunk>, QueryError> {
-    base.ensure_not_cancelled()?;
+    let (cursor, space_name) = match &mut op.kind {
+        SourceOperatorKind::StorageScanVertices {
+            space_name, cursor, ..
+        } => (cursor, &*space_name),
+        _ => unreachable!("next_column_chunk called for a non-vertex scan"),
+    };
+    if let Some(rt) = op.runtime.as_ref() {
+        rt.ensure_not_cancelled()?;
+    }
     let mut cur = match cursor.take() {
         Some(c) => c,
         None => return Ok(None),
     };
     let batch = cur
-        .next_column_batch(projected_properties, base.chunk_size)
+        .next_column_batch(projected_properties, op.config.chunk_size)
         .map_err(|error| storage_error(source, "read column batch", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
     }
-    let chunk = build_column_chunk(base, batch, projected_properties)?;
+    let chunk = build_column_chunk(&op.runtime, &op.output_layout, batch, projected_properties)?;
     *cursor = Some(cur);
     Ok(Some(chunk))
 }
@@ -312,11 +326,12 @@ fn next_column_chunk(
 /// Assemble a [`DataChunk`] from a [`VertexColumnBatch`], building the typed
 /// column layout straight from the batch columns.
 fn build_column_chunk(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
     batch: VertexColumnBatch,
     flatten: &[String],
 ) -> Result<DataChunk, QueryError> {
-    let layout = Arc::clone(&base.output_layout);
+    let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
     // Pre-compute per-column `Value` vectors once (used for both the rows and
@@ -373,8 +388,8 @@ fn build_column_chunk(
     }
 
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    if use_columnar_path(base) {
-        let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
+    if use_columnar_path(runtime) {
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(output_layout.len());
         typed.push(TypedColumn::Fallback(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
@@ -394,7 +409,7 @@ fn build_column_chunk(
         chunk.typed_columns = Some(typed);
     }
 
-    if let Some(runtime) = base.runtime.as_ref() {
+    if let Some(runtime) = runtime.as_ref() {
         runtime.columnar_stats().record_column_block_hit();
     }
 
@@ -403,8 +418,8 @@ fn build_column_chunk(
         .as_ref()
         .map(|cols| cols.iter().map(TypedColumn::estimated_size).sum())
         .unwrap_or(0);
-    let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
-    let chunk = attach_columnar_stats(base, chunk);
+    let reservation = reserve_memory_with_extra(runtime, &chunk.rows, typed_bytes)?;
+    let chunk = attach_columnar_stats(runtime, chunk);
     Ok(if let Some(r) = reservation {
         chunk.with_memory_reservation(r)
     } else {
@@ -458,24 +473,31 @@ fn typed_from_column(values: &crate::storage::ColumnValues, fallback: &[Value]) 
 /// Mirrors [`next_column_chunk`]: pulls an [`EdgeColumnBatch`] from the
 /// cursor and assembles the chunk directly from the batch columns.
 fn next_edge_column_chunk(
-    cursor: &mut Option<Box<dyn crate::storage::EdgeCursor>>,
-    space_name: &str,
+    op: &mut SourceOperator,
     source: &str,
-    base: &mut OperatorBase,
     projected_properties: &[String],
 ) -> Result<Option<DataChunk>, QueryError> {
-    base.ensure_not_cancelled()?;
+    let (cursor, space_name) = match &mut op.kind {
+        SourceOperatorKind::StorageScanEdges {
+            space_name, cursor, ..
+        } => (cursor, &*space_name),
+        _ => unreachable!("next_edge_column_chunk called for a non-edge scan"),
+    };
+    if let Some(rt) = op.runtime.as_ref() {
+        rt.ensure_not_cancelled()?;
+    }
     let mut cur = match cursor.take() {
         Some(c) => c,
         None => return Ok(None),
     };
     let batch = cur
-        .next_column_batch(projected_properties, base.chunk_size)
+        .next_column_batch(projected_properties, op.config.chunk_size)
         .map_err(|error| storage_error(source, "read edge column batch", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
     }
-    let chunk = build_edge_column_chunk(base, batch, projected_properties)?;
+    let chunk =
+        build_edge_column_chunk(&op.runtime, &op.output_layout, batch, projected_properties)?;
     *cursor = Some(cur);
     Ok(Some(chunk))
 }
@@ -483,11 +505,12 @@ fn next_edge_column_chunk(
 /// Assemble a [`DataChunk`] from an [`EdgeColumnBatch`], building the typed
 /// column layout straight from the batch columns.
 fn build_edge_column_chunk(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    output_layout: &Arc<SlotLayout>,
     batch: EdgeColumnBatch,
     flatten: &[String],
 ) -> Result<DataChunk, QueryError> {
-    let layout = Arc::clone(&base.output_layout);
+    let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
     // Pre-compute per-column `Value` vectors once (used for both the rows and
@@ -545,8 +568,8 @@ fn build_edge_column_chunk(
     }
 
     let mut chunk = DataChunk::new_with_layout(rows, layout);
-    if use_columnar_path(base) {
-        let mut typed: Vec<TypedColumn> = Vec::with_capacity(base.output_layout.len());
+    if use_columnar_path(runtime) {
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(output_layout.len());
         typed.push(TypedColumn::Fallback(
             chunk.rows.iter().map(|r| r[0].clone()).collect(),
         ));
@@ -566,7 +589,7 @@ fn build_edge_column_chunk(
         chunk.typed_columns = Some(typed);
     }
 
-    if let Some(runtime) = base.runtime.as_ref() {
+    if let Some(runtime) = runtime.as_ref() {
         runtime.columnar_stats().record_column_block_hit();
     }
 
@@ -575,8 +598,8 @@ fn build_edge_column_chunk(
         .as_ref()
         .map(|cols| cols.iter().map(TypedColumn::estimated_size).sum())
         .unwrap_or(0);
-    let reservation = reserve_memory_with_extra(base, &chunk.rows, typed_bytes)?;
-    let chunk = attach_columnar_stats(base, chunk);
+    let reservation = reserve_memory_with_extra(runtime, &chunk.rows, typed_bytes)?;
+    let chunk = attach_columnar_stats(runtime, chunk);
     Ok(if let Some(r) = reservation {
         chunk.with_memory_reservation(r)
     } else {

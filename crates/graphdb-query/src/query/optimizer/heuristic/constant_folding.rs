@@ -8,8 +8,9 @@
 //! Safety gates:
 //! - `is_evaluable`: the expression references no variables / properties /
 //!   parameters / subqueries (analysis_utils).
-//! - purity: built-in functions with side effects or non-deterministic
-//!   results (`rand`, `now`, ...) are never folded.
+//! - purity: a function is folded only when the function registry reports it
+//!   pure (`BuiltinFunction::is_pure`); unregistered functions are never
+//!   folded (conservative).
 //! - aggregates and window functions are never folded (they need a row
 //!   group context even with constant arguments).
 //! - evaluation failures keep the original expression (conservative).
@@ -20,25 +21,12 @@ use crate::core::types::ContextualExpression;
 use crate::core::Expression;
 use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::query::optimizer::heuristic::rule::RewriteRule;
 use crate::query::planning::plan::PlanNodeEnum;
-
-/// Built-in functions that are not deterministic or have side effects.
-/// Folding them would change the semantics of the query.
-const IMPURE_FUNCTIONS: &[&str] = &[
-    "rand",
-    "rand32",
-    "rand64",
-    "gen_random_uuid",
-    "now",
-    "timestamp",
-    "current_date",
-    "current_timestamp",
-    "sleep",
-];
 
 /// Constant folding rule.
 #[derive(Debug)]
@@ -50,14 +38,19 @@ impl FoldConstantsRule {
         Self
     }
 
-    /// Whether the expression tree contains an impure function call.
+    /// Whether the expression tree contains a non-pure function call.
     fn is_pure(expression: &Expression) -> bool {
         match expression {
             // Aggregates and window functions need a row-group context even
             // with constant arguments — never fold them.
             Expression::Aggregate { .. } | Expression::WindowFunction { .. } => false,
             Expression::Function { name, args, .. } => {
-                !IMPURE_FUNCTIONS.contains(&name.as_str()) && args.iter().all(Self::is_pure)
+                // Purity comes from the function registry; unregistered
+                // functions are conservatively treated as non-pure.
+                global_registry_ref()
+                    .get_builtin(name.as_str())
+                    .is_some_and(|f| f.is_pure())
+                    && args.iter().all(Self::is_pure)
             }
             Expression::Binary { left, right, .. } => Self::is_pure(left) && Self::is_pure(right),
             Expression::Unary { operand, .. } => Self::is_pure(operand),
@@ -343,6 +336,33 @@ mod tests {
         assert!(is_evaluable(&expr), "rand has no context dependency");
         let folded = FoldConstantsRule::fold_expression(&expr);
         assert_eq!(folded, expr, "impure functions must never fold");
+    }
+
+    #[test]
+    fn test_fold_unregistered_function_is_not_folded() {
+        // A function name that is not in the registry must conservatively
+        // stay unfolded even though it carries no context dependency.
+        let expr = Expression::Function {
+            name: "future_nondeterministic_fn".to_string(),
+            args: vec![Expression::Literal(Value::Int(1))],
+        };
+        assert!(is_evaluable(&expr), "no context dependency");
+        let folded = FoldConstantsRule::fold_expression(&expr);
+        assert_eq!(folded, expr, "unregistered functions must never fold");
+    }
+
+    #[test]
+    fn test_fold_pure_builtin_function() {
+        let expr = Expression::Function {
+            name: "abs".to_string(),
+            args: vec![Expression::Literal(Value::Int(-5))],
+        };
+        let folded = FoldConstantsRule::fold_expression(&expr);
+        assert_eq!(
+            folded,
+            Expression::Literal(Value::Int(5)),
+            "pure builtin functions fold"
+        );
     }
 
     #[test]

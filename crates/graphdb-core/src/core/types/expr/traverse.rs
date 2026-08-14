@@ -12,6 +12,7 @@ impl Expression {
         match self {
             Expression::Literal(_) => vec![],
             Expression::Variable(_) => vec![],
+            Expression::SessionVariable(_) => vec![],
             Expression::Property { object, .. } => vec![object.as_ref()],
             Expression::Binary { left, right, .. } => vec![left.as_ref(), right.as_ref()],
             Expression::Unary { operand, .. } => vec![operand.as_ref()],
@@ -127,6 +128,7 @@ impl Expression {
         match self {
             Expression::Literal(_) => vec![],
             Expression::Variable(_) => vec![],
+            Expression::SessionVariable(_) => vec![],
             Expression::Property { object, .. } => vec![object.as_mut()],
             Expression::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             Expression::Unary { operand, .. } => vec![operand.as_mut()],
@@ -432,6 +434,7 @@ impl Expression {
                     .collect(),
             ),
             Expression::Parameter(_) => self.clone(),
+            Expression::SessionVariable(_) => self.clone(),
             Expression::Vector(_) => self.clone(),
             Expression::Exists { body: _ } => self.clone(),
             Expression::In {

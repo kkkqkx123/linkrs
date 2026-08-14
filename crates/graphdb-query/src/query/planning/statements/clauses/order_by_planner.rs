@@ -14,6 +14,7 @@ use crate::query::planning::plan::logical::logical_nodes::operation::LogicalSort
 use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::planning::statements::plan_combiner::wrap_logical;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::QueryContext;
@@ -69,7 +70,7 @@ impl ClausePlanner for OrderByClausePlanner {
 
     fn transform_clause(
         &self,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
         stmt: &Stmt,
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
@@ -84,6 +85,27 @@ impl ClausePlanner for OrderByClausePlanner {
                 "The ORDER BY clause requires an input plan".to_string(),
             )
         })?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in ORDER
+        // BY expressions are rejected at planning time with a precise error.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names = input_plan
+            .root()
+            .as_ref()
+            .map(|root| root.col_names().to_vec())
+            .unwrap_or_default();
+        for item in &order_by_items {
+            if let Some(expr_meta) = item.expression.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
 
         let sort_items: Vec<SortItem> = order_by_items
             .into_iter()

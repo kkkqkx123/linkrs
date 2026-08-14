@@ -210,6 +210,7 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         auto_commit: false,
         transaction_id: Some(txn_handle.0),
         parameters: None,
+        session_variables: None,
         query_id: None,
     };
 

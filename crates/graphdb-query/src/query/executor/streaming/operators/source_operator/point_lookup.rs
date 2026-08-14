@@ -1,24 +1,22 @@
-use std::sync::Arc;
-
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
-use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::state::GlobalState;
-use crate::storage::{open_edge_scan, EdgeCursor, ScanOptions, VecEdgeCursor};
+use crate::query::executor::streaming::state::GlobalStateKey;
+use crate::storage::{open_edge_scan, ScanOptions, VecEdgeCursor};
 
 use super::util::{
     attach_columnar_stats, make_edge_row, make_flat_edge_row, make_flat_vertex_row,
     parse_vertex_id, reserve_memory, storage_error,
 };
 use super::SourceOperator;
+use super::SourceOperatorKind;
 
 /// Open the point-lookup source variants.
-pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
-    match op {
-        SourceOperator::GetVertices {
+pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
+    let state = match &mut op.kind {
+        SourceOperatorKind::GetVertices {
             vertex_ids,
             cached_ids,
             ..
@@ -32,11 +30,9 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
                     }
                 }
             }
-            base.insert_state(GlobalState::Source(SourceState::GetVertices {
-                position: 0,
-            }));
+            GlobalState::Source(SourceState::GetVertices { position: 0 })
         }
-        SourceOperator::GetEdges {
+        SourceOperatorKind::GetEdges {
             storage,
             space_name,
             edge_type,
@@ -91,60 +87,58 @@ pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(
             if !edges.is_empty() {
                 *cursor = Some(Box::new(VecEdgeCursor::new(edges)));
             }
-            base.insert_state(GlobalState::Source(SourceState::GetEdges { cursor: None }));
+            GlobalState::Source(SourceState::GetEdges { cursor: None })
         }
         _ => unreachable!("point_lookup::open called for a non-lookup source"),
-    }
+    };
+    op.insert_state(state);
     Ok(())
 }
 
 /// Emit the next chunk for `GetVertices` or `GetEdges`.
-pub(crate) fn next(
-    op: &mut SourceOperator,
-    base: &mut OperatorBase,
-) -> Result<Option<DataChunk>, QueryError> {
-    match op {
-        SourceOperator::GetVertices {
-            storage,
-            space_name,
-            vertex_ids,
-            cached_ids,
-            projected_properties,
-        } => next_get_vertices(
-            base,
-            storage,
-            space_name,
-            vertex_ids,
-            cached_ids,
-            projected_properties,
-        ),
-        SourceOperator::GetEdges {
-            space_name,
-            projected_properties,
-            cursor,
-            ..
-        } => next_get_edges(base, space_name, cursor, projected_properties),
-        _ => unreachable!("point_lookup::next called for a non-lookup source"),
+pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    if matches!(&op.kind, SourceOperatorKind::GetVertices { .. }) {
+        return next_get_vertices(op);
     }
+    if matches!(&op.kind, SourceOperatorKind::GetEdges { .. }) {
+        return next_get_edges(op);
+    }
+    unreachable!("point_lookup::next called for a non-lookup source")
 }
 
 #[allow(clippy::too_many_arguments)]
-fn next_get_vertices(
-    base: &mut OperatorBase,
-    storage: &Option<Arc<parking_lot::RwLock<dyn crate::storage::QueryStorage>>>,
-    space_name: &str,
-    vertex_ids: &Option<Vec<Value>>,
-    cached_ids: &[VertexId],
-    projected_properties: &[String],
-) -> Result<Option<DataChunk>, QueryError> {
+fn next_get_vertices(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    let SourceOperatorKind::GetVertices {
+        storage,
+        space_name,
+        vertex_ids,
+        cached_ids,
+        projected_properties,
+    } = &mut op.kind
+    else {
+        unreachable!("next_get_vertices called for a non-get-vertices source");
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let vertex_ids = &*vertex_ids;
+    let cached_ids = &*cached_ids;
+    let projected_properties = &*projected_properties;
     // Fast path: single-ID lookup without batch/position machinery.
     if let Some(ids) = vertex_ids.as_ref() {
         if ids.len() == 1 {
             // Check if already returned (state position >= ids.len()).
             {
-                let mut arena = base.state_arena();
+                let mut arena = op
+                    .runtime
+                    .as_ref()
+                    .expect("runtime required")
+                    .state_arena_for(op.config.partition_id)
+                    .lock();
                 if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
-                    arena.global.get_mut(&base.state_key())
+                    arena.global.get_mut(&GlobalStateKey(
+                        op.config.physical_operator_id,
+                        op.config.partition_id,
+                    ))
                 {
                     if *position >= ids.len() {
                         return Ok(None);
@@ -171,30 +165,38 @@ fn next_get_vertices(
                     })?
             };
             // Mark position as done so subsequent calls return None.
-            let mark_done = |base: &mut OperatorBase| {
-                let mut arena = base.state_arena();
-                if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
-                    arena.global.get_mut(&base.state_key())
-                {
-                    *position = ids.len();
+            let mark_done = {
+                let runtime = &op.runtime;
+                let key = GlobalStateKey(op.config.physical_operator_id, op.config.partition_id);
+                move |done: usize| {
+                    let mut arena = runtime
+                        .as_ref()
+                        .expect("runtime required")
+                        .state_arena_for(key.1)
+                        .lock();
+                    if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
+                        arena.global.get_mut(&key)
+                    {
+                        *position = done;
+                    }
                 }
             };
             if let Some(vertex) = vertex_opt {
                 let rows = vec![make_flat_vertex_row(vertex, projected_properties)];
-                let reservation = reserve_memory(base, &rows)?;
+                let reservation = reserve_memory(&op.runtime, &rows)?;
                 let chunk = attach_columnar_stats(
-                    base,
-                    DataChunk::new_with_layout(rows, base.output_layout.clone()),
+                    &op.runtime,
+                    DataChunk::new_with_layout(rows, op.output_layout.clone()),
                 );
                 let chunk = if let Some(r) = reservation {
                     chunk.with_memory_reservation(r)
                 } else {
                     chunk
                 };
-                mark_done(base);
+                mark_done(ids.len());
                 return Ok(Some(chunk));
             }
-            mark_done(base);
+            mark_done(ids.len());
             return Ok(None);
         }
     }
@@ -207,15 +209,26 @@ fn next_get_vertices(
             .as_ref()
             .ok_or_else(|| QueryError::execution("GetVertices requires vertex IDs".to_string()))?;
         let (position, done) = {
-            let mut arena = base.state_arena();
-            let s = arena.global.get_mut(&base.state_key()).unwrap();
+            let mut arena = op
+                .runtime
+                .as_ref()
+                .expect("runtime required")
+                .state_arena_for(op.config.partition_id)
+                .lock();
+            let s = arena
+                .global
+                .get_mut(&GlobalStateKey(
+                    op.config.physical_operator_id,
+                    op.config.partition_id,
+                ))
+                .unwrap();
             let GlobalState::Source(SourceState::GetVertices { position }) = s else {
                 return Ok(None);
             };
             if *position >= ids.len() {
                 (0, true)
             } else {
-                let end = (*position + base.chunk_size).min(ids.len());
+                let end = (*position + op.config.chunk_size).min(ids.len());
                 *position = end;
                 (end, false)
             }
@@ -223,7 +236,7 @@ fn next_get_vertices(
         if done {
             return Ok(None);
         }
-        let start = position.saturating_sub(base.chunk_size);
+        let start = position.saturating_sub(op.config.chunk_size);
         let mut rows = Vec::with_capacity(position - start);
         if projected_properties.is_empty() {
             for vid in &cached_ids[start..position] {
@@ -246,10 +259,10 @@ fn next_get_vertices(
             }
         }
         if !rows.is_empty() {
-            let reservation = reserve_memory(base, &rows)?;
+            let reservation = reserve_memory(&op.runtime, &rows)?;
             let chunk = attach_columnar_stats(
-                base,
-                DataChunk::new_with_layout(rows, base.output_layout.clone()),
+                &op.runtime,
+                DataChunk::new_with_layout(rows, op.output_layout.clone()),
             );
             let chunk = if let Some(r) = reservation {
                 chunk.with_memory_reservation(r)
@@ -261,18 +274,24 @@ fn next_get_vertices(
     }
 }
 
-fn next_get_edges(
-    base: &mut OperatorBase,
-    space_name: &str,
-    cursor: &mut Option<Box<dyn EdgeCursor>>,
-    projected_properties: &[String],
-) -> Result<Option<DataChunk>, QueryError> {
+fn next_get_edges(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    let SourceOperatorKind::GetEdges {
+        space_name,
+        projected_properties,
+        cursor,
+        ..
+    } = &mut op.kind
+    else {
+        unreachable!("next_get_edges called for a non-get-edges source");
+    };
+    let space_name = &*space_name;
+    let projected_properties = &*projected_properties;
     let mut cur = match cursor.take() {
         Some(c) => c,
         None => return Ok(None),
     };
     let batch = cur
-        .next_batch(base.chunk_size)
+        .next_batch(op.config.chunk_size)
         .map_err(|error| storage_error("GetEdges", "read cursor", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
@@ -291,10 +310,10 @@ fn next_get_edges(
         })
         .collect::<Vec<_>>();
     if !rows.is_empty() {
-        let reservation = reserve_memory(base, &rows)?;
+        let reservation = reserve_memory(&op.runtime, &rows)?;
         let chunk = attach_columnar_stats(
-            base,
-            DataChunk::new_with_layout(rows, base.output_layout.clone()),
+            &op.runtime,
+            DataChunk::new_with_layout(rows, op.output_layout.clone()),
         );
         let chunk = if let Some(r) = reservation {
             chunk.with_memory_reservation(r)

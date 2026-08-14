@@ -15,7 +15,9 @@ use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::helpers::accumulator_states::{
     accumulator_to_value, AggregateAccumulator,
 };
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::spill::{
     HashPartitionConfig, HashPartitionSpiller, SpillManager, SpilledFile,
 };
@@ -65,7 +67,7 @@ fn reject_spill_replay(_spill_files: &[SpilledFile]) -> Result<Vec<Vec<Value>>, 
 }
 
 #[derive(Debug)]
-pub enum BlockingOperator {
+pub enum BlockingOperatorKind {
     Sort {
         sort_expressions: Vec<Expression>,
         sort_directions: Vec<SortDirection>,
@@ -140,16 +142,30 @@ pub enum BlockingOperator {
     },
 }
 
+/// Blocking operator.
+///
+/// Wraps [`BlockingOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct BlockingOperator {
+    pub kind: BlockingOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl BlockingOperator {
     pub fn from_spec(
         spec: &super::spec::BlockingSpec,
         memory_budget: &crate::query::executor::base::MemoryBudget,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             super::spec::BlockingSpec::Sort {
                 sort_expressions,
                 sort_directions,
-            } => Self::Sort {
+            } => BlockingOperatorKind::Sort {
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
@@ -161,7 +177,7 @@ impl BlockingOperator {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
-            } => Self::Aggregate {
+            } => BlockingOperatorKind::Aggregate {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
@@ -172,7 +188,7 @@ impl BlockingOperator {
             },
             super::spec::BlockingSpec::GroupBy {
                 group_by_expressions,
-            } => Self::GroupBy {
+            } => BlockingOperatorKind::GroupBy {
                 group_by_expressions: group_by_expressions.clone(),
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
@@ -184,7 +200,7 @@ impl BlockingOperator {
                 partition_by_exprs,
                 order_by_exprs,
                 order_by_directions,
-            } => Self::WindowFunction {
+            } => BlockingOperatorKind::WindowFunction {
                 window_exprs: window_exprs.clone(),
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
@@ -199,7 +215,7 @@ impl BlockingOperator {
                 partition_by_exprs,
                 order_by_exprs,
                 order_by_directions,
-            } => Self::Window {
+            } => BlockingOperatorKind::Window {
                 window_exprs: window_exprs.clone(),
                 partition_by_exprs: partition_by_exprs.clone(),
                 order_by_exprs: order_by_exprs.clone(),
@@ -213,7 +229,7 @@ impl BlockingOperator {
                 n,
                 sort_expressions,
                 sort_directions,
-            } => Self::TopN {
+            } => BlockingOperatorKind::TopN {
                 n: *n,
                 sort_expressions: sort_expressions.clone(),
                 sort_directions: sort_directions.clone(),
@@ -222,36 +238,38 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::spec::BlockingSpec::Distinct => Self::Distinct {
+            super::spec::BlockingSpec::Distinct => BlockingOperatorKind::Distinct {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::spec::BlockingSpec::Materialize => Self::Materialize {
+            super::spec::BlockingSpec::Materialize => BlockingOperatorKind::Materialize {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::spec::BlockingSpec::DataCollect => Self::DataCollect {
+            super::spec::BlockingSpec::DataCollect => BlockingOperatorKind::DataCollect {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::spec::BlockingSpec::RollUpApply { rollup_expressions } => Self::RollUpApply {
-                rollup_expressions: rollup_expressions.clone(),
-                memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
-                state: None,
-            },
+            super::spec::BlockingSpec::RollUpApply { rollup_expressions } => {
+                BlockingOperatorKind::RollUpApply {
+                    rollup_expressions: rollup_expressions.clone(),
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    state: None,
+                }
+            }
             super::spec::BlockingSpec::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
-            } => Self::PartialAggregate {
+            } => BlockingOperatorKind::PartialAggregate {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
@@ -264,7 +282,7 @@ impl BlockingOperator {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
-            } => Self::FinalAggregate {
+            } => BlockingOperatorKind::FinalAggregate {
                 group_by_expressions: group_by_expressions.clone(),
                 aggregate_functions: aggregate_functions.clone(),
                 output_col_names: output_col_names.clone(),
@@ -273,33 +291,52 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: BlockingOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
     }
 
     pub fn memory_tracker(&self) -> &MemoryTracker {
-        match self {
-            Self::Sort { memory_tracker, .. }
-            | Self::Aggregate { memory_tracker, .. }
-            | Self::GroupBy { memory_tracker, .. }
-            | Self::WindowFunction { memory_tracker, .. }
-            | Self::Window { memory_tracker, .. }
-            | Self::TopN { memory_tracker, .. }
-            | Self::Distinct { memory_tracker, .. }
-            | Self::Materialize { memory_tracker, .. }
-            | Self::DataCollect { memory_tracker, .. }
-            | Self::RollUpApply { memory_tracker, .. }
-            | Self::PartialAggregate { memory_tracker, .. }
-            | Self::FinalAggregate { memory_tracker, .. } => memory_tracker,
+        match &self.kind {
+            BlockingOperatorKind::Sort { memory_tracker, .. }
+            | BlockingOperatorKind::Aggregate { memory_tracker, .. }
+            | BlockingOperatorKind::GroupBy { memory_tracker, .. }
+            | BlockingOperatorKind::WindowFunction { memory_tracker, .. }
+            | BlockingOperatorKind::Window { memory_tracker, .. }
+            | BlockingOperatorKind::TopN { memory_tracker, .. }
+            | BlockingOperatorKind::Distinct { memory_tracker, .. }
+            | BlockingOperatorKind::Materialize { memory_tracker, .. }
+            | BlockingOperatorKind::DataCollect { memory_tracker, .. }
+            | BlockingOperatorKind::RollUpApply { memory_tracker, .. }
+            | BlockingOperatorKind::PartialAggregate { memory_tracker, .. }
+            | BlockingOperatorKind::FinalAggregate { memory_tracker, .. } => memory_tracker,
         }
     }
 
-    pub fn open(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::Sort { state, .. } => {
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        match &mut self.kind {
+            BlockingOperatorKind::Sort { state, .. } => {
                 *state = Some(SortState {
                     col_names: vec![],
                     input_layout: None,
@@ -312,7 +349,7 @@ impl BlockingOperator {
                     merge_state: None,
                 });
             }
-            Self::Aggregate {
+            BlockingOperatorKind::Aggregate {
                 state,
                 aggregate_functions,
                 ..
@@ -330,7 +367,7 @@ impl BlockingOperator {
                     col_names: vec![],
                 });
             }
-            Self::GroupBy { state, .. } => {
+            BlockingOperatorKind::GroupBy { state, .. } => {
                 *state = Some(GroupByState {
                     all_rows: vec![],
                     col_names: vec![],
@@ -343,7 +380,7 @@ impl BlockingOperator {
                     output_complete: false,
                 });
             }
-            Self::WindowFunction { state, .. } => {
+            BlockingOperatorKind::WindowFunction { state, .. } => {
                 *state = Some(WindowFunctionState {
                     all_rows: vec![],
                     col_names: vec![],
@@ -356,7 +393,7 @@ impl BlockingOperator {
                     output_complete: false,
                 });
             }
-            Self::Window { state, .. } => {
+            BlockingOperatorKind::Window { state, .. } => {
                 *state = Some(WindowState {
                     all_rows: vec![],
                     col_names: vec![],
@@ -369,7 +406,7 @@ impl BlockingOperator {
                     output_complete: false,
                 });
             }
-            Self::TopN { state, .. } => {
+            BlockingOperatorKind::TopN { state, .. } => {
                 *state = Some(TopNState {
                     columnar_batch: None,
                     col_names: vec![],
@@ -377,7 +414,7 @@ impl BlockingOperator {
                     result_iter: None,
                 });
             }
-            Self::Distinct { state, .. } => {
+            BlockingOperatorKind::Distinct { state, .. } => {
                 *state = Some(DistinctState {
                     seen_rows: std::collections::HashSet::new(),
                     col_names: Vec::new(),
@@ -391,7 +428,7 @@ impl BlockingOperator {
                     output_iter: None,
                 });
             }
-            Self::Materialize { state, .. } => {
+            BlockingOperatorKind::Materialize { state, .. } => {
                 *state = Some(MaterializeState {
                     materialized_rows: vec![],
                     result_iter: None,
@@ -400,7 +437,7 @@ impl BlockingOperator {
                     input_layout: None,
                 });
             }
-            Self::DataCollect { state, .. } => {
+            BlockingOperatorKind::DataCollect { state, .. } => {
                 *state = Some(DataCollectState {
                     all_rows: vec![],
                     emitted: false,
@@ -408,14 +445,14 @@ impl BlockingOperator {
                     input_layout: None,
                 });
             }
-            Self::RollUpApply { state, .. } => {
+            BlockingOperatorKind::RollUpApply { state, .. } => {
                 *state = Some(RollUpApplyState {
                     all_rows: vec![],
                     result_iter: None,
                     spill_files: vec![],
                 });
             }
-            Self::PartialAggregate { state, .. } => {
+            BlockingOperatorKind::PartialAggregate { state, .. } => {
                 *state = Some(PartialAggregateState {
                     group_map: HashMap::new(),
                     col_names: vec![],
@@ -423,7 +460,7 @@ impl BlockingOperator {
                     spill_files: vec![],
                 });
             }
-            Self::FinalAggregate { state, .. } => {
+            BlockingOperatorKind::FinalAggregate { state, .. } => {
                 *state = Some(FinalAggregateState {
                     group_map: HashMap::new(),
                     col_names: vec![],
@@ -433,17 +470,12 @@ impl BlockingOperator {
             }
         }
         input.open()?;
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::Sort {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        match &mut self.kind {
+            BlockingOperatorKind::Sort {
                 sort_expressions,
                 sort_directions,
                 memory_tracker,
@@ -455,7 +487,9 @@ impl BlockingOperator {
                 if st.merge_state.is_none() && st.row_iter.is_none() {
                     while let Some(mut chunk) = input.advance()? {
                         chunk.materialize_selection_by("Sort");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if st.col_names.is_empty() {
                             st.col_names = chunk.col_names();
                             st.input_layout = Some(chunk.get_layout());
@@ -472,7 +506,9 @@ impl BlockingOperator {
                         for idx in chunk.visible_indices() {
                             let row = &chunk.rows[idx];
                             if let Err(e) = memory_tracker.try_reserve_row(row) {
-                                if let Some(sm) = base.spill_manager() {
+                                if let Some(sm) =
+                                    self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+                                {
                                     let mut rows = batch.to_rows();
                                     spill_sorted_run(
                                         &mut rows,
@@ -502,7 +538,9 @@ impl BlockingOperator {
                     if st.has_spilled {
                         if let Some(batch) = st.columnar_batch.take() {
                             if batch.num_rows() > 0 {
-                                if let Some(sm) = base.spill_manager() {
+                                if let Some(sm) =
+                                    self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+                                {
                                     let mut rows = batch.to_rows();
                                     spill_sorted_run(
                                         &mut rows,
@@ -556,7 +594,9 @@ impl BlockingOperator {
                     let mut out_rows = Vec::with_capacity(batch_size);
 
                     while out_rows.len() < batch_size {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let min_idx = find_min_run(
                             &merge.run_buffers,
                             &merge.col_names,
@@ -584,7 +624,7 @@ impl BlockingOperator {
                     } else {
                         Ok(Some(DataChunk::new_with_layout(
                             out_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     }
                 } else if let Some(ref mut iter) = st.row_iter {
@@ -594,7 +634,7 @@ impl BlockingOperator {
                     } else {
                         Ok(Some(DataChunk::new_with_layout(
                             chunk_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     }
                 } else {
@@ -602,7 +642,7 @@ impl BlockingOperator {
                 }
             }
 
-            Self::Aggregate {
+            BlockingOperatorKind::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names: _,
@@ -656,7 +696,7 @@ impl BlockingOperator {
                         } else {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                     }
@@ -664,7 +704,9 @@ impl BlockingOperator {
                     // Replay phase: process spilled partitions one at a time
                     if state.has_spilled && state.partition_spiller.is_none() {
                         while state.current_partition < state.spilled_runs.len() {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
 
                             let run = match &state.spilled_runs[state.current_partition] {
                                 Some(r) => r,
@@ -735,7 +777,7 @@ impl BlockingOperator {
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
                                         chunk_rows,
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                     )));
                                 }
                                 state.result_iter = None;
@@ -752,11 +794,14 @@ impl BlockingOperator {
                     while accumulating {
                         match input.advance()? {
                             Some(mut chunk) => {
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
                                 }
-                                let sm = base.spill_manager();
+                                let sm =
+                                    self.runtime.as_ref().and_then(|rt| rt.get_spill_manager());
                                 // Columnar fast path: batch-evaluate the
                                 // group keys and aggregate arguments once
                                 // per chunk on the typed columns (no per-row
@@ -873,7 +918,11 @@ impl BlockingOperator {
                                             MemoryBudget::estimate_row_memory(&group_key)
                                                 + group_overhead,
                                         ) {
-                                            if let Some(sm) = base.spill_manager() {
+                                            if let Some(sm) = self
+                                                .runtime
+                                                .as_ref()
+                                                .and_then(|rt| rt.get_spill_manager())
+                                            {
                                                 let config = HashPartitionConfig::default();
                                                 let num_partitions = config.num_partitions;
                                                 let mut spiller =
@@ -989,12 +1038,12 @@ impl BlockingOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         chunk_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
             }
 
-            Self::GroupBy {
+            BlockingOperatorKind::GroupBy {
                 group_by_expressions,
                 memory_tracker,
                 state,
@@ -1049,7 +1098,7 @@ impl BlockingOperator {
                         } else {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                     }
@@ -1057,7 +1106,9 @@ impl BlockingOperator {
                     // Replay phase: group each spilled partition in memory.
                     if state.has_spilled && state.partition_spiller.is_none() {
                         while state.current_partition < state.spilled_runs.len() {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
 
                             let run = match &state.spilled_runs[state.current_partition] {
                                 Some(r) => r,
@@ -1099,7 +1150,7 @@ impl BlockingOperator {
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
                                         chunk_rows,
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                     )));
                                 }
                                 state.result_iter = None;
@@ -1115,7 +1166,9 @@ impl BlockingOperator {
                     while accumulating {
                         match input.advance()? {
                             Some(chunk) => {
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 if state.col_names.is_empty() {
                                     state.col_names = match chunk.col_names() {
                                         names if !names.is_empty() => names,
@@ -1126,11 +1179,15 @@ impl BlockingOperator {
                                 }
                                 for row in chunk.rows {
                                     if let Some(ref mut spiller) = state.partition_spiller {
-                                        let manager = base.spill_manager().ok_or_else(|| {
-                                            QueryError::execution(
-                                                "Spill manager not available".to_string(),
-                                            )
-                                        })?;
+                                        let manager = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                            .ok_or_else(|| {
+                                                QueryError::execution(
+                                                    "Spill manager not available".to_string(),
+                                                )
+                                            })?;
                                         let group_key = eval_group_key(&row, &state.col_names);
                                         let p = crate::query::executor::streaming::spill::hash_row_partition(
                                             &group_key,
@@ -1140,7 +1197,11 @@ impl BlockingOperator {
                                         continue;
                                     }
                                     if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                        if let Some(sm) = base.spill_manager() {
+                                        if let Some(sm) = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                        {
                                             let config = HashPartitionConfig::default();
                                             let num_partitions = config.num_partitions;
                                             let mut spiller =
@@ -1215,12 +1276,12 @@ impl BlockingOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         chunk_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
             }
 
-            Self::WindowFunction {
+            BlockingOperatorKind::WindowFunction {
                 window_exprs,
                 partition_by_exprs,
                 order_by_exprs,
@@ -1267,7 +1328,7 @@ impl BlockingOperator {
                         } else {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                     }
@@ -1275,7 +1336,9 @@ impl BlockingOperator {
                     // Replay phase: compute each spilled partition in memory.
                     if state.has_spilled && state.partition_spiller.is_none() {
                         while state.current_partition < state.spilled_runs.len() {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
 
                             let run = match &state.spilled_runs[state.current_partition] {
                                 Some(r) => r,
@@ -1333,7 +1396,7 @@ impl BlockingOperator {
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
                                         chunk_rows,
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                     )));
                                 }
                                 state.result_iter = None;
@@ -1350,17 +1413,23 @@ impl BlockingOperator {
                         match input.advance()? {
                             Some(mut chunk) => {
                                 chunk.materialize_selection_by("WindowFunction");
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
                                 }
                                 for row in chunk.rows {
                                     if let Some(ref mut spiller) = state.partition_spiller {
-                                        let manager = base.spill_manager().ok_or_else(|| {
-                                            QueryError::execution(
-                                                "Spill manager not available".to_string(),
-                                            )
-                                        })?;
+                                        let manager = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                            .ok_or_else(|| {
+                                                QueryError::execution(
+                                                    "Spill manager not available".to_string(),
+                                                )
+                                            })?;
                                         let partition_key =
                                             eval_partition_key(&row, &state.col_names);
                                         let p =
@@ -1372,7 +1441,11 @@ impl BlockingOperator {
                                         continue;
                                     }
                                     if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                        if let Some(sm) = base.spill_manager() {
+                                        if let Some(sm) = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                        {
                                             let config = HashPartitionConfig::default();
                                             let num_partitions = config.num_partitions;
                                             let mut spiller =
@@ -1466,12 +1539,12 @@ impl BlockingOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         chunk_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
             }
 
-            Self::Window {
+            BlockingOperatorKind::Window {
                 window_exprs,
                 partition_by_exprs,
                 order_by_exprs,
@@ -1518,7 +1591,7 @@ impl BlockingOperator {
                         } else {
                             return Ok(Some(DataChunk::new_with_layout(
                                 chunk_rows,
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                             )));
                         }
                     }
@@ -1526,7 +1599,9 @@ impl BlockingOperator {
                     // Replay phase: compute each spilled partition in memory.
                     if state.has_spilled && state.partition_spiller.is_none() {
                         while state.current_partition < state.spilled_runs.len() {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
 
                             let run = match &state.spilled_runs[state.current_partition] {
                                 Some(r) => r,
@@ -1584,7 +1659,7 @@ impl BlockingOperator {
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
                                         chunk_rows,
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                     )));
                                 }
                                 state.result_iter = None;
@@ -1601,17 +1676,23 @@ impl BlockingOperator {
                         match input.advance()? {
                             Some(mut chunk) => {
                                 chunk.materialize_selection_by("Window");
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 if state.col_names.is_empty() {
                                     state.col_names = chunk.col_names();
                                 }
                                 for row in chunk.rows {
                                     if let Some(ref mut spiller) = state.partition_spiller {
-                                        let manager = base.spill_manager().ok_or_else(|| {
-                                            QueryError::execution(
-                                                "Spill manager not available".to_string(),
-                                            )
-                                        })?;
+                                        let manager = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                            .ok_or_else(|| {
+                                                QueryError::execution(
+                                                    "Spill manager not available".to_string(),
+                                                )
+                                            })?;
                                         let partition_key =
                                             eval_partition_key(&row, &state.col_names);
                                         let p =
@@ -1623,7 +1704,11 @@ impl BlockingOperator {
                                         continue;
                                     }
                                     if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                        if let Some(sm) = base.spill_manager() {
+                                        if let Some(sm) = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                        {
                                             let config = HashPartitionConfig::default();
                                             let num_partitions = config.num_partitions;
                                             let mut spiller =
@@ -1717,12 +1802,12 @@ impl BlockingOperator {
                     }
                     return Ok(Some(DataChunk::new_with_layout(
                         chunk_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
             }
 
-            Self::TopN {
+            BlockingOperatorKind::TopN {
                 n,
                 sort_expressions,
                 sort_directions,
@@ -1730,17 +1815,15 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("TopN not opened".to_string()));
-                }
-
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let limit = *n as usize;
 
                     while let Some(mut chunk) = input.advance()? {
                         chunk.materialize_selection_by("TopN");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if state.col_names.is_empty() {
                             state.col_names = chunk.col_names();
                             state.input_layout = Some(chunk.get_layout());
@@ -1788,7 +1871,7 @@ impl BlockingOperator {
                     if let Some(row) = iter.next() {
                         Ok(Some(DataChunk::new_with_layout(
                             vec![row],
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     } else {
                         Ok(None)
@@ -1798,7 +1881,7 @@ impl BlockingOperator {
                 }
             }
 
-            Self::Distinct {
+            BlockingOperatorKind::Distinct {
                 state,
                 memory_tracker,
                 ..
@@ -1813,7 +1896,7 @@ impl BlockingOperator {
                     } else {
                         return Ok(Some(DataChunk::new_with_layout(
                             chunk_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                 }
@@ -1821,7 +1904,9 @@ impl BlockingOperator {
                 // Replay phase: process spilled partitions one at a time
                 if state.has_spilled && state.partition_spiller.is_none() {
                     while state.current_partition < state.spilled_runs.len() {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
 
                         let run = match &state.spilled_runs[state.current_partition] {
                             Some(r) => r,
@@ -1860,7 +1945,7 @@ impl BlockingOperator {
                             if !chunk_rows.is_empty() {
                                 return Ok(Some(DataChunk::new_with_layout(
                                     chunk_rows,
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                 )));
                             }
                             state.output_iter = None;
@@ -1875,7 +1960,9 @@ impl BlockingOperator {
                     match input.advance()? {
                         Some(mut chunk) => {
                             chunk.materialize_selection_by("Distinct");
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
                             if state.col_names.is_empty() {
                                 state.col_names = chunk.col_names();
                                 state.input_layout = Some(chunk.get_layout());
@@ -1883,7 +1970,11 @@ impl BlockingOperator {
                             for row in chunk.rows {
                                 if !state.seen_rows.contains(&row) {
                                     if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                        if let Some(sm) = base.spill_manager() {
+                                        if let Some(sm) = self
+                                            .runtime
+                                            .as_ref()
+                                            .and_then(|rt| rt.get_spill_manager())
+                                        {
                                             let config = HashPartitionConfig::default();
                                             let mut spiller =
                                                 HashPartitionSpiller::new(config, &sm, 0)?;
@@ -1921,10 +2012,16 @@ impl BlockingOperator {
                 if let Some(ref mut spiller) = state.partition_spiller {
                     while let Some(mut chunk) = input.advance()? {
                         chunk.materialize_selection_by("Distinct");
-                        base.ensure_not_cancelled()?;
-                        let sm = base.spill_manager().ok_or_else(|| {
-                            QueryError::execution("Spill manager not available".to_string())
-                        })?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
+                        let sm = self
+                            .runtime
+                            .as_ref()
+                            .and_then(|rt| rt.get_spill_manager())
+                            .ok_or_else(|| {
+                                QueryError::execution("Spill manager not available".to_string())
+                            })?;
                         for row in chunk.rows {
                             spiller.insert_row(&row, &sm)?;
                         }
@@ -1954,31 +2051,31 @@ impl BlockingOperator {
                 } else {
                     Ok(Some(DataChunk::new_with_layout(
                         chunk_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )))
                 }
             }
 
-            Self::Materialize {
+            BlockingOperatorKind::Materialize {
                 memory_tracker,
                 state,
                 ..
             } => {
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("Materialize not opened".to_string()));
-                }
-
                 let state = state.as_mut().unwrap();
                 if !state.materialized {
                     while let Some(mut chunk) = input.advance()? {
                         chunk.materialize_selection_by("Materialize");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if state.input_layout.is_none() {
                             state.input_layout = Some(chunk.get_layout());
                         }
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                if let Some(sm) = base.spill_manager() {
+                                if let Some(sm) =
+                                    self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+                                {
                                     spill_not_supported(
                                         &mut state.materialized_rows,
                                         &sm,
@@ -2004,11 +2101,12 @@ impl BlockingOperator {
                 }
 
                 if let Some(iter) = &mut state.result_iter {
-                    let rows: Vec<Vec<Value>> = iter.by_ref().take(base.chunk_size).collect();
+                    let rows: Vec<Vec<Value>> =
+                        iter.by_ref().take(self.config.chunk_size).collect();
                     if !rows.is_empty() {
                         Ok(Some(DataChunk::new_with_layout(
                             rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     } else {
                         Ok(None)
@@ -2018,15 +2116,11 @@ impl BlockingOperator {
                 }
             }
 
-            Self::DataCollect {
+            BlockingOperatorKind::DataCollect {
                 memory_tracker,
                 state,
                 ..
             } => {
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("DataCollect not opened".to_string()));
-                }
-
                 let state = state.as_mut().unwrap();
                 if state.emitted {
                     return Ok(None);
@@ -2034,13 +2128,17 @@ impl BlockingOperator {
 
                 while let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("DataCollect");
-                    base.ensure_not_cancelled()?;
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
                     if state.input_layout.is_none() {
                         state.input_layout = Some(chunk.get_layout());
                     }
                     for row in chunk.rows {
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                            if let Some(sm) = base.spill_manager() {
+                            if let Some(sm) =
+                                self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+                            {
                                 spill_not_supported(
                                     &mut state.all_rows,
                                     &sm,
@@ -2065,35 +2163,35 @@ impl BlockingOperator {
                     let rows = std::mem::take(&mut state.all_rows);
                     return Ok(Some(DataChunk::new_with_layout(
                         rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 }
 
                 Ok(None)
             }
 
-            Self::RollUpApply {
+            BlockingOperatorKind::RollUpApply {
                 rollup_expressions,
                 memory_tracker,
                 state,
                 ..
             } => {
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("RollUpApply not opened".to_string()));
-                }
-
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = Vec::new();
                     while let Some(mut chunk) = input.advance()? {
                         chunk.materialize_selection_by("RollUpApply");
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
-                                if let Some(sm) = base.spill_manager() {
+                                if let Some(sm) =
+                                    self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+                                {
                                     spill_not_supported(
                                         &mut state.all_rows,
                                         &sm,
@@ -2126,11 +2224,12 @@ impl BlockingOperator {
                 }
 
                 if let Some(iter) = &mut state.result_iter {
-                    let rows: Vec<Vec<Value>> = iter.by_ref().take(base.chunk_size).collect();
+                    let rows: Vec<Vec<Value>> =
+                        iter.by_ref().take(self.config.chunk_size).collect();
                     if !rows.is_empty() {
                         return Ok(Some(DataChunk::new_with_layout(
                             rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )));
                     }
                 }
@@ -2138,7 +2237,7 @@ impl BlockingOperator {
                 Ok(None)
             }
 
-            Self::PartialAggregate {
+            BlockingOperatorKind::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names: _,
@@ -2150,7 +2249,9 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(mut chunk) = input.advance()? {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -2267,7 +2368,7 @@ impl BlockingOperator {
                     } else {
                         Ok(Some(DataChunk::new_with_layout(
                             chunk_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     }
                 } else {
@@ -2275,7 +2376,7 @@ impl BlockingOperator {
                 }
             }
 
-            Self::FinalAggregate {
+            BlockingOperatorKind::FinalAggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names: _,
@@ -2287,7 +2388,9 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(chunk) = input.advance()? {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -2355,7 +2458,7 @@ impl BlockingOperator {
                     } else {
                         Ok(Some(DataChunk::new_with_layout(
                             chunk_rows,
-                            Arc::clone(&base.output_layout),
+                            Arc::clone(&self.output_layout),
                         )))
                     }
                 } else {
@@ -2365,204 +2468,159 @@ impl BlockingOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            Self::Sort {
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        match &mut self.kind {
+            BlockingOperatorKind::Sort {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    if let Some(ref s) = state {
-                        for run in &s.runs {
-                            let _ = std::fs::remove_file(&run.path);
-                        }
-                        for sf in &s.spill_files {
-                            let _ = std::fs::remove_file(&sf.path);
-                        }
+                if let Some(ref s) = state {
+                    for run in &s.runs {
+                        let _ = std::fs::remove_file(&run.path);
                     }
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-            Self::Aggregate {
-                state,
-                memory_tracker,
-                ..
-            } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    if let Some(ref s) = state {
-                        for r in s.spilled_runs.iter().flatten() {
-                            let _ = std::fs::remove_file(&r.path);
-                        }
+                    for sf in &s.spill_files {
+                        let _ = std::fs::remove_file(&sf.path);
                     }
-                    *state = None;
-                    base.lifecycle.mark_closed();
                 }
+                memory_tracker.reset();
+                *state = None;
                 Ok(())
             }
-            Self::GroupBy {
+            BlockingOperatorKind::Aggregate {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    if let Some(ref s) = state {
-                        for r in s.spilled_runs.iter().flatten() {
-                            let _ = std::fs::remove_file(&r.path);
-                        }
+                memory_tracker.reset();
+                if let Some(ref s) = state {
+                    for r in s.spilled_runs.iter().flatten() {
+                        let _ = std::fs::remove_file(&r.path);
                     }
-                    *state = None;
-                    base.lifecycle.mark_closed();
                 }
+                *state = None;
                 Ok(())
             }
-            Self::WindowFunction {
+            BlockingOperatorKind::GroupBy {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    if let Some(ref s) = state {
-                        for r in s.spilled_runs.iter().flatten() {
-                            let _ = std::fs::remove_file(&r.path);
-                        }
+                memory_tracker.reset();
+                if let Some(ref s) = state {
+                    for r in s.spilled_runs.iter().flatten() {
+                        let _ = std::fs::remove_file(&r.path);
                     }
-                    *state = None;
-                    base.lifecycle.mark_closed();
                 }
+                *state = None;
                 Ok(())
             }
-            Self::Window {
+            BlockingOperatorKind::WindowFunction {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    if let Some(ref s) = state {
-                        for r in s.spilled_runs.iter().flatten() {
-                            let _ = std::fs::remove_file(&r.path);
-                        }
+                memory_tracker.reset();
+                if let Some(ref s) = state {
+                    for r in s.spilled_runs.iter().flatten() {
+                        let _ = std::fs::remove_file(&r.path);
                     }
-                    *state = None;
-                    base.lifecycle.mark_closed();
                 }
+                *state = None;
                 Ok(())
             }
-            Self::TopN {
+            BlockingOperatorKind::Window {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-            Self::RollUpApply {
-                state,
-                memory_tracker,
-                ..
-            } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-            Self::Distinct {
-                state,
-                memory_tracker,
-                ..
-            } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    if let Some(ref s) = state {
-                        for r in s.spilled_runs.iter().flatten() {
-                            let _ = std::fs::remove_file(&r.path);
-                        }
+                memory_tracker.reset();
+                if let Some(ref s) = state {
+                    for r in s.spilled_runs.iter().flatten() {
+                        let _ = std::fs::remove_file(&r.path);
                     }
-                    *state = None;
-                    base.lifecycle.mark_closed();
                 }
+                *state = None;
                 Ok(())
             }
-            Self::PartialAggregate {
+            BlockingOperatorKind::TopN {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
+                memory_tracker.reset();
+                *state = None;
                 Ok(())
             }
-            Self::FinalAggregate {
+            BlockingOperatorKind::RollUpApply {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
+                memory_tracker.reset();
+                *state = None;
                 Ok(())
             }
-            Self::Materialize {
+            BlockingOperatorKind::Distinct {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
+                memory_tracker.reset();
+                if let Some(ref s) = state {
+                    for r in s.spilled_runs.iter().flatten() {
+                        let _ = std::fs::remove_file(&r.path);
+                    }
                 }
+                *state = None;
                 Ok(())
             }
-            Self::DataCollect {
+            BlockingOperatorKind::PartialAggregate {
                 state,
                 memory_tracker,
                 ..
             } => {
-                if base.lifecycle.can_close() {
-                    memory_tracker.reset();
-                    *state = None;
-                    base.lifecycle.mark_closed();
-                }
+                memory_tracker.reset();
+                *state = None;
+                Ok(())
+            }
+            BlockingOperatorKind::FinalAggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                memory_tracker.reset();
+                *state = None;
+                Ok(())
+            }
+            BlockingOperatorKind::Materialize {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                memory_tracker.reset();
+                *state = None;
+                Ok(())
+            }
+            BlockingOperatorKind::DataCollect {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                memory_tracker.reset();
+                *state = None;
                 Ok(())
             }
         }
     }
 
     pub fn spill_with_manager(&mut self, sm: &SpillManager) -> Result<(), QueryError> {
-        match self {
-            Self::Sort {
+        match &mut self.kind {
+            BlockingOperatorKind::Sort {
                 state,
                 memory_tracker,
                 sort_expressions,
@@ -2585,7 +2643,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::Aggregate {
+            BlockingOperatorKind::Aggregate {
                 state,
                 memory_tracker,
                 ..
@@ -2615,7 +2673,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::GroupBy {
+            BlockingOperatorKind::GroupBy {
                 state,
                 memory_tracker,
                 group_by_expressions,
@@ -2649,7 +2707,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::WindowFunction {
+            BlockingOperatorKind::WindowFunction {
                 state,
                 memory_tracker,
                 partition_by_exprs,
@@ -2689,7 +2747,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::Window {
+            BlockingOperatorKind::Window {
                 state,
                 memory_tracker,
                 partition_by_exprs,
@@ -2729,8 +2787,8 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::TopN { .. } => Ok(()),
-            Self::Distinct {
+            BlockingOperatorKind::TopN { .. } => Ok(()),
+            BlockingOperatorKind::Distinct {
                 state,
                 memory_tracker,
                 ..
@@ -2749,7 +2807,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::Materialize {
+            BlockingOperatorKind::Materialize {
                 state,
                 memory_tracker,
                 ..
@@ -2764,7 +2822,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::DataCollect {
+            BlockingOperatorKind::DataCollect {
                 state,
                 memory_tracker,
                 ..
@@ -2774,7 +2832,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::PartialAggregate { state, .. } => {
+            BlockingOperatorKind::PartialAggregate { state, .. } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
                     return Err(QueryError::execution(
                         "Partial aggregate spill is not implemented; query memory budget exceeded"
@@ -2783,7 +2841,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::RollUpApply {
+            BlockingOperatorKind::RollUpApply {
                 state,
                 memory_tracker,
                 ..
@@ -2793,7 +2851,7 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::FinalAggregate { state, .. } => {
+            BlockingOperatorKind::FinalAggregate { state, .. } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
                     return Err(QueryError::execution(
                         "Final aggregate spill is not implemented; query memory budget exceeded"
@@ -2806,21 +2864,23 @@ impl BlockingOperator {
     }
 
     pub fn spill_count(&self) -> u64 {
-        match self {
-            Self::Sort { state, .. } => state.as_ref().map_or(0, |s| s.runs.len() as u64),
-            Self::Aggregate { state, .. } => state.as_ref().map_or(0, |s| {
+        match &self.kind {
+            BlockingOperatorKind::Sort { state, .. } => {
+                state.as_ref().map_or(0, |s| s.runs.len() as u64)
+            }
+            BlockingOperatorKind::Aggregate { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
-            Self::GroupBy { state, .. } => state.as_ref().map_or(0, |s| {
+            BlockingOperatorKind::GroupBy { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
-            Self::WindowFunction { state, .. } => state.as_ref().map_or(0, |s| {
+            BlockingOperatorKind::WindowFunction { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
-            Self::Window { state, .. } => state.as_ref().map_or(0, |s| {
+            BlockingOperatorKind::Window { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
-            Self::Distinct { state, .. } => state.as_ref().map_or(0, |s| {
+            BlockingOperatorKind::Distinct { state, .. } => state.as_ref().map_or(0, |s| {
                 s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
             _ => 0,
@@ -2835,15 +2895,15 @@ impl BlockingOperator {
                 })
             };
         }
-        match self {
-            Self::Sort { state, .. } => {
+        match &self.kind {
+            BlockingOperatorKind::Sort { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state
                     .as_ref()
                     .map_or(0, |s| s.runs.iter().map(|r| r.byte_size).sum::<u64>());
                 base + run_bytes
             }
-            Self::Aggregate { state, .. } => {
+            BlockingOperatorKind::Aggregate { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state.as_ref().map_or(0, |s| {
                     s.spilled_runs
@@ -2854,7 +2914,7 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::GroupBy { state, .. } => {
+            BlockingOperatorKind::GroupBy { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state.as_ref().map_or(0, |s| {
                     s.spilled_runs
@@ -2865,7 +2925,7 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::WindowFunction { state, .. } => {
+            BlockingOperatorKind::WindowFunction { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state.as_ref().map_or(0, |s| {
                     s.spilled_runs
@@ -2876,7 +2936,7 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::Window { state, .. } => {
+            BlockingOperatorKind::Window { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state.as_ref().map_or(0, |s| {
                     s.spilled_runs
@@ -2887,8 +2947,8 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::TopN { .. } => 0,
-            Self::Distinct { state, .. } => {
+            BlockingOperatorKind::TopN { .. } => 0,
+            BlockingOperatorKind::Distinct { state, .. } => {
                 let base = sum_spill!(state);
                 let run_bytes: u64 = state.as_ref().map_or(0, |s| {
                     s.spilled_runs
@@ -2899,11 +2959,11 @@ impl BlockingOperator {
                 });
                 base + run_bytes
             }
-            Self::Materialize { state, .. } => sum_spill!(state),
-            Self::DataCollect { state, .. } => sum_spill!(state),
-            Self::RollUpApply { state, .. } => sum_spill!(state),
-            Self::PartialAggregate { state, .. } => sum_spill!(state),
-            Self::FinalAggregate { state, .. } => sum_spill!(state),
+            BlockingOperatorKind::Materialize { state, .. } => sum_spill!(state),
+            BlockingOperatorKind::DataCollect { state, .. } => sum_spill!(state),
+            BlockingOperatorKind::RollUpApply { state, .. } => sum_spill!(state),
+            BlockingOperatorKind::PartialAggregate { state, .. } => sum_spill!(state),
+            BlockingOperatorKind::FinalAggregate { state, .. } => sum_spill!(state),
         }
     }
 }

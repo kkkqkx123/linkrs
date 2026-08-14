@@ -9,6 +9,7 @@ use crate::query::planning::plan::core::nodes::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -62,8 +63,6 @@ impl Planner for ReturnPlanner {
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
         // Use the verification information to optimize the planning process.
         let validation_info = &validated.validation_info;
 
@@ -80,20 +79,55 @@ impl Planner for ReturnPlanner {
 
         let return_stmt = self.extract_return_stmt(validated.stmt())?;
 
-        // A single empty row seeds a standalone RETURN statement.
-        let start_node = StartNode::new();
-        let mut current_node = PlanNodeEnum::Start(start_node.clone());
-
-        let yield_columns: Vec<YieldColumn> = return_stmt
+        // Unified entry for expression-level EXISTS / IN: subqueries in
+        // RETURN expressions are compiled here and attached to the Project
+        // node; RETURN ORDER BY items are still refused at planning time with
+        // a precise error.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut yield_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let mut yield_columns: Vec<YieldColumn> = return_stmt
             .items
             .iter()
             .map(|item| self.convert_return_item_to_yield_column(item, validated))
             .collect();
+        for col in &mut yield_columns {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut col.expression,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
+            yield_subqueries.extend(subqueries);
+        }
+        if let Some(order_by) = &return_stmt.order_by {
+            for item in &order_by.items {
+                if let Some(expr_meta) = item.expression.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        space_id,
+                        &space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        }
+
+        // A single empty row seeds a standalone RETURN statement.
+        let start_node = StartNode::new();
+        let mut current_node = PlanNodeEnum::Start(start_node.clone());
 
         // Create a projection node.
-        let project_node = ProjectNode::new(current_node.clone(), yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns)
+            .map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+            })?
+            .with_subqueries(yield_subqueries);
         current_node = PlanNodeEnum::Project(project_node);
 
         // If deduplication is required, create a deduplication node.

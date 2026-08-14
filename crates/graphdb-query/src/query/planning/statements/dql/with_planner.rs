@@ -10,6 +10,7 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::query::planning::statements::clauses::exists_planner;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -63,8 +64,6 @@ impl Planner for WithPlanner {
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
         // Use the verification information to optimize the planning process.
         let validation_info = &validated.validation_info;
 
@@ -81,31 +80,85 @@ impl Planner for WithPlanner {
 
         let with_stmt = self.extract_with_stmt(validated.stmt())?;
 
-        // A single empty row seeds a standalone WITH statement.
-        let start_node = StartNode::new();
-        let mut current_node = PlanNodeEnum::Start(start_node.clone());
-
-        let yield_columns: Vec<YieldColumn> = with_stmt
+        // Unified entry for expression-level EXISTS / IN: subqueries in WITH
+        // assignments and the WITH WHERE condition are compiled here and
+        // attached to the Project/Filter nodes; WITH ORDER BY items are still
+        // refused at planning time with a precise error.
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        let mut id_alloc = exists_planner::SubqueryIdAllocator::new();
+        let mut yield_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let mut yield_columns: Vec<YieldColumn> = with_stmt
             .items
             .iter()
             .map(|item| self.convert_return_item_to_yield_column(item, validated))
             .collect();
+        for col in &mut yield_columns {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut col.expression,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
+            yield_subqueries.extend(subqueries);
+        }
+        let mut where_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
+        let where_clause = with_stmt.where_clause.clone().map(|mut condition| {
+            let subqueries = exists_planner::plan_contextual_subqueries(
+                &mut condition,
+                &qctx,
+                space_id,
+                &space_name,
+                &outer_col_names,
+                &mut id_alloc,
+            )?;
+            where_subqueries = subqueries;
+            Ok::<_, PlannerError>(condition)
+        });
+        let where_clause = match where_clause {
+            Some(Ok(condition)) => Some(condition),
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        if let Some(order_by) = &with_stmt.order_by {
+            for item in &order_by.items {
+                if let Some(expr_meta) = item.expression.expression() {
+                    exists_planner::check_expression_subqueries(
+                        expr_meta.inner(),
+                        &qctx,
+                        space_id,
+                        &space_name,
+                        &outer_col_names,
+                    )?;
+                }
+            }
+        }
+
+        // A single empty row seeds a standalone WITH statement.
+        let start_node = StartNode::new();
+        let mut current_node = PlanNodeEnum::Start(start_node.clone());
 
         // Create a projection node.
-        let project_node = ProjectNode::new(current_node.clone(), yield_columns).map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-        })?;
+        let project_node = ProjectNode::new(current_node.clone(), yield_columns)
+            .map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
+            })?
+            .with_subqueries(yield_subqueries);
         current_node = PlanNodeEnum::Project(project_node);
 
         // If there is a WHERE clause, create a filtering node.
-        if let Some(where_clause) = &with_stmt.where_clause {
-            let filter_node =
-                FilterNode::new(current_node.clone(), where_clause.clone()).map_err(|e| {
+        if let Some(where_clause) = where_clause {
+            let filter_node = FilterNode::new(current_node.clone(), where_clause.clone())
+                .map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!(
                         "Failed to create FilterNode: {}",
                         e
                     ))
-                })?;
+                })?
+                .with_subqueries(where_subqueries);
             current_node = PlanNodeEnum::Filter(filter_node);
         }
 

@@ -31,6 +31,7 @@ async fn test_http_transaction_begin_commit() {
         query: "BEGIN".to_string(),
         session_id: 1,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     // This should complete without deadlock
@@ -53,6 +54,7 @@ async fn test_http_transaction_begin_commit() {
         query: "COMMIT".to_string(),
         session_id: 1,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -82,6 +84,7 @@ async fn test_http_transaction_rollback() {
         query: "BEGIN".to_string(),
         session_id: 2,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -98,6 +101,7 @@ async fn test_http_transaction_rollback() {
         query: "ROLLBACK".to_string(),
         session_id: 2,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -131,6 +135,7 @@ async fn test_http_concurrent_transaction_requests() {
                 query: "BEGIN".to_string(),
                 session_id,
                 parameters: Default::default(),
+                session_variables: Default::default(),
             };
 
             let result = timeout(
@@ -154,6 +159,7 @@ async fn test_http_concurrent_transaction_requests() {
                 query: "COMMIT".to_string(),
                 session_id,
                 parameters: Default::default(),
+                session_variables: Default::default(),
             };
 
             let result = timeout(
@@ -202,6 +208,7 @@ async fn test_http_transaction_with_data_operations() {
         query: "BEGIN".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(begin_req).await;
@@ -212,6 +219,7 @@ async fn test_http_transaction_with_data_operations() {
         query: "INSERT VERTEX HttpTestUser(name, age) VALUES 1:('HttpUser', 25)".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(insert_req).await;
@@ -222,6 +230,7 @@ async fn test_http_transaction_with_data_operations() {
         query: "COMMIT".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(commit_req).await;
@@ -248,6 +257,7 @@ async fn test_http_rapid_transaction_requests() {
             query: "BEGIN".to_string(),
             session_id,
             parameters: Default::default(),
+            session_variables: Default::default(),
         };
 
         let result = timeout(
@@ -264,6 +274,7 @@ async fn test_http_rapid_transaction_requests() {
             query: "COMMIT".to_string(),
             session_id,
             parameters: Default::default(),
+            session_variables: Default::default(),
         };
 
         let result = timeout(
@@ -291,6 +302,7 @@ async fn test_http_transaction_savepoints() {
         query: "BEGIN".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(req).await;
@@ -301,6 +313,7 @@ async fn test_http_transaction_savepoints() {
         query: "SAVEPOINT sp1".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(req).await;
@@ -311,6 +324,7 @@ async fn test_http_transaction_savepoints() {
         query: "RELEASE SAVEPOINT sp1".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(req).await;
@@ -321,6 +335,7 @@ async fn test_http_transaction_savepoints() {
         query: "COMMIT".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(req).await;
@@ -341,6 +356,7 @@ async fn test_http_transaction_error_handling() {
         query: "INVALID_QUERY_SYNTAX!!!".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(invalid_req).await;
@@ -352,6 +368,7 @@ async fn test_http_transaction_error_handling() {
         query: "UNKNOWN_COMMAND xyz".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = simulate_http_query_execute(unknown_req).await;
@@ -372,6 +389,7 @@ async fn test_http_streaming_transaction() {
         query: "BEGIN".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -388,6 +406,7 @@ async fn test_http_streaming_transaction() {
         query: "COMMIT".to_string(),
         session_id,
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -420,6 +439,7 @@ async fn test_mixed_api_transaction_consistency() {
         query: "SELECT 1".to_string(),
         session_id: txn_id.0 as i64, // Using txn_id as session_id for test
         parameters: Default::default(),
+        session_variables: Default::default(),
     };
 
     let result = timeout(
@@ -520,6 +540,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 query: "BEGIN".to_string(),
                 session_id: i as i64,
                 parameters: Default::default(),
+                session_variables: Default::default(),
             };
 
             // Direct await - this is the fixed pattern
@@ -536,6 +557,7 @@ async fn test_no_deadlock_in_async_transaction_handling() {
                 query: "COMMIT".to_string(),
                 session_id: i as i64,
                 parameters: Default::default(),
+                session_variables: Default::default(),
             };
 
             let result = simulate_http_query_execute(request).await;

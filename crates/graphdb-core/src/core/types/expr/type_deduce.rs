@@ -41,6 +41,7 @@ impl Expression {
             Expression::Reduce { .. } => DataType::Empty,
             Expression::PathBuild(_) => DataType::Path,
             Expression::Parameter(_) => DataType::Empty,
+            Expression::SessionVariable(_) => DataType::Empty,
             Expression::Vector(_) => DataType::Vector,
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,

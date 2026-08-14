@@ -369,6 +369,7 @@ impl TestDb {
                 auto_commit: false,
                 transaction_id: Some(txn_id),
                 parameters: None,
+                session_variables: None,
                 query_id: None,
             };
             let result = self
@@ -385,6 +386,7 @@ impl TestDb {
                 auto_commit: true,
                 transaction_id: None,
                 parameters: None,
+                session_variables: None,
                 query_id: None,
             };
             self.query_api.execute(query, ctx)
@@ -408,6 +410,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         self.query_api.execute_stream(query, ctx)
@@ -423,6 +426,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         self.query_api.execute(query, ctx)
@@ -441,6 +445,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         let outcomes = self.query_api.execute_batch(statements, ctx);
@@ -467,6 +472,7 @@ impl TestDb {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         };
         let outcomes = self

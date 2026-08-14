@@ -25,9 +25,17 @@ pub async fn execute<
 ) -> Result<JsonResponse<QueryResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
 
+    let parameters = json_params_to_core(&request.parameters);
+    let session_variables = json_params_to_core(&request.session_variables);
+
     // Executing Queries with GraphService
     let result = match graph_service
-        .execute(request.session_id, &request.query)
+        .execute_with_params(
+            request.session_id,
+            &request.query,
+            parameters,
+            session_variables,
+        )
         .await
     {
         Ok(exec_result) => {
@@ -179,6 +187,47 @@ fn execution_result_to_response(result: ExecutionResult) -> QueryResponse {
         ExecutionResult::Error(msg) => {
             QueryResponse::error("EXECUTION_ERROR".to_string(), msg, None)
         }
+    }
+}
+
+/// Convert an HTTP request's JSON parameter map to core `Value` bindings.
+/// Empty maps are passed through as `None` so the core sees no bindings.
+fn json_params_to_core(
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<std::collections::HashMap<String, crate::core::Value>> {
+    if params.is_empty() {
+        return None;
+    }
+    Some(
+        params
+            .iter()
+            .map(|(k, v)| (k.clone(), json_value_to_core(v)))
+            .collect(),
+    )
+}
+
+fn json_value_to_core(value: &serde_json::Value) -> crate::core::Value {
+    match value {
+        serde_json::Value::Null => crate::core::Value::Null(Default::default()),
+        serde_json::Value::Bool(b) => crate::core::Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                crate::core::Value::BigInt(i)
+            } else if let Some(u) = n.as_u64() {
+                crate::core::Value::BigInt(u as i64)
+            } else {
+                crate::core::Value::Double(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => crate::core::Value::string(s.as_str()),
+        serde_json::Value::Array(items) => crate::core::Value::list(crate::core::List::from_vec(
+            items.iter().map(json_value_to_core).collect(),
+        )),
+        serde_json::Value::Object(map) => crate::core::Value::Map(Box::new(
+            map.iter()
+                .map(|(k, v)| (k.clone(), json_value_to_core(v)))
+                .collect(),
+        )),
     }
 }
 

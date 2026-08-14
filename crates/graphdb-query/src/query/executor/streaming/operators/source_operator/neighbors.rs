@@ -3,14 +3,13 @@ use std::collections::HashSet;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{error::QueryError, EdgeDirection};
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::state::SourceState;
 use crate::query::executor::streaming::state::GlobalState;
-use crate::storage::QueryStorage;
 use std::sync::Arc;
 
 use super::util::{attach_columnar_stats, make_flat_vertex_row, reserve_memory, storage_error};
 use super::SourceOperator;
+use super::SourceOperatorKind;
 
 /// Two-phase neighbor scan state machine.
 ///
@@ -35,61 +34,54 @@ pub enum NeighborScanState {
 }
 
 /// Open the `GetNeighbors` source: reset the scan state machine.
-pub(crate) fn open(op: &mut SourceOperator, base: &mut OperatorBase) -> Result<(), QueryError> {
-    match op {
-        SourceOperator::GetNeighbors { state, .. } => {
+pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
+    let state = match &mut op.kind {
+        SourceOperatorKind::GetNeighbors { state, .. } => {
             *state = NeighborScanState::Init;
-            base.insert_state(GlobalState::Source(SourceState::GetNeighbors {
-                state: NeighborScanState::Init,
-            }));
+            NeighborScanState::Init
         }
         _ => unreachable!("neighbors::open called for a non-neighbor source"),
-    }
+    };
+    op.insert_state(GlobalState::Source(SourceState::GetNeighbors { state }));
     Ok(())
 }
 
 /// Emit the next chunk of neighbor vertices.
-pub(crate) fn next(
-    op: &mut SourceOperator,
-    base: &mut OperatorBase,
-) -> Result<Option<DataChunk>, QueryError> {
-    match op {
-        SourceOperator::GetNeighbors {
-            storage,
-            space_name,
-            direction,
-            projected_properties,
-            state,
-        } => next_get_neighbors(
-            base,
-            storage,
-            space_name,
-            direction,
-            projected_properties,
-            state,
-        ),
-        _ => unreachable!("neighbors::next called for a non-neighbor source"),
+pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    if !matches!(&op.kind, SourceOperatorKind::GetNeighbors { .. }) {
+        unreachable!("neighbors::next called for a non-neighbor source");
     }
+    next_get_neighbors(op)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn next_get_neighbors(
-    base: &mut OperatorBase,
-    storage: &Option<Arc<parking_lot::RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    direction: &str,
-    projected_properties: &[String],
-    state: &mut NeighborScanState,
-) -> Result<Option<DataChunk>, QueryError> {
+fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
+    let SourceOperatorKind::GetNeighbors {
+        storage,
+        space_name,
+        direction,
+        projected_properties,
+        state,
+    } = &mut op.kind
+    else {
+        unreachable!("next_get_neighbors called for a non-neighbor source");
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let direction = &*direction;
+    let projected_properties = &*projected_properties;
+    let state = &mut *state;
     let storage_ref = storage
         .as_ref()
         .ok_or_else(|| QueryError::execution("GetNeighbors requires storage".to_string()))?;
 
     loop {
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = op.runtime.as_ref() {
+            rt.ensure_not_cancelled()?;
+        }
         match state {
             NeighborScanState::Init => {
-                let dir: EdgeDirection = direction.into();
+                let dir: EdgeDirection = direction.as_str().into();
                 let guard = storage_ref.read();
                 let vertices = guard.scan_vertices(space_name).map_err(|error| {
                     storage_error("GetNeighbors", "scan vertices", space_name, error)
@@ -124,7 +116,7 @@ fn next_get_neighbors(
                     };
                     continue;
                 }
-                let end = (*position + base.chunk_size).min(vertex_ids.len());
+                let end = (*position + op.config.chunk_size).min(vertex_ids.len());
                 let guard = storage_ref.read();
                 for vid in &vertex_ids[*position..end] {
                     let edges =
@@ -161,7 +153,7 @@ fn next_get_neighbors(
                     *state = NeighborScanState::Done;
                     return Ok(None);
                 }
-                let end = (*position + base.chunk_size).min(neighbor_ids.len());
+                let end = (*position + op.config.chunk_size).min(neighbor_ids.len());
                 let guard = storage_ref.read();
                 let batch_size = end - *position;
                 let mut rows = Vec::with_capacity(batch_size);
@@ -200,10 +192,10 @@ fn next_get_neighbors(
                 drop(guard);
                 *position = end;
                 if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows)?;
+                    let reservation = reserve_memory(&op.runtime, &rows)?;
                     let chunk = attach_columnar_stats(
-                        base,
-                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout)),
+                        &op.runtime,
+                        DataChunk::new_with_layout(rows, Arc::clone(&op.output_layout)),
                     );
                     let chunk = if let Some(r) = reservation {
                         chunk.with_memory_reservation(r)

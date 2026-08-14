@@ -7,14 +7,15 @@ use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::instance::QueryBindings;
 use crate::query::executor::streaming::join_helpers::evaluate_join_key;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::operators::spec::{ApplyKind, ApplySpec};
 use crate::query::executor::streaming::plan::materializer::PhysicalPlanMaterializer;
 use crate::query::executor::streaming::plan::types::PhysicalPlan;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
-pub enum ApplyOperator {
+pub enum ApplyOperatorKind {
     Apply {
         kind: ApplyKind,
         correlated_columns: Vec<String>,
@@ -35,9 +36,12 @@ pub enum ApplyOperator {
         /// re-executed per outer row with the outer row bound as the
         /// correlation frame.
         sub_plan: Arc<PhysicalPlan>,
-        /// Bindings with the parameter maps stripped, cached for the per-row
-        /// nested materialization.
+        /// Bindings with the parameter maps stripped, cached for the nested
+        /// materialization.
         bindings: Box<QueryBindings>,
+        /// Materialized once on the first outer row and reused via
+        /// `reset()` for every subsequent row.
+        sub_executor: Option<Box<StreamingExecutor>>,
         anti: bool,
         right_rows: Option<Vec<Vec<Value>>>,
         right_layout: Option<Arc<SlotLayout>>,
@@ -52,13 +56,30 @@ pub enum ApplyOperator {
     },
 }
 
+/// Apply operator.
+///
+/// Wraps [`ApplyOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct ApplyOperator {
+    pub kind: ApplyOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl ApplyOperator {
-    pub fn from_spec(spec: &ApplySpec, budget: &MemoryBudget) -> Self {
-        match spec {
+    pub fn from_spec(
+        spec: &ApplySpec,
+        budget: &MemoryBudget,
+        output_layout: Arc<SlotLayout>,
+    ) -> Self {
+        let kind = match spec {
             ApplySpec::Apply {
                 kind,
                 correlated_columns,
-            } => Self::Apply {
+            } => ApplyOperatorKind::Apply {
                 kind: *kind,
                 correlated_columns: correlated_columns.clone(),
                 right_rows: None,
@@ -69,7 +90,7 @@ impl ApplyOperator {
                 hash_keys,
                 probe_keys,
                 anti,
-            } => Self::PatternApply {
+            } => ApplyOperatorKind::PatternApply {
                 hash_keys: hash_keys.clone(),
                 probe_keys: probe_keys.clone(),
                 anti: *anti,
@@ -86,28 +107,50 @@ impl ApplyOperator {
             ApplySpec::RollUpApply {
                 compare_columns,
                 collect_column,
-            } => Self::RollUpApply {
+            } => ApplyOperatorKind::RollUpApply {
                 compare_columns: compare_columns.clone(),
                 collect_column: collect_column.clone(),
                 right_rows: None,
                 right_layout: None,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: ApplyOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
-        match self {
-            Self::Apply { memory_tracker, .. }
-            | Self::PatternApply { memory_tracker, .. }
-            | Self::CorrelatedApply { memory_tracker, .. }
-            | Self::RollUpApply { memory_tracker, .. } => memory_tracker,
+        match &self.kind {
+            ApplyOperatorKind::Apply { memory_tracker, .. }
+            | ApplyOperatorKind::PatternApply { memory_tracker, .. }
+            | ApplyOperatorKind::CorrelatedApply { memory_tracker, .. }
+            | ApplyOperatorKind::RollUpApply { memory_tracker, .. } => memory_tracker,
         }
     }
 
     pub fn open(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
@@ -115,29 +158,33 @@ impl ApplyOperator {
         // CorrelatedApply keeps only the left input; the right placeholder
         // (`SourceOperator::Start`) is never executed because the nested right
         // subtree is re-materialized per outer row at runtime.
-        if !matches!(self, Self::CorrelatedApply { .. }) {
+        if !matches!(&self.kind, ApplyOperatorKind::CorrelatedApply { .. }) {
             right.open()?;
         }
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
     pub fn next(
         &mut self,
-        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            Self::Apply {
+        match &mut self.kind {
+            ApplyOperatorKind::Apply {
                 kind,
                 correlated_columns,
                 right_rows,
                 right_layout,
                 memory_tracker,
             } => {
-                materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
-                let output_layout = Arc::clone(&base.output_layout);
+                materialize_right(
+                    &self.runtime,
+                    right,
+                    right_rows,
+                    right_layout,
+                    memory_tracker,
+                )?;
+                let output_layout = Arc::clone(&self.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
@@ -150,7 +197,9 @@ impl ApplyOperator {
                     left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = &self.runtime {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let matches = matching_rows(
                             &left_row,
                             &left_chunk.layout,
@@ -203,7 +252,7 @@ impl ApplyOperator {
                     }
                 }
             }
-            Self::PatternApply {
+            ApplyOperatorKind::PatternApply {
                 hash_keys,
                 probe_keys,
                 anti,
@@ -211,8 +260,14 @@ impl ApplyOperator {
                 right_layout,
                 memory_tracker,
             } => {
-                materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
-                let output_layout = Arc::clone(&base.output_layout);
+                materialize_right(
+                    &self.runtime,
+                    right,
+                    right_rows,
+                    right_layout,
+                    memory_tracker,
+                )?;
+                let output_layout = Arc::clone(&self.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
@@ -225,7 +280,9 @@ impl ApplyOperator {
                     left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = &self.runtime {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let left_key =
                             evaluate_join_key(&left_row, left_chunk.layout.clone(), hash_keys)?;
                         let mut exists = false;
@@ -249,18 +306,19 @@ impl ApplyOperator {
                     }
                 }
             }
-            Self::CorrelatedApply {
+            ApplyOperatorKind::CorrelatedApply {
                 sub_plan,
                 bindings,
                 anti,
+                sub_executor,
                 ..
             } => {
-                let rt = base.runtime.clone().ok_or_else(|| {
+                let rt = self.runtime.clone().ok_or_else(|| {
                     QueryError::execution(
                         "CorrelatedApply requires an execution runtime".to_string(),
                     )
                 })?;
-                let output_layout = Arc::clone(&base.output_layout);
+                let output_layout = Arc::clone(&self.output_layout);
                 loop {
                     let Some(mut left_chunk) = left.advance()? else {
                         return Ok(None);
@@ -268,31 +326,36 @@ impl ApplyOperator {
                     left_chunk.materialize_selection_by("CorrelatedApply");
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
-                        base.ensure_not_cancelled()?;
-                        // Bind this outer row as the correlation frame consumed
-                        // by the Argument source at the root of the right
-                        // subtree. The right subtree has a single Argument
-                        // consumer, so overwriting the previous frame is safe
-                        // (the frame is `Mutex::take`n on the first read).
-                        rt.set_correlation_frame(left_chunk.layout.clone(), left_row.clone());
-                        // Re-materialize the self-contained right subtree fresh
-                        // for this row, sharing the parent runtime so storage,
-                        // parameter values, and the correlation frame resolve
-                        // against the same execution context.
-                        let (mut sub_exec, _) =
-                            PhysicalPlanMaterializer::materialize(sub_plan, bindings)?;
-                        sub_exec.set_chunk_size(bindings.chunk_size);
-                        sub_exec.set_runtime(Some(rt.clone()));
-                        sub_exec.open()?;
+                        if let Some(rt) = &self.runtime {
+                            rt.ensure_not_cancelled()?;
+                        }
+                        // Materialize the self-contained right subtree once
+                        // and reuse it for every outer row via the reset
+                        // protocol. The frame is injected per row into the
+                        // Argument source's private slot.
+                        if sub_executor.is_none() {
+                            let (mut exec, _) =
+                                PhysicalPlanMaterializer::materialize(sub_plan, bindings)?;
+                            exec.set_chunk_size(bindings.chunk_size);
+                            exec.set_runtime(Some(rt.clone()));
+                            exec.open()?;
+                            *sub_executor = Some(Box::new(exec));
+                        }
+                        let exec = sub_executor.as_mut().ok_or_else(|| {
+                            QueryError::execution(
+                                "CorrelatedApply sub-executor failed to materialize".to_string(),
+                            )
+                        })?;
+                        exec.inject_correlation_frame(left_chunk.layout.clone(), left_row.clone());
+                        exec.reset()?;
                         let mut exists = false;
-                        while let Some(mut sub_chunk) = sub_exec.advance()? {
+                        while let Some(mut sub_chunk) = exec.advance()? {
                             sub_chunk.materialize_selection_by("CorrelatedApply");
                             if !sub_chunk.rows.is_empty() {
                                 exists = true;
                                 break;
                             }
                         }
-                        sub_exec.close()?;
                         if exists != *anti {
                             output.push(left_row);
                         }
@@ -305,15 +368,21 @@ impl ApplyOperator {
                     }
                 }
             }
-            Self::RollUpApply {
+            ApplyOperatorKind::RollUpApply {
                 compare_columns,
                 collect_column,
                 right_rows,
                 right_layout,
                 memory_tracker,
             } => {
-                materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
-                let output_layout = Arc::clone(&base.output_layout);
+                materialize_right(
+                    &self.runtime,
+                    right,
+                    right_rows,
+                    right_layout,
+                    memory_tracker,
+                )?;
+                let output_layout = Arc::clone(&self.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
@@ -336,7 +405,9 @@ impl ApplyOperator {
                     left_chunk.materialize_selection_by("Apply");
                     let mut output = Vec::with_capacity(left_chunk.rows.len());
                     for left_row in left_chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = &self.runtime {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let matches = matching_rows(
                             &left_row,
                             &left_chunk.layout,
@@ -371,45 +442,78 @@ impl ApplyOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_stopped();
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(
+    /// Reset per-run materialized state and rewind both inputs.
+    ///
+    /// `Apply`/`PatternApply`/`RollUpApply` drop their materialized right
+    /// side so the next run re-pulls it; `CorrelatedApply` additionally
+    /// resets its reused sub-executor (nested subqueries reset recursively).
+    pub fn reset(
         &mut self,
-        base: &mut OperatorBase,
-        _left: &mut StreamingExecutor,
-        _right: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if !base.lifecycle.can_close() {
-            return Ok(());
+        left: &mut StreamingExecutor,
+        right: &mut StreamingExecutor,
+    ) -> Result<bool, QueryError> {
+        match &mut self.kind {
+            ApplyOperatorKind::Apply {
+                right_rows,
+                right_layout,
+                ..
+            }
+            | ApplyOperatorKind::PatternApply {
+                right_rows,
+                right_layout,
+                ..
+            }
+            | ApplyOperatorKind::RollUpApply {
+                right_rows,
+                right_layout,
+                ..
+            } => {
+                right_rows.take();
+                right_layout.take();
+            }
+            ApplyOperatorKind::CorrelatedApply {
+                sub_executor,
+                right_rows,
+                right_layout,
+                ..
+            } => {
+                if let Some(exec) = sub_executor {
+                    exec.reset()?;
+                }
+                right_rows.take();
+                right_layout.take();
+            }
         }
-        match self {
-            Self::Apply {
+        left.reset()?;
+        right.reset()?;
+        Ok(false)
+    }
+
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        match &mut self.kind {
+            ApplyOperatorKind::Apply {
                 right_rows,
                 right_layout,
                 memory_tracker,
                 ..
             }
-            | Self::PatternApply {
+            | ApplyOperatorKind::PatternApply {
                 right_rows,
                 right_layout,
                 memory_tracker,
                 ..
             }
-            | Self::CorrelatedApply {
+            | ApplyOperatorKind::CorrelatedApply {
                 right_rows,
                 right_layout,
                 memory_tracker,
                 ..
             }
-            | Self::RollUpApply {
+            | ApplyOperatorKind::RollUpApply {
                 right_rows,
                 right_layout,
                 memory_tracker,
@@ -420,13 +524,17 @@ impl ApplyOperator {
                 memory_tracker.reset();
             }
         }
-        base.lifecycle.mark_closed();
+        if let ApplyOperatorKind::CorrelatedApply { sub_executor, .. } = &mut self.kind {
+            if let Some(mut exec) = sub_executor.take() {
+                exec.close_tree()?;
+            }
+        }
         Ok(())
     }
 }
 
 fn materialize_right(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
     right: &mut StreamingExecutor,
     rows: &mut Option<Vec<Vec<Value>>>,
     layout: &mut Option<Arc<SlotLayout>>,
@@ -438,7 +546,9 @@ fn materialize_right(
     let mut materialized = Vec::new();
     while let Some(mut chunk) = right.advance()? {
         chunk.materialize_selection_by("Apply");
-        base.ensure_not_cancelled()?;
+        if let Some(rt) = runtime {
+            rt.ensure_not_cancelled()?;
+        }
         if layout.is_none() {
             *layout = Some(chunk.get_layout());
         }
@@ -495,7 +605,10 @@ fn keys_match(left: &[Value], right: &[Value]) -> bool {
 mod tests {
     use super::*;
     use crate::core::types::ContextualExpression;
-    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
+    use crate::query::executor::streaming::operators::source_operator::{
+        SourceOperator, SourceOperatorKind,
+    };
     use crate::query::executor::streaming::runtime::ExecutionRuntime;
     use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -503,12 +616,15 @@ mod tests {
     fn scan(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
         let layout = Arc::new(SlotLayout::from_names(&col_names));
         StreamingExecutor::Source(
-            OperatorBase::new(0).with_output_layout(layout),
-            SourceOperator::ScanVertices {
-                buffer: rows,
-                current_index: 0,
-                col_names,
-            },
+            OperatorBase::new(0),
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows,
+                    current_index: 0,
+                    col_names,
+                },
+                layout,
+            ),
         )
     }
 
@@ -520,7 +636,8 @@ mod tests {
         let left = scan(left_rows, vec!["id".to_string()]);
         let right = scan(right_rows, vec!["id".to_string()]);
         let budget = MemoryBudget::default_budget();
-        let operator = ApplyOperator::from_spec(&spec, &budget);
+        let operator =
+            ApplyOperator::from_spec(&spec, &budget, Arc::new(SlotLayout::new(Vec::new())));
         let mut executor = StreamingExecutor::Apply(
             OperatorBase::new(3),
             Box::new(left),
@@ -589,9 +706,10 @@ mod tests {
                 correlated_columns: vec!["left_input".to_string()],
             },
             &MemoryBudget::default_budget(),
+            output_layout,
         );
         let mut executor = StreamingExecutor::Apply(
-            OperatorBase::new(3).with_output_layout(output_layout),
+            OperatorBase::new(3),
             Box::new(left),
             Box::new(right),
             operator,
@@ -650,6 +768,7 @@ mod tests {
     fn correlated_bindings() -> QueryBindings {
         QueryBindings {
             parameters: Arc::new(std::collections::HashMap::new()),
+            session_variables: Arc::new(std::collections::HashMap::new()),
             parameter_frame: None,
             space_name: None,
             storage: None,
@@ -683,16 +802,26 @@ mod tests {
         left_rows: Vec<Vec<Value>>,
     ) -> Result<Vec<Vec<Value>>, QueryError> {
         let left = scan(left_rows, vec!["id".to_string()]);
-        let right = StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start);
+        let right = StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::new(
+                SourceOperatorKind::Start,
+                Arc::new(SlotLayout::new(Vec::new())),
+            ),
+        );
         let budget = MemoryBudget::default_budget();
-        let operator = ApplyOperator::CorrelatedApply {
-            sub_plan,
-            bindings: Box::new(correlated_bindings()),
-            anti,
-            right_rows: None,
-            right_layout: None,
-            memory_tracker: MemoryTracker::new(budget),
-        };
+        let operator = ApplyOperator::new(
+            ApplyOperatorKind::CorrelatedApply {
+                sub_plan,
+                bindings: Box::new(correlated_bindings()),
+                sub_executor: None,
+                anti,
+                right_rows: None,
+                right_layout: None,
+                memory_tracker: MemoryTracker::new(budget),
+            },
+            Arc::new(SlotLayout::new(Vec::new())),
+        );
         let mut executor = StreamingExecutor::Apply(
             OperatorBase::new(3),
             Box::new(left),

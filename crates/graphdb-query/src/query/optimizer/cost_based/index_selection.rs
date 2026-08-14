@@ -328,7 +328,7 @@ fn full_scan_cost(
 }
 
 // =====================================================================
-// Logical-plan variant (P3: PlanNodeEnum logic/physical separation).
+// Logical-plan variant (PlanNodeEnum logic/physical separation).
 //
 // The index selection decision is taken on the pure logical tree
 // (`LogicalNodeEnum`) and emits the same `index:` note as the physical
@@ -600,7 +600,7 @@ mod tests {
     }
 
     // ===================================================================
-    // Logical-plan walker tests (P3 step 1)
+    // Logical-plan walker tests
     // ===================================================================
 
     use crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;

@@ -152,6 +152,9 @@ pub trait ExpressionVisitor {
             Expression::Parameter(name) => {
                 self.visit_parameter(name);
             }
+            Expression::SessionVariable(name) => {
+                self.visit_parameter(name);
+            }
             Expression::Vector(data) => {
                 self.visit_vector(data);
             }

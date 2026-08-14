@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{Edge, EdgeDirection, Value};
@@ -10,21 +8,28 @@ use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::QueryStorage;
+
+use super::{GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    steps: u32,
-    direction: EdgeDirection,
-    edge_types: &[String],
-    base: &mut OperatorBase,
+    op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("Subgraph not opened".to_string()));
-    }
+    let GraphOperatorKind::Subgraph {
+        storage,
+        space_name,
+        steps,
+        direction,
+        edge_types,
+    } = &mut op.kind
+    else {
+        unreachable!("subgraph::handle called for a non-subgraph graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let steps = *steps;
+    let direction = *direction;
+    let edge_types = &*edge_types;
     while let Some(mut chunk) = input.advance()? {
         chunk.materialize_selection_by("Subgraph");
         if let Some(storage_lock) = storage {
@@ -33,7 +38,9 @@ pub(super) fn handle(
 
             let mut out_rows = Vec::new();
             for row in &chunk.rows {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 let ctx = ValueRowContext::new(row.clone(), chunk.get_layout());
                 let vid_val = ctx
                     .get_variable("vid")
@@ -47,7 +54,9 @@ pub(super) fn handle(
                     visited.insert(seed_vid);
 
                     while let Some((current, current_step)) = frontier.pop() {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = op.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if current_step >= steps {
                             continue;
                         }
@@ -125,7 +134,7 @@ pub(super) fn handle(
             let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(&op.output_layout),
             )));
         } else {
             if !chunk.is_empty() {

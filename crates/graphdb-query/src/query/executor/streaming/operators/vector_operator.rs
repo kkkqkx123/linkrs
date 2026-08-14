@@ -7,14 +7,16 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::query::executor::streaming::operators::spec::VectorManageCommand;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
 
 fn make_manage_result(
-    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    output_layout: Arc<SlotLayout>,
     action: &str,
     name: Option<&str>,
     status: &str,
@@ -29,7 +31,7 @@ fn make_manage_result(
 }
 
 #[derive(Debug)]
-pub enum VectorOperator {
+pub enum VectorOperatorKind {
     VectorManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -72,18 +74,32 @@ pub enum VectorOperator {
     },
 }
 
+/// Vector operator.
+///
+/// Wraps [`VectorOperatorKind`] with the runtime context injected at `open()`.
+/// Lifecycle state is owned exclusively by the executor; operators never
+/// write it.
+#[derive(Debug)]
+pub struct VectorOperator {
+    pub kind: VectorOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl VectorOperator {
     /// Create a VectorOperator from an immutable spec.
     pub fn from_spec(
         spec: &super::spec::VectorSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "qdrant")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             super::spec::VectorSpec::VectorManage {
                 space_name,
                 command,
-            } => VectorOperator::VectorManage {
+            } => VectorOperatorKind::VectorManage {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 command: command.clone(),
@@ -98,7 +114,7 @@ impl VectorOperator {
                 top_k,
                 tag_name,
                 field_name,
-            } => VectorOperator::VectorSearch {
+            } => VectorOperatorKind::VectorSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 space_id: *space_id,
@@ -114,7 +130,7 @@ impl VectorOperator {
                 space_name,
                 index_name,
                 lookup_key,
-            } => VectorOperator::VectorLookup {
+            } => VectorOperatorKind::VectorLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 index_name: index_name.clone(),
@@ -131,7 +147,7 @@ impl VectorOperator {
                 tag_name,
                 field_name,
                 space_id,
-            } => VectorOperator::VectorMatch {
+            } => VectorOperatorKind::VectorMatch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 pattern: pattern.clone(),
@@ -144,33 +160,47 @@ impl VectorOperator {
                 #[cfg(feature = "qdrant")]
                 vector_coordinator: vector_coordinator.clone(),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: VectorOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            VectorOperator::VectorManage { .. }
-            | VectorOperator::VectorSearch { .. }
-            | VectorOperator::VectorLookup { .. }
-            | VectorOperator::VectorMatch { .. } => {
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
+        match &mut self.kind {
+            VectorOperatorKind::VectorManage { .. }
+            | VectorOperatorKind::VectorSearch { .. }
+            | VectorOperatorKind::VectorLookup { .. }
+            | VectorOperatorKind::VectorMatch { .. } => {
                 input.open()?;
-                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        match self {
-            VectorOperator::VectorManage {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        match &mut self.kind {
+            VectorOperatorKind::VectorManage {
                 storage,
                 space_name,
                 command,
@@ -179,10 +209,6 @@ impl VectorOperator {
             } => {
                 #[cfg(feature = "qdrant")]
                 let _ = (&storage, &space_name);
-
-                if !base.lifecycle.is_opened() {
-                    return Ok(None);
-                }
 
                 let result = match command {
                     VectorManageCommand::Create {
@@ -221,7 +247,7 @@ impl VectorOperator {
                                 });
                                 match res {
                                     Ok(_) => Ok(Some(make_manage_result(
-                                        Arc::clone(&base.output_layout),
+                                        Arc::clone(&self.output_layout),
                                         "create_vector_index",
                                         Some(index_name.as_str()),
                                         "created",
@@ -230,7 +256,7 @@ impl VectorOperator {
                                 }
                             } else {
                                 Ok(Some(make_manage_result(
-                                    Arc::clone(&base.output_layout),
+                                    Arc::clone(&self.output_layout),
                                     "create_vector_index",
                                     Some(index_name.as_str()),
                                     "no-coordinator",
@@ -249,7 +275,7 @@ impl VectorOperator {
                                 space_id,
                             );
                             Ok(Some(make_manage_result(
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                                 "create_vector_index",
                                 Some(index_name.as_str()),
                                 "qdrant feature disabled",
@@ -269,7 +295,7 @@ impl VectorOperator {
                         {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
-                                Arc::clone(&base.output_layout),
+                                Arc::clone(&self.output_layout),
                                 "drop_vector_index",
                                 Some(index_name.as_str()),
                                 "qdrant feature disabled",
@@ -278,11 +304,10 @@ impl VectorOperator {
                     }
                 };
 
-                base.lifecycle.mark_closed();
                 result
             }
 
-            VectorOperator::VectorSearch {
+            VectorOperatorKind::VectorSearch {
                 space_id,
                 tag_name,
                 field_name,
@@ -294,10 +319,6 @@ impl VectorOperator {
             } => {
                 #[cfg(not(feature = "qdrant"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
-
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("VectorSearch not opened".to_string()));
-                }
 
                 #[cfg(feature = "qdrant")]
                 {
@@ -321,13 +342,12 @@ impl VectorOperator {
                                 Value::Double(result.score as f64),
                             ]);
                         }
-                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
                             Ok(Some(DataChunk::new_with_layout(
                                 rows,
-                                base.output_layout.clone(),
+                                self.output_layout.clone(),
                             )))
                         };
                     }
@@ -335,17 +355,12 @@ impl VectorOperator {
 
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("VectorSearch");
-                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.lifecycle.mark_closed();
                 Ok(None)
             }
 
-            VectorOperator::VectorLookup { .. } => {
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("VectorLookup not opened".to_string()));
-                }
+            VectorOperatorKind::VectorLookup { .. } => {
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("VectorSearch");
                     return Ok(Some(chunk));
@@ -353,7 +368,7 @@ impl VectorOperator {
                 Ok(None)
             }
 
-            VectorOperator::VectorMatch {
+            VectorOperatorKind::VectorMatch {
                 space_id,
                 tag_name,
                 field_name,
@@ -365,10 +380,6 @@ impl VectorOperator {
             } => {
                 #[cfg(not(feature = "qdrant"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold);
-
-                if !base.lifecycle.is_opened() {
-                    return Err(QueryError::execution("VectorMatch not opened".to_string()));
-                }
 
                 #[cfg(feature = "qdrant")]
                 {
@@ -393,13 +404,12 @@ impl VectorOperator {
                                 Value::Double(result.score as f64),
                             ]);
                         }
-                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
                             Ok(Some(DataChunk::new_with_layout(
                                 rows,
-                                base.output_layout.clone(),
+                                self.output_layout.clone(),
                             )))
                         };
                     }
@@ -407,48 +417,18 @@ impl VectorOperator {
 
                 if let Some(mut chunk) = input.advance()? {
                     chunk.materialize_selection_by("VectorSearch");
-                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.lifecycle.mark_closed();
                 Ok(None)
             }
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            VectorOperator::VectorManage { .. }
-            | VectorOperator::VectorSearch { .. }
-            | VectorOperator::VectorLookup { .. }
-            | VectorOperator::VectorMatch { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_stopped();
-                }
-                Ok(())
-            }
-        }
+    pub fn stop(&mut self) -> Result<(), QueryError> {
+        Ok(())
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        match self {
-            VectorOperator::VectorManage { .. }
-            | VectorOperator::VectorSearch { .. }
-            | VectorOperator::VectorLookup { .. }
-            | VectorOperator::VectorMatch { .. } => {
-                if base.lifecycle.can_close() {
-                    base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-        }
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        Ok(())
     }
 }

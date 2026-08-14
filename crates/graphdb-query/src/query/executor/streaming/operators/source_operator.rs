@@ -7,8 +7,10 @@ use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::executor::streaming::state::{GlobalState, GlobalStateKey, StateArenaSet};
 use crate::storage::EdgeCursor;
 use crate::storage::IndexCursor;
 use crate::storage::IndexRow;
@@ -27,13 +29,35 @@ mod util;
 pub use neighbors::NeighborScanState;
 pub use storage_scan::{column_block_enabled, set_column_block_enabled};
 
-/// Source operator with arena-based state for counters.
+/// Immutable per-operator execution config injected at `open()`.
+///
+/// Mirrors the immutable fields of the executor's [`OperatorBase`] so the
+/// operator hot path (in particular `next()`) never needs the base passed
+/// down as a parameter.
+#[derive(Debug, Clone, Copy)]
+pub struct OperatorConfig {
+    pub chunk_size: usize,
+    pub partition_id: Option<usize>,
+    pub physical_operator_id: PhysicalOperatorId,
+}
+
+impl Default for OperatorConfig {
+    fn default() -> Self {
+        Self {
+            chunk_size: 1024,
+            partition_id: None,
+            physical_operator_id: PhysicalOperatorId(0),
+        }
+    }
+}
+
+/// Source operator kind with arena-based state for counters.
 ///
 /// Heavy mutable resources (cursors) are kept inline for practical lifetime
 /// management; simple counters and state machines live in the `SourceState`
-/// arena on [`OperatorBase`].
+/// arena on the execution runtime.
 #[derive(Debug)]
-pub enum SourceOperator {
+pub enum SourceOperatorKind {
     /// Buffered vertex scan — rows come from the spec.
     ScanVertices {
         buffer: Vec<Vec<Value>>,
@@ -134,23 +158,44 @@ pub enum SourceOperator {
     Start,
 }
 
+/// Source operator.
+///
+/// Wraps [`SourceOperatorKind`] with the runtime context injected at
+/// `open()`. Lifecycle state is owned exclusively by the executor; operators
+/// never write it.
+#[derive(Debug)]
+pub struct SourceOperator {
+    pub kind: SourceOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+    /// Correlation frame bound to this operator instance by a parent
+    /// executor (`StreamingExecutor::inject_correlation_frame`). Consumed
+    /// (one-shot) by `Argument`. Per-instance, so parallel partitions and
+    /// nested subqueries never share or overwrite frames.
+    pub frame: Option<(Arc<SlotLayout>, Vec<Value>)>,
+}
+
 impl SourceOperator {
     /// Create a SourceOperator with immutable config from an immutable spec
     /// and the per-query storage client.  Mutable runtime state is created
     /// separately in [`SourceOperator::open`] and stored in the operator
-    /// state arena on [`OperatorBase`].
+    /// state arena on the execution runtime.
     pub fn from_spec(
         spec: &super::spec::SourceSpec,
         storage: Option<Arc<RwLock<dyn crate::storage::QueryStorage>>>,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
-            super::spec::SourceSpec::ScanVertices { rows, col_names } => Self::ScanVertices {
-                buffer: rows.clone(),
-                current_index: 0,
-                col_names: col_names.clone(),
-            },
+        let kind = match spec {
+            super::spec::SourceSpec::ScanVertices { rows, col_names } => {
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows.clone(),
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }
+            }
             super::spec::SourceSpec::StandaloneValues { values, col_names } => {
-                Self::StandaloneValues {
+                SourceOperatorKind::StandaloneValues {
                     values: values.clone(),
                     buffer: Vec::new(),
                     current_index: 0,
@@ -165,7 +210,7 @@ impl SourceOperator {
                 predicate,
                 tag,
                 partition_range,
-            } => Self::StorageScanVertices {
+            } => SourceOperatorKind::StorageScanVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 limit: *limit,
@@ -176,11 +221,13 @@ impl SourceOperator {
                 tag: tag.clone(),
                 cursor: None,
             },
-            super::spec::SourceSpec::ScanEdges { rows, col_names } => Self::ScanEdges {
-                buffer: rows.clone(),
-                current_index: 0,
-                col_names: col_names.clone(),
-            },
+            super::spec::SourceSpec::ScanEdges { rows, col_names } => {
+                SourceOperatorKind::ScanEdges {
+                    buffer: rows.clone(),
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }
+            }
             super::spec::SourceSpec::StorageScanEdges {
                 space_name,
                 limit,
@@ -188,7 +235,7 @@ impl SourceOperator {
                 col_names,
                 projected_properties,
                 partition_range,
-            } => Self::StorageScanEdges {
+            } => SourceOperatorKind::StorageScanEdges {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 limit: *limit,
@@ -202,7 +249,7 @@ impl SourceOperator {
                 space_name,
                 vertex_ids,
                 projected_properties,
-            } => Self::GetVertices {
+            } => SourceOperatorKind::GetVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 vertex_ids: vertex_ids.clone(),
@@ -216,7 +263,7 @@ impl SourceOperator {
                 dst,
                 rank,
                 projected_properties,
-            } => Self::GetEdges {
+            } => SourceOperatorKind::GetEdges {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_type: edge_type.clone(),
@@ -230,7 +277,7 @@ impl SourceOperator {
                 space_name,
                 direction,
                 projected_properties,
-            } => Self::GetNeighbors {
+            } => SourceOperatorKind::GetNeighbors {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 direction: direction.clone(),
@@ -245,7 +292,7 @@ impl SourceOperator {
                 projection,
                 output_layout,
                 ..
-            } => Self::IndexScan {
+            } => SourceOperatorKind::IndexScan {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 index_name: index_name.clone(),
@@ -257,14 +304,14 @@ impl SourceOperator {
                 cursor: None,
                 edge_type_names: std::collections::HashMap::new(),
             },
-            super::spec::SourceSpec::Argument { .. } => Self::Argument,
+            super::spec::SourceSpec::Argument { .. } => SourceOperatorKind::Argument,
             super::spec::SourceSpec::GetProp {
                 space_name,
                 entity_slot,
                 prop_names,
                 is_vertex,
                 output_layout,
-            } => Self::GetProp {
+            } => SourceOperatorKind::GetProp {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 entity_slot: *entity_slot,
@@ -272,63 +319,140 @@ impl SourceOperator {
                 is_vertex: *is_vertex,
                 output_layout: output_layout.clone(),
             },
-            super::spec::SourceSpec::Start => Self::Start,
+            super::spec::SourceSpec::Start => SourceOperatorKind::Start,
+        };
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig {
+                chunk_size: 1024,
+                partition_id: None,
+                physical_operator_id: PhysicalOperatorId(0),
+            },
+            frame: None,
         }
     }
 
-    pub fn open(&mut self, base: &mut OperatorBase) -> Result<(), QueryError> {
+    pub fn new(kind: SourceOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig {
+                chunk_size: 1024,
+                partition_id: None,
+                physical_operator_id: PhysicalOperatorId(0),
+            },
+            frame: None,
+        }
+    }
+
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
+        &mut self,
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    fn state_key(&self) -> GlobalStateKey {
+        GlobalStateKey(self.config.physical_operator_id, self.config.partition_id)
+    }
+
+    fn state_arena(&self) -> parking_lot::MutexGuard<'_, StateArenaSet> {
+        self.runtime
+            .as_ref()
+            .expect("runtime required")
+            .state_arena_for(self.config.partition_id)
+            .lock()
+    }
+
+    fn insert_state(&mut self, state: GlobalState) {
+        let Some(rt) = self.runtime.as_ref() else {
+            return;
+        };
+        let key = self.state_key();
+        rt.state_arena_for(self.config.partition_id)
+            .lock()
+            .global
+            .insert(key, state);
+    }
+
+    fn take_state(&mut self) -> Option<GlobalState> {
+        let rt = self.runtime.as_ref()?;
+        let key = self.state_key();
+        rt.state_arena_for(self.config.partition_id)
+            .lock()
+            .global
+            .remove(&key)
+    }
+
+    pub fn open(&mut self) -> Result<(), QueryError> {
         use crate::query::executor::streaming::operators::state::SourceState;
         use crate::query::executor::streaming::state::GlobalState;
-        match self {
-            Self::ScanVertices { .. } | Self::StandaloneValues { .. } | Self::ScanEdges { .. } => {
-                buffered::open(self, base)?
+        let mut state: Option<GlobalState> = None;
+        match &mut self.kind {
+            SourceOperatorKind::ScanVertices { .. }
+            | SourceOperatorKind::StandaloneValues { .. }
+            | SourceOperatorKind::ScanEdges { .. } => buffered::open(self)?,
+            SourceOperatorKind::StorageScanVertices { .. }
+            | SourceOperatorKind::StorageScanEdges { .. } => storage_scan::open(self)?,
+            SourceOperatorKind::GetVertices { .. } | SourceOperatorKind::GetEdges { .. } => {
+                point_lookup::open(self)?
             }
-            Self::StorageScanVertices { .. } | Self::StorageScanEdges { .. } => {
-                storage_scan::open(self, base)?
+            SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
+            SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::Argument => {
+                state = Some(GlobalState::Source(SourceState::Argument));
             }
-            Self::GetVertices { .. } | Self::GetEdges { .. } => point_lookup::open(self, base)?,
-            Self::GetNeighbors { .. } => neighbors::open(self, base)?,
-            Self::IndexScan { .. } => index_scan::open(self, base)?,
-            Self::Argument => base.insert_state(GlobalState::Source(SourceState::Argument)),
-            Self::GetProp {
+            SourceOperatorKind::GetProp {
                 entity_slot,
                 prop_names,
                 ..
             } => {
-                base.insert_state(GlobalState::Source(SourceState::GetProp {
+                state = Some(GlobalState::Source(SourceState::GetProp {
                     entity_slot: *entity_slot,
                     prop_names: prop_names.clone(),
                 }));
             }
-            Self::Start => {
-                base.insert_state(GlobalState::Source(SourceState::Start { emitted: false }))
+            SourceOperatorKind::Start => {
+                state = Some(GlobalState::Source(SourceState::Start { emitted: false }));
             }
         }
-        base.lifecycle.mark_opened();
+        if let Some(state) = state {
+            self.insert_state(state);
+        }
         Ok(())
     }
 
-    pub fn next(&mut self, base: &mut OperatorBase) -> Result<Option<DataChunk>, QueryError> {
+    pub fn next(&mut self) -> Result<Option<DataChunk>, QueryError> {
         use crate::query::executor::streaming::operators::state::SourceState;
         use crate::query::executor::streaming::state::GlobalState;
-        match self {
-            Self::ScanVertices { .. } | Self::StandaloneValues { .. } | Self::ScanEdges { .. } => {
-                buffered::next(self, base)
+        match &mut self.kind {
+            SourceOperatorKind::ScanVertices { .. }
+            | SourceOperatorKind::StandaloneValues { .. }
+            | SourceOperatorKind::ScanEdges { .. } => buffered::next(self),
+            SourceOperatorKind::StorageScanVertices { .. }
+            | SourceOperatorKind::StorageScanEdges { .. } => storage_scan::next(self),
+            SourceOperatorKind::GetVertices { .. } | SourceOperatorKind::GetEdges { .. } => {
+                point_lookup::next(self)
             }
-            Self::StorageScanVertices { .. } | Self::StorageScanEdges { .. } => {
-                storage_scan::next(self, base)
-            }
-            Self::GetVertices { .. } | Self::GetEdges { .. } => point_lookup::next(self, base),
-            Self::GetNeighbors { .. } => neighbors::next(self, base),
-            Self::IndexScan { .. } => index_scan::next(self, base),
-            Self::GetProp { .. } => Err(QueryError::execution(
+            SourceOperatorKind::GetNeighbors { .. } => neighbors::next(self),
+            SourceOperatorKind::IndexScan { .. } => index_scan::next(self),
+            SourceOperatorKind::GetProp { .. } => Err(QueryError::execution(
                 "GetProp is not available as a source operator; \
                  use the unary GetProp (coming in M2)"
                     .to_string(),
             )),
-            Self::Start => {
-                let mut arena = base.state_arena();
-                let s = arena.global.get_mut(&base.state_key());
+            SourceOperatorKind::Start => {
+                let mut arena = self.state_arena();
+                let s = arena.global.get_mut(&self.state_key());
                 let emitted = match s {
                     Some(GlobalState::Source(SourceState::Start { ref mut emitted })) => emitted,
                     _ => return Ok(None),
@@ -338,20 +462,35 @@ impl SourceOperator {
                 }
                 *emitted = true;
                 let chunk =
-                    DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
+                    DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&self.output_layout));
                 Ok(Some(chunk))
             }
-            Self::Argument => {
-                let rt = base.runtime.as_ref().ok_or_else(|| {
-                    QueryError::execution(
-                        "Argument requires a runtime with correlation frame".to_string(),
-                    )
-                })?;
-                let frame = rt.take_correlation_frame();
+            SourceOperatorKind::Argument => {
+                let frame = self.frame.take();
                 match frame {
-                    Some((_layout, row)) => {
-                        let chunk =
-                            DataChunk::new_with_layout(vec![row], Arc::clone(&base.output_layout));
+                    Some((layout, row)) => {
+                        // Project the injected frame down to this Argument's
+                        // own output layout: the injected row may carry more
+                        // columns than the outer column names the sub-plan
+                        // was compiled against (e.g. optimizer-added flat
+                        // property slots).
+                        let projected: Vec<Value> = self
+                            .output_layout
+                            .names()
+                            .iter()
+                            .map(|name| {
+                                layout
+                                    .slot_id(name)
+                                    .and_then(|slot| row.get(slot).cloned())
+                                    .unwrap_or_else(|| {
+                                        Value::Null(crate::core::value::NullType::Null)
+                                    })
+                            })
+                            .collect();
+                        let chunk = DataChunk::new_with_layout(
+                            vec![projected],
+                            Arc::clone(&self.output_layout),
+                        );
                         Ok(Some(chunk))
                     }
                     None => Ok(None),
@@ -360,13 +499,58 @@ impl SourceOperator {
         }
     }
 
-    pub fn stop(&mut self, _base: &mut OperatorBase) -> Result<(), QueryError> {
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn close(&mut self, base: &mut OperatorBase) -> Result<(), QueryError> {
-        base.take_state();
-        base.lifecycle.mark_closed();
+    /// Rewind this source so it re-produces the same logical stream.
+    ///
+    /// Buffered sources reset their row index; storage-backed sources
+    /// re-open their cursor (the query-level snapshot guarantees identical
+    /// re-reads); `Argument`/`GetProp` keep their injected frame/state and
+    /// `Start` un-emits its single row.
+    pub fn reset(&mut self) -> Result<bool, QueryError> {
+        use crate::query::executor::streaming::operators::state::SourceState;
+        use crate::query::executor::streaming::state::GlobalState;
+        match &mut self.kind {
+            SourceOperatorKind::ScanVertices { current_index, .. }
+            | SourceOperatorKind::ScanEdges { current_index, .. }
+            | SourceOperatorKind::StandaloneValues { current_index, .. } => {
+                *current_index = 0;
+            }
+            SourceOperatorKind::StorageScanVertices { .. }
+            | SourceOperatorKind::StorageScanEdges { .. } => {
+                storage_scan::open(self)?;
+            }
+            SourceOperatorKind::GetVertices { .. } | SourceOperatorKind::GetEdges { .. } => {
+                point_lookup::open(self)?
+            }
+            SourceOperatorKind::GetNeighbors { .. } => neighbors::open(self)?,
+            SourceOperatorKind::IndexScan { .. } => index_scan::open(self)?,
+            SourceOperatorKind::Argument => {
+                // The correlation frame lives on the operator and is
+                // re-injected per run by the parent; nothing to rewind.
+            }
+            SourceOperatorKind::GetProp { .. } => {
+                // State is immutable; nothing to rewind.
+            }
+            SourceOperatorKind::Start => {
+                if let Some(rt) = &self.runtime {
+                    let key = self.state_key();
+                    let mut arena = rt.state_arena_for(self.config.partition_id).lock();
+                    if let Some(GlobalState::Source(SourceState::Start { emitted })) =
+                        arena.global.get_mut(&key)
+                    {
+                        *emitted = false;
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn close(&mut self) -> Result<(), QueryError> {
+        self.take_state();
         Ok(())
     }
 }
@@ -379,66 +563,74 @@ mod tests {
     use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
 
+    fn source(kind: SourceOperatorKind) -> SourceOperator {
+        SourceOperator::new(kind, Arc::new(SlotLayout::new(Vec::new())))
+    }
+
+    fn config_for(base: &OperatorBase) -> OperatorConfig {
+        OperatorConfig {
+            chunk_size: base.chunk_size,
+            partition_id: base.partition_id,
+            physical_operator_id: base.physical_operator_id,
+        }
+    }
+
     #[test]
     fn scan_source_terminates_after_consuming_its_buffer() {
-        let mut source = SourceOperator::ScanVertices {
+        let mut source = source(SourceOperatorKind::ScanVertices {
             buffer: vec![vec![Value::BigInt(1)]],
             current_index: 0,
             col_names: Vec::new(),
-        };
-        let mut base = OperatorBase::new(0);
+        });
+        let base = OperatorBase::new(0);
 
-        source.open(&mut base).expect("source should open");
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+        source.open().expect("source should open");
         assert_eq!(
             source
-                .next(&mut base)
+                .next()
                 .expect("first pull should succeed")
                 .map(|chunk| chunk.len()),
             Some(1)
         );
-        assert!(source
-            .next(&mut base)
-            .expect("second pull should succeed")
-            .is_none());
+        assert!(source.next().expect("second pull should succeed").is_none());
     }
 
     #[test]
     fn scan_source_splits_across_multiple_chunks() {
-        let mut base = OperatorBase::new(0);
+        let base = OperatorBase::new(0);
         let chunk_size = base.chunk_size;
         let row_count = chunk_size * 2 + 7;
         let buffer: Vec<Vec<Value>> = (0..row_count)
             .map(|i| vec![Value::BigInt(i as i64)])
             .collect();
-        let mut source = SourceOperator::ScanVertices {
+        let mut source = source(SourceOperatorKind::ScanVertices {
             buffer,
             current_index: 0,
             col_names: Vec::new(),
-        };
-        source.open(&mut base).expect("source should open");
+        });
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+        source.open().expect("source should open");
 
         let chunk1 = source
-            .next(&mut base)
+            .next()
             .expect("first pull should succeed")
             .expect("first chunk should be Some");
         assert_eq!(chunk1.len(), chunk_size);
 
         let chunk2 = source
-            .next(&mut base)
+            .next()
             .expect("second pull should succeed")
             .expect("second chunk should be Some");
         assert_eq!(chunk2.len(), chunk_size);
 
         let chunk3 = source
-            .next(&mut base)
+            .next()
             .expect("third pull should succeed")
             .expect("third chunk should be Some");
         assert_eq!(chunk3.len(), 7);
 
-        assert!(source
-            .next(&mut base)
-            .expect("fourth pull should succeed")
-            .is_none());
+        assert!(source.next().expect("fourth pull should succeed").is_none());
 
         let total: i64 = chunk1
             .rows
@@ -456,15 +648,16 @@ mod tests {
 
     #[test]
     fn scan_without_col_names_infers_layout_from_row_width() {
-        let mut base = OperatorBase::new(0);
-        let mut source = SourceOperator::ScanVertices {
+        let base = OperatorBase::new(0);
+        let mut source = source(SourceOperatorKind::ScanVertices {
             buffer: vec![vec![Value::BigInt(1), Value::string("a")]],
             current_index: 0,
             col_names: Vec::new(),
-        };
-        source.open(&mut base).expect("source should open");
+        });
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+        source.open().expect("source should open");
         let mut chunk = source
-            .next(&mut base)
+            .next()
             .expect("pull should succeed")
             .expect("chunk should be Some");
         assert_eq!(chunk.num_columns(), 2);
@@ -484,49 +677,49 @@ mod tests {
             #[cfg(feature = "qdrant")]
             None,
         ));
-        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
-        let mut source = SourceOperator::ScanVertices {
+        let base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let mut source = source(SourceOperatorKind::ScanVertices {
             buffer: vec![vec![Value::string("row")]],
             current_index: 0,
             col_names: Vec::new(),
-        };
+        });
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
 
-        source.open(&mut base).expect("source should open");
+        source.open().expect("source should open");
         let error = source
-            .next(&mut base)
+            .next()
             .expect_err("the source must propagate a memory budget error");
         assert!(error.to_string().contains("Memory budget exceeded"));
     }
 
     #[test]
     fn buffered_source_open_returns_configuration_errors() {
-        let mut source = SourceOperator::GetVertices {
+        let mut source = source(SourceOperatorKind::GetVertices {
             storage: None,
             space_name: "test".to_string(),
             vertex_ids: None,
             cached_ids: Vec::new(),
             projected_properties: Vec::new(),
-        };
-        let mut base = OperatorBase::new(0);
+        });
+        let base = OperatorBase::new(0);
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
 
-        let error = source
-            .next(&mut base)
-            .expect_err("source without storage must fail");
+        let error = source.next().expect_err("source without storage must fail");
         assert!(error.to_string().contains("requires storage"));
-        assert!(source.close(&mut base).is_ok());
+        assert!(source.close().is_ok());
     }
 
     #[test]
     fn get_vertices_single_id_returns_none_on_second_call() {
         let mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
         let storage = Arc::new(RwLock::new(mock));
-        let mut source = SourceOperator::GetVertices {
+        let mut source = source(SourceOperatorKind::GetVertices {
             storage: Some(storage),
             space_name: "test".to_string(),
             vertex_ids: Some(vec![Value::string("1")]),
             cached_ids: Vec::new(),
             projected_properties: Vec::new(),
-        };
+        });
         let runtime = Arc::new(ExecutionRuntime::new(
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
@@ -536,17 +729,18 @@ mod tests {
             #[cfg(feature = "qdrant")]
             None,
         ));
-        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let base = OperatorBase::new(0).with_runtime(Some(runtime));
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
 
-        source.open(&mut base).expect("open should succeed");
+        source.open().expect("open should succeed");
 
-        let result1 = source.next(&mut base).expect("first next should succeed");
+        let result1 = source.next().expect("first next should succeed");
         assert!(
             result1.is_none(),
             "no vertex in mock, first call returns None"
         );
 
-        let result2 = source.next(&mut base).expect("second next should succeed");
+        let result2 = source.next().expect("second next should succeed");
         assert!(
             result2.is_none(),
             "second call must also return None (regression: do not re-emit)"
@@ -556,7 +750,7 @@ mod tests {
     #[test]
     fn get_edges_projected_filters_edge_properties() {
         use crate::core::Edge;
-        let mut mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
+        let mock = crate::storage::MockStorage::new().expect("MockStorage should be created");
         let src = crate::core::types::storage_ids::VertexId::from_int64(1);
         let dst = crate::core::types::storage_ids::VertexId::from_int64(2);
         mock.set_edges(vec![Edge {
@@ -572,7 +766,7 @@ mod tests {
             .collect(),
         }]);
         let storage = Arc::new(RwLock::new(mock));
-        let mut source = SourceOperator::GetEdges {
+        let mut source = source(SourceOperatorKind::GetEdges {
             storage: Some(storage),
             space_name: "test".to_string(),
             edge_type: Some("friend".to_string()),
@@ -581,7 +775,7 @@ mod tests {
             rank: 0,
             projected_properties: vec!["degree".to_string()],
             cursor: None,
-        };
+        });
         let runtime = Arc::new(ExecutionRuntime::new(
             QueryIdentity::default(),
             MemoryBudget::new(1024 * 1024),
@@ -591,12 +785,13 @@ mod tests {
             #[cfg(feature = "qdrant")]
             None,
         ));
-        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let base = OperatorBase::new(0).with_runtime(Some(runtime));
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
 
-        source.open(&mut base).expect("open should succeed");
+        source.open().expect("open should succeed");
 
         let chunk = source
-            .next(&mut base)
+            .next()
             .expect("first next should succeed")
             .expect("edge must be returned");
         assert_eq!(chunk.len(), 1);
@@ -611,9 +806,139 @@ mod tests {
         }
         assert_eq!(row[1], Value::Double(0.8));
 
-        assert!(source
-            .next(&mut base)
-            .expect("second next should succeed")
-            .is_none());
+        assert!(source.next().expect("second next should succeed").is_none());
+    }
+
+    // ── Reset protocol ──
+
+    #[test]
+    fn buffered_scan_reset_rewinds_the_buffer() {
+        let mut source = source(SourceOperatorKind::ScanVertices {
+            buffer: vec![
+                vec![Value::BigInt(1)],
+                vec![Value::BigInt(2)],
+                vec![Value::BigInt(3)],
+            ],
+            current_index: 0,
+            col_names: Vec::new(),
+        });
+        let base = OperatorBase::new(0);
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+
+        source.open().expect("open should succeed");
+        let mut all = Vec::new();
+        while let Some(chunk) = source.next().expect("first run should succeed") {
+            all.extend(chunk.rows);
+        }
+        assert_eq!(all.len(), 3, "first run emits every row");
+
+        source
+            .reset()
+            .expect("reset should succeed without fallback");
+
+        let mut again = Vec::new();
+        while let Some(chunk) = source.next().expect("second run should succeed") {
+            again.extend(chunk.rows);
+        }
+        assert_eq!(again, all, "reset re-produces the identical stream");
+    }
+
+    #[test]
+    fn start_source_reset_remits_its_single_row() {
+        let runtime = Arc::new(ExecutionRuntime::new(
+            QueryIdentity::default(),
+            MemoryBudget::new(1024 * 1024),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        let base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let mut source = source(SourceOperatorKind::Start);
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+
+        source.open().expect("open should succeed");
+        assert!(source.next().expect("pull").is_some());
+        assert!(source.next().expect("pull").is_none());
+
+        source.reset().expect("reset should succeed");
+        assert!(
+            source.next().expect("pull").is_some(),
+            "reset un-emits Start"
+        );
+        assert!(source.next().expect("pull").is_none());
+    }
+
+    #[test]
+    fn argument_source_reads_the_injected_frame_per_reset() {
+        let layout = Arc::new(SlotLayout::from_names(&["id".to_string()]));
+        let mut source = SourceOperator::new(SourceOperatorKind::Argument, layout.clone());
+
+        source.open().expect("open should succeed");
+
+        source.frame = Some((layout.clone(), vec![Value::Int(1)]));
+        let chunk = source.next().expect("pull").expect("frame row emitted");
+        assert_eq!(chunk.rows, vec![vec![Value::Int(1)]]);
+        assert!(
+            source.next().expect("pull").is_none(),
+            "frame is consumed once per run"
+        );
+
+        source.reset().expect("reset should succeed");
+        source.frame = Some((layout.clone(), vec![Value::Int(2)]));
+        let chunk = source.next().expect("pull").expect("new frame row emitted");
+        assert_eq!(chunk.rows, vec![vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn storage_backed_source_reset_reopens_and_repulls() {
+        use crate::core::types::storage_ids::VertexId;
+        use crate::core::Edge;
+        use crate::storage::MockStorage;
+
+        let mock = MockStorage::new().expect("MockStorage should be created");
+        mock.set_edges(vec![Edge {
+            src: VertexId::from_int64(1),
+            dst: VertexId::from_int64(2),
+            edge_type: "friend".to_string(),
+            ranking: 0,
+            props: Default::default(),
+        }]);
+        let storage: Arc<RwLock<dyn crate::storage::QueryStorage>> = Arc::new(RwLock::new(mock));
+        let runtime = Arc::new(ExecutionRuntime::new(
+            QueryIdentity::default(),
+            MemoryBudget::new(1024 * 1024),
+            Some(storage.clone()),
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        ));
+        let base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let mut source = source(SourceOperatorKind::GetEdges {
+            storage: Some(storage),
+            space_name: "test".to_string(),
+            edge_type: Some("friend".to_string()),
+            src: Some("1".to_string()),
+            dst: Some("2".to_string()),
+            rank: 0,
+            projected_properties: Vec::new(),
+            cursor: None,
+        });
+        source.inject_context(base.runtime.as_ref(), config_for(&base));
+
+        source.open().expect("open should succeed");
+        let first = source.next().expect("pull").expect("edge emitted");
+        assert_eq!(first.len(), 1);
+        assert!(source.next().expect("pull").is_none());
+
+        source.reset().expect("reset should succeed");
+        let second = source
+            .next()
+            .expect("pull")
+            .expect("same edge re-emitted after reset");
+        assert_eq!(second.len(), 1);
+        assert!(source.next().expect("pull").is_none());
     }
 }

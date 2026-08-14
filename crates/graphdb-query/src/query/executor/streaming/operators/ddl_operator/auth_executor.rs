@@ -1,29 +1,26 @@
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::permission::RoleType;
 use crate::core::types::user::{UserAlterInfo, UserInfo};
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::UserManageCommand;
-use crate::storage::{QueryStorage, StorageAuthOps};
+use crate::storage::StorageAuthOps;
 
 pub(super) fn execute_user_manage(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    command: &UserManageCommand,
-    emitted: &mut bool,
-    base: &mut OperatorBase,
+    op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let super::DdlOperatorKind::UserManage {
+        storage,
+        command,
+        emitted,
+    } = &mut op.kind
+    else {
+        return Ok(None);
+    };
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    if !base.lifecycle.is_opened() {
-        return Ok(None);
-    }
     let result = match command {
         UserManageCommand::Create {
             username,
@@ -150,6 +147,5 @@ pub(super) fn execute_user_manage(
             Ok(Some(DataChunk::new(Vec::new(), schema)))
         }
     };
-    base.lifecycle.mark_closed();
     result
 }

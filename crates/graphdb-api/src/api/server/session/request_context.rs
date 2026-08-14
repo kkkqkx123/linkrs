@@ -308,6 +308,7 @@ pub fn build_query_request_context(
         space_name: session.space_name(),
         query,
         parameters,
+        session_variables: session.variables_snapshot(),
         query_id: None,
         transaction_id: session.current_transaction(),
         auto_commit: session.is_auto_commit(),

@@ -30,6 +30,9 @@ pub struct QueryRequestContext {
     pub query: String,
     /// Query parameters
     pub parameters: HashMap<String, Value>,
+    /// Session variable snapshot (`$name` references), captured once per
+    /// statement at the API layer. Distinct from `parameters` (`@name`).
+    pub session_variables: HashMap<String, Value>,
     /// Optional caller/server-assigned query ID.
     ///
     /// When set, the execution runtime is registered and identified under
@@ -53,6 +56,7 @@ impl QueryRequestContext {
             space_name: None,
             query,
             parameters: HashMap::new(),
+            session_variables: HashMap::new(),
             query_id: None,
             transaction_id: None,
             auto_commit: true,
@@ -65,6 +69,12 @@ impl QueryRequestContext {
     /// Create a query request context with parameters
     pub fn with_parameters(mut self, parameters: HashMap<String, Value>) -> Self {
         self.parameters = parameters;
+        self
+    }
+
+    /// Set the session variable snapshot.
+    pub fn with_session_variables(mut self, variables: HashMap<String, Value>) -> Self {
+        self.session_variables = variables;
         self
     }
 

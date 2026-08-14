@@ -40,6 +40,9 @@ pub struct ExecutionContext {
     pub bound_snapshot: Option<crate::storage::SnapshotHandle>,
     pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
+    /// Session variable snapshot for this query (resolves
+    /// `Expression::SessionVariable`); captured once per statement.
+    pub session_variables: Arc<HashMap<String, crate::core::Value>>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
     /// Maximum intra-query workers (P8). 1 = serial only.
@@ -95,6 +98,7 @@ impl ExecutionContext {
             bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            session_variables: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
@@ -127,6 +131,7 @@ impl ExecutionContext {
             bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(parameters),
+            session_variables: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
@@ -158,6 +163,7 @@ impl ExecutionContext {
             bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            session_variables: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
@@ -199,6 +205,7 @@ impl ExecutionContext {
             bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            session_variables: Arc::new(HashMap::new()),
             memory_budget: budget,
             max_workers: 1,
             query_id: 0,
@@ -275,6 +282,7 @@ impl Default for ExecutionContext {
             bound_snapshot: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            session_variables: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,

@@ -6,7 +6,7 @@
 //! values at execution time.
 //!
 //! This module re-renders a DML statement as a canonical template in which
-//! every literal value position is replaced by a `$__dml_N` parameter slot,
+//! every literal value position is replaced by a `@__dml_N` parameter slot,
 //! producing a normalized query text (identical across same-shape
 //! statements) together with the ordered literal values used for
 //! execution-time binding.
@@ -18,7 +18,7 @@
 //! values (constant folding, index selection) and users already have
 //! explicit `$param` binding for parameterized read reuse.
 //!
-//! Semantic note: after normalization the bound DML plan sees only `$__dml_N`
+//! Semantic note: after normalization the bound DML plan sees only `@__dml_N`
 //! parameters, not the literal values. DML plans do not rely on constant
 //! values for constant folding or index selection, so parameterization does
 //! not degrade plan quality — the same rationale that excludes read queries.
@@ -39,7 +39,7 @@ pub const DML_PARAM_PREFIX: &str = "__dml_";
 /// Result of normalizing a DML statement's shape.
 #[derive(Debug, Clone)]
 pub struct DmlShape {
-    /// Query text with literal values replaced by `$__dml_N` placeholders.
+    /// Query text with literal values replaced by `@__dml_N` placeholders.
     pub normalized_text: String,
     /// Literal values in left-to-right source order, indexed by `N`.
     pub values: Vec<Value>,
@@ -71,7 +71,7 @@ pub fn normalize_shape(stmt: &Stmt) -> Option<DmlShape> {
 }
 
 /// Render an expression position, replacing every literal leaf with a
-/// `$__dml_N` placeholder and recording the value.
+/// `@__dml_N` placeholder and recording the value.
 ///
 /// Returns `None` when the expression contains a construct that cannot be
 /// re-rendered as re-parseable text; the caller then treats the statement as
@@ -85,7 +85,7 @@ pub(crate) fn render_contextual(
 }
 
 /// Render an expression into `out`, replacing every literal leaf with a
-/// `$__dml_N` placeholder.
+/// `@__dml_N` placeholder.
 ///
 /// Only constructs that can be faithfully re-parsed are handled; anything
 /// else yields `None` so the statement falls back to the non-cached path.
@@ -100,6 +100,11 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
             Some(())
         }
         Expression::Parameter(name) => {
+            out.push('@');
+            out.push_str(name);
+            Some(())
+        }
+        Expression::SessionVariable(name) => {
             out.push('$');
             out.push_str(name);
             Some(())
@@ -214,10 +219,10 @@ fn render_expr(out: &mut String, values: &mut Vec<Value>, expr: &Expression) -> 
     }
 }
 
-/// Emit a `$__dml_N` placeholder and record the literal value.
+/// Emit a `@__dml_N` placeholder and record the literal value.
 fn push_param(out: &mut String, values: &mut Vec<Value>, value: Value) {
     let index = values.len();
-    out.push('$');
+    out.push('@');
     out.push_str(DML_PARAM_PREFIX);
     out.push_str(&index.to_string());
     values.push(value);
@@ -245,7 +250,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "INSERT VERTEX person(name, age) VALUES $__dml_0: ($__dml_1, $__dml_2)"
+            "INSERT VERTEX person(name, age) VALUES @__dml_0: (@__dml_1, @__dml_2)"
         );
         assert_eq!(shape.values.len(), 3);
         assert_eq!(shape.values[0], Value::from("p00001"));
@@ -260,7 +265,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "INSERT EDGE works_at(position, salary) VALUES $__dml_0 -> $__dml_1 @$__dml_2: ($__dml_3, $__dml_4)"
+            "INSERT EDGE works_at(position, salary) VALUES @__dml_0 -> @__dml_1 @@__dml_2: (@__dml_3, @__dml_4)"
         );
         assert_eq!(shape.values.len(), 5);
     }
@@ -299,7 +304,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "INSERT VERTEX IF NOT EXISTS person(name) VALUES $__dml_0: ($__dml_1), $__dml_2: ($__dml_3)"
+            "INSERT VERTEX IF NOT EXISTS person(name) VALUES @__dml_0: (@__dml_1), @__dml_2: (@__dml_3)"
         );
         assert_eq!(shape.values.len(), 4);
     }
@@ -311,7 +316,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "INSERT VERTEX User(id, name) VALUES $__dml_0: (upper($__dml_1), $__dml_2)"
+            "INSERT VERTEX User(id, name) VALUES @__dml_0: (upper(@__dml_1), @__dml_2)"
         );
     }
 
@@ -335,7 +340,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "UPDATE VERTEX $__dml_0 SET name = $__dml_1"
+            "UPDATE VERTEX @__dml_0 SET name = @__dml_1"
         );
         assert_eq!(shape.values.len(), 2);
     }
@@ -347,7 +352,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "UPDATE EDGE OF works_at FROM $__dml_0 TO $__dml_1 @$__dml_2 SET salary = $__dml_3"
+            "UPDATE EDGE OF works_at FROM @__dml_0 TO @__dml_1 @@__dml_2 SET salary = @__dml_3"
         );
     }
 
@@ -358,7 +363,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "UPSERT EDGE $__dml_0 -> $__dml_1 @$__dml_2 OF works_at SET salary = $__dml_3"
+            "UPSERT EDGE @__dml_0 -> @__dml_1 @@__dml_2 OF works_at SET salary = @__dml_3"
         );
     }
 
@@ -369,7 +374,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "UPDATE VERTEX $__dml_0 SET name = $__dml_1 WHERE (age > $__dml_2)"
+            "UPDATE VERTEX @__dml_0 SET name = @__dml_1 WHERE (age > @__dml_2)"
         );
     }
 
@@ -400,7 +405,7 @@ mod tests {
         let query = "DELETE VERTEX \"v1\", \"v2\"";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
-        assert_eq!(shape.normalized_text, "DELETE VERTEX $__dml_0, $__dml_1");
+        assert_eq!(shape.normalized_text, "DELETE VERTEX @__dml_0, @__dml_1");
     }
 
     #[test]
@@ -410,7 +415,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "DELETE EDGE works_at $__dml_0 -> $__dml_1 @$__dml_2"
+            "DELETE EDGE works_at @__dml_0 -> @__dml_1 @@__dml_2"
         );
     }
 
@@ -421,7 +426,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "DELETE TAG * FROM $__dml_0 WITH EDGE"
+            "DELETE TAG * FROM @__dml_0 WITH EDGE"
         );
     }
 
@@ -432,7 +437,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "MERGE (n:person {name: $__dml_0}) ON CREATE SET age = $__dml_1"
+            "MERGE (n:person {name: @__dml_0}) ON CREATE SET age = @__dml_1"
         );
     }
 
@@ -443,7 +448,7 @@ mod tests {
         let shape = normalize_shape(&stmt).expect("shape should normalize");
         assert_eq!(
             shape.normalized_text,
-            "MERGE (a:person)-[:knows]->(b:person) ON MATCH SET score = $__dml_0"
+            "MERGE (a:person)-[:knows]->(b:person) ON MATCH SET score = @__dml_0"
         );
     }
 
@@ -452,7 +457,7 @@ mod tests {
         let query = "SET name = \"x\", age = 30";
         let stmt = parse(query);
         let shape = normalize_shape(&stmt).expect("shape should normalize");
-        assert_eq!(shape.normalized_text, "SET name = $__dml_0, age = $__dml_1");
+        assert_eq!(shape.normalized_text, "SET name = @__dml_0, age = @__dml_1");
     }
 
     #[test]

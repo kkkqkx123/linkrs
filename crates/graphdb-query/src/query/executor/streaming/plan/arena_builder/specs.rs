@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, EdgeManageCommand, FulltextManageCommand, FulltextSpec,
-    GraphSpec, IndexManageCommand, JoinSpec, PropertyRename, RecursiveFragmentSpec, SinkSpec,
-    SourceSpec, SpaceManageCommand, TagManageCommand, UnarySpec, UserManageCommand,
+    ApplySpec, BlockingSpec, BuildSide, DdlSpec, EdgeManageCommand, FulltextManageCommand,
+    FulltextSpec, GraphSpec, IndexManageCommand, JoinSpec, PropertyRename, RecursiveFragmentSpec,
+    SinkSpec, SourceSpec, SpaceManageCommand, TagManageCommand, UnarySpec, UserManageCommand,
     VectorManageCommand, VectorSpec,
 };
 use super::super::super::slot::SlotLayout;
+use super::super::super::subquery::SubqueryRunnerSpec;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::ExecutionContext;
@@ -379,10 +380,14 @@ pub(super) fn contextual_to_expression(
 
 pub(super) fn build_filter_spec(
     node: &crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode,
+    subquery_runners: Vec<SubqueryRunnerSpec>,
 ) -> Result<UnarySpec, PlanBuildError> {
     let condition = node.condition();
     let predicate = contextual_to_expression(condition)?;
-    Ok(UnarySpec::Filter { predicate })
+    Ok(UnarySpec::Filter {
+        predicate,
+        subquery_runners,
+    })
 }
 
 /// Build the storage-backed `AppendVertices` unary spec from the plan node.
@@ -468,6 +473,7 @@ pub(super) fn is_count_only_aggregate(
 
 pub(super) fn build_project_spec(
     node: &crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode,
+    subquery_runners: Vec<SubqueryRunnerSpec>,
 ) -> Result<UnarySpec, PlanBuildError> {
     // A Project sitting directly above a count_only expand only forwards the
     // aggregate argument of a count-only aggregate.  Replace it with a
@@ -478,6 +484,7 @@ pub(super) fn build_project_spec(
             return Ok(UnarySpec::Project {
                 output_expressions: vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
                 output_col_names: vec![COUNT_ONLY_COLUMN.to_string()],
+                subquery_runners,
             });
         }
     }
@@ -489,6 +496,7 @@ pub(super) fn build_project_spec(
     Ok(UnarySpec::Project {
         output_expressions,
         output_col_names: node.col_names().to_vec(),
+        subquery_runners,
     })
 }
 
@@ -557,13 +565,17 @@ pub(super) fn build_remove_spec(
 
 pub(super) fn build_assign_spec(
     node: &crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::AssignNode,
+    subquery_runners: Vec<SubqueryRunnerSpec>,
 ) -> Result<UnarySpec, PlanBuildError> {
     let assignments: Vec<(String, Expression)> = node
         .assignments()
         .iter()
         .filter_map(|(name, expr)| expr.get_expression().map(|e| (name.clone(), e)))
         .collect();
-    Ok(UnarySpec::Assign { assignments })
+    Ok(UnarySpec::Assign {
+        assignments,
+        subquery_runners,
+    })
 }
 
 pub(super) fn build_unwind_spec(
@@ -1113,11 +1125,13 @@ pub(super) fn build_join_with_keys(
                 join_condition: None,
                 hash_keys: hash_key_expressions(hash_keys)?,
                 probe_keys: hash_key_expressions(probe_keys)?,
+                build_side: BuildSide::default(),
             }),
             JoinSpec::LeftJoin { .. } => Ok(JoinSpec::HashLeftJoin {
                 join_condition: None,
                 hash_keys: hash_key_expressions(hash_keys)?,
                 probe_keys: hash_key_expressions(probe_keys)?,
+                build_side: BuildSide::default(),
             }),
             _ => build_join_with_condition(hash_keys, probe_keys, default),
         },

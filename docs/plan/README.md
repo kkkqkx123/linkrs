@@ -2,25 +2,25 @@
 
 > 本目录存放各查询引擎功能的设计/方案文档。本文档是进度索引：
 > 说明各方案的实施状态、剩余任务与验证基线，并链接到详细方案文档。
-> 更新日期：2026-08-13。
+> 更新日期：2026-08-14。
 
 ## 1. 文档索引
 
 | 文档 | 主题 | 状态 |
 |------|------|------|
-| [query_exists_in_subquery.md](query_exists_in_subquery.md) | EXISTS/IN/NOT IN 表达式级子查询（概览 + 解析器缺陷修复记录） | 部分实施（解析器修复已落地；正式实现由 impl 文档承接） |
-| [query_exists_in_subquery_impl.md](query_exists_in_subquery_impl.md) | EXISTS/IN 正式实现 P0-P3 详案 | **P0/P1 已完成，P2/P3 待实施** |
-| [query_exists_in_subquery_p2.md](query_exists_in_subquery_p2.md) | P2 相关子查询逐行重执行（CorrelatedApply）实现详案 | **待实施** |
-| [query_expression_optimization.md](query_expression_optimization.md) | 表达式求值优化（常量折叠 + 批量求值 + 表达式编译） | 常量折叠已完成；批量求值 / 表达式编译待实施 |
-| [query_session_variables.md](query_session_variables.md) | 会话级用户变量（$var） | 部分实施（server 层 `LET` + 存储 + 事务语义已完成；表达式级引用待实施） |
+| [query_expression_optimization.md](query_expression_optimization.md) | 表达式求值优化（常量折叠 + 批量求值 + 表达式编译） | 常量折叠、批量/列式求值已完成；表达式编译为设计阶段 |
+| [query_session_variables.md](query_session_variables.md) | 会话级用户变量（$var） | 已完成（走 Parameter 复用路径，改进方案见下） |
+| [query_followup_improvements.md](query_followup_improvements.md) | 实现差异改进（SessionVariable 表达式变体 + 函数纯度标记） | **已完成（2026-08-14）** |
+| [executor_operator_context_refactor.md](executor_operator_context_refactor.md) | 执行器算子上下文重构（拆分 OperatorBase + left/right 角色显式化） | **待实施** |
 
 > 原 `query_verification_backlog.md` 已删除，其遗留验证项与低优先小项并入
-> 本文档第 4 节。
+> 本文档第 4 节。原 `query_exists_in_subquery*.md` 系列方案文档（P0-P3
+> 实现详案）已完成使命删除，实施记录并入下文第 2 节。
 
-## 2. 当前主线：EXISTS / IN / NOT IN 子查询
+## 2. 已完成主线：EXISTS / IN / NOT IN 子查询
 
-设计详案：[query_exists_in_subquery_impl.md](query_exists_in_subquery_impl.md)
-（P0 双侧键重构、P1 合取位置转换、P2 相关子查询逐行重执行、P3 表达式级兜底）。
+P0-P3 四阶段全部完成（P0 双侧键重构、P1 合取位置转换、P2 相关子查询
+逐行重执行、P3 表达式级兜底）。
 
 ### 2.1 已完成
 
@@ -50,24 +50,35 @@
     `physical_plan_explain.rs` 双路径均展示 `hash_keys`/`probe_keys`/`anti`。
   - e2e：`tests/e2e/subquery.rs` 9 例（相关/非相关 EXISTS、NOT EXISTS、
     相关 NOT EXISTS、IN、NOT IN、路径子查询、残差条件、EXPLAIN 算子断言）。
+- **P2 — 相关子查询逐行重执行（CorrelatedApply）**：非等值/多变量相关
+  （如 `p.age > t.age`）规划为 `CorrelatedApplyNode` + `Argument` 源，
+  右子树按行重建执行器执行（`tests/e2e/subquery.rs` 相关用例覆盖）。
+- **P3 — 表达式级兜底**：OR 之下 / RETURN 等非合取位置的 EXISTS/IN 由
+  `plan_expression_subqueries` 编译为独立子计划，挂在
+  Filter/Project/Assign 的算子 spec 上（`subquery_runners`），物化阶段
+  实例化 per-operator `SubqueryExecutor`（`subquery.rs`）：重置协议复用
+  执行器、非相关结果缓存、相关帧注入、NULL 永不匹配；EXPLAIN 展示
+  `subquery: N` 计数。
 
 ### 2.2 剩余任务
 
 | # | 任务 | 说明 | 优先级 |
 |---|------|------|--------|
-| 1 | **P2 相关子查询逐行重执行** | 非等值/多变量相关（如 `p.age > t.age`）当前在规划期报精确错误；需 CorrelatedApply（Argument + correlation frame + 右子树按行重建执行器） | 中 |
-| 2 | **P3 表达式级兜底或精确报错** | OR 之下 / RETURN 中的 EXISTS/IN 目前到达运行时 `execute_subquery` 报「not supported」；可选方案 A 运行时子查询执行器注入，或方案 B 先落地精确诊断错误 | 低 |
-| 3 | **全量回归** | `cargo test --test '*'`（integration_e2e 全量未跑完）；`cargo clippy -p graphdb-query --all-targets` 全 features | 高（上线前） |
+| 1 | **全量回归** | `cargo test --test '*'`（integration_e2e 全量未跑完）；`cargo clippy -p graphdb-query --all-targets` 全 features | 高（上线前） |
 
 ## 3. 其他方案状态
 
 ### 3.1 表达式求值优化（query_expression_optimization.md）
 
-- **已完成**：常量折叠 `FoldConstantsRule`（启发式优化器挂载，8 个单测）。
+- **已完成**：常量折叠 `FoldConstantsRule`（启发式优化器挂载，10 个单测 +
+  `tests/dql/constant_folding.rs` 集成测试）；批量/列式求值
+  （`chunk/typed.rs` SIMD 友好 TypedBatch 批量运算 + `chunk/eval.rs`
+  列引用零拷贝/常量广播快路径 + `chunk/policy.rs` 跨查询自适应策略 +
+  逐行回退）；**常量折叠纯度门**（黑名单 → 注册表
+  `BuiltinFunction::is_pure` 纯度标记，未注册函数保守不折叠，见
+  [query_followup_improvements.md](query_followup_improvements.md) 方案 B）。
 - **待实施**：
-  - §2.2 批量/列式求值（Filter/Project 热路径，`try_batch_shape` 保守
-    检测 + 逐行回退）；
-  - §2.3 表达式编译（闭包链 / 字节码，依赖批量框架验证收益后推进）。
+  - §2.3 表达式编译（闭包链 / 字节码，文档自标长期仅设计）。
 
 ### 3.2 会话级用户变量（query_session_variables.md）
 
@@ -77,11 +88,13 @@
   - 事务语义：`commit_variables` / `rollback_variables` /
     `rollback_variables_to`（ROLLBACK TO SAVEPOINT）/ `push_variable_savepoint`
     / `release_variable_savepoint`；
-  - `graph_service` 语句分发处理 `LET $name = expr`（求值后写回会话变量）。
-- **待实施**：
-  - lexer `$name` → `Tk::SessionVar`（与 `$^`/`$$`/`$-` 图引用区分）；
-  - core 新增 `Expression::SessionVariable` 变体（含各 visitor/构造器分支）；
-  - `YIELD $name` / 表达式内 `$name` 引用与求值器支持；EXPLAIN 展示。
+  - `graph_service` 语句分发处理 `LET $name = expr`（求值后写回会话变量）；
+  - **`Expression::SessionVariable` 表达式变体**：`$name` 解析为会话变量、
+    `@name` 为查询参数（两通道独立、同名共存）；词法旁路
+    （`filter_session_parameters`/`statement_parameter_names`）已删除；
+    每语句快照经 `QueryRequest.session_variables` 注入；HTTP handler 与
+    embedded API 同步接入；EXPLAIN 展示 `$x`；集成测试 6 例通过，详见
+    [query_followup_improvements.md](query_followup_improvements.md) 方案 A。
 
 ## 4. 遗留验证项与低优先小项（原 backlog 并入）
 
@@ -94,10 +107,14 @@
 | 5 | EXPLAIN 中间算子列级 projected 展示 | 目前仅 Source 层展示 `projected`；Unary（AppendVertices/Project）与 Join 未展示 | 低 |
 | 6 | 分区策略扩展与工作窃取 | 仅支持 Range 均分；Hash/RoundRobin 分区 + `MorselWorkerPool` 工作窃取（设计先行，基准验证负载倾斜后再实施） | 低 |
 
-## 5. 验证基线（2026-08-13）
+## 5. 验证基线（2026-08-14）
 
-- `cargo test -p graphdb-query --lib`：**1450 passed**（基线 1430 → +20）。
+- `cargo test -p graphdb-query --lib`：**1491 passed**（基线 1430 → +61）。
 - `cargo clippy -p graphdb-query --all-targets`：新增警告为零（仅存既有
   测试代码警告）。
-- `cargo test --test integration_e2e subquery`：**9 passed**。
-- `cargo test --test '*'` 全量 integration 回归：**尚未执行完毕**（见 2.2 #3）。
+- `cargo test --test integration_e2e subquery`：**28 passed**（含
+  表达式级子查询全量回归）；`cargo test --test e2e`：**99 passed**。
+- `cargo test --test integration_session_variables`：**6 passed**；
+  `cargo test --test integration_embedded_api --features embedded,fulltext-search`：
+  **61 passed**（2 个既有 batch 断言失败与本次改动无关）。
+- `cargo test --test '*'` 全量 integration 回归：**尚未执行完毕**（见 2.2 #1）。

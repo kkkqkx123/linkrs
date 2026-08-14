@@ -4,9 +4,10 @@ use crate::core::wal::EntityRef;
 use crate::core::{Edge, Value, Vertex};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::storage::FlatVertexRecord;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Convert an EntityRef to VertexId for back-to-table fetches.
 pub(crate) fn entity_ref_to_vertex_id(entity_ref: &EntityRef) -> Option<VertexId> {
@@ -129,20 +130,20 @@ pub(crate) fn parse_vertex_id(value: &str) -> VertexId {
 }
 
 pub(crate) fn reserve_memory(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
     rows: &[Vec<Value>],
 ) -> Result<Option<MemoryReservation>, QueryError> {
-    reserve_memory_with_extra(base, rows, 0)
+    reserve_memory_with_extra(runtime, rows, 0)
 }
 
 /// Reserve memory for `rows` plus `extra_bytes` (e.g. the typed column
 /// layout built by the source) against the query memory budget.
 pub(crate) fn reserve_memory_with_extra(
-    base: &OperatorBase,
+    runtime: &Option<Arc<ExecutionRuntime>>,
     rows: &[Vec<Value>],
     extra_bytes: usize,
 ) -> Result<Option<MemoryReservation>, QueryError> {
-    let Some(runtime) = base.runtime.as_ref() else {
+    let Some(runtime) = runtime.as_ref() else {
         return Ok(None);
     };
     let bytes = MemoryBudget::estimate_rows_memory(rows).saturating_add(extra_bytes);
@@ -151,8 +152,11 @@ pub(crate) fn reserve_memory_with_extra(
 
 /// Attach the query-level columnar fast-path counters to a produced chunk
 /// (T5 observability) when the operator has a runtime attached.
-pub(crate) fn attach_columnar_stats(base: &OperatorBase, chunk: DataChunk) -> DataChunk {
-    match base.runtime.as_ref() {
+pub(crate) fn attach_columnar_stats(
+    runtime: &Option<Arc<ExecutionRuntime>>,
+    chunk: DataChunk,
+) -> DataChunk {
+    match runtime.as_ref() {
         Some(rt) => chunk.with_columnar_stats(rt.columnar_stats()),
         None => chunk,
     }

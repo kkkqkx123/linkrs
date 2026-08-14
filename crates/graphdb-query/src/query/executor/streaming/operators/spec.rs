@@ -174,10 +174,15 @@ pub enum SourceSpec {
 pub enum UnarySpec {
     Filter {
         predicate: Expression,
+        /// Expression-level subqueries compiled for this filter;
+        /// the materializer turns them into a per-operator `SubqueryExecutor`.
+        subquery_runners: Vec<crate::query::executor::streaming::subquery::SubqueryRunnerSpec>,
     },
     Project {
         output_expressions: Vec<Expression>,
         output_col_names: Vec<String>,
+        /// Expression-level subqueries compiled for this project.
+        subquery_runners: Vec<crate::query::executor::streaming::subquery::SubqueryRunnerSpec>,
     },
     Limit {
         offset: u32,
@@ -185,6 +190,8 @@ pub enum UnarySpec {
     },
     Assign {
         assignments: Vec<(String, Expression)>,
+        /// Expression-level subqueries compiled for this assign.
+        subquery_runners: Vec<crate::query::executor::streaming::subquery::SubqueryRunnerSpec>,
     },
     Remove {
         columns_to_remove: Vec<String>,
@@ -213,6 +220,28 @@ pub enum UnarySpec {
     Sample {
         count: u64,
     },
+}
+
+impl UnarySpec {
+    /// Expression-level subquery runner specs of this operator (empty for
+    /// kinds that do not host subqueries). The materializer instantiates a
+    /// per-operator `SubqueryExecutor` from these.
+    pub fn subquery_runners(
+        &self,
+    ) -> &[crate::query::executor::streaming::subquery::SubqueryRunnerSpec] {
+        match self {
+            Self::Filter {
+                subquery_runners, ..
+            }
+            | Self::Project {
+                subquery_runners, ..
+            }
+            | Self::Assign {
+                subquery_runners, ..
+            } => subquery_runners,
+            _ => &[],
+        }
+    }
 }
 
 // ── Blocking spec ────────────────────────────────────────────────────────────
@@ -269,6 +298,23 @@ pub enum BlockingSpec {
 
 // ── Join spec ────────────────────────────────────────────────────────────────
 
+/// Which physical child of a hash join provides the build side.
+///
+/// The logical plan always builds from the right child (the default); a left
+/// build side is a physical alternative selected by the plan conversion when
+/// the right child is not hashable but the left child is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildSide {
+    Left,
+    Right,
+}
+
+impl Default for BuildSide {
+    fn default() -> Self {
+        Self::Right
+    }
+}
+
 /// Immutable config for binary join operators.
 #[derive(Debug, Clone)]
 pub enum JoinSpec {
@@ -292,11 +338,13 @@ pub enum JoinSpec {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
+        build_side: BuildSide,
     },
     HashLeftJoin {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
+        build_side: BuildSide,
     },
     NestedLoopJoin {
         join_condition: Option<Expression>,

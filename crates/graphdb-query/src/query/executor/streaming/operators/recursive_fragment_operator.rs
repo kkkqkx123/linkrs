@@ -13,13 +13,15 @@ use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::source_operator::OperatorConfig;
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 
 use super::spec::RecursiveFragmentSpec;
 
 #[derive(Debug)]
-pub enum RecursiveFragmentOperator {
+pub enum RecursiveFragmentOperatorKind {
     ShortestPath {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -62,20 +64,34 @@ pub enum RecursiveFragmentOperator {
     },
 }
 
+/// Recursive fragment operator.
+///
+/// Wraps [`RecursiveFragmentOperatorKind`] with the runtime context injected
+/// at `open()`. Lifecycle state is owned exclusively by the executor;
+/// operators never write it.
+#[derive(Debug)]
+pub struct RecursiveFragmentOperator {
+    pub kind: RecursiveFragmentOperatorKind,
+    pub runtime: Option<Arc<ExecutionRuntime>>,
+    pub output_layout: Arc<SlotLayout>,
+    pub config: OperatorConfig,
+}
+
 impl RecursiveFragmentOperator {
     pub fn from_spec(
         spec: &RecursiveFragmentSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        output_layout: Arc<SlotLayout>,
     ) -> Self {
-        match spec {
+        let kind = match spec {
             RecursiveFragmentSpec::ShortestPath {
                 edge_types,
                 direction,
                 max_depth,
                 start_vertices,
                 target_vertices,
-            } => Self::ShortestPath {
+            } => RecursiveFragmentOperatorKind::ShortestPath {
                 storage,
                 space_name,
                 edge_types: edge_types.clone(),
@@ -91,7 +107,7 @@ impl RecursiveFragmentOperator {
                 left_vertex_column,
                 right_vertex_column,
                 single_shortest,
-            } => Self::MultiShortestPath {
+            } => RecursiveFragmentOperatorKind::MultiShortestPath {
                 storage,
                 space_name,
                 edge_types: edge_types.clone(),
@@ -106,7 +122,7 @@ impl RecursiveFragmentOperator {
                 direction,
                 max_depth,
                 allow_loops,
-            } => Self::BFSShortest {
+            } => RecursiveFragmentOperatorKind::BFSShortest {
                 storage,
                 space_name,
                 edge_types: edge_types.clone(),
@@ -124,7 +140,7 @@ impl RecursiveFragmentOperator {
                 offset,
                 start_vertices,
                 target_vertices,
-            } => Self::AllPaths {
+            } => RecursiveFragmentOperatorKind::AllPaths {
                 storage,
                 space_name,
                 edge_types: edge_types.clone(),
@@ -137,30 +153,40 @@ impl RecursiveFragmentOperator {
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
             },
+        };
+        Self::new(kind, output_layout)
+    }
+
+    pub fn new(kind: RecursiveFragmentOperatorKind, output_layout: Arc<SlotLayout>) -> Self {
+        Self {
+            kind,
+            runtime: None,
+            output_layout,
+            config: OperatorConfig::default(),
         }
     }
 
-    pub fn open(
+    /// Inject the runtime and execution config (called once by the executor
+    /// before this operator produces any data).
+    pub fn inject_context(
         &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
+        runtime: Option<&Arc<ExecutionRuntime>>,
+        config: OperatorConfig,
+    ) {
+        if let Some(rt) = runtime {
+            self.runtime = Some(rt.clone());
+        }
+        self.config = config;
+    }
+
+    pub fn open(&mut self, input: &mut StreamingExecutor) -> Result<(), QueryError> {
         input.open()?;
-        base.lifecycle.mark_opened();
         Ok(())
     }
 
-    pub fn next(
-        &mut self,
-        base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
-    ) -> Result<Option<DataChunk>, QueryError> {
-        if !base.lifecycle.is_opened() {
-            return Err(QueryError::execution("RecursiveFragment not opened"));
-        }
-
-        match self {
-            Self::ShortestPath {
+    pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        match &mut self.kind {
+            RecursiveFragmentOperatorKind::ShortestPath {
                 storage,
                 space_name,
                 edge_types,
@@ -179,7 +205,9 @@ impl RecursiveFragmentOperator {
                     let layout = chunk.get_layout();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let pairs = path_endpoint_pairs(
                             row,
                             layout.clone(),
@@ -199,8 +227,10 @@ impl RecursiveFragmentOperator {
                             let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
                                 continue;
                             };
-                            base.ensure_not_cancelled()?;
-                            let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
+                            let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
                             let paths = bidir_bfs_shortest_path(
                                 &*reader,
                                 &src_vid,
@@ -216,7 +246,9 @@ impl RecursiveFragmentOperator {
                                 cancel_token.as_ref(),
                             )?;
                             for path in &paths {
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Path(Box::new(path.clone())));
                                 out_rows.push(out_row);
@@ -240,14 +272,14 @@ impl RecursiveFragmentOperator {
                     let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 } else {
                     return Ok(Some(chunk));
                 }
             },
 
-            Self::MultiShortestPath {
+            RecursiveFragmentOperatorKind::MultiShortestPath {
                 storage,
                 space_name,
                 edge_types,
@@ -268,7 +300,9 @@ impl RecursiveFragmentOperator {
                     let layout = chunk.get_layout();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let ctx = ValueRowContext::new(row.clone(), layout.clone());
                         let left_val = ctx
                             .get_variable(left_vertex_column)
@@ -291,8 +325,10 @@ impl RecursiveFragmentOperator {
                         } else {
                             Some(edge_types.as_slice())
                         };
-                        base.ensure_not_cancelled()?;
-                        let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
+                        let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
                         let paths = bidir_bfs_shortest_path(
                             &*reader,
                             &src_vid,
@@ -308,7 +344,9 @@ impl RecursiveFragmentOperator {
                             cancel_token.as_ref(),
                         )?;
                         for path in &paths {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
                             let mut out_row = row.clone();
                             out_row.push(Value::Path(Box::new(path.clone())));
                             out_rows.push(out_row);
@@ -331,14 +369,14 @@ impl RecursiveFragmentOperator {
                     let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 } else {
                     return Ok(Some(chunk));
                 }
             },
 
-            Self::BFSShortest {
+            RecursiveFragmentOperatorKind::BFSShortest {
                 storage,
                 space_name,
                 edge_types,
@@ -356,7 +394,9 @@ impl RecursiveFragmentOperator {
                     let layout = chunk.get_layout();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let ctx = ValueRowContext::new(row.clone(), layout.clone());
                         let vid_val = ctx
                             .get_variable("vid")
@@ -378,7 +418,7 @@ impl RecursiveFragmentOperator {
                         } else {
                             Some(edge_types.as_slice())
                         };
-                        let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+                        let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
                         let paths = bidir_bfs_shortest_path(
                             &*reader,
                             &start_vid,
@@ -394,7 +434,9 @@ impl RecursiveFragmentOperator {
                             cancel_token.as_ref(),
                         )?;
                         for path in &paths {
-                            base.ensure_not_cancelled()?;
+                            if let Some(rt) = self.runtime.as_ref() {
+                                rt.ensure_not_cancelled()?;
+                            }
                             let mut out_row = row.clone();
                             out_row.push(Value::Path(Box::new(path.clone())));
                             out_rows.push(out_row);
@@ -417,14 +459,14 @@ impl RecursiveFragmentOperator {
                     let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 } else {
                     return Ok(Some(chunk));
                 }
             },
 
-            Self::AllPaths {
+            RecursiveFragmentOperatorKind::AllPaths {
                 storage,
                 space_name,
                 edge_types,
@@ -447,7 +489,9 @@ impl RecursiveFragmentOperator {
                     let layout = chunk.get_layout();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = self.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         let pairs = path_endpoint_pairs(
                             row,
                             layout.clone(),
@@ -462,7 +506,7 @@ impl RecursiveFragmentOperator {
                             let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
                                 continue;
                             };
-                            let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+                            let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
                             let paths = enumerate_all_paths(
                                 &*reader,
                                 &src_vid,
@@ -479,7 +523,9 @@ impl RecursiveFragmentOperator {
                                 cancel_token.as_ref(),
                             )?;
                             for path in paths.iter().skip(*offset) {
-                                base.ensure_not_cancelled()?;
+                                if let Some(rt) = self.runtime.as_ref() {
+                                    rt.ensure_not_cancelled()?;
+                                }
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Path(Box::new(path.clone())));
                                 out_rows.push(out_row);
@@ -503,7 +549,7 @@ impl RecursiveFragmentOperator {
                     let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
-                        Arc::clone(&base.output_layout),
+                        Arc::clone(&self.output_layout),
                     )));
                 } else {
                     return Ok(Some(chunk));
@@ -512,37 +558,31 @@ impl RecursiveFragmentOperator {
         }
     }
 
-    pub fn stop(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        if base.lifecycle.can_close() {
-            base.lifecycle.mark_stopped();
-        }
+    pub fn stop(&mut self) -> Result<(), QueryError> {
         Ok(())
     }
 
-    pub fn bind_runtime(&mut self, runtime: &super::super::runtime::ExecutionRuntime) {
+    pub fn bind_runtime(&mut self, runtime: &Arc<ExecutionRuntime>) {
         let storage = runtime.storage.clone();
         let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
-        match self {
-            Self::ShortestPath {
+        self.runtime = Some(Arc::clone(runtime));
+        match &mut self.kind {
+            RecursiveFragmentOperatorKind::ShortestPath {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::MultiShortestPath {
+            | RecursiveFragmentOperatorKind::MultiShortestPath {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::BFSShortest {
+            | RecursiveFragmentOperatorKind::BFSShortest {
                 storage: target_storage,
                 space_name: target_space,
                 ..
             }
-            | Self::AllPaths {
+            | RecursiveFragmentOperatorKind::AllPaths {
                 storage: target_storage,
                 space_name: target_space,
                 ..
@@ -553,12 +593,14 @@ impl RecursiveFragmentOperator {
         }
     }
 
-    pub fn close(
-        &mut self,
-        base: &mut OperatorBase,
-        _input: &mut StreamingExecutor,
-    ) -> Result<(), QueryError> {
-        base.lifecycle.mark_closed();
+    pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
+    }
+
+    /// Reset per-run graph-algorithm state and rewind the input. All state
+    /// is derived per input row, so only the input needs rewinding.
+    pub fn reset(&mut self, input: &mut StreamingExecutor) -> Result<bool, QueryError> {
+        input.reset()?;
+        Ok(false)
     }
 }

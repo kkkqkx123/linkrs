@@ -193,7 +193,9 @@ mod tests {
     use crate::query::executor::streaming::executor::StreamingExecutor;
     use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperatorKind;
     use crate::query::executor::streaming::runtime::QueryIdentity;
+    use crate::query::executor::streaming::slot::SlotLayout;
 
     #[test]
     fn cancellation_error_releases_resources_immediately() {
@@ -217,11 +219,14 @@ mod tests {
             0,
             StreamingExecutor::Source(
                 OperatorBase::new(1),
-                SourceOperator::ScanVertices {
-                    buffer: vec![vec![Value::BigInt(1)]],
-                    current_index: 0,
-                    col_names: vec!["id".to_string()],
-                },
+                SourceOperator::new(
+                    SourceOperatorKind::ScanVertices {
+                        buffer: vec![vec![Value::BigInt(1)]],
+                        current_index: 0,
+                        col_names: vec!["id".to_string()],
+                    },
+                    Arc::new(SlotLayout::from_names(&["id".to_string()])),
+                ),
             ),
         );
         engine.set_runtime(runtime.clone());

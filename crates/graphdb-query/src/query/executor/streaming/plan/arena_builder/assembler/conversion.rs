@@ -3,6 +3,7 @@
 use super::super::super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, JoinSpec, SetSpec, SourceSpec, TxnSpec,
 };
+use super::super::super::super::subquery::SubqueryRunnerSpec;
 use super::super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::super::types::{
     FragmentId, FragmentKind, FragmentSpec, InputContract, LogicalNodeId, OperatorKindSpec,
@@ -86,7 +87,9 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = build_filter_spec(filter_node)?;
+                let subquery_runners =
+                    build_subquery_runner_specs(filter_node.subqueries(), exec_ctx)?;
+                let spec = build_filter_spec(filter_node, subquery_runners)?;
                 Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Project(project_node) => {
@@ -98,7 +101,9 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = build_project_spec(project_node)?;
+                let subquery_runners =
+                    build_subquery_runner_specs(project_node.subqueries(), exec_ctx)?;
+                let spec = build_project_spec(project_node, subquery_runners)?;
                 Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Limit(limit_node) => {
@@ -146,7 +151,9 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = build_assign_spec(assign_node)?;
+                let subquery_runners =
+                    build_subquery_runner_specs(assign_node.subqueries(), exec_ctx)?;
+                let spec = build_assign_spec(assign_node, subquery_runners)?;
                 Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
             }
             PlanNodeEnum::Unwind(unwind_node) => {
@@ -1439,4 +1446,35 @@ impl ArenaPlanAssembler {
             }
         }
     }
+}
+
+/// Compile expression-level subqueries into immutable runner specs.
+///
+/// Each `PlannedSubquery`'s plan root is built as a self-contained physical
+/// plan (same `sub_ctx` convention as the CorrelatedApply right subtree); the
+/// materializer later instantiates per-operator runners from these specs.
+pub(crate) fn build_subquery_runner_specs(
+    planned: &[crate::query::planning::statements::clauses::exists_planner::PlannedSubquery],
+    exec_ctx: &ExecutionContext,
+) -> Result<Vec<SubqueryRunnerSpec>, PlanBuildError> {
+    let mut specs = Vec::with_capacity(planned.len());
+    for subquery in planned {
+        let root = subquery.plan.root().clone().ok_or_else(|| {
+            PlanBuildError::missing_value(
+                "Subquery",
+                -1,
+                "root",
+                "expression-level subquery plan has no root node",
+            )
+        })?;
+        let mut sub_ctx = PhysicalPlanBuildContext::from_execution_context(exec_ctx);
+        sub_ctx.partition_spec = None;
+        let sub_plan = Arc::new(PhysicalPlanBuilder::build(&root, &mut sub_ctx, exec_ctx)?);
+        specs.push(SubqueryRunnerSpec {
+            id: subquery.id,
+            plan: sub_plan,
+            correlated: subquery.correlated,
+        });
+    }
+    Ok(specs)
 }

@@ -10,7 +10,7 @@
 //!
 //! Non-equi correlation (e.g. `p.age > t.age`) is planned as a
 //! [`CorrelatedApplyNode`] that re-executes the right subtree per outer row
-//! with the outer row bound as the correlation frame (P2).
+//! with the outer row bound as the correlation frame.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -28,11 +28,13 @@ use crate::query::planning::plan::core::nodes::graph_operations::graph_operation
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::PatternApplyNode;
 use crate::query::planning::plan::core::nodes::join::CrossJoinNode;
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
 use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalCorrelatedApplyNode;
 use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternApplyNode;
 use crate::query::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode;
 use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
+use crate::query::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::query::planning::plan::logical::LogicalNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
@@ -54,9 +56,17 @@ pub struct ExistsSpec {
 /// A planned subquery: the subquery plan plus its correlated keys.
 #[derive(Debug, Clone)]
 pub struct PlannedSubquery {
+    /// Stable identity (`SubqueryBody.id`) assigned by the id allocator; the
+    /// runtime dispatches on it to find the compiled runner.
+    /// The conjunctive path (`plan_subquery`) leaves it 0 — those subqueries
+    /// never materialize runners.
+    pub id: u64,
     /// The subquery plan (pattern scans + subquery-local filters, or the
     /// `Filter -> CrossJoin -> Argument` correlated right subtree).
-    pub plan: SubPlan,
+    ///
+    /// Boxed so plan nodes can carry `Vec<PlannedSubquery>` without an
+    /// infinite-size type cycle (SubPlan roots embed `PlanNodeEnum` by value).
+    pub plan: Box<SubPlan>,
     /// Outer-side (left layout) key expressions.
     pub hash_keys: Vec<ContextualExpression>,
     /// Subquery-side (right layout) key expressions.
@@ -147,6 +157,411 @@ pub fn is_trivially_true(expr: &Expression) -> bool {
         } => is_trivially_true(left) && is_trivially_true(right),
         _ => false,
     }
+}
+
+/// Monotonically increasing allocator for stable `SubqueryBody.id`s within a
+/// single query planning pass. Re-planning the same AST with a fresh
+/// allocator re-assigns ids from 0.
+#[derive(Debug, Default)]
+pub struct SubqueryIdAllocator {
+    next: u64,
+}
+
+impl SubqueryIdAllocator {
+    pub fn new() -> Self {
+        Self { next: 0 }
+    }
+
+    /// Allocate the next stable id.
+    pub fn allocate(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
+
+/// Collect every EXISTS / IN subquery at expression level of `expr`,
+/// assigning each body a stable id from `id_alloc` (in place).
+///
+/// The walker covers every nested container — binary/unary operators, CASE,
+/// lists, maps, type casts, subscripts, ranges, paths, list comprehensions,
+/// function/aggregate arguments, reduce, window functions, label-tag
+/// properties, path builds — by descending through
+/// [`Expression::children_mut`]. Subquery bodies are NOT descended into:
+/// nested subqueries inside a body's WHERE / RETURN are compiled recursively
+/// by the subquery planner rather than by this walker.
+pub fn collect_expression_subqueries(
+    expr: &mut Expression,
+    id_alloc: &mut SubqueryIdAllocator,
+) -> Vec<crate::core::types::expr::SubqueryBody> {
+    let mut bodies = Vec::new();
+    collect_expression_subqueries_inner(expr, id_alloc, &mut bodies);
+    bodies
+}
+
+fn collect_expression_subqueries_inner(
+    expr: &mut Expression,
+    id_alloc: &mut SubqueryIdAllocator,
+    out: &mut Vec<crate::core::types::expr::SubqueryBody>,
+) {
+    match expr {
+        Expression::Exists { body } => {
+            body.id = id_alloc.allocate();
+            out.push(body.as_ref().clone());
+        }
+        Expression::In {
+            expr: left,
+            subquery,
+            ..
+        } => {
+            subquery.id = id_alloc.allocate();
+            out.push(subquery.as_ref().clone());
+            // The IN left operand is an expression-level position itself.
+            collect_expression_subqueries_inner(left, id_alloc, out);
+        }
+        // `Expression::children_mut` does not expose the aggregate filter.
+        Expression::Aggregate { args, filter, .. } => {
+            for arg in args.iter_mut() {
+                collect_expression_subqueries_inner(arg, id_alloc, out);
+            }
+            if let Some(filter_expr) = filter {
+                collect_expression_subqueries_inner(filter_expr, id_alloc, out);
+            }
+        }
+        _ => {
+            for child in expr.children_mut() {
+                collect_expression_subqueries_inner(child, id_alloc, out);
+            }
+        }
+    }
+}
+
+/// Unified planning entry for EXISTS / IN at any expression position
+/// (WHERE residual, HAVING, RETURN, WITH assignments, ...).
+///
+/// Collects every EXISTS / IN in `expr`, assigns stable ids, compiles each
+/// into a standalone sub-plan, and returns the rewritten expression (bodies
+/// now carry their ids) plus the planned subqueries for the hosting
+/// Filter/Project/Assign node. Compilation failure returns a precise
+/// [`PlannerError`] naming the position and the supported alternative —
+/// there is no "compiled but missing at runtime" path.
+pub fn plan_expression_subqueries(
+    expr: Expression,
+    qctx: &Arc<QueryContext>,
+    space_id: u64,
+    space_name: &str,
+    outer_col_names: &[String],
+    id_alloc: &mut SubqueryIdAllocator,
+) -> Result<(Expression, Vec<PlannedSubquery>), PlannerError> {
+    let mut expr = expr;
+    let bodies = collect_expression_subqueries(&mut expr, id_alloc);
+    let mut planned = Vec::with_capacity(bodies.len());
+    for body in &bodies {
+        match plan_scalar_subquery(body, qctx, space_id, space_name, outer_col_names, id_alloc) {
+            Ok(subquery) => planned.push(subquery),
+            Err(error) => {
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "EXISTS/IN subquery cannot be planned in this position ({error}); \
+                     move it to a conjunctive WHERE condition, e.g. \
+                     `WHERE cond AND EXISTS {{ ... }}`"
+                )))
+            }
+        }
+    }
+    Ok((expr, planned))
+}
+
+/// Convenience rejection entry for call sites whose hosting operator does
+/// not yet support expression-level subqueries (ORDER BY / UNWIND / DML
+/// value positions): any EXISTS / IN is refused at planning time with the
+/// precise error instead of leaking to the runtime "not supported" path.
+pub fn check_expression_subqueries(
+    expr: &Expression,
+    _qctx: &Arc<QueryContext>,
+    _space_id: u64,
+    _space_name: &str,
+    _outer_col_names: &[String],
+) -> Result<(), PlannerError> {
+    let mut id_alloc = SubqueryIdAllocator::new();
+    let mut cloned = expr.clone();
+    let bodies = collect_expression_subqueries(&mut cloned, &mut id_alloc);
+    if bodies.is_empty() {
+        return Ok(());
+    }
+    Err(expression_subquery_position_error())
+}
+
+/// Compile every expression-level EXISTS / IN inside a contextual expression
+/// into a standalone sub-plan, re-registering the rewritten expression (bodies now carry
+/// their stable ids) into its context so the plan node evaluates the
+/// id-carrying form. Returns the compiled subqueries for the hosting node.
+pub fn plan_contextual_subqueries(
+    ctx_expr: &mut ContextualExpression,
+    qctx: &Arc<QueryContext>,
+    space_id: u64,
+    space_name: &str,
+    outer_col_names: &[String],
+    id_alloc: &mut SubqueryIdAllocator,
+) -> Result<Vec<PlannedSubquery>, PlannerError> {
+    let Some(expr_meta) = ctx_expr.expression() else {
+        return Ok(Vec::new());
+    };
+    let (planned_expr, subqueries) = plan_expression_subqueries(
+        expr_meta.inner().clone(),
+        qctx,
+        space_id,
+        space_name,
+        outer_col_names,
+        id_alloc,
+    )?;
+    if subqueries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ctx = ctx_expr.context();
+    let new_id = ctx.register_expression(ExpressionMeta::new(planned_expr));
+    *ctx_expr = ContextualExpression::new(new_id, ctx.clone());
+    Ok(subqueries)
+}
+
+/// The precise planning-time error for expression-level EXISTS / IN on
+/// hosts that are not yet wired: the original Stage B error semantics.
+fn expression_subquery_position_error() -> PlannerError {
+    PlannerError::PlanGenerationFailed(
+        "EXISTS/IN subquery cannot be planned in this position \
+         (expression-level subquery execution is not yet supported here); \
+         move it to a conjunctive WHERE condition, e.g. \
+         `WHERE cond AND EXISTS { ... }`"
+            .to_string(),
+    )
+}
+
+/// Compile a single expression-level EXISTS / IN body into a standalone
+/// sub-plan.
+///
+/// The result differs from `plan_subquery` (conjunctive WHERE) in three
+/// ways:
+/// - no hash/probe key extraction: the subquery never participates in an
+///   apply filter, the runtime tests result containment directly;
+/// - IN needs no synthesized equality — the sub-plan only outputs the
+///   RETURN expression column and the runtime probes it per row;
+/// - a correlated subquery is re-rooted as
+///   `Filter(correlated) -> CrossJoin(Argument(outer), plan)` so the runtime
+///   can bind the hosting row as the correlation frame, and the optional
+///   RETURN expression becomes a top `Project` node.
+fn plan_scalar_subquery(
+    body: &crate::core::types::expr::SubqueryBody,
+    qctx: &Arc<QueryContext>,
+    space_id: u64,
+    space_name: &str,
+    outer_col_names: &[String],
+    id_alloc: &mut SubqueryIdAllocator,
+) -> Result<PlannedSubquery, PlannerError> {
+    // Parse the subquery patterns (stored as re-parseable strings).
+    let mut patterns = Vec::with_capacity(body.patterns.len());
+    for pattern_str in &body.patterns {
+        let pattern = crate::query::parser::parsing::TraversalParser::new()
+            .parse_pattern(&mut crate::query::parser::ParseContext::new(pattern_str))
+            .map_err(|e| {
+                PlannerError::PlanGenerationFailed(format!(
+                    "Invalid subquery pattern `{pattern_str}`: {e}"
+                ))
+            })?;
+        patterns.push(pattern);
+    }
+
+    let inner_vars: HashSet<String> = patterns
+        .iter()
+        .flat_map(PatternUtils::find_variables)
+        .collect();
+
+    // Subquery-local conditions. Unlike the conjunctive path there is no
+    // synthesized IN equality: containment is decided at runtime,
+    // the sub-plan only has to produce the RETURN column.
+    let mut conditions: Vec<Expression> = Vec::new();
+    if let Some(where_expr) = &body.where_clause {
+        collect_and_conjuncts(where_expr, &mut conditions);
+    }
+
+    // Nested EXISTS/IN inside the subquery's own WHERE are planned
+    // recursively as further applies over the subquery base plan; the
+    // residual (expression-level positions) is compiled recursively via
+    // `plan_expression_subqueries` and attached to the sub-plan's own
+    // Filter/Project nodes.
+    let mut nested_specs = Vec::new();
+    let mut flat_conditions = Vec::new();
+    for condition in &conditions {
+        flat_conditions.push(extract_conjunctive_exists(condition, &mut nested_specs));
+    }
+    let (inner_residual, correlated_residual) = split_correlated(&flat_conditions, &inner_vars);
+
+    // A RETURN expression referencing outer columns also makes the subquery
+    // correlated: the projection must see the outer frame through the
+    // CrossJoin below.
+    let return_expr = body.return_expr.as_ref().map(|e| e.as_ref().clone());
+    let return_correlated = return_expr
+        .as_ref()
+        .is_some_and(|e| e.get_variables().iter().any(|v| !inner_vars.contains(v)));
+
+    // Build the base subquery plan. Index selection is disabled for the
+    // subquery: its tags are not part of the outer ValidationInfo, so scans
+    // degrade to full scans (same convention as the conjunctive path).
+    let expr_context = Arc::new(ExpressionAnalysisContext::new());
+    let validation_info = ValidationInfo::new();
+    let planning_ctx = PlanningContext {
+        space_id,
+        space_name,
+        validation_info: &validation_info,
+        qctx,
+        enable_index_optimization: false,
+        metadata_context: &None,
+        expr_context: &Some(expr_context.clone()),
+        where_expression: None,
+    };
+
+    let mut sub_plan = if patterns.is_empty() {
+        pattern_planner::plan_node_pattern(space_id, space_name)?
+    } else {
+        let mut plan = pattern_planner::plan_path_pattern(&patterns[0], &planning_ctx)?;
+        for pattern in patterns.iter().skip(1) {
+            let path_plan = pattern_planner::plan_path_pattern(pattern, &planning_ctx)?;
+            plan = plan_combiner::cross_join_plans(plan, path_plan)?;
+        }
+        plan
+    };
+
+    // Nested conjunctive EXISTS/IN wrap the subquery base plan.
+    for nested in &nested_specs {
+        let nested_outer = sub_plan
+            .root()
+            .as_ref()
+            .map(|root| root.col_names().to_vec())
+            .unwrap_or_default();
+        let planned = plan_subquery(nested, qctx, space_id, space_name, &nested_outer)?;
+        sub_plan = if planned.correlated {
+            wrap_correlated_apply(sub_plan, &planned, nested.negated)?
+        } else {
+            wrap_pattern_apply(sub_plan, &planned, nested.negated)?
+        };
+    }
+
+    // Subquery-local residual filter; expression-level subqueries inside the
+    // residual are compiled recursively and attached to this filter node.
+    if !inner_residual.is_empty() && !is_trivially_true(&and_join(&inner_residual)) {
+        let (planned_residual, residual_subqueries) = plan_expression_subqueries(
+            and_join(&inner_residual),
+            qctx,
+            space_id,
+            space_name,
+            outer_col_names,
+            id_alloc,
+        )?;
+        sub_plan = wrap_filter_with_subqueries(
+            sub_plan,
+            to_contextual(planned_residual, &expr_context),
+            residual_subqueries,
+        )?;
+    }
+
+    // When the subquery references outer columns (non-equi correlation),
+    // re-root it as Filter -> CrossJoin(Argument, plan) so the runtime can
+    // bind the outer row as the correlation frame and re-execute per row.
+    let correlated = !correlated_residual.is_empty() || return_correlated;
+    if correlated {
+        sub_plan = build_correlated_right_subtree(sub_plan, &correlated_residual, outer_col_names)?;
+    }
+
+    // The RETURN expression (if any) becomes a top projection; expression-level
+    // subqueries inside it are compiled recursively and attached to the
+    // project node. EXISTS without a RETURN expression needs no projection —
+    // existence is decided by non-emptiness.
+    if let Some(return_expr) = return_expr {
+        let (planned_return, return_subqueries) = plan_expression_subqueries(
+            return_expr,
+            qctx,
+            space_id,
+            space_name,
+            outer_col_names,
+            id_alloc,
+        )?;
+        sub_plan = wrap_project_with_subqueries(
+            sub_plan,
+            to_contextual(planned_return, &expr_context),
+            return_subqueries,
+        )?;
+    }
+
+    Ok(PlannedSubquery {
+        id: body.id,
+        plan: Box::new(sub_plan),
+        hash_keys: Vec::new(),
+        probe_keys: Vec::new(),
+        correlated,
+    })
+}
+
+/// Wrap `plan` with a filter node carrying expression-level subqueries
+/// (physical node + logical mirror).
+fn wrap_filter_with_subqueries(
+    plan: SubPlan,
+    condition: ContextualExpression,
+    subqueries: Vec<PlannedSubquery>,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = plan.root().clone().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+    })?;
+    let filter_node = FilterNode::new(input_node, condition.clone())?.with_subqueries(subqueries);
+
+    let logical_root = plan.logical_root().cloned().map(|input| {
+        LogicalNodeEnum::Filter(LogicalFilterNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            condition,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    });
+
+    Ok(SubPlan {
+        root: Some(filter_node.into_enum()),
+        tail: plan.tail,
+        logical_root,
+    })
+}
+
+/// Wrap `plan` with a projection of a single expression column, carrying any
+/// expression-level subqueries inside it (physical node + logical mirror).
+fn wrap_project_with_subqueries(
+    plan: SubPlan,
+    expression: ContextualExpression,
+    subqueries: Vec<PlannedSubquery>,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = plan.root().clone().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+    })?;
+    let column =
+        crate::core::YieldColumn::new(expression.clone(), expression.to_expression_string());
+    let project_node =
+        ProjectNode::new(input_node, vec![column.clone()])?.with_subqueries(subqueries);
+
+    let logical_root = plan.logical_root().cloned().map(|input| {
+        LogicalNodeEnum::Project(LogicalProjectNode {
+            id: next_node_id(),
+            input: Some(Box::new(input.clone())),
+            deps: vec![input],
+            columns: vec![column],
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        })
+    });
+
+    Ok(SubPlan {
+        root: Some(project_node.into_enum()),
+        tail: plan.tail,
+        logical_root,
+    })
 }
 
 /// Plan a single EXISTS / IN spec against the outer plan.
@@ -298,7 +713,8 @@ pub fn plan_subquery(
     }
 
     Ok(PlannedSubquery {
-        plan: sub_plan,
+        id: spec.body.id,
+        plan: Box::new(sub_plan),
         hash_keys: if correlated { Vec::new() } else { hash_keys },
         probe_keys: if correlated { Vec::new() } else { probe_keys },
         correlated,
@@ -402,8 +818,9 @@ pub fn wrap_correlated_apply(
 /// `Filter(correlated) -> CrossJoin(Argument(col_names = outer), plan)`.
 ///
 /// The `Argument` source carries only the outer layout; the outer row values
-/// are injected at runtime via `ExecutionRuntime::set_correlation_frame`, and
-/// all outer-correlated conditions live in the top `Filter` above the join.
+/// are injected per run into the executor's private correlation slot via
+/// `StreamingExecutor::inject_correlation_frame`, and all
+/// outer-correlated conditions live in the top `Filter` above the join.
 fn build_correlated_right_subtree(
     sub_plan: SubPlan,
     correlated_residual: &[Expression],
@@ -624,7 +1041,7 @@ mod tests {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: None,
-                    is_correlated: false,
+                    id: 0,
                 }),
             },
         );
@@ -652,7 +1069,7 @@ mod tests {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: None,
-                    is_correlated: false,
+                    id: 0,
                 }),
             },
         );
@@ -674,7 +1091,7 @@ mod tests {
                     patterns: vec!["(p:person)".to_string()],
                     where_clause: None,
                     return_expr: Some(Box::new(prop("p", "name"))),
-                    is_correlated: false,
+                    id: 0,
                 },
                 false,
             ),
@@ -695,7 +1112,7 @@ mod tests {
                 patterns: vec!["(p:person)".to_string()],
                 where_clause: None,
                 return_expr: None,
-                is_correlated: false,
+                id: 0,
             }),
         };
         let cond = Expression::binary(
@@ -793,7 +1210,7 @@ mod tests {
                     prop("t", "age"),
                 ))),
                 return_expr: None,
-                is_correlated: true,
+                id: 0,
             },
             negated: false,
             left_expr: None,
@@ -873,7 +1290,7 @@ mod tests {
                 prop("p", "age"),
             ))),
             return_expr: None,
-            is_correlated: true,
+            id: 0,
         };
         let outer_spec = ExistsSpec {
             body: SubqueryBody {
@@ -882,7 +1299,7 @@ mod tests {
                     body: Box::new(inner_body),
                 })),
                 return_expr: None,
-                is_correlated: true,
+                id: 0,
             },
             negated: false,
             left_expr: None,
@@ -927,7 +1344,7 @@ mod tests {
                     prop("t", "age"),
                 ))),
                 return_expr: Some(Box::new(prop("p", "age"))),
-                is_correlated: true,
+                id: 0,
             },
             negated: false,
             left_expr: Some(prop("t", "age")),
@@ -978,5 +1395,304 @@ mod tests {
             Expression::literal(true),
         )));
         assert!(!is_trivially_true(&Expression::literal(Value::Int(1))));
+    }
+
+    // ── expression-level subquery collection ───────────────────
+
+    fn body() -> crate::core::types::expr::SubqueryBody {
+        crate::core::types::expr::SubqueryBody {
+            id: 0,
+            patterns: vec!["(p:person)".to_string()],
+            where_clause: None,
+            return_expr: None,
+        }
+    }
+
+    fn exists() -> Expression {
+        Expression::exists(body())
+    }
+
+    fn in_subq(left: Expression) -> Expression {
+        Expression::in_subquery(left, body(), false)
+    }
+
+    /// Assert that `expr` contains exactly `expected` expression-level
+    /// subqueries and that every body received a unique, monotonically
+    /// allocated id.
+    fn assert_collected(mut expr: Expression, expected: usize) {
+        let mut alloc = SubqueryIdAllocator::new();
+        let bodies = collect_expression_subqueries(&mut expr, &mut alloc);
+        assert_eq!(bodies.len(), expected, "collected subqueries");
+        let mut ids: Vec<u64> = bodies.iter().map(|b| b.id).collect();
+        ids.sort_unstable();
+        let unique: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "ids must be unique");
+        if !ids.is_empty() {
+            assert_eq!(ids[0], 0, "ids start at 0");
+            for w in ids.windows(2) {
+                assert_eq!(w[1], w[0] + 1, "ids are contiguous");
+            }
+        }
+        // Bodies must carry their assigned ids in the mutated expression.
+        // Traverse manually: `Expression::find_all` goes through
+        // `children()`, which hides the aggregate filter.
+        fn count_subqueries(expr: &Expression) -> usize {
+            let own = matches!(expr, Expression::Exists { .. } | Expression::In { .. }) as usize;
+            let children = match expr {
+                Expression::Aggregate { args, filter, .. } => {
+                    let mut c: Vec<&Expression> = args.iter().collect();
+                    if let Some(f) = filter {
+                        c.push(f.as_ref());
+                    }
+                    c
+                }
+                Expression::Exists { body } => {
+                    let mut c: Vec<&Expression> = Vec::new();
+                    if let Some(w) = &body.where_clause {
+                        c.push(w);
+                    }
+                    if let Some(r) = &body.return_expr {
+                        c.push(r);
+                    }
+                    c
+                }
+                _ => expr.children(),
+            };
+            own + children.iter().map(|c| count_subqueries(c)).sum::<usize>()
+        }
+        assert_eq!(
+            count_subqueries(&expr),
+            expected,
+            "expression tree retains subqueries"
+        );
+    }
+
+    #[test]
+    fn collects_subquery_at_top_level() {
+        assert_collected(exists(), 1);
+        assert_collected(in_subq(Expression::variable("t")), 1);
+    }
+
+    #[test]
+    fn collects_binary_left_and_right() {
+        let expr = Expression::binary(
+            exists(),
+            BinaryOperator::Or,
+            in_subq(Expression::variable("t")),
+        );
+        assert_collected(expr, 2);
+    }
+
+    #[test]
+    fn collects_unary_operand() {
+        assert_collected(Expression::unary(UnaryOperator::Not, exists()), 1);
+    }
+
+    #[test]
+    fn collects_inside_case() {
+        let expr = Expression::Case {
+            test_expr: Some(Box::new(exists())),
+            conditions: vec![(exists(), exists())],
+            default: Some(Box::new(in_subq(Expression::variable("t")))),
+        };
+        assert_collected(expr, 4);
+    }
+
+    #[test]
+    fn collects_inside_list_and_map() {
+        assert_collected(
+            Expression::List(vec![exists(), in_subq(Expression::variable("t"))]),
+            2,
+        );
+        assert_collected(
+            Expression::Map(vec![
+                ("a".to_string(), exists()),
+                ("b".to_string(), in_subq(Expression::variable("t"))),
+            ]),
+            2,
+        );
+    }
+
+    #[test]
+    fn collects_inside_type_cast_subscript_range_path() {
+        assert_collected(
+            Expression::cast(exists(), crate::core::types::DataType::Bool),
+            1,
+        );
+        assert_collected(Expression::subscript(exists(), Expression::literal(0)), 1);
+        assert_collected(
+            Expression::Range {
+                collection: Box::new(exists()),
+                start: Some(Box::new(in_subq(Expression::variable("t")))),
+                end: None,
+            },
+            2,
+        );
+        assert_collected(Expression::Path(vec![exists()]), 1);
+    }
+
+    #[test]
+    fn collects_inside_list_comprehension() {
+        let expr = Expression::ListComprehension {
+            variable: "x".to_string(),
+            source: Box::new(exists()),
+            filter: Some(Box::new(in_subq(Expression::variable("t")))),
+            map: Some(Box::new(Expression::function(
+                "upper".to_string(),
+                vec![exists()],
+            ))),
+        };
+        assert_collected(expr, 3);
+    }
+
+    #[test]
+    fn collects_inside_function_and_aggregate_args() {
+        assert_collected(
+            Expression::function(
+                "f".to_string(),
+                vec![exists(), in_subq(Expression::variable("t"))],
+            ),
+            2,
+        );
+        let agg = Expression::Aggregate {
+            func: crate::core::types::operators::AggregateFunction::Count(None),
+            args: vec![exists()],
+            distinct: false,
+            filter: Some(Box::new(in_subq(Expression::variable("t")))),
+        };
+        assert_collected(agg, 2);
+    }
+
+    #[test]
+    fn collects_inside_reduce_and_window_function() {
+        assert_collected(
+            Expression::reduce(
+                "acc",
+                exists(),
+                "x",
+                in_subq(Expression::variable("t")),
+                Expression::variable("acc"),
+            ),
+            2,
+        );
+        let window = Expression::WindowFunction {
+            name: "row_number".to_string(),
+            args: vec![exists()],
+            over_partition_by: vec![in_subq(Expression::variable("t"))],
+            over_order_by: vec![],
+            over_order_desc: vec![],
+        };
+        assert_collected(window, 2);
+    }
+
+    #[test]
+    fn collects_inside_label_tag_property_and_path_build() {
+        assert_collected(
+            Expression::LabelTagProperty {
+                tag: Box::new(exists()),
+                property: "name".to_string(),
+            },
+            1,
+        );
+        assert_collected(
+            Expression::PathBuild(vec![exists(), in_subq(Expression::variable("t"))]),
+            2,
+        );
+    }
+
+    #[test]
+    fn collects_in_left_operand_of_in() {
+        let expr = Expression::in_subquery(exists(), body(), false);
+        assert_collected(expr, 2);
+    }
+
+    #[test]
+    fn does_not_descend_into_subquery_bodies() {
+        // A subquery whose WHERE / RETURN themselves contain EXISTS / IN must
+        // not be collected at expression level: those are compiled
+        // recursively by the subquery planner.
+        let inner = crate::core::types::expr::SubqueryBody {
+            id: 0,
+            patterns: vec!["(p:person)".to_string()],
+            where_clause: Some(Box::new(Expression::binary(
+                Expression::variable("p"),
+                BinaryOperator::Or,
+                exists(),
+            ))),
+            return_expr: Some(Box::new(in_subq(Expression::variable("p")))),
+        };
+        let mut alloc = SubqueryIdAllocator::new();
+        let mut expr = Expression::exists(inner);
+        let bodies = collect_expression_subqueries(&mut expr, &mut alloc);
+        assert_eq!(bodies.len(), 1, "only the outer subquery is collected");
+    }
+
+    #[test]
+    fn ids_are_reassigned_on_replanning() {
+        let mut first_alloc = SubqueryIdAllocator::new();
+        let mut second_alloc = SubqueryIdAllocator::new();
+        let mut expr_a = Expression::binary(exists(), BinaryOperator::Or, exists());
+        let mut expr_b = Expression::binary(exists(), BinaryOperator::Or, exists());
+        let ids_a: Vec<u64> = collect_expression_subqueries(&mut expr_a, &mut first_alloc)
+            .iter()
+            .map(|b| b.id)
+            .collect();
+        let ids_b: Vec<u64> = collect_expression_subqueries(&mut expr_b, &mut second_alloc)
+            .iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(ids_a, vec![0, 1]);
+        assert_eq!(ids_b, vec![0, 1], "fresh planning re-assigns ids from 0");
+    }
+
+    #[test]
+    fn plan_expression_subqueries_rejects_and_accepts() {
+        let qctx = Arc::new(crate::query::QueryContext::new(Arc::new(
+            crate::query::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )));
+        let mut alloc = SubqueryIdAllocator::new();
+        let outer = vec!["t".to_string()];
+
+        // No expression-level subquery: unchanged expression, no runners.
+        let expr = Expression::binary(
+            prop("t", "age"),
+            BinaryOperator::GreaterThan,
+            Expression::literal(30),
+        );
+        let (out, planned) =
+            plan_expression_subqueries(expr.clone(), &qctx, 1, "default", &outer, &mut alloc)
+                .expect("plain expression passes");
+        assert_eq!(out, expr);
+        assert!(planned.is_empty());
+
+        // EXISTS / IN at expression level: compiled into
+        // standalone sub-plans with stable ids. The rewritten expression
+        // carries the ids; the runners match by id.
+        for expr in [exists(), in_subq(Expression::variable("t"))] {
+            let (rewritten, planned) =
+                plan_expression_subqueries(expr, &qctx, 1, "default", &outer, &mut alloc)
+                    .expect("expression-level subquery compiles");
+            assert_eq!(planned.len(), 1, "one subquery compiled");
+            let body_id = match &rewritten {
+                Expression::Exists { body } | Expression::In { subquery: body, .. } => body.id,
+                other => panic!("expected a top-level subquery expression, got {:?}", other),
+            };
+            assert_eq!(planned[0].id, body_id, "runner id matches the body id");
+            assert!(!planned[0].correlated, "no outer references in test body");
+            assert!(planned[0].plan.root().is_some(), "sub-plan has a root");
+        }
+
+        // Ids are re-allocated per planning pass and unique within a pass.
+        let (_, planned) =
+            plan_expression_subqueries(exists(), &qctx, 1, "default", &outer, &mut alloc)
+                .expect("re-plan succeeds");
+        assert_eq!(planned.len(), 1);
     }
 }

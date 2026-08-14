@@ -13,6 +13,7 @@ use super::chunk::DataChunk;
 use super::executor::{SortDirection, StreamingExecutor};
 use super::operators::base::OperatorBase;
 use super::operators::blocking::BlockingOperator;
+use super::operators::blocking::BlockingOperatorKind;
 use super::operators::gather_operator::GatherOperator;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
@@ -269,20 +270,31 @@ impl StreamingExecutionEngine {
             .map(|input| {
                 let output_layout = Arc::clone(&input.base().output_layout);
                 StreamingExecutor::Blocking(
-                    OperatorBase::new(local_sort_id).with_output_layout(output_layout),
+                    OperatorBase::new(local_sort_id).with_output_layout(output_layout.clone()),
                     Box::new(input),
-                    BlockingOperator::Sort {
-                        sort_expressions: sort_expressions.clone(),
-                        sort_directions: sort_directions.clone(),
-                        memory_tracker: MemoryTracker::new(budget.clone()),
-                        state: None,
-                    },
+                    BlockingOperator::new(
+                        BlockingOperatorKind::Sort {
+                            sort_expressions: sort_expressions.clone(),
+                            sort_directions: sort_directions.clone(),
+                            memory_tracker: MemoryTracker::new(budget.clone()),
+                            state: None,
+                        },
+                        output_layout,
+                    ),
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let gather_layout = local_sorts
+            .first()
+            .map(|tree| Arc::clone(&tree.base().output_layout))
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "Partitioned sort requires at least one local tree".to_string(),
+                )
+            })?;
         self.build_partitioned_executor(
             local_sorts,
-            GatherOperator::merge_sort(sort_expressions, sort_directions, limit),
+            GatherOperator::merge_sort(sort_expressions, sort_directions, limit, gather_layout),
             None,
         )
     }
@@ -327,16 +339,16 @@ impl StreamingExecutionEngine {
         let mut left_gather = StreamingExecutor::Gather(
             OperatorBase::new(left_gather_id)
                 .with_global(true)
-                .with_output_layout(left_layout),
+                .with_output_layout(left_layout.clone()),
             left_local_trees,
-            GatherOperator::concatenate(),
+            GatherOperator::concatenate(left_layout),
         );
         let mut right_gather = StreamingExecutor::Gather(
             OperatorBase::new(right_gather_id)
                 .with_global(true)
-                .with_output_layout(right_layout),
+                .with_output_layout(right_layout.clone()),
             right_local_trees,
-            GatherOperator::concatenate(),
+            GatherOperator::concatenate(right_layout),
         );
         if let Some(ref runtime) = self.runtime {
             left_gather.set_runtime(Some(runtime.clone()));
@@ -690,8 +702,13 @@ impl Default for StreamingExecutionEngine {
 mod tests {
     use super::super::operators::base::OperatorBase;
     use super::super::operators::gather_operator::GatherOperator;
+    use super::super::operators::join_operator::JoinOperator;
+    use super::super::operators::join_operator::JoinOperatorKind;
     use super::super::operators::source_operator::SourceOperator;
+    use super::super::operators::source_operator::SourceOperatorKind;
+    use super::super::operators::spec::BuildSide;
     use super::super::operators::unary_operator::UnaryOperator;
+    use super::super::operators::unary_operator::UnaryOperatorKind;
     use super::super::slot::SlotLayout;
     use super::*;
     use crate::core::Value;
@@ -715,11 +732,14 @@ mod tests {
     fn scan_executor(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
         StreamingExecutor::Source(
             operator_base(0, &col_names),
-            SourceOperator::ScanVertices {
-                buffer: rows,
-                current_index: 0,
-                col_names,
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows,
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                },
+                Arc::new(SlotLayout::from_names(&col_names)),
+            ),
         )
     }
 
@@ -824,12 +844,18 @@ mod tests {
         let limit = StreamingExecutor::Unary(
             OperatorBase::new(0),
             scan,
-            UnaryOperator::Limit {
-                offset: 0,
-                limit: 10,
-                skipped: 0,
-                consumed: 0,
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::Limit {
+                    offset: 0,
+                    limit: 10,
+                    skipped: 0,
+                    consumed: 0,
+                },
+                Arc::new(SlotLayout::from_names(&[
+                    "id".to_string(),
+                    "name".to_string(),
+                ])),
+            ),
         );
 
         engine.register_executor(0, limit);
@@ -843,38 +869,50 @@ mod tests {
 
     #[test]
     fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
-        use super::super::operators::join_operator::JoinOperator;
         use crate::core::types::expr::Expression;
 
         let left = StreamingExecutor::Source(
             operator_base(1, &["id".to_string()]).with_chunk_size(1),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
-                current_index: 0,
-                col_names: vec!["id".to_string()],
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
+                    current_index: 0,
+                    col_names: vec!["id".to_string()],
+                },
+                Arc::new(SlotLayout::from_names(&["id".to_string()])),
+            ),
         );
         let right = StreamingExecutor::Source(
             operator_base(2, &["id".to_string()]).with_chunk_size(1),
-            SourceOperator::ScanVertices {
-                buffer: vec![vec![Value::BigInt(2)]],
-                current_index: 0,
-                col_names: vec!["id".to_string()],
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: vec![vec![Value::BigInt(2)]],
+                    current_index: 0,
+                    col_names: vec!["id".to_string()],
+                },
+                Arc::new(SlotLayout::from_names(&["id".to_string()])),
+            ),
         );
         let join = StreamingExecutor::Join(
             operator_base(3, &["left_id".to_string(), "right_id".to_string()]),
             Box::new(left),
             Box::new(right),
-            JoinOperator::HashJoin {
-                join_condition: None,
-                hash_keys: vec![Expression::Variable("id".to_string())],
-                probe_keys: vec![Expression::Variable("id".to_string())],
-                build_side: crate::query::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
-                left_consumed: false,
-                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-                right_col_names: Vec::new(),
-            },
+            JoinOperator::new(
+                JoinOperatorKind::HashJoin {
+                    join_condition: None,
+                    hash_keys: vec![Expression::Variable("id".to_string())],
+                    probe_keys: vec![Expression::Variable("id".to_string())],
+                    build_side: crate::query::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
+                    build_done: false,
+                    memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                    right_col_names: Vec::new(),
+                    build_side_select: BuildSide::default(),
+                },
+                Arc::new(SlotLayout::from_names(&[
+                    "left_id".to_string(),
+                    "right_id".to_string(),
+                ])),
+            ),
         );
 
         let mut engine = StreamingExecutionEngine::new();
@@ -901,12 +939,25 @@ mod tests {
     ) -> StreamingExecutor {
         StreamingExecutor::Source(
             operator_base(0, &col_names),
-            SourceOperator::ScanVertices {
-                buffer: rows,
-                current_index: 0,
-                col_names,
-            },
+            SourceOperator::new(
+                SourceOperatorKind::ScanVertices {
+                    buffer: rows,
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                },
+                Arc::new(SlotLayout::from_names(&col_names)),
+            ),
         )
+    }
+
+    /// Build a Concatenate gather whose output layout mirrors the first
+    /// partition tree (test helper for partitioned executor tests).
+    fn concatenate_gather(local_trees: &[StreamingExecutor]) -> GatherOperator {
+        let layout = local_trees
+            .first()
+            .map(|tree| Arc::clone(&tree.base().output_layout))
+            .unwrap_or_else(|| Arc::new(SlotLayout::new(vec![])));
+        GatherOperator::concatenate(layout)
     }
 
     fn extract_ids(chunks: &[DataChunk]) -> Vec<i64> {
@@ -1049,23 +1100,21 @@ mod tests {
         let mut engine = StreamingExecutionEngine::new();
         let runtime = Arc::new(ExecutionRuntime::default_budget());
         engine.set_runtime(runtime.clone());
+        let partitions = vec![
+            partitioned_scan_executor(
+                create_test_buffer(2),
+                0,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+            partitioned_scan_executor(
+                create_test_buffer(3),
+                1,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+        ];
+        let gather = concatenate_gather(&partitions);
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        create_test_buffer(2),
-                        0,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        create_test_buffer(3),
-                        1,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                ],
-                GatherOperator::concatenate(),
-                None,
-            )
+            .build_partitioned_executor(partitions, gather, None)
             .expect("gather tree should be registered");
 
         assert_eq!(engine.partition_count(), 2);
@@ -1102,30 +1151,28 @@ mod tests {
         engine.set_runtime(runtime.clone());
         engine.set_max_workers(2);
         engine.set_max_buffered_chunks(1);
+        let partitions = vec![
+            partitioned_scan_executor(
+                create_test_buffer(1_500),
+                0,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+            partitioned_scan_executor(
+                (1_500..3_000)
+                    .map(|value| {
+                        vec![
+                            Value::BigInt(value as i64),
+                            Value::string(format!("item_{value}")),
+                        ]
+                    })
+                    .collect(),
+                1,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+        ];
+        let gather = concatenate_gather(&partitions);
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        create_test_buffer(1_500),
-                        0,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        (1_500..3_000)
-                            .map(|value| {
-                                vec![
-                                    Value::BigInt(value as i64),
-                                    Value::string(format!("item_{value}")),
-                                ]
-                            })
-                            .collect(),
-                        1,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                ],
-                GatherOperator::concatenate(),
-                None,
-            )
+            .build_partitioned_executor(partitions, gather, None)
             .expect("build parallel gather");
 
         let chunks = engine.execute_collected().expect("parallel gather execute");
@@ -1169,23 +1216,21 @@ mod tests {
         engine.set_runtime(runtime.clone());
         engine.set_max_workers(2);
         engine.set_max_buffered_chunks(1);
+        let partitions = vec![
+            partitioned_scan_executor(
+                create_test_buffer(5_000),
+                0,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+            partitioned_scan_executor(
+                create_test_buffer(5_000),
+                1,
+                vec!["id".to_string(), "name".to_string()],
+            ),
+        ];
+        let gather = concatenate_gather(&partitions);
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        create_test_buffer(5_000),
-                        0,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        create_test_buffer(5_000),
-                        1,
-                        vec!["id".to_string(), "name".to_string()],
-                    ),
-                ],
-                GatherOperator::concatenate(),
-                None,
-            )
+            .build_partitioned_executor(partitions, gather, None)
             .expect("build parallel gather");
 
         let mut stream = engine.into_stream().expect("create stream");
@@ -1209,29 +1254,28 @@ mod tests {
         engine.set_runtime(runtime.clone());
         engine.set_max_workers(2);
         engine.set_max_buffered_chunks(1);
+        let partitions = vec![
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(1)], vec![Value::BigInt(3)]],
+                0,
+                vec!["id".to_string()],
+            ),
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(2)], vec![Value::BigInt(4)]],
+                1,
+                vec!["id".to_string()],
+            ),
+        ];
+        let gather = GatherOperator::merge_sort(
+            vec![crate::core::types::expr::Expression::Variable(
+                "id".to_string(),
+            )],
+            vec![SortDirection::Ascending],
+            None,
+            Arc::clone(&partitions[0].base().output_layout),
+        );
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(1)], vec![Value::BigInt(3)]],
-                        0,
-                        vec!["id".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(2)], vec![Value::BigInt(4)]],
-                        1,
-                        vec!["id".to_string()],
-                    ),
-                ],
-                GatherOperator::merge_sort(
-                    vec![crate::core::types::expr::Expression::Variable(
-                        "id".to_string(),
-                    )],
-                    vec![SortDirection::Ascending],
-                    None,
-                ),
-                None,
-            )
+            .build_partitioned_executor(partitions, gather, None)
             .expect("build parallel merge gather");
 
         let chunks = engine
@@ -1287,42 +1331,45 @@ mod tests {
             "SUM".to_string(),
         ]));
         let global = StreamingExecutor::Blocking(
-            OperatorBase::new(40).with_output_layout(result_layout),
+            OperatorBase::new(40).with_output_layout(result_layout.clone()),
             Box::new(scan_executor(Vec::new(), vec!["amount".to_string()])),
-            BlockingOperator::Aggregate {
-                group_by_expressions: Vec::new(),
-                aggregate_functions: vec![
-                    (
-                        crate::core::types::operators::AggregateFunction::Count(None),
-                        crate::core::types::expr::Expression::Literal(Value::Int(1)),
-                    ),
-                    (
-                        crate::core::types::operators::AggregateFunction::Sum("amount".to_string()),
-                        crate::core::types::expr::Expression::Variable("amount".to_string()),
-                    ),
-                ],
-                output_col_names: vec!["COUNT".to_string(), "SUM".to_string()],
-                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-                state: None,
-            },
+            BlockingOperator::new(
+                BlockingOperatorKind::Aggregate {
+                    group_by_expressions: Vec::new(),
+                    aggregate_functions: vec![
+                        (
+                            crate::core::types::operators::AggregateFunction::Count(None),
+                            crate::core::types::expr::Expression::Literal(Value::Int(1)),
+                        ),
+                        (
+                            crate::core::types::operators::AggregateFunction::Sum(
+                                "amount".to_string(),
+                            ),
+                            crate::core::types::expr::Expression::Variable("amount".to_string()),
+                        ),
+                    ],
+                    output_col_names: vec!["COUNT".to_string(), "SUM".to_string()],
+                    memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                    state: None,
+                },
+                result_layout,
+            ),
         );
+        let partitions = vec![
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
+                0,
+                vec!["amount".to_string()],
+            ),
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(3)], vec![Value::BigInt(4)]],
+                1,
+                vec!["amount".to_string()],
+            ),
+        ];
+        let gather = concatenate_gather(&partitions);
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
-                        0,
-                        vec!["amount".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(3)], vec![Value::BigInt(4)]],
-                        1,
-                        vec!["amount".to_string()],
-                    ),
-                ],
-                GatherOperator::concatenate(),
-                Some(global),
-            )
+            .build_partitioned_executor(partitions, gather, Some(global))
             .expect("partitioned aggregate tree should build");
 
         let chunks = engine
@@ -1341,30 +1388,31 @@ mod tests {
         let mut engine = StreamingExecutionEngine::new();
         let result_layout = Arc::new(SlotLayout::from_names(&["id".to_string()]));
         let global = StreamingExecutor::Blocking(
-            OperatorBase::new(41).with_output_layout(result_layout),
+            OperatorBase::new(41).with_output_layout(result_layout.clone()),
             Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
-            BlockingOperator::Distinct {
-                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-                state: None,
-            },
+            BlockingOperator::new(
+                BlockingOperatorKind::Distinct {
+                    memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                    state: None,
+                },
+                result_layout,
+            ),
         );
+        let partitions = vec![
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
+                0,
+                vec!["id".to_string()],
+            ),
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(2)], vec![Value::BigInt(3)]],
+                1,
+                vec!["id".to_string()],
+            ),
+        ];
+        let gather = concatenate_gather(&partitions);
         engine
-            .build_partitioned_executor(
-                vec![
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
-                        0,
-                        vec!["id".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(2)], vec![Value::BigInt(3)]],
-                        1,
-                        vec!["id".to_string()],
-                    ),
-                ],
-                GatherOperator::concatenate(),
-                Some(global),
-            )
+            .build_partitioned_executor(partitions, gather, Some(global))
             .expect("partitioned dedup tree should build");
 
         let chunks = engine
@@ -1382,39 +1430,36 @@ mod tests {
         let global = StreamingExecutor::Unary(
             OperatorBase::new(42),
             Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
-            UnaryOperator::Limit {
-                offset: 2,
-                limit: 3,
-                skipped: 0,
-                consumed: 0,
-            },
+            UnaryOperator::new(
+                UnaryOperatorKind::Limit {
+                    offset: 2,
+                    limit: 3,
+                    skipped: 0,
+                    consumed: 0,
+                },
+                Arc::new(SlotLayout::from_names(&["id".to_string()])),
+            ),
         );
-        engine
-            .build_partitioned_executor(
+        let partitions = vec![
+            partitioned_scan_executor(
+                vec![vec![Value::BigInt(0)], vec![Value::BigInt(1)]],
+                0,
+                vec!["id".to_string()],
+            ),
+            partitioned_scan_executor(
                 vec![
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(0)], vec![Value::BigInt(1)]],
-                        0,
-                        vec!["id".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        vec![
-                            vec![Value::BigInt(2)],
-                            vec![Value::BigInt(3)],
-                            vec![Value::BigInt(4)],
-                        ],
-                        1,
-                        vec!["id".to_string()],
-                    ),
-                    partitioned_scan_executor(
-                        vec![vec![Value::BigInt(5)]],
-                        2,
-                        vec!["id".to_string()],
-                    ),
+                    vec![Value::BigInt(2)],
+                    vec![Value::BigInt(3)],
+                    vec![Value::BigInt(4)],
                 ],
-                GatherOperator::concatenate(),
-                Some(global),
-            )
+                1,
+                vec!["id".to_string()],
+            ),
+            partitioned_scan_executor(vec![vec![Value::BigInt(5)]], 2, vec!["id".to_string()]),
+        ];
+        let gather = concatenate_gather(&partitions);
+        engine
+            .build_partitioned_executor(partitions, gather, Some(global))
             .expect("partitioned limit tree should build");
 
         let chunks = engine
@@ -1425,8 +1470,6 @@ mod tests {
 
     #[test]
     fn partitioned_hash_join_matches_rows_across_partition_boundaries() {
-        use super::super::operators::join_operator::JoinOperator;
-
         let mut engine = StreamingExecutionEngine::new();
         let join_layout = Arc::new(SlotLayout::from_names(&[
             "id".to_string(),
@@ -1435,7 +1478,7 @@ mod tests {
             "right".to_string(),
         ]));
         let global_join = StreamingExecutor::Join(
-            OperatorBase::new(43).with_output_layout(join_layout),
+            OperatorBase::new(43).with_output_layout(join_layout.clone()),
             Box::new(scan_executor(
                 Vec::new(),
                 vec!["id".to_string(), "left".to_string()],
@@ -1444,19 +1487,23 @@ mod tests {
                 Vec::new(),
                 vec!["id".to_string(), "right".to_string()],
             )),
-            JoinOperator::HashJoin {
-                join_condition: None,
-                hash_keys: vec![crate::core::types::expr::Expression::Variable(
-                    "id".to_string(),
-                )],
-                probe_keys: vec![crate::core::types::expr::Expression::Variable(
-                    "id".to_string(),
-                )],
-                build_side: crate::query::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
-                left_consumed: false,
-                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-                right_col_names: Vec::new(),
-            },
+            JoinOperator::new(
+                JoinOperatorKind::HashJoin {
+                    join_condition: None,
+                    hash_keys: vec![crate::core::types::expr::Expression::Variable(
+                        "id".to_string(),
+                    )],
+                    probe_keys: vec![crate::core::types::expr::Expression::Variable(
+                        "id".to_string(),
+                    )],
+                    build_side: crate::query::executor::streaming::operators::join_operator::HashJoinBuildSide::new(),
+                    build_done: false,
+                    memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                    right_col_names: Vec::new(),
+                    build_side_select: BuildSide::default(),
+                },
+                join_layout,
+            ),
         );
         engine
             .build_partitioned_join_executor(
@@ -1518,20 +1565,24 @@ mod tests {
 
     #[test]
     fn partitioned_join_rejects_mismatched_input_partition_counts() {
-        use super::super::operators::join_operator::JoinOperator;
-
         let mut engine = StreamingExecutionEngine::new();
         let global_join = StreamingExecutor::Join(
             OperatorBase::new(44),
             Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
             Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
-            JoinOperator::InnerJoin {
-                join_condition: None,
-                build_side_tuples: Vec::new(),
-                left_consumed: false,
-                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
-                right_col_names: Vec::new(),
-            },
+            JoinOperator::new(
+                JoinOperatorKind::InnerJoin {
+                    join_condition: None,
+                    build_side_tuples: Vec::new(),
+                    build_done: false,
+                    memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                    right_col_names: Vec::new(),
+                },
+                Arc::new(SlotLayout::from_names(&[
+                    "id".to_string(),
+                    "id".to_string(),
+                ])),
+            ),
         );
         let error = engine
             .build_partitioned_join_executor(

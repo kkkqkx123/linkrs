@@ -855,7 +855,7 @@ pub fn walk_and_optimize_joins_with_decisions(
 }
 
 // =====================================================================
-// Logical-plan variants (P3: PlanNodeEnum logic/physical separation).
+// Logical-plan variants (PlanNodeEnum logic/physical separation).
 //
 // The cost-based join order decision is taken on the pure logical tree
 // (`LogicalNodeEnum`) and produces the same `join_order:` note as the
@@ -1760,7 +1760,7 @@ mod tests {
     }
 
     // ===================================================================
-    // Logical-plan walker tests (P3 step 1)
+    // Logical-plan walker tests
     // ===================================================================
 
     use crate::query::planning::plan::logical::logical_nodes::access::LogicalStartNode;

@@ -7,7 +7,9 @@
 
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
+use crate::query::executor::expression::ExpressionError;
 use crate::query::executor::streaming::slot::{SlotId, SlotLayout};
+use crate::query::executor::streaming::subquery::{EvalEnv, SubqueryExecutor};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,6 +29,10 @@ pub struct ValueRowContext {
     layout: Arc<SlotLayout>,
     /// Parameter name→value map (shared via Arc across rows).
     parameters: Option<Arc<HashMap<String, Value>>>,
+    /// Session variable name→value snapshot (shared via Arc across rows).
+    session_variables: Option<Arc<HashMap<String, Value>>>,
+    /// Expression-level subquery executor of the hosting operator.
+    subquery_executor: Option<Arc<SubqueryExecutor>>,
 }
 
 impl ValueRowContext {
@@ -37,10 +43,12 @@ impl ValueRowContext {
             variables: HashMap::new(),
             layout,
             parameters: None,
+            session_variables: None,
+            subquery_executor: None,
         }
     }
 
-    /// Create a new context with parameter values for `$name` resolution.
+    /// Create a new context with parameter values for `@name` resolution.
     pub fn with_parameters(
         row: Vec<Value>,
         layout: Arc<SlotLayout>,
@@ -51,6 +59,20 @@ impl ValueRowContext {
             variables: HashMap::new(),
             layout,
             parameters: Some(parameters),
+            session_variables: None,
+            subquery_executor: None,
+        }
+    }
+
+    /// Create a new context from a full evaluation environment.
+    pub fn with_env(row: Vec<Value>, layout: Arc<SlotLayout>, env: &EvalEnv) -> Self {
+        Self {
+            row,
+            variables: HashMap::new(),
+            layout,
+            parameters: env.params.clone(),
+            session_variables: env.session_variables.clone(),
+            subquery_executor: env.subquery_executor.clone(),
         }
     }
 
@@ -101,6 +123,45 @@ impl ExpressionContext for ValueRowContext {
     fn get_parameter(&self, name: &str) -> Option<Value> {
         self.parameters.as_ref().and_then(|p| p.get(name).cloned())
     }
+
+    fn get_session_variable(&self, name: &str) -> Result<Value, ExpressionError> {
+        self.session_variables
+            .as_ref()
+            .and_then(|vars| vars.get(name).cloned())
+            .ok_or_else(|| {
+                ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
+            })
+    }
+
+    fn execute_exists(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> Result<bool, ExpressionError> {
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_exists(body, self.layout.clone(), self.row.clone())
+    }
+
+    fn contains_subquery(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+        value: &Value,
+    ) -> Result<Value, ExpressionError> {
+        if value.is_null() {
+            return Ok(Value::Bool(false));
+        }
+        let found = self
+            .subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_contains(body, self.layout.clone(), self.row.clone(), value)?;
+        Ok(Value::Bool(found))
+    }
 }
 
 /// A light-weight expression context that borrows the row data instead
@@ -115,6 +176,10 @@ pub struct BorrowedRowContext<'a> {
     variables: HashMap<String, Value>,
     layout: Arc<SlotLayout>,
     parameters: Option<Arc<HashMap<String, Value>>>,
+    /// Session variable name→value snapshot (shared via Arc across rows).
+    session_variables: Option<Arc<HashMap<String, Value>>>,
+    /// Expression-level subquery executor of the hosting operator.
+    subquery_executor: Option<Arc<SubqueryExecutor>>,
 }
 
 impl<'a> BorrowedRowContext<'a> {
@@ -124,10 +189,12 @@ impl<'a> BorrowedRowContext<'a> {
             variables: HashMap::new(),
             layout,
             parameters: None,
+            session_variables: None,
+            subquery_executor: None,
         }
     }
 
-    /// Create with parameter values for `$name` resolution.
+    /// Create with parameter values for `@name` resolution.
     pub fn with_parameters(
         row: &'a [Value],
         layout: Arc<SlotLayout>,
@@ -138,6 +205,21 @@ impl<'a> BorrowedRowContext<'a> {
             variables: HashMap::new(),
             layout,
             parameters: Some(parameters),
+            session_variables: None,
+            subquery_executor: None,
+        }
+    }
+
+    /// Create from a full evaluation environment (parameters + subquery
+    /// executor).
+    pub fn with_env(row: &'a [Value], layout: Arc<SlotLayout>, env: &EvalEnv) -> Self {
+        Self {
+            row,
+            variables: HashMap::new(),
+            layout,
+            parameters: env.params.clone(),
+            session_variables: env.session_variables.clone(),
+            subquery_executor: env.subquery_executor.clone(),
         }
     }
 
@@ -172,6 +254,45 @@ impl ExpressionContext for BorrowedRowContext<'_> {
     fn get_parameter(&self, name: &str) -> Option<Value> {
         self.parameters.as_ref().and_then(|p| p.get(name).cloned())
     }
+
+    fn get_session_variable(&self, name: &str) -> Result<Value, ExpressionError> {
+        self.session_variables
+            .as_ref()
+            .and_then(|vars| vars.get(name).cloned())
+            .ok_or_else(|| {
+                ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
+            })
+    }
+
+    fn execute_exists(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> Result<bool, ExpressionError> {
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_exists(body, self.layout.clone(), self.row.to_vec())
+    }
+
+    fn contains_subquery(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+        value: &Value,
+    ) -> Result<Value, ExpressionError> {
+        if value.is_null() {
+            return Ok(Value::Bool(false));
+        }
+        let found = self
+            .subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_contains(body, self.layout.clone(), self.row.to_vec(), value)?;
+        Ok(Value::Bool(found))
+    }
 }
 
 /// A context that presents two disjoint row halves as a single combined row
@@ -187,6 +308,10 @@ pub struct SplitRowContext<'a> {
     variables: HashMap<String, Value>,
     layout: Arc<SlotLayout>,
     parameters: Option<Arc<HashMap<String, Value>>>,
+    /// Session variable name→value snapshot (shared via Arc across rows).
+    session_variables: Option<Arc<HashMap<String, Value>>>,
+    /// Expression-level subquery executor of the hosting operator.
+    subquery_executor: Option<Arc<SubqueryExecutor>>,
 }
 
 impl<'a> SplitRowContext<'a> {
@@ -199,6 +324,29 @@ impl<'a> SplitRowContext<'a> {
             variables: HashMap::new(),
             layout,
             parameters: None,
+            session_variables: None,
+            subquery_executor: None,
+        }
+    }
+
+    /// Create from a full evaluation environment (parameters + subquery
+    /// executor).
+    pub fn with_env(
+        left: &'a [Value],
+        right: &'a [Value],
+        layout: Arc<SlotLayout>,
+        env: &EvalEnv,
+    ) -> Self {
+        let split = left.len();
+        Self {
+            left,
+            right,
+            split,
+            variables: HashMap::new(),
+            layout,
+            parameters: env.params.clone(),
+            session_variables: env.session_variables.clone(),
+            subquery_executor: env.subquery_executor.clone(),
         }
     }
 }
@@ -227,6 +375,49 @@ impl ExpressionContext for SplitRowContext<'_> {
 
     fn get_parameter(&self, name: &str) -> Option<Value> {
         self.parameters.as_ref().and_then(|p| p.get(name).cloned())
+    }
+
+    fn get_session_variable(&self, name: &str) -> Result<Value, ExpressionError> {
+        self.session_variables
+            .as_ref()
+            .and_then(|vars| vars.get(name).cloned())
+            .ok_or_else(|| {
+                ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
+            })
+    }
+
+    fn execute_exists(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> Result<bool, ExpressionError> {
+        let mut row = self.left.to_vec();
+        row.extend_from_slice(self.right);
+        self.subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_exists(body, self.layout.clone(), row)
+    }
+
+    fn contains_subquery(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+        value: &Value,
+    ) -> Result<Value, ExpressionError> {
+        if value.is_null() {
+            return Ok(Value::Bool(false));
+        }
+        let mut row = self.left.to_vec();
+        row.extend_from_slice(self.right);
+        let found = self
+            .subquery_executor
+            .as_ref()
+            .ok_or_else(|| {
+                ExpressionError::type_error("Subquery execution not supported in this context")
+            })?
+            .execute_contains(body, self.layout.clone(), row, value)?;
+        Ok(Value::Bool(found))
     }
 }
 

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use super::super::executor::StreamingExecutor;
 use super::super::operators::apply_operator::ApplyOperator;
+use super::super::operators::apply_operator::ApplyOperatorKind;
 use super::super::operators::base::OperatorBase;
 use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::ddl_operator::DdlOperator;
@@ -27,11 +28,13 @@ use super::super::operators::recursive_fragment_operator::RecursiveFragmentOpera
 use super::super::operators::set_operator::SetOperator;
 use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
+use super::super::operators::source_operator::SourceOperatorKind;
 use super::super::operators::spec::ApplySpec;
 use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
 use super::super::runtime::ExecutionRuntime;
+use super::super::subquery::SubqueryExecutor;
 use super::types::{
     FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
 };
@@ -144,9 +147,10 @@ impl PhysicalPlanMaterializer {
                 .logical_node_id
                 .map(|logical_id| logical_id.0)
                 .unwrap_or(op_spec.operator_id.0 as i64);
+            let output_layout = Arc::new(op_spec.output_layout.clone());
             let base = OperatorBase::new(plan_node_id)
                 .with_physical_operator_id(op_spec.operator_id)
-                .with_output_layout(Arc::new(op_spec.output_layout.clone()));
+                .with_output_layout(output_layout.clone());
 
             let mut inputs = if operator_index == 0 {
                 take_external_inputs(&op_spec.input_contract, fragment_roots)?
@@ -163,67 +167,111 @@ impl PhysicalPlanMaterializer {
                 OperatorKindSpec::Source(src_spec) => {
                     require_input_count(fragment.id, op_id, &inputs, 0)?;
                     let storage = bindings.storage.clone();
-                    let op = SourceOperator::from_spec(src_spec, storage);
+                    let op = SourceOperator::from_spec(src_spec, storage, output_layout.clone());
                     StreamingExecutor::Source(base, op)
                 }
                 OperatorKindSpec::Unary(unary_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
-                    let op = UnaryOperator::from_spec(unary_spec);
+                    let mut op = UnaryOperator::from_spec(unary_spec, output_layout.clone());
+                    // Instantiate a per-operator SubqueryExecutor
+                    // from the spec's compiled runner specs (fresh mutable
+                    // state per operator instance / partition).
+                    let runner_specs = unary_spec.subquery_runners();
+                    if !runner_specs.is_empty() {
+                        let executor = Arc::new(SubqueryExecutor::from_specs(
+                            runtime.clone(),
+                            Arc::new(stripped_bindings(bindings)),
+                            runner_specs,
+                        ));
+                        op.set_subquery_executor(executor);
+                    }
                     StreamingExecutor::Unary(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Blocking(blocking_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
-                    let op = BlockingOperator::from_spec(blocking_spec, &bindings.memory_budget);
+                    let op = BlockingOperator::from_spec(
+                        blocking_spec,
+                        &bindings.memory_budget,
+                        output_layout.clone(),
+                    );
                     StreamingExecutor::Blocking(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Join(join_spec) => {
                     let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
-                    let op = JoinOperator::from_spec(join_spec, &bindings.memory_budget);
+                    let op = JoinOperator::from_spec(
+                        join_spec,
+                        &bindings.memory_budget,
+                        output_layout.clone(),
+                    );
                     StreamingExecutor::Join(base, Box::new(left), Box::new(right), op)
                 }
                 OperatorKindSpec::Graph(graph_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
-                    let op = GraphOperator::from_spec(graph_spec, storage, space_name);
+                    let op = GraphOperator::from_spec(
+                        graph_spec,
+                        storage,
+                        space_name,
+                        output_layout.clone(),
+                    );
                     StreamingExecutor::Graph(base, Box::new(child), op)
                 }
                 OperatorKindSpec::RecursiveFragment(rf_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
-                    let op = RecursiveFragmentOperator::from_spec(rf_spec, storage, space_name);
+                    let op = RecursiveFragmentOperator::from_spec(
+                        rf_spec,
+                        storage,
+                        space_name,
+                        output_layout.clone(),
+                    );
                     StreamingExecutor::RecursiveFragment(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Sink(sink_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
-                    let op = SinkOperator::from_spec(sink_spec, storage);
+                    let op = SinkOperator::from_spec(sink_spec, storage, output_layout.clone());
                     StreamingExecutor::Sink(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Set(set_spec) => {
                     let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
-                    let op = SetOperator::from_spec(set_spec, &bindings.memory_budget);
+                    let op = SetOperator::from_spec(
+                        set_spec,
+                        &bindings.memory_budget,
+                        output_layout.clone(),
+                    );
                     StreamingExecutor::Set(base, Box::new(left), Box::new(right), op)
                 }
                 OperatorKindSpec::Apply(apply_spec) => match apply_spec {
                     ApplySpec::CorrelatedApply { sub_plan, anti } => {
                         let left = take_unary_input(fragment.id, op_id, &mut inputs)?;
-                        let right =
-                            StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start);
-                        let op = ApplyOperator::CorrelatedApply {
-                            sub_plan: sub_plan.clone(),
-                            bindings: Box::new(stripped_bindings(bindings)),
-                            anti: *anti,
-                            right_rows: None,
-                            right_layout: None,
-                            memory_tracker: MemoryTracker::new(bindings.memory_budget.clone()),
-                        };
+                        let right = StreamingExecutor::Source(
+                            OperatorBase::new(0),
+                            SourceOperator::new(SourceOperatorKind::Start, output_layout.clone()),
+                        );
+                        let op = ApplyOperator::new(
+                            ApplyOperatorKind::CorrelatedApply {
+                                sub_plan: sub_plan.clone(),
+                                bindings: Box::new(stripped_bindings(bindings)),
+                                sub_executor: None,
+                                anti: *anti,
+                                right_rows: None,
+                                right_layout: None,
+                                memory_tracker: MemoryTracker::new(bindings.memory_budget.clone()),
+                            },
+                            output_layout.clone(),
+                        );
                         StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
                     }
                     _ => {
                         let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
-                        let op = ApplyOperator::from_spec(apply_spec, &bindings.memory_budget);
+                        let op = ApplyOperator::from_spec(
+                            apply_spec,
+                            &bindings.memory_budget,
+                            output_layout.clone(),
+                        );
                         StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
                     }
                 },
@@ -235,13 +283,13 @@ impl PhysicalPlanMaterializer {
                         )));
                     }
                     let children = inputs;
-                    let op = ExchangeOperator::from_spec(exchange_spec);
+                    let op = ExchangeOperator::from_spec(exchange_spec, output_layout.clone());
                     StreamingExecutor::Exchange(base, children, op)
                 }
                 OperatorKindSpec::Ddl(ddl_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
-                    let op = DdlOperator::from_spec(ddl_spec, storage);
+                    let op = DdlOperator::from_spec(ddl_spec, storage, output_layout.clone());
                     StreamingExecutor::Ddl(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Fulltext(ft_spec) => {
@@ -254,6 +302,7 @@ impl PhysicalPlanMaterializer {
                         storage,
                         #[cfg(feature = "fulltext-search")]
                         ft_mgr,
+                        output_layout.clone(),
                     );
                     StreamingExecutor::Fulltext(base, Box::new(child), op)
                 }
@@ -267,12 +316,13 @@ impl PhysicalPlanMaterializer {
                         storage,
                         #[cfg(feature = "qdrant")]
                         coord,
+                        output_layout.clone(),
                     );
                     StreamingExecutor::Vector(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Txn(txn_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
-                    let op = TxnOperator::from_spec(txn_spec);
+                    let op = TxnOperator::from_spec(txn_spec, output_layout.clone());
                     StreamingExecutor::Txn(base, Box::new(child), op)
                 }
             };
@@ -428,6 +478,12 @@ impl PhysicalPlanMaterializer {
             runtime.set_parameter_values(values);
         }
 
+        // Session variable snapshot: operators resolve $name session variables
+        // through this map (captured once per statement at the API layer).
+        if !bindings.session_variables.is_empty() {
+            runtime.set_session_variable_values(bindings.session_variables.clone());
+        }
+
         // M6: shared scheduler takes priority.
         if let Some(ref ss) = bindings.shared_scheduler {
             runtime.set_shared_scheduler(Some(ss.clone()));
@@ -554,7 +610,7 @@ mod tests {
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::{ContextualExpression, ExpressionMeta};
     use crate::query::executor::base::ExecutionContext;
-    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+
     use crate::query::executor::streaming::parameters::ParameterSchema;
     use crate::query::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
     use crate::query::executor::streaming::plan::context::PhysicalPlanBuildContext;
@@ -599,6 +655,7 @@ mod tests {
     fn bindings() -> QueryBindings {
         QueryBindings {
             parameters: Arc::new(HashMap::new()),
+            session_variables: Arc::new(HashMap::new()),
             parameter_frame: None,
             space_name: None,
             storage: None,
@@ -636,15 +693,15 @@ mod tests {
             other => panic!("expected Apply executor, got {:?}", other.operator_name()),
         };
         assert!(
-            matches!(op, ApplyOperator::CorrelatedApply { .. }),
+            matches!(op.kind, ApplyOperatorKind::CorrelatedApply { .. }),
             "CorrelatedApply spec must materialize into the CorrelatedApply operator"
         );
         assert!(
-            matches!(&*left, StreamingExecutor::Source(_, SourceOperator::Start)),
+            matches!(&*left, StreamingExecutor::Source(_, op) if matches!(op.kind, SourceOperatorKind::Start)),
             "left input comes from the unary input fragment (Start source)"
         );
         assert!(
-            matches!(&*right, StreamingExecutor::Source(_, SourceOperator::Start)),
+            matches!(&*right, StreamingExecutor::Source(_, op) if matches!(op.kind, SourceOperatorKind::Start)),
             "right input is the Start placeholder (never executed)"
         );
     }

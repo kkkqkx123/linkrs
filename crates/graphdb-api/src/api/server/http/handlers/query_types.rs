@@ -8,8 +8,14 @@ use std::collections::HashMap;
 pub struct QueryRequest {
     pub query: String,
     pub session_id: i64,
+    /// Query parameters bound to `@name` references in the statement.
     #[serde(default)]
-    pub parameters: HashMap<String, String>,
+    pub parameters: HashMap<String, serde_json::Value>,
+    /// Session variables bound to `$name` references in the statement.
+    /// When omitted, the session-managed snapshot (set via `LET $name = expr`)
+    /// is used.
+    #[serde(default)]
+    pub session_variables: HashMap<String, serde_json::Value>,
 }
 
 /// Batch query request: multiple auto-commit DML statements executed inside a

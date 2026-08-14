@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{EdgeDirection, Value};
@@ -9,31 +7,38 @@ use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::traversal::config::TraversalConfig;
-use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;
 use super::common;
-use super::GraphCtx;
+use super::{GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle_traverse(
-    min_depth: u32,
-    max_depth: u32,
-    visited: &mut VisitedSet,
-    ctx: &mut GraphCtx,
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let storage = ctx.storage;
-    let space_name = ctx.space_name;
-    let edge_types = ctx.edge_types;
-    let direction = ctx.direction;
-    let base = &mut *ctx.base;
-    let input = &mut *ctx.input;
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("Traverse not opened".to_string()));
-    }
+    let GraphOperatorKind::Traverse {
+        storage,
+        space_name,
+        edge_types,
+        direction,
+        min_depth,
+        max_depth,
+        visited,
+        ..
+    } = &mut op.kind
+    else {
+        unreachable!("traverse::handle_traverse called for a non-traverse graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let edge_types = &*edge_types;
+    let direction = *direction;
+    let min_depth = *min_depth;
+    let max_depth = *max_depth;
+    let visited = &mut *visited;
 
-    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+    let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
@@ -46,7 +51,7 @@ pub(super) fn handle_traverse(
             );
             if let Some(output) = common::traverse_on_chunk(
                 chunk,
-                Arc::clone(&base.output_layout),
+                Arc::clone(&op.output_layout),
                 &*reader,
                 &tc,
                 visited,
@@ -88,7 +93,7 @@ pub(super) fn handle_traverse(
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(
                     rows,
-                    Arc::clone(&base.output_layout),
+                    Arc::clone(&op.output_layout),
                 )));
             }
         }
@@ -97,25 +102,28 @@ pub(super) fn handle_traverse(
 }
 
 pub(super) fn handle_traverse_all(
-    base: &mut OperatorBase,
+    _op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("TraverseAll not opened".to_string()));
-    }
     input.advance()
 }
 
 pub(super) fn handle_bi_expand(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    edge_types: &[String],
-    base: &mut OperatorBase,
+    op: &mut GraphOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("BiExpand not opened".to_string()));
-    }
+    let GraphOperatorKind::BiExpand {
+        storage,
+        space_name,
+        edge_types,
+        ..
+    } = &mut op.kind
+    else {
+        unreachable!("traverse::handle_bi_expand called for a non-bi-expand graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let edge_types = &*edge_types;
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
@@ -124,7 +132,9 @@ pub(super) fn handle_bi_expand(
 
             let mut out_rows = Vec::new();
             for (_, row) in common::visible_rows(&chunk) {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 let context = ValueRowContext::new(row.clone(), chunk.get_layout());
                 let vid_val = context
                     .get_variable("vid")
@@ -177,7 +187,7 @@ pub(super) fn handle_bi_expand(
             let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(&op.output_layout),
             )));
         } else {
             if !chunk.is_empty() {
@@ -189,19 +199,27 @@ pub(super) fn handle_bi_expand(
 }
 
 pub(super) fn handle_bi_traverse(
-    min_depth: u32,
-    max_depth: u32,
-    visited: &mut VisitedSet,
-    ctx: &mut GraphCtx,
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let storage = ctx.storage;
-    let space_name = ctx.space_name;
-    let edge_types = ctx.edge_types;
-    let base = &mut *ctx.base;
-    let input = &mut *ctx.input;
-    if !base.lifecycle.is_opened() {
-        return Err(QueryError::execution("BiTraverse not opened".to_string()));
-    }
+    let GraphOperatorKind::BiTraverse {
+        storage,
+        space_name,
+        edge_types,
+        min_depth,
+        max_depth,
+        visited,
+        ..
+    } = &mut op.kind
+    else {
+        unreachable!("traverse::handle_bi_traverse called for a non-bi-traverse graph source")
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let edge_types = &*edge_types;
+    let min_depth = *min_depth;
+    let max_depth = *max_depth;
+    let visited = &mut *visited;
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
@@ -210,7 +228,9 @@ pub(super) fn handle_bi_traverse(
 
             let mut out_rows = Vec::new();
             for (_, row) in common::visible_rows(&chunk) {
-                base.ensure_not_cancelled()?;
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
                 let ctx = ValueRowContext::new(row.clone(), chunk.get_layout());
                 let vid_val = ctx
                     .get_variable("vid")
@@ -222,7 +242,9 @@ pub(super) fn handle_bi_traverse(
                     local_visited.insert(vid);
 
                     while let Some((current, depth)) = frontier.pop() {
-                        base.ensure_not_cancelled()?;
+                        if let Some(rt) = op.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
                         if depth >= max_depth {
                             continue;
                         }
@@ -290,7 +312,7 @@ pub(super) fn handle_bi_traverse(
             let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
-                Arc::clone(&base.output_layout),
+                Arc::clone(&op.output_layout),
             )));
         } else {
             if !chunk.is_empty() {

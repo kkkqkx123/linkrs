@@ -14,6 +14,9 @@ pub struct QueryRequest {
     pub auto_commit: bool,
     pub transaction_id: Option<TransactionId>,
     pub parameters: Option<HashMap<String, Value>>,
+    /// Session variable snapshot (`$name` references), captured once per
+    /// statement. Distinct from `parameters` (`@name` references).
+    pub session_variables: Option<HashMap<String, Value>>,
     /// Optional server-assigned query ID threaded to the execution runtime.
     pub query_id: Option<u64>,
 }
@@ -26,6 +29,7 @@ impl Default for QueryRequest {
             auto_commit: true,
             transaction_id: None,
             parameters: None,
+            session_variables: None,
             query_id: None,
         }
     }
