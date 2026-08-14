@@ -4,7 +4,9 @@
 
 use crate::core::types::TransactionId;
 use crate::core::Value;
+use crate::query::parser::ast::stmt::Ast;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Query request
 #[derive(Debug, Clone)]
@@ -19,6 +21,13 @@ pub struct QueryRequest {
     pub session_variables: Option<HashMap<String, Value>>,
     /// Optional server-assigned query ID threaded to the execution runtime.
     pub query_id: Option<u64>,
+    /// Pre-parsed statement AST from the API-layer classification pass.
+    ///
+    /// When present, the query engine skips its own parse of the query text
+    /// (single-parse pipeline for transaction / session commands). The AST
+    /// carries its own expression analysis context, so expression ids stay
+    /// consistent with the plan generated from it.
+    pub parsed_statement: Option<Arc<Ast>>,
 }
 
 impl Default for QueryRequest {
@@ -31,6 +40,7 @@ impl Default for QueryRequest {
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         }
     }
 }

@@ -371,6 +371,7 @@ impl TestDb {
                 parameters: None,
                 session_variables: None,
                 query_id: None,
+                parsed_statement: None,
             };
             let result = self
                 .query_api
@@ -388,6 +389,7 @@ impl TestDb {
                 parameters: None,
                 session_variables: None,
                 query_id: None,
+                parsed_statement: None,
             };
             self.query_api.execute(query, ctx)
         };
@@ -412,6 +414,7 @@ impl TestDb {
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         self.query_api.execute_stream(query, ctx)
     }
@@ -428,6 +431,7 @@ impl TestDb {
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         self.query_api.execute(query, ctx)
     }
@@ -447,6 +451,7 @@ impl TestDb {
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         let outcomes = self.query_api.execute_batch(statements, ctx);
         let mut results = Vec::with_capacity(outcomes.len());
@@ -474,6 +479,7 @@ impl TestDb {
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         let outcomes = self
             .query_api

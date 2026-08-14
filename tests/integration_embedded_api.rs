@@ -194,6 +194,87 @@ fn test_session_auto_commit() {
     assert!(!session.auto_commit());
 }
 
+/// Text transaction commands (BEGIN / SAVEPOINT / ROLLBACK TO / COMMIT)
+/// through `Session::execute` perform the TransactionManager side effects
+/// and run the state-machine plan.
+#[test]
+fn test_session_text_transaction_commands() {
+    let test_db = create_test_database();
+    let db = &test_db.db;
+    let mut session = db.session().expect("创建会话失败");
+
+    session
+        .create_space("txn_text_space", SpaceConfig::default())
+        .expect("create space failed");
+    session
+        .use_space("txn_text_space")
+        .expect("use space failed");
+    session
+        .execute("CREATE TAG IF NOT EXISTS person(name STRING NOT NULL, age INT)")
+        .expect("CREATE TAG failed");
+
+    // BEGIN starts a session-level transaction; subsequent statements are
+    // bound to it.
+    session.execute("BEGIN").expect("BEGIN should succeed");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .expect("INSERT inside text transaction should succeed");
+
+    // ROLLBACK undoes the transaction writes.
+    session.execute("ROLLBACK").expect("ROLLBACK should succeed");
+    let count = session
+        .execute("MATCH (p:person) RETURN count(p) AS c")
+        .expect("MATCH should succeed");
+    let value = count.rows().first().expect("count row").get("c");
+    assert_eq!(
+        value,
+        Some(&graphdb::core::Value::BigInt(0)),
+        "ROLLBACK must undo the in-transaction INSERT"
+    );
+
+    // SAVEPOINT + ROLLBACK TO keeps the transaction active.
+    session.execute("BEGIN").expect("BEGIN should succeed");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .expect("INSERT p1 should succeed");
+    session.execute("SAVEPOINT sp1").expect("SAVEPOINT should succeed");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p2':('Bob', 25)")
+        .expect("INSERT p2 should succeed");
+    session
+        .execute("ROLLBACK TO sp1")
+        .expect("ROLLBACK TO should succeed");
+    let count = session
+        .execute("MATCH (p:person) RETURN count(p) AS c")
+        .expect("MATCH should succeed");
+    let value = count.rows().first().expect("count row").get("c");
+    assert_eq!(
+        value,
+        Some(&graphdb::core::Value::BigInt(1)),
+        "ROLLBACK TO must undo post-savepoint writes only"
+    );
+
+    session
+        .execute("COMMIT")
+        .expect("COMMIT should succeed");
+    let count = session
+        .execute("MATCH (p:person) RETURN count(p) AS c")
+        .expect("MATCH should succeed");
+    let value = count.rows().first().expect("count row").get("c");
+    assert_eq!(value, Some(&graphdb::core::Value::BigInt(1)));
+
+    // COMMIT without an active transaction fails clearly.
+    assert!(session.execute("COMMIT").is_err());
+
+    // LET is not supported in embedded sessions (no session-variable store).
+    let err = session.execute("LET $x = 1").expect_err("LET must fail");
+    assert!(
+        err.to_string().contains("not supported in embedded"),
+        "unexpected error: {}",
+        err
+    );
+}
+
 #[test]
 fn test_session_execute() {
     let test_db = create_test_database();

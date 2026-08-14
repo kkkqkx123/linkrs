@@ -633,7 +633,12 @@ impl ArenaPlanAssembler {
             spec: OperatorKindSpec::Txn(spec),
             input_contract: InputContract::NoInput,
             input_layout: None,
-            output_layout: SlotLayout::new(vec![]),
+            // Transaction commands produce a structured two-column result
+            // (command / result) through [`TransactionCommandResult`].
+            output_layout: SlotLayout::from_names(&[
+                "command".to_string(),
+                "result".to_string(),
+            ]),
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,

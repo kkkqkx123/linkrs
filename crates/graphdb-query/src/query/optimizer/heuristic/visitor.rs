@@ -45,8 +45,8 @@ use crate::query::planning::plan::core::nodes::traversal::traversal_node::{
 };
 
 use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RollbackNode,
-    SelectNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::query::planning::plan::core::nodes::data_modification::{
@@ -267,6 +267,8 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_begin_transaction => BeginTransactionNode, BeginTransaction,
         visit_commit => CommitNode, Commit,
         visit_rollback => RollbackNode, Rollback,
+        visit_savepoint => SavepointNode, Savepoint,
+        visit_release_savepoint => ReleaseSavepointNode, ReleaseSavepoint,
         visit_fulltext_search => FulltextSearchNode, FulltextSearch,
         visit_fulltext_lookup => FulltextLookupNode, FulltextLookup,
         visit_match_fulltext => MatchFulltextNode, MatchFulltext,

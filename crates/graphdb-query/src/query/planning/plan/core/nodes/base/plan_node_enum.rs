@@ -39,8 +39,8 @@ pub use crate::query::planning::plan::core::nodes::access::index_scan::{
     IndexLimit, IndexScanNode, OrderByItem, ScanType,
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RollbackNode,
-    SelectNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
@@ -175,6 +175,8 @@ pub enum PlanNodeEnum {
     BeginTransaction(BeginTransactionNode),
     Commit(CommitNode),
     Rollback(RollbackNode),
+    Savepoint(SavepointNode),
+    ReleaseSavepoint(ReleaseSavepointNode),
 
     // ========== Data Processing Node ----------
     DataCollect(DataCollectNode),
@@ -384,6 +386,8 @@ crate::define_enum_as_methods! {
     (BeginTransaction, as_begin_transaction, BeginTransactionNode),
     (Commit, as_commit, CommitNode),
     (Rollback, as_rollback, RollbackNode),
+    (Savepoint, as_savepoint, SavepointNode),
+    (ReleaseSavepoint, as_release_savepoint, ReleaseSavepointNode),
     // Data processing node
     (DataCollect, as_data_collect, DataCollectNode),
     (Remove, as_remove, RemoveNode),
@@ -481,6 +485,8 @@ crate::define_enum_as_mut_methods! {
     (BeginTransaction, as_begin_transaction_mut, BeginTransactionNode),
     (Commit, as_commit_mut, CommitNode),
     (Rollback, as_rollback_mut, RollbackNode),
+    (Savepoint, as_savepoint_mut, SavepointNode),
+    (ReleaseSavepoint, as_release_savepoint_mut, ReleaseSavepointNode),
     // Data processing node
     (DataCollect, as_data_collect_mut, DataCollectNode),
     (Remove, as_remove_mut, RemoveNode),
@@ -582,6 +588,8 @@ crate::define_enum_type_name! {
     (BeginTransaction, "BeginTransaction"),
     (Commit, "Commit"),
     (Rollback, "Rollback"),
+    (Savepoint, "Savepoint"),
+    (ReleaseSavepoint, "ReleaseSavepoint"),
     // Data processing node
     (DataCollect, "DataCollect"),
     (Remove, "Remove"),
@@ -682,6 +690,8 @@ crate::define_enum_category! {
     (BeginTransaction, PlanNodeCategory::ControlFlow),
     (Commit, PlanNodeCategory::ControlFlow),
     (Rollback, PlanNodeCategory::ControlFlow),
+    (Savepoint, PlanNodeCategory::ControlFlow),
+    (ReleaseSavepoint, PlanNodeCategory::ControlFlow),
     // Data processing node
     (DataCollect, PlanNodeCategory::DataProcessing),
     (Remove, PlanNodeCategory::DataProcessing),
@@ -782,6 +792,8 @@ crate::define_enum_describe! {
     (BeginTransaction, "BeginTransaction"),
     (Commit, "Commit"),
     (Rollback, "Rollback"),
+    (Savepoint, "Savepoint"),
+    (ReleaseSavepoint, "ReleaseSavepoint"),
     // Data processing node
     (DataCollect, "DataCollect"),
     (Remove, "Remove"),

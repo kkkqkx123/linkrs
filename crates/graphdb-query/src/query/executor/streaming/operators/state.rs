@@ -526,6 +526,9 @@ pub enum TxnState {
     BeginTransaction,
     Commit,
     Rollback,
+    RollbackToSavepoint,
+    Savepoint,
+    ReleaseSavepoint,
 }
 
 impl TxnState {
@@ -534,6 +537,9 @@ impl TxnState {
             super::spec::TxnSpec::BeginTransaction => TxnState::BeginTransaction,
             super::spec::TxnSpec::Commit => TxnState::Commit,
             super::spec::TxnSpec::Rollback => TxnState::Rollback,
+            super::spec::TxnSpec::RollbackToSavepoint { .. } => TxnState::RollbackToSavepoint,
+            super::spec::TxnSpec::Savepoint { .. } => TxnState::Savepoint,
+            super::spec::TxnSpec::ReleaseSavepoint { .. } => TxnState::ReleaseSavepoint,
         }
     }
 }

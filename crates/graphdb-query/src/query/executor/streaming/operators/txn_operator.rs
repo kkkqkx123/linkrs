@@ -15,13 +15,16 @@ use crate::query::executor::streaming::transaction_scope::{
 ///
 /// Validates state transitions through the [`SessionTransactionController`]
 /// and produces a structured result chunk.  The actual TransactionManager
-/// operations (begin/commit/rollback) are performed by the API layer before
-/// this operator runs.
+/// operations (begin/commit/rollback/savepoint) are performed by the API
+/// layer before this operator runs.
 #[derive(Debug)]
 pub enum TxnOperatorKind {
     BeginTransaction { emitted: bool },
     Commit { emitted: bool },
     Rollback { emitted: bool },
+    RollbackToSavepoint { name: String, emitted: bool },
+    Savepoint { name: String, emitted: bool },
+    ReleaseSavepoint { name: String, emitted: bool },
 }
 
 /// Transaction command operator.
@@ -54,6 +57,22 @@ impl TxnOperator {
             }
             super::spec::TxnSpec::Commit => TxnOperatorKind::Commit { emitted: false },
             super::spec::TxnSpec::Rollback => TxnOperatorKind::Rollback { emitted: false },
+            super::spec::TxnSpec::RollbackToSavepoint { name } => {
+                TxnOperatorKind::RollbackToSavepoint {
+                    name: name.clone(),
+                    emitted: false,
+                }
+            }
+            super::spec::TxnSpec::Savepoint { name } => TxnOperatorKind::Savepoint {
+                name: name.clone(),
+                emitted: false,
+            },
+            super::spec::TxnSpec::ReleaseSavepoint { name } => {
+                TxnOperatorKind::ReleaseSavepoint {
+                    name: name.clone(),
+                    emitted: false,
+                }
+            }
         };
         Self::new(kind, output_layout)
     }
@@ -143,6 +162,59 @@ impl TxnOperator {
                 ctrl.rollback_finalize();
                 Ok(Some(
                     TransactionCommandResult::rollback(txn_id)
+                        .into_data_chunk(Arc::clone(output_layout)),
+                ))
+            }
+            TxnOperatorKind::RollbackToSavepoint { name, emitted } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let ctrl = Self::controller(runtime)?;
+                // ROLLBACK TO SAVEPOINT does not leave the transaction: the
+                // controller must be Active (validated only, no transition).
+                if !ctrl.is_active() {
+                    return Err(QueryError::execution(format!(
+                        "Cannot ROLLBACK TO SAVEPOINT in state {:?}",
+                        ctrl.state()
+                    )));
+                }
+                Ok(Some(
+                    TransactionCommandResult::rollback_to(name.clone())
+                        .into_data_chunk(Arc::clone(output_layout)),
+                ))
+            }
+            TxnOperatorKind::Savepoint { name, emitted } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let ctrl = Self::controller(runtime)?;
+                if !ctrl.is_active() {
+                    return Err(QueryError::execution(format!(
+                        "Cannot SAVEPOINT in state {:?}",
+                        ctrl.state()
+                    )));
+                }
+                Ok(Some(
+                    TransactionCommandResult::savepoint(name.clone())
+                        .into_data_chunk(Arc::clone(output_layout)),
+                ))
+            }
+            TxnOperatorKind::ReleaseSavepoint { name, emitted } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let ctrl = Self::controller(runtime)?;
+                if !ctrl.is_active() {
+                    return Err(QueryError::execution(format!(
+                        "Cannot RELEASE SAVEPOINT in state {:?}",
+                        ctrl.state()
+                    )));
+                }
+                Ok(Some(
+                    TransactionCommandResult::release_savepoint(name.clone())
                         .into_data_chunk(Arc::clone(output_layout)),
                 ))
             }

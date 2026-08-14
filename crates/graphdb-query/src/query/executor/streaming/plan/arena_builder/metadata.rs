@@ -834,6 +834,9 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
         TxnSpec::BeginTransaction => "BeginTransaction",
         TxnSpec::Commit => "Commit",
         TxnSpec::Rollback => "Rollback",
+        TxnSpec::RollbackToSavepoint { .. } => "RollbackToSavepoint",
+        TxnSpec::Savepoint { .. } => "Savepoint",
+        TxnSpec::ReleaseSavepoint { .. } => "ReleaseSavepoint",
     }
 }
 

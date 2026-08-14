@@ -180,7 +180,11 @@ fn is_direct_dcl(stmt: &Stmt) -> bool {
 pub fn is_transaction(stmt: &Stmt) -> bool {
     matches!(
         stmt,
-        Stmt::BeginTransaction(..) | Stmt::CommitTransaction(..) | Stmt::RollbackTransaction(..)
+        Stmt::BeginTransaction(..)
+            | Stmt::CommitTransaction(..)
+            | Stmt::RollbackTransaction(..)
+            | Stmt::Savepoint(..)
+            | Stmt::ReleaseSavepoint(..)
     )
 }
 
@@ -263,7 +267,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
-        let mut parser_result = self.parse_into_context(query_text)?;
+        // The API layer may already have parsed the statement (classification
+        // pass); reuse that AST to keep the pipeline single-parse. The AST
+        // carries its own expression analysis context, so expression ids stay
+        // consistent with the plan generated from it.
+        let mut parser_result = match rctx.parsed_statement.clone() {
+            Some(ast) => crate::query::parser::parsing::ParserResult { ast },
+            None => self.parse_into_context(query_text)?,
+        };
 
         // P1: shape-normalize DML statements so structurally identical
         // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
@@ -564,9 +575,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             &request.ast,
             request.dml_shape_cacheable,
         )?;
-        let scope = transaction_id
-            .map(|id| TransactionScope::explicit(id, true))
-            .unwrap_or_else(|| request.transaction_scope.clone());
+        // Transaction commands keep the resolved CommandScope even when the
+        // caller passes a transaction id (COMMIT/ROLLBACK carry the finished
+        // transaction id); regular statements inside an explicit transaction
+        // bind the caller-provided id as an explicit scope.
+        let scope = if is_transaction(&request.stmt) {
+            request.transaction_scope.clone()
+        } else {
+            transaction_id
+                .map(|id| TransactionScope::explicit(id, true))
+                .unwrap_or_else(|| request.transaction_scope.clone())
+        };
 
         if stream_ddl || sink == ResultSink::Materialize {
             let start = Instant::now();
@@ -684,6 +703,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         stmt: &Stmt,
         request: &QueryRequestContext,
     ) -> TransactionScope {
+        // Transaction commands (BEGIN / COMMIT / ROLLBACK / SAVEPOINT /
+        // RELEASE) always run in the transient CommandScope: the API layer
+        // performs the TransactionManager operations and the plan only
+        // validates/tracks state through the session controller. This check
+        // must precede the transaction_id short-circuit — COMMIT/ROLLBACK
+        // carry the finished transaction id on the request and must NOT be
+        // treated as an explicit statement within that transaction.
+        if is_transaction(stmt) {
+            return TransactionScope::CommandScope;
+        }
         if let Some(scope) = Self::scope_for_bound_request(request) {
             return scope;
         }
@@ -695,8 +724,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         } else if requires_auto_commit(stmt) {
             TransactionScope::None
-        } else if is_transaction(stmt) {
-            TransactionScope::CommandScope
         } else {
             TransactionScope::None
         }

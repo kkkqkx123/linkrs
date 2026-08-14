@@ -176,6 +176,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::BeginTransaction(_) => vec![],
             PlanNodeEnum::Commit(_) => vec![],
             PlanNodeEnum::Rollback(_) => vec![],
+            PlanNodeEnum::Savepoint(_) => vec![],
+            PlanNodeEnum::ReleaseSavepoint(_) => vec![],
         }
     }
 }

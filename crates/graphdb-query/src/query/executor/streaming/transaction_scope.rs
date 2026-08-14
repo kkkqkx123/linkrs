@@ -437,6 +437,30 @@ impl TransactionCommandResult {
         }
     }
 
+    pub fn rollback_to(savepoint_name: String) -> Self {
+        Self {
+            command: "ROLLBACK TO SAVEPOINT",
+            transaction_id: None,
+            message: format!("Rolled back to savepoint '{}'", savepoint_name),
+        }
+    }
+
+    pub fn savepoint(savepoint_name: String) -> Self {
+        Self {
+            command: "SAVEPOINT",
+            transaction_id: None,
+            message: format!("Created savepoint '{}'", savepoint_name),
+        }
+    }
+
+    pub fn release_savepoint(savepoint_name: String) -> Self {
+        Self {
+            command: "RELEASE SAVEPOINT",
+            transaction_id: None,
+            message: format!("Released savepoint '{}'", savepoint_name),
+        }
+    }
+
     /// Convert to an [`ExecutionResult`].
     pub fn into_execution_result(self) -> ExecutionResult {
         let row = vec![

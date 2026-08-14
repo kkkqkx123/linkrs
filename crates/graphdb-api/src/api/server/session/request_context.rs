@@ -310,6 +310,7 @@ pub fn build_query_request_context(
         parameters,
         session_variables: session.variables_snapshot(),
         query_id: None,
+        parsed_statement: None,
         transaction_id: session.current_transaction(),
         auto_commit: session.is_auto_commit(),
         read_only: false,

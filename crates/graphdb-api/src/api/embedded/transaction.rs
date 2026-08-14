@@ -200,6 +200,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
 
         let result = {
@@ -238,6 +239,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: Some(params),
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
 
         let result = {

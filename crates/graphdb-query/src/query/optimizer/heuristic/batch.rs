@@ -214,6 +214,8 @@ impl PlanNodeVisitor for SubqueryHostFinder {
         visit_begin_transaction => crate::query::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode,
         visit_commit => crate::query::planning::plan::core::nodes::control_flow::control_flow_node::CommitNode,
         visit_rollback => crate::query::planning::plan::core::nodes::control_flow::control_flow_node::RollbackNode,
+        visit_savepoint => crate::query::planning::plan::core::nodes::control_flow::control_flow_node::SavepointNode,
+        visit_release_savepoint => crate::query::planning::plan::core::nodes::control_flow::control_flow_node::ReleaseSavepointNode,
         visit_fulltext_search => crate::query::planning::plan::core::nodes::search::fulltext::data_access::FulltextSearchNode,
         visit_fulltext_lookup => crate::query::planning::plan::core::nodes::search::fulltext::data_access::FulltextLookupNode,
         visit_match_fulltext => crate::query::planning::plan::core::nodes::search::fulltext::data_access::MatchFulltextNode,

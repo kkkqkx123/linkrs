@@ -17,11 +17,14 @@ use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
 use crate::query::optimizer::PartitioningConfig;
+use crate::query::parser::ast::stmt::Ast;
+use crate::query::parser::ast::Stmt;
+use crate::query::parser::{Parser, ParserResult};
 use crate::query::DataSet;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use crate::transaction::TransactionManager;
+use crate::transaction::{TransactionId, TransactionManager};
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -430,26 +433,51 @@ impl<
             txn_manager.cleanup_expired_transactions();
         }
 
-        // Handle transaction control statements
-        let trimmed_stmt = stmt.trim().to_uppercase();
-        if trimmed_stmt.starts_with("BEGIN") || trimmed_stmt.starts_with("START TRANSACTION") {
-            return self.handle_begin_transaction(&session, stmt);
-        } else if trimmed_stmt.starts_with("COMMIT") {
-            return self.handle_commit_transaction(&session).await;
-        } else if trimmed_stmt.starts_with("ROLLBACK") {
-            return self.handle_rollback_transaction(&session, stmt);
-        } else if trimmed_stmt.starts_with("SAVEPOINT") {
-            return self.handle_savepoint(&session, stmt);
-        } else if trimmed_stmt.starts_with("RELEASE SAVEPOINT") {
-            return self.handle_release_savepoint(&session, stmt);
-        } else if trimmed_stmt.starts_with("LET ") {
-            return self.handle_let_statement(&session, stmt);
+        // Unified classification entry: transaction / session commands are
+        // dispatched through the parser (single AST entry point), replacing
+        // the legacy text-prefix dispatch. `LET $name = expr` is a session
+        // command (evaluated through the query engine, stored on the
+        // session); the six transaction commands perform the TransactionManager
+        // side effect, execute the state-machine plan, and apply session
+        // post-processing.
+        match Self::parse_command(stmt) {
+            Err(parse_error) => return Err(parse_error),
+            Ok(Some(parsed)) => {
+                let parsed_ast = parsed.ast;
+                let stmt_ast = parsed_ast.stmt();
+                match stmt_ast {
+                    Stmt::AssignVariable(assign) => {
+                        return self.execute_variable_assignment(
+                            &session,
+                            parsed_ast.clone(),
+                            assign,
+                            stmt,
+                            space_id,
+                            parameters,
+                            session_variables,
+                        );
+                    }
+                    _ => {
+                        return self.execute_transaction_command(
+                            &session,
+                            stmt,
+                            stmt_ast,
+                            parsed_ast.clone(),
+                            space_id,
+                            parameters,
+                            session_variables,
+                        );
+                    }
+                }
+            }
+            Ok(None) => {}
         }
 
         // Perform a regular query using core layer QueryApi
         let mut result = self.execute_query_with_permission(
             session_id,
             stmt,
+            None,
             space_id,
             parameters,
             session_variables,
@@ -500,20 +528,19 @@ impl<
             .find_session(session_id)
             .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
 
-        // Handle transaction control statements
-        let trimmed_stmt = stmt.trim().to_uppercase();
-        if trimmed_stmt.starts_with("BEGIN")
-            || trimmed_stmt.starts_with("START TRANSACTION")
-            || trimmed_stmt.starts_with("COMMIT")
-            || trimmed_stmt.starts_with("ROLLBACK")
-            || trimmed_stmt.starts_with("SAVEPOINT")
-            || trimmed_stmt.starts_with("RELEASE SAVEPOINT")
-            || trimmed_stmt.starts_with("LET ")
-        {
-            return self
-                .execute(session_id, stmt)
-                .await
-                .map(StreamingQueryResult::from_execution_result);
+        // Transaction / session commands are forwarded to the materialized
+        // `execute` path: the streaming path does not build a session
+        // controller (no CommandScope branch in the stream executor), and
+        // command results are single-row anyway.
+        match Self::parse_command(stmt) {
+            Err(parse_error) => return Err(parse_error),
+            Ok(Some(_)) => {
+                return self
+                    .execute(session_id, stmt)
+                    .await
+                    .map(StreamingQueryResult::from_execution_result);
+            }
+            Ok(None) => {}
         }
 
         // Assign a server-side monotonic query ID up front so the request-scoped
@@ -527,6 +554,7 @@ impl<
             parameters: None,
             session_variables: Some(session.variables_snapshot()),
             query_id: Some(query_id as u64),
+            parsed_statement: None,
         };
 
         let mut query_api = self.query_api.write();
@@ -567,10 +595,450 @@ impl<
         Ok(result)
     }
 
+    // ==================== Unified transaction / session commands ====================
+
+    /// Whether the statement text begins with a transaction / session
+    /// command keyword (used to surface the first specific parse error for
+    /// malformed commands instead of the generic recovery abort).
+    fn is_command_like(stmt: &str) -> bool {
+        let upper = stmt.trim().to_uppercase();
+        upper == "BEGIN"
+            || upper.starts_with("BEGIN ")
+            || upper.starts_with("START TRANSACTION")
+            || upper.starts_with("COMMIT")
+            || upper.starts_with("ROLLBACK")
+            || upper.starts_with("SAVEPOINT")
+            || upper.starts_with("RELEASE SAVEPOINT")
+            || upper == "LET"
+            || upper.starts_with("LET ")
+    }
+
+    /// Unified classification entry: parse the statement and return it when
+    /// it is one of the transaction / session commands (BEGIN / COMMIT /
+    /// ROLLBACK / SAVEPOINT / RELEASE SAVEPOINT / LET).
+    ///
+    /// The parse is gated behind the zero-cost [`Self::is_command_like`]
+    /// text check: regular statements skip the API-layer parse entirely
+    /// (the query engine parses them once on the regular path), so the
+    /// single-parse pipeline applies to every statement.
+    ///
+    /// - `Ok(Some(parser_result))`: a command; the pre-parsed AST is reused
+    ///   by the engine (skipping its internal parse) and by the command
+    ///   handlers (no re-parse to read AST fields).
+    /// - `Ok(None)`: a regular statement (or an unrecognized one) — the
+    ///   regular query path handles it (and surfaces any parse error).
+    /// - `Err(message)`: a command-like statement failed to parse; the first
+    ///   specific parse error is surfaced instead of the generic recovery
+    ///   abort (the parser's recovery masks the first error with
+    ///   "Too many parse errors").
+    fn parse_command(stmt: &str) -> Result<Option<ParserResult>, String> {
+        if !Self::is_command_like(stmt) {
+            return Ok(None);
+        }
+        let mut parser = Parser::new(stmt);
+        match parser.parse() {
+            Ok(result) if !parser.has_errors() => {
+                let stmt_ast = result.ast.stmt();
+                match stmt_ast {
+                    Stmt::BeginTransaction(_)
+                    | Stmt::CommitTransaction(_)
+                    | Stmt::RollbackTransaction(_)
+                    | Stmt::Savepoint(_)
+                    | Stmt::ReleaseSavepoint(_)
+                    | Stmt::AssignVariable(_) => Ok(Some(result)),
+                    _ => Ok(None),
+                }
+            }
+            Ok(_) => Ok(None),
+            Err(_) => {
+                if let Some(first) = parser.errors().iter().next() {
+                    return Err(format!("Parse error: {}", first.message));
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Execute a transaction / session command through the unified
+    /// AST → plan → operator → state machine pipeline.
+    ///
+    /// Flow per command: ① API-layer TransactionManager side effect (the
+    /// parameters are read from the AST), ② QueryRequest construction with
+    /// the transaction id semantics of §3.1, ③ plan execution through the
+    /// query API (the `TxnOperator` validates the session controller and
+    /// produces a structured result), ④ API-layer session post-processing.
+    /// Execute a transaction / session command through the unified
+    /// AST → plan → operator → state machine pipeline.
+    ///
+    /// Flow per command: ① API-layer TransactionManager side effect (the
+    /// parameters are read from the AST), ② QueryRequest construction with
+    /// the transaction id semantics of §3.1, ③ plan execution through the
+    /// query API (the `TxnOperator` validates the session controller and
+    /// produces a structured result), ④ API-layer session post-processing.
+    fn execute_transaction_command(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt_text: &str,
+        stmt: &Stmt,
+        parsed_ast: Arc<Ast>,
+        space_id: i64,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
+    ) -> Result<ExecutionResult, String> {
+        self.validate_session_transaction_state(session)?;
+        let txn_manager = self
+            .transaction_manager
+            .as_ref()
+            .ok_or("Transaction manager not initialized")?;
+
+        match stmt {
+            Stmt::BeginTransaction(begin_stmt) => {
+                if session.has_active_transaction() {
+                    return Err("Session already has an active transaction".to_string());
+                }
+
+                // ① TM side effect: begin with the AST access mode.
+                let mut options = session.transaction_options();
+                if let Some(read_only) = begin_stmt.read_only {
+                    options.read_only = read_only;
+                }
+                let txn_id = match txn_manager
+                    .begin_transaction_with_owner(options.clone(), session.id().to_string())
+                {
+                    Ok(txn_id) => txn_id,
+                    Err(e) => {
+                        // If the error is a write conflict, try cleaning up
+                        // expired transactions and retry once. This handles
+                        // the case where a stale transaction is blocking new
+                        // write transactions.
+                        if matches!(
+                            e.kind(),
+                            crate::transaction::TransactionErrorKind::WriteTransactionConflict
+                        ) {
+                            txn_manager.cleanup_expired_transactions();
+                            match txn_manager.begin_transaction_with_owner(
+                                options,
+                                session.id().to_string(),
+                            ) {
+                                Ok(txn_id) => txn_id,
+                                Err(retry_err) => {
+                                    return Err(format!(
+                                        "Failed to start transaction: {}",
+                                        retry_err
+                                    ));
+                                }
+                            }
+                        } else {
+                            return Err(format!("Failed to start transaction: {}", e));
+                        }
+                    }
+                };
+
+                // ② session binding + ③ plan execution (the controller
+                // begins tracking the fresh transaction; the operator emits
+                // the structured BEGIN result).
+                session.bind_transaction(txn_id);
+                session.set_auto_commit(false);
+                info!(
+                    "Session {} started {} transaction {}",
+                    session.id(),
+                    if begin_stmt.read_only == Some(true) {
+                        "read-only"
+                    } else {
+                        "read-write"
+                    },
+                    txn_id
+                );
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                );
+                if result.is_err() {
+                    // The plan failed unexpectedly (state-machine
+                    // divergence is a bug); clean up the fresh binding so
+                    // the session does not carry a stale transaction.
+                    let _ = txn_manager.abort_transaction(txn_id);
+                    session.unbind_transaction();
+                    session.set_auto_commit(true);
+                }
+                result
+            }
+
+            Stmt::CommitTransaction(_) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction to commit")?;
+
+                // ① TM side effect: commit first so the request can carry
+                // the (now finished) transaction id for state tracking.
+                txn_manager
+                    .commit_transaction(txn_id)
+                    .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+                // ② session unbind + ④ session post-processing (variable
+                // overlay merge) + ③ plan execution.
+                session.unbind_transaction();
+                session.set_auto_commit(true);
+                session.commit_variables();
+                info!("Session {} committed transaction {}", session.id(), txn_id);
+                self.run_transaction_command_plan(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                )
+            }
+
+            Stmt::RollbackTransaction(rollback_stmt) => {
+                if let Some(savepoint_name) = &rollback_stmt.savepoint_name {
+                    // ROLLBACK TO SAVEPOINT: partial rollback; the
+                    // transaction stays active.
+                    let txn_id = session
+                        .current_transaction()
+                        .ok_or("No active transaction to rollback")?;
+                    let savepoint_info = txn_manager
+                        .get_context(txn_id)
+                        .map_err(|e| format!("Failed to get transaction context: {}", e))?
+                        .find_savepoint_by_name(savepoint_name)
+                        .ok_or_else(|| format!("Savepoint '{}' does not exist", savepoint_name))?;
+
+                    let storage = &*self.storage;
+                    txn_manager
+                        .rollback_to_savepoint(txn_id, savepoint_info.id, storage)
+                        .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                    session.rollback_variables_to(savepoint_name);
+                    info!(
+                        "Session {} rolled back transaction {} to savepoint {}",
+                        session.id(),
+                        txn_id,
+                        savepoint_name
+                    );
+                    self.run_transaction_command_plan(
+                        session.id(),
+                        stmt_text,
+                        parsed_ast,
+                        space_id,
+                        Some(txn_id),
+                        parameters,
+                        session_variables,
+                    )
+                } else {
+                    // Full transaction rollback.
+                    let txn_id = session
+                        .current_transaction()
+                        .ok_or("No active transaction to rollback")?;
+                    txn_manager
+                        .abort_transaction(txn_id)
+                        .map_err(|e| format!("Failed to rollback transaction: {}", e))?;
+                    session.unbind_transaction();
+                    session.set_auto_commit(true);
+                    session.rollback_variables();
+                    info!(
+                        "Session {} rolled back transaction {}",
+                        session.id(),
+                        txn_id
+                    );
+                    self.run_transaction_command_plan(
+                        session.id(),
+                        stmt_text,
+                        parsed_ast,
+                        space_id,
+                        Some(txn_id),
+                        parameters,
+                        session_variables,
+                    )
+                }
+            }
+
+            Stmt::Savepoint(savepoint_stmt) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction, cannot create savepoint")?;
+                let savepoint_id = txn_manager
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .map_err(|e| format!("Failed to create savepoint: {}", e))?;
+                info!(
+                    "Session {} created savepoint {} in transaction {} (ID: {})",
+                    session.id(),
+                    savepoint_stmt.name,
+                    txn_id,
+                    savepoint_id
+                );
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                );
+                if result.is_ok() {
+                    session.push_variable_savepoint(&savepoint_stmt.name);
+                }
+                result
+            }
+
+            Stmt::ReleaseSavepoint(release_stmt) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction, cannot release savepoint")?;
+                let context = txn_manager
+                    .get_context(txn_id)
+                    .map_err(|e| format!("Failed to get transaction context: {}", e))?;
+                let savepoint_info = context
+                    .find_savepoint_by_name(&release_stmt.name)
+                    .ok_or_else(|| format!("Savepoint '{}' does not exist", release_stmt.name))?;
+                txn_manager
+                    .release_savepoint(txn_id, savepoint_info.id)
+                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                info!(
+                    "Session {} released savepoint {} in transaction {}",
+                    session.id(),
+                    release_stmt.name,
+                    txn_id
+                );
+                let result = self.run_transaction_command_plan(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                );
+                if result.is_ok() {
+                    session.release_variable_savepoint(&release_stmt.name);
+                }
+                result
+            }
+
+            _ => Err("Statement is not a transaction command".to_string()),
+        }
+    }
+
+
+    /// Execute the transaction-command plan: permission check + query API
+    /// invocation with the explicit transaction id + result conversion.
+    ///
+    /// The command's plan runs in `TransactionScope::CommandScope`: the
+    /// `TxnOperator` validates/tracks the session controller and produces
+    /// the structured command/result row. An active transaction binds
+    /// through `create_execution` (preserving timestamps and the read-only
+    /// mode for G2); finished transactions (COMMIT / ROLLBACK already
+    /// performed the TM side effect) bind an auto-commit context.
+    fn run_transaction_command_plan(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parsed_ast: Arc<Ast>,
+        space_id: i64,
+        transaction_id: Option<TransactionId>,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
+    ) -> Result<ExecutionResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+
+        session.charge();
+        let username = session.user();
+
+        // Permission check: transaction commands now go through the unified
+        // permission path (previously bypassed by the prefix dispatch).
+        if !self.permission_manager.is_admin(&username)
+            && !stmt.trim().to_uppercase().starts_with("USE ")
+        {
+            let permission = self.extract_permission_from_statement(stmt);
+            if let Err(e) = self
+                .permission_manager
+                .check_permission(&username, space_id, permission)
+            {
+                return Err(format!("Permission check failed: {}", e));
+            }
+        }
+
+        // Resolve the immutable execution binding: an active transaction
+        // binds through `create_execution`; a finished transaction (the TM
+        // side effect already ran for COMMIT / ROLLBACK) binds an
+        // auto-commit context — the command plan performs no data access.
+        let execution = transaction_id.and_then(|id| {
+            let manager = self.transaction_manager.as_ref()?;
+            if manager.is_transaction_active(id) {
+                manager.create_execution(id, false).ok()
+            } else {
+                None
+            }
+        });
+
+        self.run_query_plan(
+            &session,
+            stmt,
+            Some(parsed_ast.clone()),
+            transaction_id,
+            execution,
+            parameters,
+            session_variables,
+        )
+    }
+
+    /// Execute a `LET $name = expr` session-variable assignment.
+    ///
+    /// The right-hand side is evaluated through the query engine (the LET
+    /// statement plans to a single-row, single-column expression evaluation
+    /// plan reusing the RETURN chain). The first value of the first row is
+    /// stored in the session; inside an explicit transaction the assignment
+    /// is recorded on the variable overlay so ROLLBACK / ROLLBACK TO
+    /// SAVEPOINT restore the previous value. Client-supplied parameters and
+    /// session variables are passed through to the evaluation.
+    fn execute_variable_assignment(
+        &self,
+        session: &Arc<ClientSession>,
+        parsed_ast: Arc<Ast>,
+        assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
+        stmt: &str,
+        space_id: i64,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
+    ) -> Result<ExecutionResult, String> {
+        let result = self.execute_query_with_permission(
+            session.id(),
+            stmt,
+            Some(parsed_ast),
+            space_id,
+            parameters,
+            session_variables,
+        )?;
+        let value = match result {
+            ExecutionResult::DataSet { data, .. } => data
+                .rows
+                .into_iter()
+                .next()
+                .and_then(|row| row.into_iter().next())
+                .ok_or_else(|| "LET expression returned no value".to_string())?,
+            _ => {
+                return Err("LET expression could not be evaluated".to_string());
+            }
+        };
+        session.set_variable(assign.name.clone(), value);
+        info!("Session {} set session variable", session.id());
+        Ok(ExecutionResult::Success)
+    }
+
     fn execute_query_with_permission(
         &self,
         session_id: i64,
         stmt: &str,
+        parsed_ast: Option<Arc<Ast>>,
         space_id: i64,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
@@ -600,12 +1068,16 @@ impl<
 
         // Resolve the immutable operation context for this query.
         let mut statement_guard = None;
-        let txn_context = if let Some(txn_id) = session.current_transaction() {
+        let execution = if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
                 match txn_manager.begin_statement(txn_id) {
                     Ok((ctx, statement_start)) => {
                         statement_guard = Some((txn_manager.clone(), ctx.clone(), statement_start));
-                        Some(ctx)
+                        Some(
+                            txn_manager
+                                .create_execution(ctx.id, false)
+                                .map_err(|error| error.to_string())?,
+                        )
                     }
                     Err(e) => {
                         if e.is_timeout() {
@@ -624,42 +1096,15 @@ impl<
             None
         };
 
-        // Use core layer QueryApi to execute query. Session variables are
-        // injected through the dedicated session_variables channel (captured
-        // once per statement), fully decoupled from query parameters.
-        // Client-supplied session variables replace the session snapshot;
-        // otherwise the snapshot (set via `LET $name = expr`) is used.
-        let query_request = crate::api::core::QueryRequest {
-            space_id: session.space().map(|s| s.id),
-            space_name: session.space().map(|s| s.name),
-            auto_commit: session.is_auto_commit(),
-            transaction_id: session.current_transaction(),
+        let mut result = self.run_query_plan(
+            &session,
+            stmt,
+            parsed_ast,
+            None,
+            execution,
             parameters,
-            session_variables: session_variables.or_else(|| Some(session.variables_snapshot())),
-            query_id: None,
-        };
-
-        let mut query_api = self.query_api.write();
-        let mut result = if let Some(context) = txn_context.as_ref() {
-            let manager = self
-                .transaction_manager
-                .as_ref()
-                .ok_or_else(|| "Transaction manager is not configured".to_string())?;
-            let execution = manager
-                .create_execution(context.id, false)
-                .map_err(|error| error.to_string())?;
-            query_api
-                .execute_with_execution(stmt, query_request, &execution)
-                .map_err(|e| e.to_string())
-        } else {
-            let execution_storage = self
-                .storage
-                .bind_auto_commit_context()
-                .map_err(|error| error.to_string())?;
-            query_api
-                .execute_with_operation_storage(stmt, query_request, execution_storage)
-                .map_err(|e| e.to_string())
-        };
+            session_variables,
+        );
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
@@ -691,10 +1136,61 @@ impl<
             }
         }
 
-        match result {
-            Ok(query_result) => Ok(Self::convert_to_execution_result(query_result)),
-            Err(e) => Err(e.to_string()),
-        }
+        result
+    }
+
+    /// Shared query execution segment for regular statements and transaction
+    /// commands: builds the `QueryRequest` and invokes the query API with the
+    /// resolved execution binding, converting the result.
+    ///
+    /// `transaction_id` overrides the session binding when provided (used by
+    /// transaction commands whose TM side effect already happened); `execution`
+    /// is an explicit transaction binding created by the caller (optionally
+    /// after `begin_statement`); `None` binds an auto-commit context.
+    /// `parsed_ast` is the classification-pass AST for command statements;
+    /// the engine reuses it instead of re-parsing the text.
+    fn run_query_plan(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt: &str,
+        parsed_ast: Option<Arc<Ast>>,
+        transaction_id: Option<TransactionId>,
+        execution: Option<crate::transaction::types::TransactionExecution>,
+        parameters: Option<HashMap<String, crate::core::Value>>,
+        session_variables: Option<HashMap<String, crate::core::Value>>,
+    ) -> Result<ExecutionResult, String> {
+        // Session variables are injected through the dedicated
+        // session_variables channel (captured once per statement), fully
+        // decoupled from query parameters. Client-supplied session variables
+        // replace the session snapshot; otherwise the snapshot (set via
+        // `LET $name = expr`) is used.
+        let query_request = crate::api::core::QueryRequest {
+            space_id: session.space().map(|s| s.id),
+            space_name: session.space().map(|s| s.name),
+            auto_commit: session.is_auto_commit(),
+            transaction_id: transaction_id.or_else(|| session.current_transaction()),
+            parameters,
+            session_variables: session_variables.or_else(|| Some(session.variables_snapshot())),
+            query_id: None,
+            parsed_statement: parsed_ast,
+        };
+
+        let mut query_api = self.query_api.write();
+        let result = if let Some(execution) = execution.as_ref() {
+            query_api
+                .execute_with_execution(stmt, query_request, execution)
+                .map_err(|e| e.to_string())
+        } else {
+            let execution_storage = self
+                .storage
+                .bind_auto_commit_context()
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_with_operation_storage(stmt, query_request, execution_storage)
+                .map_err(|e| e.to_string())
+        };
+
+        result.map(Self::convert_to_execution_result)
     }
 
     /// Convert core QueryResult to query ExecutionResult
@@ -947,350 +1443,6 @@ impl<
         Ok(())
     }
 
-    /// Parse the transaction access mode from a `BEGIN [TRANSACTION] [READ
-    /// ONLY | READ WRITE]` statement.
-    ///
-    /// Returns `Ok(Some(true))` for READ ONLY, `Ok(Some(false))` for READ
-    /// WRITE and `Ok(None)` when no access mode is specified. Malformed
-    /// suffixes (e.g. `BEGIN READ`) are rejected.
-    fn parse_begin_access_mode(stmt: &str) -> Result<Option<bool>, String> {
-        let upper = stmt.trim().to_uppercase();
-        let (_, suffix) = if let Some(pos) = upper.find("READ") {
-            (&upper[..pos], &upper[pos..])
-        } else {
-            return Ok(None);
-        };
-        let suffix = suffix.trim_start();
-        if suffix.starts_with("READ ONLY") {
-            return Ok(Some(true));
-        }
-        if suffix.starts_with("READ WRITE") {
-            return Ok(Some(false));
-        }
-        Err("Invalid BEGIN access mode, expected READ ONLY or READ WRITE".to_string())
-    }
-
-    /// Processing the BEGIN TRANSACTION statement
-    fn handle_begin_transaction(
-        &self,
-        session: &Arc<ClientSession>,
-        stmt: &str,
-    ) -> Result<ExecutionResult, String> {
-        self.validate_session_transaction_state(session)?;
-
-        if session.has_active_transaction() {
-            return Err("Session already has an active transaction".to_string());
-        }
-
-        let txn_manager = self
-            .transaction_manager
-            .as_ref()
-            .ok_or("Transaction manager not initialized")?;
-
-        // READ ONLY transactions start a consistent MVCC snapshot read
-        // (begin_read_transaction -> acquire_read_timestamp); READ WRITE /
-        // unspecified transactions proceed with the session defaults.
-        let access_mode = Self::parse_begin_access_mode(stmt)?;
-        let mut options = session.transaction_options();
-        if let Some(read_only) = access_mode {
-            options.read_only = read_only;
-        }
-        match txn_manager.begin_transaction_with_owner(options, session.id().to_string()) {
-            Ok(txn_id) => {
-                session.bind_transaction(txn_id);
-                session.set_auto_commit(false);
-                info!(
-                    "Session {} started {} transaction {}",
-                    session.id(),
-                    if access_mode == Some(true) {
-                        "read-only"
-                    } else {
-                        "read-write"
-                    },
-                    txn_id
-                );
-                Ok(ExecutionResult::Success)
-            }
-            Err(e) => {
-                // If the error is a write conflict, try cleaning up expired transactions
-                // and retry once. This handles the case where a stale transaction
-                // is blocking new write transactions.
-                if matches!(
-                    e.kind(),
-                    crate::transaction::TransactionErrorKind::WriteTransactionConflict
-                ) {
-                    txn_manager.cleanup_expired_transactions();
-                    let options = session.transaction_options();
-                    match txn_manager
-                        .begin_transaction_with_owner(options, session.id().to_string())
-                    {
-                        Ok(txn_id) => {
-                            session.bind_transaction(txn_id);
-                            session.set_auto_commit(false);
-                            info!(
-                                "Session {} started transaction {} after cleanup retry",
-                                session.id(),
-                                txn_id
-                            );
-                            return Ok(ExecutionResult::Success);
-                        }
-                        Err(retry_err) => {
-                            return Err(format!("Failed to start transaction: {}", retry_err));
-                        }
-                    }
-                }
-                Err(format!("Failed to start transaction: {}", e))
-            }
-        }
-    }
-
-    /// Processing the COMMIT statement
-    async fn handle_commit_transaction(
-        &self,
-        session: &Arc<ClientSession>,
-    ) -> Result<ExecutionResult, String> {
-        self.validate_session_transaction_state(session)?;
-
-        let txn_id = session
-            .current_transaction()
-            .ok_or("No active transaction to commit")?;
-
-        let txn_manager = self
-            .transaction_manager
-            .as_ref()
-            .ok_or("Transaction manager not initialized")?;
-
-        match txn_manager.commit_transaction(txn_id) {
-            Ok(()) => {
-                session.unbind_transaction();
-                session.set_auto_commit(true);
-                session.commit_variables();
-                info!("Session {} committed transaction {}", session.id(), txn_id);
-                Ok(ExecutionResult::Success)
-            }
-            Err(e) => Err(format!("Failed to commit transaction: {}", e)),
-        }
-    }
-
-    /// Processing the ROLLBACK statement
-    fn handle_rollback_transaction(
-        &self,
-        session: &Arc<ClientSession>,
-        stmt: &str,
-    ) -> Result<ExecutionResult, String> {
-        self.validate_session_transaction_state(session)?;
-
-        let trimmed = stmt.trim().to_uppercase();
-
-        // Check whether it is a command to perform a ROLLBACK TO SAVEPOINT.
-        if trimmed.starts_with("ROLLBACK TO ") {
-            // Extract the savepoint name from the ORIGINAL statement to
-            // preserve case (the transaction layer matches names verbatim).
-            let original = stmt.trim();
-            let savepoint_name = original
-                .get("ROLLBACK TO ".len()..)
-                .map(|s| s.trim())
-                .ok_or("Invalid ROLLBACK TO syntax")?;
-
-            let txn_id = session
-                .current_transaction()
-                .ok_or("No active transaction to rollback")?;
-
-            let txn_manager = self
-                .transaction_manager
-                .as_ref()
-                .ok_or("Transaction manager not initialized")?;
-
-            let savepoint_info = txn_manager
-                .get_context(txn_id)
-                .map_err(|e| format!("Failed to get transaction context: {}", e))?
-                .find_savepoint_by_name(savepoint_name)
-                .ok_or_else(|| format!("Savepoint '{}' does not exist", savepoint_name))?;
-
-            let storage = &*self.storage;
-            txn_manager
-                .rollback_to_savepoint(txn_id, savepoint_info.id, storage)
-                .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
-            session.rollback_variables_to(savepoint_name);
-            info!(
-                "Session {} rolled back transaction {} to savepoint {}",
-                session.id(),
-                txn_id,
-                savepoint_name
-            );
-            Ok(ExecutionResult::Success)
-        } else {
-            // Full transaction rollback
-            let txn_id = session
-                .current_transaction()
-                .ok_or("No active transaction to rollback")?;
-
-            let txn_manager = self
-                .transaction_manager
-                .as_ref()
-                .ok_or("Transaction manager not initialized")?;
-
-            match txn_manager.abort_transaction(txn_id) {
-                Ok(()) => {
-                    session.unbind_transaction();
-                    session.set_auto_commit(true);
-                    session.rollback_variables();
-                    info!(
-                        "Session {} rolled back transaction {}",
-                        session.id(),
-                        txn_id
-                    );
-                    Ok(ExecutionResult::Success)
-                }
-                Err(e) => Err(format!("Failed to rollback transaction: {}", e)),
-            }
-        }
-    }
-
-    /// Processing the SAVEPOINT statement
-    fn handle_savepoint(
-        &self,
-        session: &Arc<ClientSession>,
-        stmt: &str,
-    ) -> Result<ExecutionResult, String> {
-        let savepoint_name = stmt["SAVEPOINT".len()..].trim();
-
-        if savepoint_name.is_empty() {
-            return Err("Savepoint name cannot be empty".to_string());
-        }
-
-        let txn_id = session
-            .current_transaction()
-            .ok_or("No active transaction, cannot create savepoint")?;
-
-        let txn_manager = self
-            .transaction_manager
-            .as_ref()
-            .ok_or("Transaction manager not initialized")?;
-
-        let savepoint_id = txn_manager
-            .create_savepoint(txn_id, Some(savepoint_name.to_string()))
-            .map_err(|e| format!("Failed to create savepoint: {}", e))?;
-
-        session.push_variable_savepoint(savepoint_name);
-
-        info!(
-            "Session {} created savepoint {} in transaction {} (ID: {})",
-            session.id(),
-            savepoint_name,
-            txn_id,
-            savepoint_id
-        );
-
-        Ok(ExecutionResult::Success)
-    }
-
-    /// Processing the RELEASE SAVEPOINT statement
-    fn handle_release_savepoint(
-        &self,
-        session: &Arc<ClientSession>,
-        stmt: &str,
-    ) -> Result<ExecutionResult, String> {
-        let savepoint_name = stmt["RELEASE SAVEPOINT".len()..].trim();
-
-        if savepoint_name.is_empty() {
-            return Err("Savepoint name cannot be empty".to_string());
-        }
-
-        let txn_id = session
-            .current_transaction()
-            .ok_or("No active transaction, cannot release savepoint")?;
-
-        let txn_manager = self
-            .transaction_manager
-            .as_ref()
-            .ok_or("Transaction manager not initialized")?;
-
-        let context = txn_manager
-            .get_context(txn_id)
-            .map_err(|e| format!("Failed to get transaction context: {}", e))?;
-        let savepoint_info = context
-            .find_savepoint_by_name(savepoint_name)
-            .ok_or_else(|| format!("Savepoint '{}' does not exist", savepoint_name))?;
-
-        if let Err(e) = txn_manager.release_savepoint(txn_id, savepoint_info.id) {
-            return Err(format!("Failed to release savepoint: {}", e));
-        }
-
-        info!(
-            "Session {} released savepoint {} in transaction {}",
-            session.id(),
-            savepoint_name,
-            txn_id
-        );
-
-        session.release_variable_savepoint(savepoint_name);
-
-        Ok(ExecutionResult::Success)
-    }
-
-    /// Processing the `LET $name = expr` session-variable assignment.
-    ///
-    /// The right-hand side is evaluated through the query engine as
-    /// `RETURN <expr>` (session variables are injected as parameters, so an
-    /// expression may reference earlier assignments). The first value of the
-    /// first row is stored in the session; inside an explicit transaction the
-    /// assignment is recorded on the variable overlay so ROLLBACK /
-    /// ROLLBACK TO SAVEPOINT restore the previous value.
-    fn handle_let_statement(
-        &self,
-        session: &Arc<ClientSession>,
-        stmt: &str,
-    ) -> Result<ExecutionResult, String> {
-        let (name, expr) = Self::parse_let_statement(stmt)?;
-        let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
-        let evaluate_stmt = format!("RETURN ({})", expr);
-        let result =
-            self.execute_query_with_permission(session.id(), &evaluate_stmt, space_id, None, None)?;
-        let value = match result {
-            ExecutionResult::DataSet { data, .. } => data
-                .rows
-                .into_iter()
-                .next()
-                .and_then(|row| row.into_iter().next())
-                .ok_or_else(|| format!("LET expression '{}' returned no value", expr))?,
-            _ => {
-                return Err(format!("LET expression '{}' could not be evaluated", expr));
-            }
-        };
-        session.set_variable(name, value);
-        info!("Session {} set session variable", session.id());
-        Ok(ExecutionResult::Success)
-    }
-
-    /// Parse `LET $name = expr` into the variable name and expression text.
-    ///
-    /// Both `LET $name = expr` and `LET name = expr` are accepted. The name
-    /// must be a valid identifier (`[A-Za-z_][A-Za-z0-9_]*`).
-    fn parse_let_statement(stmt: &str) -> Result<(String, String), String> {
-        let rest = stmt.trim_start();
-        let rest = &rest["LET".len()..];
-        let rest = rest.trim_start();
-        let rest = rest.strip_prefix('$').unwrap_or(rest);
-        let eq_pos = rest
-            .find('=')
-            .ok_or("LET requires an assignment: LET $name = expr")?;
-        let name = rest[..eq_pos].trim();
-        let expr = rest[eq_pos + 1..].trim();
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !valid {
-            return Err(format!("Invalid session variable name '{}'", name));
-        }
-        if expr.is_empty() {
-            return Err(format!("LET {} requires an expression", name));
-        }
-        Ok((name.to_string(), expr.to_string()))
-    }
 }
 
 impl<S> GraphService<S>
@@ -1313,8 +1465,11 @@ where
     ///
     /// Inside an explicit transaction (or a non-auto-commit session) execution
     /// falls back to per-statement [`execute`](Self::execute), preserving
-    /// transaction semantics. Returns one outcome per input statement, in
-    /// order.
+    /// transaction semantics. Transaction commands are rejected with an
+    /// explicit error (the batch window contract is DML only); `LET`
+    /// statements are routed through [`execute`](Self::execute) one by one
+    /// (session side effects must run per statement). Returns one outcome per
+    /// input statement, in order.
     pub async fn execute_batch(
         &self,
         session_id: i64,
@@ -1330,21 +1485,47 @@ where
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
         let username = session.user();
 
+        // Classification pass: transaction commands get an explicit error,
+        // LET statements run per-statement through `execute`, everything
+        // else joins the batch window.
+        let mut results: Vec<Option<Result<ExecutionResult, String>>> =
+            vec![None; statements.len()];
+        let mut batch_indices: Vec<usize> = Vec::new();
+        let mut batch_statements: Vec<String> = Vec::new();
+        for (index, stmt) in statements.iter().enumerate() {
+            match Self::parse_command(stmt) {
+                Err(parse_error) => results[index] = Some(Err(parse_error)),
+                Ok(Some(parsed)) => match parsed.ast.stmt() {
+                    Stmt::AssignVariable(_) => {
+                        results[index] = Some(self.execute(session_id, stmt).await);
+                    }
+                    _ => {
+                        results[index] = Some(Err(
+                            "Transaction commands are not supported in batch execution".to_string(),
+                        ));
+                    }
+                },
+                Ok(None) => {
+                    batch_indices.push(index);
+                    batch_statements.push(stmt.clone());
+                }
+            }
+        }
+
         // The batch window is for auto-commit DML only. Inside an explicit
         // transaction (or a non-auto-commit session) fall back to
         // per-statement execution so transaction semantics are preserved.
         if session.current_transaction().is_some() || !session.is_auto_commit() {
-            let mut results = Vec::with_capacity(statements.len());
-            for stmt in statements {
-                results.push(self.execute(session_id, stmt).await);
+            for (index, stmt) in batch_statements.iter().enumerate() {
+                results[batch_indices[index]] = Some(self.execute(session_id, stmt).await);
             }
-            return results;
+            return finalize_batch_outcomes(results);
         }
 
         // Permission-check first so denied statements are never executed.
         let mut denied: Vec<(usize, String)> = Vec::new();
-        let mut permitted: Vec<String> = Vec::with_capacity(statements.len());
-        for (index, stmt) in statements.iter().enumerate() {
+        let mut permitted: Vec<String> = Vec::with_capacity(batch_statements.len());
+        for (index, stmt) in batch_statements.iter().enumerate() {
             if !self.permission_manager.is_admin(&username) {
                 let permission = self.extract_permission_from_statement(stmt);
                 if let Err(e) = self
@@ -1366,26 +1547,15 @@ where
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         let outcomes = self
             .query_api
             .write()
             .execute_batch(&permitted, query_request);
 
-        let mut results = Vec::with_capacity(statements.len());
-        let mut permitted_outcomes = outcomes.into_iter();
-        for index in 0..statements.len() {
-            if let Some((_, error)) = denied.iter().find(|(i, _)| *i == index) {
-                results.push(Err(error.clone()));
-                continue;
-            }
-            match permitted_outcomes.next() {
-                Some(Ok(result)) => results.push(Ok(Self::convert_to_execution_result(result))),
-                Some(Err(error)) => results.push(Err(error.to_string())),
-                None => results.push(Err("Batch outcome missing".to_string())),
-            }
-        }
-        results
+        merge_batch_outcomes::<S>(&mut results, &batch_indices, &denied, outcomes);
+        finalize_batch_outcomes(results)
     }
 }
 
@@ -1425,17 +1595,45 @@ where
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
         let username = session.user();
 
-        if session.current_transaction().is_some() || !session.is_auto_commit() {
-            let mut results = Vec::with_capacity(statements.len());
-            for stmt in statements {
-                results.push(self.execute(session_id, stmt).await);
+        // Classification pass (same policy as execute_batch): transaction
+        // commands get an explicit error, LET statements run per-statement.
+        let mut results: Vec<Option<Result<ExecutionResult, String>>> =
+            vec![None; statements.len()];
+        let mut batch_indices: Vec<usize> = Vec::new();
+        let mut batch_statements: Vec<String> = Vec::new();
+        for (index, stmt) in statements.iter().enumerate() {
+            match Self::parse_command(stmt) {
+                Err(parse_error) => results[index] = Some(Err(parse_error)),
+                Ok(Some(parsed)) => match parsed.ast.stmt() {
+                    Stmt::AssignVariable(_) => {
+                        results[index] = Some(self.execute(session_id, stmt).await);
+                    }
+                    _ => {
+                        results[index] = Some(Err(
+                            "Transaction commands are not supported in batch execution".to_string(),
+                        ));
+                    }
+                },
+                Ok(None) => {
+                    batch_indices.push(index);
+                    batch_statements.push(stmt.clone());
+                }
             }
-            return results;
+        }
+
+        // Inside an explicit transaction (or a non-auto-commit session) fall
+        // back to per-statement execution so transaction semantics are
+        // preserved.
+        if session.current_transaction().is_some() || !session.is_auto_commit() {
+            for (index, stmt) in batch_statements.iter().enumerate() {
+                results[batch_indices[index]] = Some(self.execute(session_id, stmt).await);
+            }
+            return finalize_batch_outcomes(results);
         }
 
         let mut denied: Vec<(usize, String)> = Vec::new();
-        let mut permitted: Vec<String> = Vec::with_capacity(statements.len());
-        for (index, stmt) in statements.iter().enumerate() {
+        let mut permitted: Vec<String> = Vec::with_capacity(batch_statements.len());
+        for (index, stmt) in batch_statements.iter().enumerate() {
             if !self.permission_manager.is_admin(&username) {
                 let permission = self.extract_permission_from_statement(stmt);
                 if let Err(e) = self
@@ -1457,26 +1655,57 @@ where
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
         let outcomes =
             self.query_api
                 .write()
                 .execute_batch_grouped(&permitted, query_request, group_size);
 
-        let mut results = Vec::with_capacity(statements.len());
-        let mut permitted_outcomes = outcomes.into_iter();
-        for index in 0..statements.len() {
-            if let Some((_, error)) = denied.iter().find(|(i, _)| *i == index) {
-                results.push(Err(error.clone()));
-                continue;
-            }
-            match permitted_outcomes.next() {
-                Some(Ok(result)) => results.push(Ok(Self::convert_to_execution_result(result))),
-                Some(Err(error)) => results.push(Err(error.to_string())),
-                None => results.push(Err("Batch outcome missing".to_string())),
-            }
+        merge_batch_outcomes::<S>(&mut results, &batch_indices, &denied, outcomes);
+        finalize_batch_outcomes(results)
+    }
+}
+
+/// Convert the per-slot batch results into the final ordered outcome vector.
+fn finalize_batch_outcomes(
+    results: Vec<Option<Result<ExecutionResult, String>>>,
+) -> Vec<Result<ExecutionResult, String>> {
+    results
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(|| Err("Batch outcome missing".to_string())))
+        .collect()
+}
+
+/// Merge the batch-window outcomes back into the per-slot results.
+fn merge_batch_outcomes<S>(
+    results: &mut [Option<Result<ExecutionResult, String>>],
+    batch_indices: &[usize],
+    denied: &[(usize, String)],
+    outcomes: Vec<Result<crate::api::core::QueryResult, crate::api::core::CoreError>>,
+) where
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + 'static,
+{
+    let mut permitted_outcomes = outcomes.into_iter();
+    for (batch_pos, original_index) in batch_indices.iter().enumerate() {
+        if let Some((_, error)) = denied.iter().find(|(i, _)| *i == batch_pos) {
+            results[*original_index] = Some(Err(error.clone()));
+            continue;
         }
-        results
+        match permitted_outcomes.next() {
+            Some(Ok(result)) => {
+                results[*original_index] = Some(Ok(GraphService::<S>::convert_to_execution_result(
+                    result,
+                )));
+            }
+            Some(Err(error)) => results[*original_index] = Some(Err(error.to_string())),
+            None => results[*original_index] = Some(Err("Batch outcome missing".to_string())),
+        }
     }
 }
 
@@ -1486,38 +1715,81 @@ mod tests {
     use crate::storage::MockStorage;
 
     #[test]
-    fn parse_begin_access_mode_variants() {
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN"),
-            Ok(None)
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION"),
-            Ok(None)
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ ONLY"),
-            Ok(Some(true))
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ WRITE"),
-            Ok(Some(false))
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ ONLY"),
-            Ok(Some(true))
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("START TRANSACTION READ WRITE"),
-            Ok(Some(false))
-        );
-        assert_eq!(
-            GraphService::<MockStorage>::parse_begin_access_mode("begin read only"),
-            Ok(Some(true))
-        );
-        assert!(GraphService::<MockStorage>::parse_begin_access_mode("BEGIN READ").is_err());
+    fn transaction_command_classification() {
+        // The seven transaction / session commands are classified through
+        // the unified parser entry; other statements pass through.
+        let begin = GraphService::<MockStorage>::parse_command("BEGIN READ ONLY")
+            .expect("BEGIN should classify")
+            .expect("BEGIN should be a command");
+        assert!(matches!(
+            begin.ast.stmt(),
+            crate::query::parser::ast::Stmt::BeginTransaction(ref s) if s.read_only == Some(true)
+        ));
+
+        let commit = GraphService::<MockStorage>::parse_command("COMMIT")
+            .expect("COMMIT should classify")
+            .expect("COMMIT should be a command");
+        assert!(matches!(
+            commit.ast.stmt(),
+            crate::query::parser::ast::Stmt::CommitTransaction(_)
+        ));
+
+        let rollback = GraphService::<MockStorage>::parse_command("ROLLBACK TO sp1")
+            .expect("ROLLBACK TO should classify")
+            .expect("ROLLBACK TO should be a command");
+        assert!(matches!(
+            rollback.ast.stmt(),
+            crate::query::parser::ast::Stmt::RollbackTransaction(ref s)
+                if s.savepoint_name.as_deref() == Some("sp1")
+        ));
+
+        let savepoint = GraphService::<MockStorage>::parse_command("SAVEPOINT sp1")
+            .expect("SAVEPOINT should classify")
+            .expect("SAVEPOINT should be a command");
+        assert!(matches!(
+            savepoint.ast.stmt(),
+            crate::query::parser::ast::Stmt::Savepoint(ref s) if s.name == "sp1"
+        ));
+
+        let release = GraphService::<MockStorage>::parse_command("RELEASE SAVEPOINT sp1")
+            .expect("RELEASE SAVEPOINT should classify")
+            .expect("RELEASE SAVEPOINT should be a command");
+        assert!(matches!(
+            release.ast.stmt(),
+            crate::query::parser::ast::Stmt::ReleaseSavepoint(ref s) if s.name == "sp1"
+        ));
+
+        let let_stmt = GraphService::<MockStorage>::parse_command("LET $x = 1 + 2")
+            .expect("LET should classify")
+            .expect("LET should be a command");
+        assert!(matches!(
+            let_stmt.ast.stmt(),
+            crate::query::parser::ast::Stmt::AssignVariable(ref s) if s.name == "x"
+        ));
+
+        // Regular statements and malformed commands are not classified.
+        assert!(GraphService::<MockStorage>::parse_command("MATCH (n) RETURN n")
+            .unwrap()
+            .is_none());
+        assert!(GraphService::<MockStorage>::parse_command("COMMIT junk")
+            .unwrap()
+            .is_none());
+
+        // Malformed commands surface the first specific parse error.
+        let err = GraphService::<MockStorage>::parse_command("LET $x").expect_err("LET $x must fail");
         assert!(
-            GraphService::<MockStorage>::parse_begin_access_mode("BEGIN TRANSACTION READ").is_err()
+            err.contains("LET requires an assignment"),
+            "unexpected error: {}",
+            err
+        );
+
+        // A bare `LET` also surfaces a specific error (command-like).
+        let bare_let = GraphService::<MockStorage>::parse_command("LET")
+            .expect_err("bare LET must fail");
+        assert!(
+            bare_let.contains("Invalid session variable name"),
+            "unexpected error: {}",
+            bare_let
         );
     }
 }

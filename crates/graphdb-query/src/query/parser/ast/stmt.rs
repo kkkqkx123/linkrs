@@ -110,6 +110,9 @@ pub enum Stmt {
     BeginTransaction(BeginTransactionStmt),
     CommitTransaction(CommitTransactionStmt),
     RollbackTransaction(RollbackTransactionStmt),
+    Savepoint(SavepointStmt),
+    ReleaseSavepoint(ReleaseSavepointStmt),
+    AssignVariable(AssignVariableStmt),
 }
 
 impl Stmt {
@@ -179,6 +182,9 @@ impl Stmt {
             Stmt::BeginTransaction(s) => s.span,
             Stmt::CommitTransaction(s) => s.span,
             Stmt::RollbackTransaction(s) => s.span,
+            Stmt::Savepoint(s) => s.span,
+            Stmt::ReleaseSavepoint(s) => s.span,
+            Stmt::AssignVariable(s) => s.span,
         }
     }
 
@@ -257,7 +263,16 @@ impl Stmt {
                 None => "BEGIN TRANSACTION",
             },
             Stmt::CommitTransaction(_) => "COMMIT TRANSACTION",
-            Stmt::RollbackTransaction(_) => "ROLLBACK TRANSACTION",
+            Stmt::RollbackTransaction(stmt) => {
+                if stmt.savepoint_name.is_some() {
+                    "ROLLBACK TRANSACTION TO SAVEPOINT"
+                } else {
+                    "ROLLBACK TRANSACTION"
+                }
+            }
+            Stmt::Savepoint(_) => "SAVEPOINT",
+            Stmt::ReleaseSavepoint(_) => "RELEASE SAVEPOINT",
+            Stmt::AssignVariable(_) => "LET",
         }
     }
 
@@ -612,6 +627,24 @@ impl Stmt {
     pub fn as_match_vector(&self) -> Option<&MatchVector> {
         match self {
             Stmt::MatchVector(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_savepoint(&self) -> Option<&SavepointStmt> {
+        match self {
+            Stmt::Savepoint(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_release_savepoint(&self) -> Option<&ReleaseSavepointStmt> {
+        match self {
+            Stmt::ReleaseSavepoint(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_assign_variable(&self) -> Option<&AssignVariableStmt> {
+        match self {
+            Stmt::AssignVariable(s) => Some(s),
             _ => None,
         }
     }

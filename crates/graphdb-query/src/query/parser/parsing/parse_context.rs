@@ -36,6 +36,8 @@ const STATEMENT_SYNC_TOKENS: &[TokenKind] = &[
     TokenKind::Begin,
     TokenKind::Commit,
     TokenKind::Rollback,
+    TokenKind::Savepoint,
+    TokenKind::Release,
     TokenKind::Search,
     TokenKind::Dollar,
     TokenKind::Eof,

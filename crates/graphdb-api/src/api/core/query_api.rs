@@ -343,6 +343,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         request_context.auto_commit = ctx.auto_commit;
         request_context.parameters = ctx.parameters.clone().unwrap_or_default();
         request_context.session_variables = ctx.session_variables.clone().unwrap_or_default();
+        request_context.parsed_statement = ctx.parsed_statement.clone();
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);
@@ -474,6 +475,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         request_context.auto_commit = ctx.auto_commit;
         request_context.parameters = ctx.parameters.clone().unwrap_or_default();
         request_context.session_variables = ctx.session_variables.clone().unwrap_or_default();
+        request_context.parsed_statement = ctx.parsed_statement.clone();
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);
@@ -533,6 +535,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             parameters: Some(params),
             session_variables: ctx.session_variables,
             query_id: ctx.query_id,
+            parsed_statement: ctx.parsed_statement,
         };
         self.execute(query, new_ctx)
     }

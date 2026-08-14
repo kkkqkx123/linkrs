@@ -78,6 +78,11 @@ impl StmtParser {
             TokenKind::Begin => Self::parse_begin_transaction(ctx),
             TokenKind::Commit => Self::parse_commit_transaction(ctx),
             TokenKind::Rollback => Self::parse_rollback_transaction(ctx),
+            TokenKind::Savepoint => Self::parse_savepoint_statement(ctx),
+            TokenKind::Release => Self::parse_release_savepoint(ctx),
+
+            // Session variable assignment statement
+            TokenKind::Let => Self::parse_let_statement(ctx),
 
             // Full-text search statements
             // Check if it's SEARCH VECTOR or SEARCH INDEX
@@ -804,6 +809,8 @@ impl StmtParser {
     }
 
     /// Parse ROLLBACK TRANSACTION statement
+    ///
+    /// Grammar: `ROLLBACK [TRANSACTION] [TO <savepoint-name>]`
     fn parse_rollback_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Rollback)?;
@@ -813,10 +820,113 @@ impl StmtParser {
             ctx.expect_token(TokenKind::Transaction)?;
         }
 
+        // Optional: TO <savepoint-name> — rolls back to a savepoint instead
+        // of the whole transaction. The name keeps its original case (the
+        // transaction layer matches savepoint names verbatim).
+        let savepoint_name = if ctx.check_token(TokenKind::To) {
+            ctx.expect_token(TokenKind::To)?;
+            Some(ctx.expect_identifier()?)
+        } else {
+            None
+        };
+
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
-        Ok(Stmt::RollbackTransaction(RollbackTransactionStmt { span }))
+        Ok(Stmt::RollbackTransaction(RollbackTransactionStmt {
+            span,
+            savepoint_name,
+        }))
+    }
+
+    /// Parse SAVEPOINT statement
+    ///
+    /// Grammar: `SAVEPOINT <savepoint-name>`
+    fn parse_savepoint_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let start_span = ctx.current_span();
+        ctx.expect_token(TokenKind::Savepoint)?;
+        let name = ctx.expect_identifier()?;
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::Savepoint(SavepointStmt { span, name }))
+    }
+
+    /// Parse RELEASE SAVEPOINT statement
+    ///
+    /// Grammar: `RELEASE SAVEPOINT <savepoint-name>`
+    fn parse_release_savepoint(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let start_span = ctx.current_span();
+        ctx.expect_token(TokenKind::Release)?;
+        ctx.expect_token(TokenKind::Savepoint)?;
+        let name = ctx.expect_identifier()?;
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+        Ok(Stmt::ReleaseSavepoint(ReleaseSavepointStmt { span, name }))
+    }
+
+    /// Parse LET statement
+    ///
+    /// Grammar: `LET [$]name = expr`. The name must be a valid identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`); the right-hand side is parsed through the
+    /// standard expression pipeline so it may reference `$name` session
+    /// variables and `@name` parameters.
+    fn parse_let_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let start_span = ctx.current_span();
+        ctx.expect_token(TokenKind::Let)?;
+
+        // Optional leading `$` (both `LET $name = expr` and `LET name = expr`).
+        let _ = ctx.match_token(TokenKind::Dollar);
+
+        // The name token must be an identifier; reject empty / malformed
+        // names with a clear message.
+        let name = match ctx.expect_identifier() {
+            Ok(name) => name,
+            Err(_) => {
+                let pos = ctx.current_position();
+                let display_name = ctx.current_token().lexeme.clone();
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    format!("Invalid session variable name '{}'", display_name),
+                    pos,
+                ));
+            }
+        };
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            let pos = ctx.current_position();
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                format!("Invalid session variable name '{}'", name),
+                pos,
+            ));
+        }
+
+        // The `=` assignment separator must follow; a bare `LET $name`
+        // reports the missing-assignment message.
+        if !ctx.check_token(TokenKind::Assign) {
+            let pos = ctx.current_position();
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "LET requires an assignment: LET $name = expr".to_string(),
+                pos,
+            ));
+        }
+        ctx.expect_token(TokenKind::Assign)?;
+
+        let expression = Self::parse_expression(ctx)?;
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+
+        Ok(Stmt::AssignVariable(AssignVariableStmt {
+            span,
+            name,
+            expression,
+        }))
     }
 }
 
@@ -1313,6 +1423,135 @@ mod tests {
                 "Expecting an Assignment statement, you actually get {:?}",
                 result
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_let_statement() {
+        let mut ctx = create_parser_context("LET $x = 1 + 2");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LET parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::AssignVariable(stmt)) = result {
+            assert_eq!(stmt.name, "x");
+            let expr = stmt
+                .expression
+                .get_expression()
+                .expect("expression should resolve");
+            assert!(
+                matches!(
+                    expr,
+                    crate::core::types::expr::Expression::Binary { .. }
+                ),
+                "LET RHS should parse as a binary expression, got {:?}",
+                expr
+            );
+        } else {
+            panic!("Expected an AssignVariable statement, got {:?}", result);
+        }
+
+        // Without the leading `$`.
+        let mut ctx = create_parser_context("LET y = 'Alice'");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "LET without $ parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::AssignVariable(stmt)) = result {
+            assert_eq!(stmt.name, "y");
+        } else {
+            panic!("Expected an AssignVariable statement, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_parse_let_statement_errors() {
+        // Missing assignment separator.
+        let mut ctx = create_parser_context("LET $x");
+        let result = StmtParser::parse_statement(&mut ctx);
+        let err = result.expect_err("LET without `=` must fail");
+        assert!(
+            err.to_string().contains("LET requires an assignment"),
+            "unexpected error: {}",
+            err
+        );
+
+        // Empty name.
+        let mut ctx = create_parser_context("LET $ = 1");
+        let result = StmtParser::parse_statement(&mut ctx);
+        let err = result.expect_err("LET with empty name must fail");
+        assert!(
+            err.to_string().contains("Invalid session variable name"),
+            "unexpected error: {}",
+            err
+        );
+
+        // Name starting with a digit.
+        let mut ctx = create_parser_context("LET $1x = 1");
+        let result = StmtParser::parse_statement(&mut ctx);
+        let err = result.expect_err("LET with digit-leading name must fail");
+        assert!(
+            err.to_string().contains("Invalid session variable name"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_parse_rollback_to_savepoint() {
+        let mut ctx = create_parser_context("ROLLBACK TO sp1");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "ROLLBACK TO parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::RollbackTransaction(stmt)) = result {
+            assert_eq!(stmt.savepoint_name, Some("sp1".to_string()));
+        } else {
+            panic!("Expected a RollbackTransaction statement, got {:?}", result);
+        }
+
+        // Full rollback keeps savepoint_name = None.
+        let mut ctx = create_parser_context("ROLLBACK");
+        let result = StmtParser::parse_statement(&mut ctx);
+        if let Ok(Stmt::RollbackTransaction(stmt)) = result {
+            assert_eq!(stmt.savepoint_name, None);
+        } else {
+            panic!("Expected a RollbackTransaction statement, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_parse_savepoint_and_release() {
+        let mut ctx = create_parser_context("SAVEPOINT sp1");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "SAVEPOINT parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::Savepoint(stmt)) = result {
+            assert_eq!(stmt.name, "sp1");
+        } else {
+            panic!("Expected a Savepoint statement, got {:?}", result);
+        }
+
+        let mut ctx = create_parser_context("RELEASE SAVEPOINT sp1");
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "RELEASE SAVEPOINT parse failure: {:?}",
+            result.err()
+        );
+        if let Ok(Stmt::ReleaseSavepoint(stmt)) = result {
+            assert_eq!(stmt.name, "sp1");
+        } else {
+            panic!("Expected a ReleaseSavepoint statement, got {:?}", result);
         }
     }
 

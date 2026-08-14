@@ -40,6 +40,7 @@ use crate::query::planning::statements::dql::lookup_planner::LookupPlanner;
 use crate::query::planning::statements::dql::path_planner::PathPlanner;
 use crate::query::planning::statements::dql::pipe_planner::PipePlanner;
 use crate::query::planning::statements::dql::return_planner::ReturnPlanner;
+use crate::query::planning::statements::dql::assign_variable_planner::AssignVariablePlanner;
 use crate::query::planning::statements::dql::set_operation_planner::SetOperationPlanner;
 use crate::query::planning::statements::dql::subgraph_planner::SubgraphPlanner;
 use crate::query::planning::statements::dql::unwind_planner::UnwindPlanner;
@@ -178,6 +179,7 @@ pub enum PlannerEnum {
     Unwind(UnwindPlanner),
     With(WithPlanner),
     Return(ReturnPlanner),
+    AssignVariable(AssignVariablePlanner),
     Yield(YieldPlanner),
     Pipe(PipePlanner),
     Explain(ExplainPlanner),
@@ -219,6 +221,9 @@ impl PlannerEnum {
             Stmt::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
             Stmt::With(_) => Some(PlannerEnum::With(WithPlanner::new())),
             Stmt::Return(_) => Some(PlannerEnum::Return(ReturnPlanner::new())),
+            Stmt::AssignVariable(_) => {
+                Some(PlannerEnum::AssignVariable(AssignVariablePlanner::new()))
+            }
             Stmt::Yield(_) => Some(PlannerEnum::Yield(YieldPlanner::new())),
             Stmt::Pipe(_) => Some(PlannerEnum::Pipe(PipePlanner::new())),
             Stmt::Explain(_) => Some(PlannerEnum::Explain(ExplainPlanner::new())),
@@ -270,7 +275,9 @@ impl PlannerEnum {
             | Stmt::ClearSpace(_)
             | Stmt::BeginTransaction(_)
             | Stmt::CommitTransaction(_)
-            | Stmt::RollbackTransaction(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+            | Stmt::RollbackTransaction(_)
+            | Stmt::Savepoint(_)
+            | Stmt::ReleaseSavepoint(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             // The type of the following sentence does not currently support direct planning.
             _ => None,
         }
@@ -314,6 +321,7 @@ impl PlannerEnum {
             PlannerEnum::Unwind(planner) => planner.transform(validated, qctx),
             PlannerEnum::With(planner) => planner.transform(validated, qctx),
             PlannerEnum::Return(planner) => planner.transform(validated, qctx),
+            PlannerEnum::AssignVariable(planner) => planner.transform(validated, qctx),
             PlannerEnum::Yield(planner) => planner.transform(validated, qctx),
             PlannerEnum::Pipe(planner) => planner.transform(validated, qctx),
             PlannerEnum::Explain(planner) => planner.transform(validated, qctx),
@@ -377,6 +385,7 @@ impl PlannerEnum {
             PlannerEnum::Unwind(_) => "UnwindPlanner",
             PlannerEnum::With(_) => "WithPlanner",
             PlannerEnum::Return(_) => "ReturnPlanner",
+            PlannerEnum::AssignVariable(_) => "AssignVariablePlanner",
             PlannerEnum::Yield(_) => "YieldPlanner",
             PlannerEnum::Pipe(_) => "PipePlanner",
             PlannerEnum::Explain(_) => "ExplainPlanner",
@@ -414,6 +423,7 @@ impl PlannerEnum {
             PlannerEnum::Unwind(planner) => planner.match_planner(stmt),
             PlannerEnum::With(planner) => planner.match_planner(stmt),
             PlannerEnum::Return(planner) => planner.match_planner(stmt),
+            PlannerEnum::AssignVariable(planner) => planner.match_planner(stmt),
             PlannerEnum::Yield(planner) => planner.match_planner(stmt),
             PlannerEnum::Pipe(planner) => planner.match_planner(stmt),
             PlannerEnum::Explain(planner) => planner.match_planner(stmt),
@@ -469,6 +479,9 @@ impl PlannerEnum {
             PlannerEnum::Unwind(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::With(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Return(planner) => planner.plan_bound(bound, qctx, metadata, validated),
+            PlannerEnum::AssignVariable(planner) => {
+                planner.plan_bound(bound, qctx, metadata, validated)
+            }
             PlannerEnum::Yield(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Pipe(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Explain(planner) => planner.plan_bound(bound, qctx, metadata, validated),
@@ -563,6 +576,9 @@ impl PlannerEnum {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::Return(planner) => {
+                planner.transform_with_metadata(validated, qctx, metadata_context)
+            }
+            PlannerEnum::AssignVariable(planner) => {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::Yield(planner) => {

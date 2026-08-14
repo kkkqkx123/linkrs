@@ -228,8 +228,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::query::executor::streaming::SessionTransactionController::new(),
                 );
                 if let Some(txn_id) = query_context.request_context().transaction_id {
-                    ctrl.begin_tracking(txn_id, true)
-                        .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+                    let read_write = !query_context.request_context().read_only;
+                    ctrl.begin_tracking(txn_id, read_write).map_err(|error| {
+                        DBError::from(QueryError::execution(error.to_string()))
+                    })?;
                 }
                 *ctrl_guard = Some(ctrl.clone());
                 ctrl

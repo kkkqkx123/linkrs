@@ -9,11 +9,14 @@ use crate::api::embedded::transaction::{Transaction, TransactionConfig};
 use crate::core::Value;
 use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
+use crate::query::parser::ast::Stmt;
+use crate::query::parser::{Parser, ParserResult};
 use crate::search::FulltextIndexManager;
 use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::SearchOptions;
 use crate::sync::SyncManager;
+use crate::transaction::TransactionId;
 use crate::transaction::TransactionManager;
 use crate::transaction::TransactionOptions;
 use parking_lot::RwLock;
@@ -51,6 +54,10 @@ pub struct Session<S: StorageClient + Clone + 'static> {
     space_id: Arc<RwLock<Option<u64>>>,
     space_name: Arc<RwLock<Option<String>>>,
     auto_commit: bool,
+    /// Session-level transaction binding started through a text
+    /// `BEGIN` statement (the explicit `Transaction` handle API is
+    /// independent of this).
+    current_transaction: Arc<RwLock<Option<TransactionId>>>,
     /// Session-level change statistics
     statistics: SessionStatistics,
     /// Session-level function registry
@@ -81,6 +88,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             space_id: Arc::new(RwLock::new(None)),
             space_name: Arc::new(RwLock::new(None)),
             auto_commit: true,
+            current_transaction: Arc::new(RwLock::new(None)),
             statistics: SessionStatistics::new(),
             function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
         }
@@ -199,6 +207,45 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         // Reset the previous change history
         self.statistics.reset_last();
 
+        // Transaction / session commands are classified through the unified
+        // parser entry: the six transaction commands perform the
+        // TransactionManager side effect and execute the state-machine plan;
+        // `LET` is not supported in embedded sessions (no session-variable
+        // store).
+        match Self::parse_command(query) {
+            Err(parse_error) => {
+                return Err(CoreError::InvalidParameter(parse_error));
+            }
+            Ok(Some(parsed)) => {
+                let parsed_ast = parsed.ast;
+                match parsed_ast.stmt() {
+                    Stmt::AssignVariable(_) => {
+                        return Err(CoreError::InvalidParameter(
+                            "LET is not supported in embedded sessions (no session-variable store)"
+                                .to_string(),
+                        ));
+                    }
+                    stmt => {
+                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                    }
+                }
+            }
+            Ok(None) => {}
+        }
+
+        // Statements inside a text-begun transaction run against the
+        // transaction binding (mirroring the `Transaction` handle API).
+        if let Some(txn_id) = *self.current_transaction.read() {
+            let result = self.execute_in_transaction(query, txn_id, None);
+            self.statistics.record_changes(
+                result
+                    .as_ref()
+                    .map(|r| r.metadata().rows_returned as u64)
+                    .unwrap_or(0),
+            );
+            return result;
+        }
+
         let ctx = QueryRequest {
             space_id: *self.space_id.read(),
             space_name: self.space_name.read().clone(),
@@ -207,6 +254,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: None,
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -232,6 +280,235 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         Ok(QueryResult::from_core(result))
     }
 
+    // ==================== Unified transaction / session commands ====================
+
+    /// Unified classification entry (same policy as the server
+    /// `GraphService::parse_command`): returns the parsed statement when it
+    /// is one of the transaction / session commands, `Err` with the first
+    /// specific parse error for malformed command-like statements.
+    ///
+    /// The parse is gated behind the zero-cost command-keyword text check:
+    /// regular statements skip the API-layer parse entirely (single-parse
+    /// pipeline — the query engine parses them once on the regular path).
+    fn parse_command(query: &str) -> Result<Option<ParserResult>, String> {
+        let upper = query.trim().to_uppercase();
+        let command_like = upper == "BEGIN"
+            || upper.starts_with("BEGIN ")
+            || upper.starts_with("START TRANSACTION")
+            || upper.starts_with("COMMIT")
+            || upper.starts_with("ROLLBACK")
+            || upper.starts_with("SAVEPOINT")
+            || upper.starts_with("RELEASE SAVEPOINT")
+            || upper == "LET"
+            || upper.starts_with("LET ");
+        if !command_like {
+            return Ok(None);
+        }
+        let mut parser = Parser::new(query);
+        match parser.parse() {
+            Ok(result) if !parser.has_errors() => {
+                let stmt_ast = result.ast.stmt();
+                match stmt_ast {
+                    Stmt::BeginTransaction(_)
+                    | Stmt::CommitTransaction(_)
+                    | Stmt::RollbackTransaction(_)
+                    | Stmt::Savepoint(_)
+                    | Stmt::ReleaseSavepoint(_)
+                    | Stmt::AssignVariable(_) => Ok(Some(result)),
+                    _ => Ok(None),
+                }
+            }
+            Ok(_) => Ok(None),
+            Err(_) => {
+                if let Some(first) = parser.errors().iter().next() {
+                    return Err(format!("Parse error: {}", first.message));
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Execute a transaction command: TransactionManager side effect +
+    /// state-machine plan execution (the `TxnOperator` validates the
+    /// session controller and produces the structured result).
+    fn execute_transaction_command(
+        &self,
+        query: &str,
+        stmt: &Stmt,
+        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
+    ) -> CoreResult<QueryResult> {
+        let txn_manager = self.txn_manager();
+        let require_transaction = |what: &str| {
+            self.current_transaction_id().ok_or_else(|| {
+                CoreError::TransactionFailed(format!("No active transaction to {}", what))
+            })
+        };
+        match stmt {
+            Stmt::BeginTransaction(begin_stmt) => {
+                if self.current_transaction.read().is_some() {
+                    return Err(CoreError::InvalidParameter(
+                        "Session already has an active transaction".to_string(),
+                    ));
+                }
+                let mut options = TransactionOptions::default();
+                if let Some(read_only) = begin_stmt.read_only {
+                    options.read_only = read_only;
+                }
+                let txn_id = txn_manager
+                    .begin_transaction_with_owner(options, "embedded".to_string())
+                    .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                *self.current_transaction.write() = Some(txn_id);
+                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+            }
+            Stmt::CommitTransaction(_) => {
+                let txn_id = require_transaction("commit")?;
+                txn_manager
+                    .commit_transaction(txn_id)
+                    .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                *self.current_transaction.write() = None;
+                self.execute_command_plan(query, parsed_ast, Some(txn_id), false)
+            }
+            Stmt::RollbackTransaction(rollback_stmt) => {
+                if let Some(savepoint_name) = &rollback_stmt.savepoint_name {
+                    let txn_id = require_transaction("rollback")?;
+                    let savepoint_info = txn_manager
+                        .get_context(txn_id)
+                        .map_err(|e| CoreError::TransactionFailed(e.to_string()))?
+                        .find_savepoint_by_name(savepoint_name)
+                        .ok_or_else(|| {
+                            CoreError::TransactionFailed(format!(
+                                "Savepoint '{}' does not exist",
+                                savepoint_name
+                            ))
+                        })?;
+                    let storage = self.storage_mut();
+                    txn_manager
+                        .rollback_to_savepoint(txn_id, savepoint_info.id, &*storage)
+                        .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+                } else {
+                    let txn_id = require_transaction("rollback")?;
+                    // The embedded database has no commit sink, so the undo
+                    // log must be applied explicitly (mirroring
+                    // `rollback_to_savepoint`).
+                    let mut storage = self.storage_mut();
+                    txn_manager
+                        .abort_transaction_with_undo(txn_id, &mut *storage)
+                        .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    *self.current_transaction.write() = None;
+                    self.execute_command_plan(query, parsed_ast, Some(txn_id), false)
+                }
+            }
+            Stmt::Savepoint(savepoint_stmt) => {
+                let txn_id = require_transaction("create savepoint")?;
+                txn_manager
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+            }
+            Stmt::ReleaseSavepoint(release_stmt) => {
+                let txn_id = require_transaction("release savepoint")?;
+                let context = txn_manager
+                    .get_context(txn_id)
+                    .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                let savepoint_info = context
+                    .find_savepoint_by_name(&release_stmt.name)
+                    .ok_or_else(|| {
+                        CoreError::TransactionFailed(format!(
+                            "Savepoint '{}' does not exist",
+                            release_stmt.name
+                        ))
+                    })?;
+                txn_manager
+                    .release_savepoint(txn_id, savepoint_info.id)
+                    .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+            }
+            _ => Err(CoreError::InvalidParameter(
+                "Statement is not a transaction command".to_string(),
+            )),
+        }
+    }
+
+    /// Execute the transaction-command plan: the command runs in
+    /// `TransactionScope::CommandScope` and the `TxnOperator` validates the
+    /// session controller. An active transaction binds through
+    /// `create_execution`; finished transactions (COMMIT / ROLLBACK) run
+    /// without a storage binding.
+    fn execute_command_plan(
+        &self,
+        query: &str,
+        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
+        transaction_id: Option<TransactionId>,
+        active: bool,
+    ) -> CoreResult<QueryResult> {
+        let ctx = QueryRequest {
+            space_id: *self.space_id.read(),
+            space_name: self.space_name.read().clone(),
+            auto_commit: self.auto_commit,
+            transaction_id,
+            parameters: None,
+            session_variables: None,
+            query_id: None,
+            parsed_statement: Some(parsed_ast),
+        };
+        let mut query_api = self.db.query_api.write();
+        if active {
+            let txn_manager = self.txn_manager();
+            let execution = txn_manager
+                .create_execution(
+                    transaction_id.ok_or_else(|| {
+                        CoreError::TransactionFailed(
+                            "No transaction id for command plan".to_string(),
+                        )
+                    })?,
+                    false,
+                )
+                .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+            query_api
+                .execute_with_execution(query, ctx, &execution)
+                .map(QueryResult::from_core)
+        } else {
+            query_api.execute(query, ctx).map(QueryResult::from_core)
+        }
+    }
+
+    /// Execute a statement inside a text-begun transaction.
+    fn execute_in_transaction(
+        &self,
+        query: &str,
+        txn_id: TransactionId,
+        parameters: Option<HashMap<String, Value>>,
+    ) -> CoreResult<QueryResult> {
+        let txn_manager = self.txn_manager();
+        let (ctx, statement_start) = txn_manager
+            .begin_statement(txn_id)
+            .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+        let execution = txn_manager
+            .create_execution(txn_id, false)
+            .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+
+        let query_ctx = QueryRequest {
+            space_id: *self.space_id.read(),
+            space_name: self.space_name.read().clone(),
+            auto_commit: false,
+            transaction_id: Some(txn_id),
+            parameters,
+            session_variables: None,
+            query_id: None,
+            parsed_statement: None,
+        };
+
+        let result = {
+            let mut query_api = self.db.query_api.write();
+            query_api.execute_with_execution(query, query_ctx, &execution)?
+        };
+        txn_manager
+            .finish_statement(&ctx, statement_start)
+            .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+        Ok(QueryResult::from_core(result))
+    }
+
     /// Execute a parameterized query
     ///
     /// # Parameters
@@ -246,6 +523,33 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         query: &str,
         params: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
+        // Transaction / session commands do not consume query parameters;
+        // classify and route them through the unified command path.
+        match Self::parse_command(query) {
+            Err(parse_error) => return Err(CoreError::InvalidParameter(parse_error)),
+            Ok(Some(parsed)) => {
+                let parsed_ast = parsed.ast;
+                match parsed_ast.stmt() {
+                    Stmt::AssignVariable(_) => {
+                        return Err(CoreError::InvalidParameter(
+                            "LET is not supported in embedded sessions (no session-variable store)"
+                                .to_string(),
+                        ));
+                    }
+                    stmt => {
+                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                    }
+                }
+            }
+            Ok(None) => {}
+        }
+
+        // Statements inside a text-begun transaction run against the
+        // transaction binding.
+        if let Some(txn_id) = *self.current_transaction.read() {
+            return self.execute_in_transaction(query, txn_id, Some(params));
+        }
+
         let ctx = QueryRequest {
             space_id: *self.space_id.read(),
             space_name: self.space_name.read().clone(),
@@ -254,6 +558,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: Some(params),
             session_variables: None,
             query_id: None,
+            parsed_statement: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -286,6 +591,34 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         params: HashMap<String, Value>,
         session_variables: HashMap<String, Value>,
     ) -> CoreResult<QueryResult> {
+        // Transaction / session commands do not consume parameters or
+        // session variables; classify and route them through the unified
+        // command path.
+        match Self::parse_command(query) {
+            Err(parse_error) => return Err(CoreError::InvalidParameter(parse_error)),
+            Ok(Some(parsed)) => {
+                let parsed_ast = parsed.ast;
+                match parsed_ast.stmt() {
+                    Stmt::AssignVariable(_) => {
+                        return Err(CoreError::InvalidParameter(
+                            "LET is not supported in embedded sessions (no session-variable store)"
+                                .to_string(),
+                        ));
+                    }
+                    stmt => {
+                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                    }
+                }
+            }
+            Ok(None) => {}
+        }
+
+        // Statements inside a text-begun transaction run against the
+        // transaction binding.
+        if let Some(txn_id) = *self.current_transaction.read() {
+            return self.execute_in_transaction(query, txn_id, Some(params));
+        }
+
         let ctx = QueryRequest {
             space_id: *self.space_id.read(),
             space_name: self.space_name.read().clone(),
@@ -294,6 +627,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: Some(params),
             session_variables: Some(session_variables),
             query_id: None,
+            parsed_statement: None,
         };
 
         let mut query_api = self.db.query_api.write();
@@ -463,6 +797,11 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// Get current space name (for internal use)
     pub(crate) fn space_name(&self) -> Option<String> {
         self.space_name.read().clone()
+    }
+
+    /// Get the text-begun transaction binding, if any (internal use).
+    pub(crate) fn current_transaction_id(&self) -> Option<TransactionId> {
+        *self.current_transaction.read()
     }
 
     /// Creating a Batch Inserter

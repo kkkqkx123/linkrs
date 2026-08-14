@@ -22,7 +22,7 @@ use crate::query::planning::plan::core::{
     ShowStatsNode, ShowStatsType, ShowUsersNode,
 };
 use crate::query::planning::plan::SubPlan;
-use crate::query::planning::plan::{BeginTransactionNode, CommitNode, RollbackNode};
+use crate::query::planning::plan::{BeginTransactionNode, CommitNode, ReleaseSavepointNode, RollbackNode, SavepointNode};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
 use std::sync::Arc;
@@ -477,9 +477,22 @@ impl Planner for MaintainPlanner {
                 PlanNodeEnum::Commit(node)
             }
 
-            Stmt::RollbackTransaction(_) => {
-                let node = RollbackNode::new(next_node_id());
+            Stmt::RollbackTransaction(rollback_stmt) => {
+                let mut node = RollbackNode::new(next_node_id());
+                if let Some(savepoint) = &rollback_stmt.savepoint_name {
+                    node = node.with_savepoint(savepoint.clone());
+                }
                 PlanNodeEnum::Rollback(node)
+            }
+
+            Stmt::Savepoint(savepoint_stmt) => {
+                let node = SavepointNode::new(next_node_id(), savepoint_stmt.name.clone());
+                PlanNodeEnum::Savepoint(node)
+            }
+
+            Stmt::ReleaseSavepoint(release_stmt) => {
+                let node = ReleaseSavepointNode::new(next_node_id(), release_stmt.name.clone());
+                PlanNodeEnum::ReleaseSavepoint(node)
             }
 
             Stmt::Drop(drop_stmt) => self.plan_drop(drop_stmt, validated),
@@ -512,6 +525,8 @@ impl Planner for MaintainPlanner {
                 | Stmt::BeginTransaction(_)
                 | Stmt::CommitTransaction(_)
                 | Stmt::RollbackTransaction(_)
+                | Stmt::Savepoint(_)
+                | Stmt::ReleaseSavepoint(_)
         )
     }
 }

@@ -407,6 +407,9 @@ impl StreamingExecutor {
                 TxnOperatorKind::BeginTransaction { .. } => "BeginTransaction",
                 TxnOperatorKind::Commit { .. } => "Commit",
                 TxnOperatorKind::Rollback { .. } => "Rollback",
+                TxnOperatorKind::RollbackToSavepoint { .. } => "RollbackToSavepoint",
+                TxnOperatorKind::Savepoint { .. } => "Savepoint",
+                TxnOperatorKind::ReleaseSavepoint { .. } => "ReleaseSavepoint",
             },
             Join(_, _, _, op) => match &op.kind {
                 JoinOperatorKind::HashJoin { .. } => "HashJoin",

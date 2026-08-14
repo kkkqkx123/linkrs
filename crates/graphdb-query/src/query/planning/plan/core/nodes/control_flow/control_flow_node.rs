@@ -839,6 +839,206 @@ impl MemoryEstimatable for RollbackNode {
     }
 }
 
+/// Savepoint Node
+/// Creates a savepoint within the current transaction.
+#[derive(Debug, Clone)]
+pub struct SavepointNode {
+    id: i64,
+    savepoint: String,
+    output_var: Option<String>,
+    col_names: Vec<String>,
+}
+
+impl SavepointNode {
+    pub fn new(id: i64, savepoint: String) -> Self {
+        Self {
+            id,
+            savepoint,
+            output_var: None,
+            col_names: Vec::new(),
+        }
+    }
+
+    pub fn savepoint(&self) -> &str {
+        &self.savepoint
+    }
+
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    pub fn output_var(&self) -> Option<&str> {
+        self.output_var.as_deref()
+    }
+
+    pub fn col_names(&self) -> &[String] {
+        &self.col_names
+    }
+
+    pub fn set_output_var(&mut self, var: String) {
+        self.output_var = Some(var);
+    }
+
+    pub fn set_col_names(&mut self, names: Vec<String>) {
+        self.col_names = names;
+    }
+}
+
+impl PlanNode for SavepointNode {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
+    fn name(&self) -> &'static str {
+        "Savepoint"
+    }
+
+    fn category(&self) -> PlanNodeCategory {
+        PlanNodeCategory::ControlFlow
+    }
+
+    fn output_var(&self) -> Option<&str> {
+        self.output_var()
+    }
+
+    fn col_names(&self) -> &[String] {
+        self.col_names()
+    }
+
+    fn set_output_var(&mut self, var: String) {
+        self.set_output_var(var);
+    }
+
+    fn set_col_names(&mut self, names: Vec<String>) {
+        self.set_col_names(names);
+    }
+
+    fn into_enum(self) -> PlanNodeEnum {
+        PlanNodeEnum::Savepoint(self)
+    }
+}
+
+impl PlanNodeClonable for SavepointNode {
+    fn clone_plan_node(&self) -> PlanNodeEnum {
+        self.clone().into_enum()
+    }
+
+    fn clone_with_new_id(&self, new_id: i64) -> PlanNodeEnum {
+        let mut cloned = self.clone();
+        cloned.id = new_id;
+        cloned.into_enum()
+    }
+}
+
+impl MemoryEstimatable for SavepointNode {
+    fn estimate_memory(&self) -> usize {
+        std::mem::size_of::<SavepointNode>()
+            + self.savepoint.capacity()
+            + self.col_names.iter().map(|s| s.capacity()).sum::<usize>()
+            + self.output_var.as_ref().map(|s| s.capacity()).unwrap_or(0)
+    }
+}
+
+/// Release Savepoint Node
+/// Releases a savepoint within the current transaction.
+#[derive(Debug, Clone)]
+pub struct ReleaseSavepointNode {
+    id: i64,
+    savepoint: String,
+    output_var: Option<String>,
+    col_names: Vec<String>,
+}
+
+impl ReleaseSavepointNode {
+    pub fn new(id: i64, savepoint: String) -> Self {
+        Self {
+            id,
+            savepoint,
+            output_var: None,
+            col_names: Vec::new(),
+        }
+    }
+
+    pub fn savepoint(&self) -> &str {
+        &self.savepoint
+    }
+
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
+    pub fn output_var(&self) -> Option<&str> {
+        self.output_var.as_deref()
+    }
+
+    pub fn col_names(&self) -> &[String] {
+        &self.col_names
+    }
+
+    pub fn set_output_var(&mut self, var: String) {
+        self.output_var = Some(var);
+    }
+
+    pub fn set_col_names(&mut self, names: Vec<String>) {
+        self.col_names = names;
+    }
+}
+
+impl PlanNode for ReleaseSavepointNode {
+    fn id(&self) -> i64 {
+        self.id
+    }
+
+    fn name(&self) -> &'static str {
+        "ReleaseSavepoint"
+    }
+
+    fn category(&self) -> PlanNodeCategory {
+        PlanNodeCategory::ControlFlow
+    }
+
+    fn output_var(&self) -> Option<&str> {
+        self.output_var()
+    }
+
+    fn col_names(&self) -> &[String] {
+        self.col_names()
+    }
+
+    fn set_output_var(&mut self, var: String) {
+        self.set_output_var(var);
+    }
+
+    fn set_col_names(&mut self, names: Vec<String>) {
+        self.set_col_names(names);
+    }
+
+    fn into_enum(self) -> PlanNodeEnum {
+        PlanNodeEnum::ReleaseSavepoint(self)
+    }
+}
+
+impl PlanNodeClonable for ReleaseSavepointNode {
+    fn clone_plan_node(&self) -> PlanNodeEnum {
+        self.clone().into_enum()
+    }
+
+    fn clone_with_new_id(&self, new_id: i64) -> PlanNodeEnum {
+        let mut cloned = self.clone();
+        cloned.id = new_id;
+        cloned.into_enum()
+    }
+}
+
+impl MemoryEstimatable for ReleaseSavepointNode {
+    fn estimate_memory(&self) -> usize {
+        std::mem::size_of::<ReleaseSavepointNode>()
+            + self.savepoint.capacity()
+            + self.col_names.iter().map(|s| s.capacity()).sum::<usize>()
+            + self.output_var.as_ref().map(|s| s.capacity()).unwrap_or(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

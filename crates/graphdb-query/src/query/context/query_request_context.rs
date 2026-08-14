@@ -45,6 +45,15 @@ pub struct QueryRequestContext {
     pub read_only: bool,
     pub operation_context: Option<StorageOperationContext>,
     pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    /// Pre-parsed statement AST supplied by the API layer.
+    ///
+    /// When present, [`prepare_request`] skips the internal parse of `query`
+    /// and uses this AST directly (the classification pass already produced
+    /// it). The AST carries its own expression analysis context, so all
+    /// expression ids remain consistent with the generated plan.
+    ///
+    /// [`prepare_request`]: crate::query::pipeline::prepared::PreparedRequest
+    pub parsed_statement: Option<Arc<crate::query::parser::ast::stmt::Ast>>,
 }
 
 impl QueryRequestContext {
@@ -63,6 +72,7 @@ impl QueryRequestContext {
             read_only: false,
             operation_context: None,
             operation_storage: None,
+            parsed_statement: None,
         }
     }
 

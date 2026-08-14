@@ -922,6 +922,15 @@ pub enum TxnSpec {
     BeginTransaction,
     Commit,
     Rollback,
+    /// Roll back to a savepoint: validates the controller is in `Active`
+    /// state but does NOT transition out of it.
+    RollbackToSavepoint { name: String },
+    /// Create a savepoint (validation only — the TransactionManager
+    /// operation is performed by the API layer beforehand).
+    Savepoint { name: String },
+    /// Release a savepoint (validation only — the TransactionManager
+    /// operation is performed by the API layer beforehand).
+    ReleaseSavepoint { name: String },
 }
 
 // ── RecursiveFragment spec (M7) ──────────────────────────────────────────────

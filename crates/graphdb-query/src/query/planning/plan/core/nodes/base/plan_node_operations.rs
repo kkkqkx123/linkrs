@@ -43,6 +43,8 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::BeginTransaction(node) => node.$method(),
             PlanNodeEnum::Commit(node) => node.$method(),
             PlanNodeEnum::Rollback(node) => node.$method(),
+            PlanNodeEnum::Savepoint(node) => node.$method(),
+            PlanNodeEnum::ReleaseSavepoint(node) => node.$method(),
             PlanNodeEnum::DataCollect(node) => node.$method(),
             PlanNodeEnum::Dedup(node) => node.$method(),
             PlanNodeEnum::PatternApply(node) => node.$method(),
@@ -111,6 +113,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::BeginTransaction(_) => "BeginTransaction",
             PlanNodeEnum::Commit(_) => "Commit",
             PlanNodeEnum::Rollback(_) => "Rollback",
+            PlanNodeEnum::Savepoint(_) => "Savepoint",
+            PlanNodeEnum::ReleaseSavepoint(_) => "ReleaseSavepoint",
             PlanNodeEnum::DataCollect(_) => "DataCollect",
             PlanNodeEnum::Dedup(_) => "Dedup",
             PlanNodeEnum::PatternApply(_) => "PatternApply",
@@ -194,6 +198,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::BeginTransaction(node) => node.output_var(),
             PlanNodeEnum::Commit(node) => node.output_var(),
             PlanNodeEnum::Rollback(node) => node.output_var(),
+            PlanNodeEnum::Savepoint(node) => node.output_var(),
+            PlanNodeEnum::ReleaseSavepoint(node) => node.output_var(),
             PlanNodeEnum::DataCollect(node) => node.output_var(),
             PlanNodeEnum::Dedup(node) => node.output_var(),
             PlanNodeEnum::PatternApply(node) => node.output_var(),
@@ -238,6 +244,8 @@ impl PlanNodeEnum {
             | PlanNodeEnum::BeginTransaction(_)
             | PlanNodeEnum::Commit(_)
             | PlanNodeEnum::Rollback(_)
+            | PlanNodeEnum::Savepoint(_)
+            | PlanNodeEnum::ReleaseSavepoint(_)
             | PlanNodeEnum::SpaceManage(_)
             | PlanNodeEnum::TagManage(_)
             | PlanNodeEnum::EdgeManage(_)
@@ -360,6 +368,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::BeginTransaction(node) => node.set_output_var(var),
             PlanNodeEnum::Commit(node) => node.set_output_var(var),
             PlanNodeEnum::Rollback(node) => node.set_output_var(var),
+            PlanNodeEnum::Savepoint(node) => node.set_output_var(var),
+            PlanNodeEnum::ReleaseSavepoint(node) => node.set_output_var(var),
             PlanNodeEnum::DataCollect(node) => node.set_output_var(var),
             PlanNodeEnum::Dedup(node) => node.set_output_var(var),
             PlanNodeEnum::PatternApply(node) => node.set_output_var(var),

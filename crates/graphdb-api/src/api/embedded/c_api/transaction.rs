@@ -212,6 +212,7 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         parameters: None,
         session_variables: None,
         query_id: None,
+        parsed_statement: None,
     };
 
     let mut query_api = session.inner.query_api_mut();

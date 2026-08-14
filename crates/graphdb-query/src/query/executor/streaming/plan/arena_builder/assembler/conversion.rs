@@ -1400,13 +1400,41 @@ impl ArenaPlanAssembler {
                 node.id(),
                 TxnSpec::Commit,
             ),
-            PlanNodeEnum::Rollback(_) => Self::push_txn_op(
+            PlanNodeEnum::Rollback(rollback_node) => {
+                let spec = match rollback_node.savepoint() {
+                    Some(name) => TxnSpec::RollbackToSavepoint {
+                        name: name.to_string(),
+                    },
+                    None => TxnSpec::Rollback,
+                };
+                Self::push_txn_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    node.id(),
+                    spec,
+                )
+            }
+            PlanNodeEnum::Savepoint(savepoint_node) => Self::push_txn_op(
                 operators,
                 fragments,
                 op_alloc,
                 frag_alloc,
                 node.id(),
-                TxnSpec::Rollback,
+                TxnSpec::Savepoint {
+                    name: savepoint_node.savepoint().to_string(),
+                },
+            ),
+            PlanNodeEnum::ReleaseSavepoint(release_node) => Self::push_txn_op(
+                operators,
+                fragments,
+                op_alloc,
+                frag_alloc,
+                node.id(),
+                TxnSpec::ReleaseSavepoint {
+                    name: release_node.savepoint().to_string(),
+                },
             ),
 
             // ── Unsupported ─────────────────────────────────────────────────────

@@ -27,8 +27,8 @@ pub use crate::query::planning::plan::core::nodes::access::graph_scan_node::{
 };
 pub use crate::query::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, RollbackNode,
-    SelectNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
@@ -122,6 +122,8 @@ pub trait PlanNodeVisitor {
         BeginTransaction, BeginTransactionNode, visit_begin_transaction;
         Commit, CommitNode, visit_commit;
         Rollback, RollbackNode, visit_rollback;
+        Savepoint, SavepointNode, visit_savepoint;
+        ReleaseSavepoint, ReleaseSavepointNode, visit_release_savepoint;
         DataCollect, DataCollectNode, visit_data_collect;
     );
 
@@ -243,6 +245,8 @@ impl PlanNodeEnum {
             PlanNodeEnum::BeginTransaction(node) => visitor.visit_begin_transaction(node),
             PlanNodeEnum::Commit(node) => visitor.visit_commit(node),
             PlanNodeEnum::Rollback(node) => visitor.visit_rollback(node),
+            PlanNodeEnum::Savepoint(node) => visitor.visit_savepoint(node),
+            PlanNodeEnum::ReleaseSavepoint(node) => visitor.visit_release_savepoint(node),
             PlanNodeEnum::DataCollect(node) => visitor.visit_data_collect(node),
             PlanNodeEnum::Dedup(node) => visitor.visit_dedup(node),
             PlanNodeEnum::PatternApply(node) => visitor.visit_pattern_apply(node),

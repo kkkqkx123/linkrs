@@ -3,6 +3,6 @@ pub mod start_node;
 
 pub use control_flow_node::{
     ArgumentNode, BeginTransactionNode, CommitNode, IsolationLevel, LoopNode, PassThroughNode,
-    RollbackNode, SelectNode,
+    ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use start_node::StartNode;
