@@ -526,9 +526,9 @@ impl Binder {
             Expression::Parameter(p) => {
                 Ok(BoundExpression::ParameterRef(p.clone(), DataType::String))
             }
-            Expression::SessionVariable(name) => Ok(BoundExpression::ParameterRef(
+            Expression::SessionVariable(name) => Ok(BoundExpression::SessionVariable(
                 name.clone(),
-                DataType::String,
+                DataType::Empty,
             )),
             Expression::Vector(v) => Ok(BoundExpression::Vector(v.clone())),
             Expression::WindowFunction {

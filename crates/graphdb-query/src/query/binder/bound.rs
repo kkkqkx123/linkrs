@@ -59,8 +59,12 @@ pub enum BoundExpression {
     /// Aggregate function call
     Aggregate(BoundAggregateCall),
 
-    /// Parameter reference (`$param`)
+    /// Parameter reference (`@param`)
     ParameterRef(String, DataType),
+
+    /// Session variable reference (`$name`), distinct from query parameters.
+    /// Type is dynamic (resolved at execution time from session state).
+    SessionVariable(String, DataType),
 
     /// Subquery expression
     Subquery(Box<BoundStatement>),
@@ -211,6 +215,7 @@ impl BoundExpression {
             Self::Function(f) => f.return_type.clone(),
             Self::Aggregate(a) => a.return_type.clone(),
             Self::ParameterRef(_, dt) => ValueType::from_data_type(dt),
+            Self::SessionVariable(_, _) => ValueType::Unknown,
             Self::Subquery(_) => ValueType::Unknown,
             Self::Cast { target_type, .. } => ValueType::from_data_type(target_type),
             Self::List(_, dt) => ValueType::from_data_type(dt),
@@ -245,6 +250,7 @@ impl BoundExpression {
             Self::Function(f) => f.return_type.to_data_type(),
             Self::Aggregate(a) => a.return_type.to_data_type(),
             Self::ParameterRef(_, dt) => dt.clone(),
+            Self::SessionVariable(_, _) => DataType::Empty,
             Self::Subquery(_) => DataType::Empty,
             Self::Cast { target_type, .. } => target_type.clone(),
             Self::List(_, dt) => dt.clone(),

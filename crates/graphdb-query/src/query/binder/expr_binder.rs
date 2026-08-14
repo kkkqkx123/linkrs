@@ -121,7 +121,7 @@ impl<'a> ExpressionBinder<'a> {
             }
 
             Expression::Parameter(_) => DataType::String,
-            Expression::SessionVariable(_) => DataType::String,
+            Expression::SessionVariable(_) => DataType::Empty,
             Expression::Vector(_) => DataType::Vector,
 
             Expression::Path(_) => DataType::List,

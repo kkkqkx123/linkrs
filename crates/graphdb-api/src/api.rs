@@ -27,6 +27,7 @@ pub use server::{session, HttpServer};
 pub use embedded::GraphDatabase;
 
 // ── Private implementation modules ───────────────────────────────
+mod session_variables;
 #[cfg(feature = "server")]
 mod startup;
 

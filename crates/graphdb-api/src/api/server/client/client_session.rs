@@ -11,26 +11,10 @@ use super::session::Session;
 use super::space_context::SpaceContext;
 use super::statistics::StatisticsContext;
 use super::transaction_context::TransactionContext;
+use crate::api::session_variables::SessionVariables;
 use crate::core::error::QueryResult;
 use crate::core::types::SpaceSummary;
 use crate::core::Value;
-
-/// A session-variable operation recorded while an explicit transaction is
-/// active. The overlay guarantees that ROLLBACK (and ROLLBACK TO SAVEPOINT)
-/// restores variables to their pre-statement values, matching transaction
-/// semantics. `Set` records both the previous value (for restore) and the
-/// new value (for snapshot merge); `Savepoint` marks a rollback boundary.
-#[derive(Debug, Clone)]
-enum VariableOp {
-    Set {
-        name: String,
-        prev: Option<Value>,
-        value: Value,
-    },
-    Savepoint {
-        name: String,
-    },
-}
 
 #[derive(Debug)]
 pub struct ClientSession {
@@ -41,12 +25,8 @@ pub struct ClientSession {
     transaction_context: TransactionContext,
     statistics_context: StatisticsContext,
     idle_start_time: Arc<RwLock<Instant>>,
-    /// Session-scoped user variables (`$name`). Values are resolved as query
-    /// parameters for every statement executed by the session.
-    session_variables: Arc<RwLock<HashMap<String, Value>>>,
-    /// Transaction-scoped variable operations (set / savepoint markers).
-    /// Non-empty only while an explicit transaction is active.
-    variable_ops: Arc<RwLock<Vec<VariableOp>>>,
+    /// Session-scoped user variables (`$name`) with transaction overlay.
+    session_variables: Arc<SessionVariables>,
 }
 
 impl ClientSession {
@@ -59,8 +39,7 @@ impl ClientSession {
             transaction_context: TransactionContext::new(),
             statistics_context: StatisticsContext::new(),
             idle_start_time: Arc::new(RwLock::new(Instant::now())),
-            session_variables: Arc::new(RwLock::new(HashMap::new())),
-            variable_ops: Arc::new(RwLock::new(Vec::new())),
+            session_variables: Arc::new(SessionVariables::new()),
         })
     }
 
@@ -250,119 +229,51 @@ impl ClientSession {
     /// Assign a session variable, recording a transaction overlay operation
     /// when an explicit transaction is active.
     pub fn set_variable(&self, name: String, value: Value) {
-        if self.has_active_transaction() {
-            let prev = self.variable_value(&name);
-            self.variable_ops
-                .write()
-                .push(VariableOp::Set { name, prev, value });
-        } else {
-            self.session_variables.write().insert(name, value);
-        }
+        self.session_variables
+            .set_variable(name, value, self.has_active_transaction());
     }
 
     /// Effective value of a session variable: transaction overlay first,
     /// then the base store.
     pub fn variable_value(&self, name: &str) -> Option<Value> {
-        let ops = self.variable_ops.read();
-        for op in ops.iter().rev() {
-            if let VariableOp::Set {
-                name: op_name,
-                value,
-                ..
-            } = op
-            {
-                if op_name == name {
-                    return Some(value.clone());
-                }
-            }
-        }
-        self.session_variables.read().get(name).cloned()
+        self.session_variables.variable_value(name)
     }
 
     /// Snapshot of all session variables (base + overlay) for injection as
-    /// query parameters.
+    /// query inputs.
     pub fn variables_snapshot(&self) -> HashMap<String, Value> {
-        let mut merged = self.session_variables.read().clone();
-        for op in self.variable_ops.read().iter() {
-            if let VariableOp::Set { name, value, .. } = op {
-                merged.insert(name.clone(), value.clone());
-            }
-        }
-        merged
+        self.session_variables.variables_snapshot()
     }
 
     /// COMMIT: apply overlay operations to the base store and clear the
     /// overlay (the last assignment of each variable wins).
     pub fn commit_variables(&self) {
-        let mut base = self.session_variables.write();
-        let ops = std::mem::take(&mut *self.variable_ops.write());
-        for op in ops {
-            if let VariableOp::Set { name, value, .. } = op {
-                base.insert(name, value);
-            }
-        }
+        self.session_variables.commit_variables();
     }
 
     /// Full ROLLBACK: restore pre-transaction values and clear the overlay.
     pub fn rollback_variables(&self) {
-        self.restore_overlay_after(None);
+        self.session_variables.rollback_variables();
     }
 
     /// ROLLBACK TO SAVEPOINT: restore values assigned after the named
     /// savepoint and truncate the overlay at the savepoint marker.
     pub fn rollback_variables_to(&self, savepoint_name: &str) -> bool {
-        self.restore_overlay_after(Some(savepoint_name))
+        self.session_variables.rollback_variables_to(savepoint_name)
     }
 
     /// RELEASE SAVEPOINT: drop the marker (operations stay part of the
     /// transaction; they are no longer individually rollback-able).
     pub fn release_variable_savepoint(&self, savepoint_name: &str) {
-        let mut ops = self.variable_ops.write();
-        ops.retain(|op| !matches!(op, VariableOp::Savepoint { name } if name == savepoint_name));
+        self.session_variables
+            .release_variable_savepoint(savepoint_name);
     }
 
     /// SAVEPOINT: record a variable-overlay boundary so ROLLBACK TO can
     /// restore assignments made after the savepoint.
     pub fn push_variable_savepoint(&self, savepoint_name: &str) {
-        self.variable_ops.write().push(VariableOp::Savepoint {
-            name: savepoint_name.to_string(),
-        });
-    }
-
-    /// Restore variable values for operations at or after `savepoint_name`
-    /// (or the whole overlay when `None`), then truncate those operations.
-    /// Returns whether a matching savepoint marker was found.
-    fn restore_overlay_after(&self, savepoint_name: Option<&str>) -> bool {
-        let mut base = self.session_variables.write();
-        let mut ops = self.variable_ops.write();
-        let removed: Vec<VariableOp> = match savepoint_name {
-            Some(name) => {
-                let mut found = None;
-                for (idx, op) in ops.iter().enumerate() {
-                    if matches!(op, VariableOp::Savepoint { name: n } if n == name) {
-                        found = Some(idx + 1);
-                    }
-                }
-                match found {
-                    Some(idx) => ops.drain(idx..).collect(),
-                    None => return false,
-                }
-            }
-            None => std::mem::take(&mut *ops),
-        };
-        for op in removed.iter().rev() {
-            if let VariableOp::Set { name, prev, .. } = op {
-                match prev {
-                    Some(value) => {
-                        base.insert(name.clone(), value.clone());
-                    }
-                    None => {
-                        base.remove(name);
-                    }
-                }
-            }
-        }
-        true
+        self.session_variables
+            .push_variable_savepoint(savepoint_name);
     }
 }
 

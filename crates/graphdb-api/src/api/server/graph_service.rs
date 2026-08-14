@@ -765,6 +765,7 @@ impl<
                     let _ = txn_manager.abort_transaction(txn_id);
                     session.unbind_transaction();
                     session.set_auto_commit(true);
+                    session.rollback_variables();
                 }
                 result
             }
@@ -1019,12 +1020,31 @@ impl<
             session_variables,
         )?;
         let value = match result {
-            ExecutionResult::DataSet { data, .. } => data
-                .rows
-                .into_iter()
-                .next()
-                .and_then(|row| row.into_iter().next())
-                .ok_or_else(|| "LET expression returned no value".to_string())?,
+            ExecutionResult::DataSet { data, .. } => {
+                // Contract: the LET plan evaluates to exactly one row with
+                // one value column. Guard instead of silently taking the
+                // first value if a planner regression changes the shape.
+                if data.rows.len() != 1 {
+                    return Err(format!(
+                        "LET expression must evaluate to a single row, got {} rows",
+                        data.rows.len()
+                    ));
+                }
+                let row = data
+                    .rows
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "LET expression returned no value".to_string())?;
+                if row.len() != 1 {
+                    return Err(format!(
+                        "LET expression must evaluate to a single value, got {} columns",
+                        row.len()
+                    ));
+                }
+                row.into_iter()
+                    .next()
+                    .ok_or_else(|| "LET expression returned no value".to_string())?
+            }
             _ => {
                 return Err("LET expression could not be evaluated".to_string());
             }
@@ -1053,10 +1073,11 @@ impl<
 
         // Permission check: The admin has all permissions, so no check is required.
         // USE is a session-level operation that does not access data — skip permission
-        // check so any authenticated user can switch to a space.
-        if !self.permission_manager.is_admin(&username)
-            && !stmt.trim().to_uppercase().starts_with("USE ")
-        {
+        // check so any authenticated user can switch to a space. LET assigns a
+        // session variable without touching data, so it is exempt the same way.
+        let stmt_upper = stmt.trim().to_uppercase();
+        let session_only_statement = stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
+        if !self.permission_manager.is_admin(&username) && !session_only_statement {
             let permission = self.extract_permission_from_statement(stmt);
             if let Err(e) = self
                 .permission_manager
@@ -1130,6 +1151,7 @@ impl<
                             }
                             session.unbind_transaction();
                             session.set_auto_commit(true);
+                            session.rollback_variables();
                         }
                     }
                 }
@@ -1162,15 +1184,23 @@ impl<
         // Session variables are injected through the dedicated
         // session_variables channel (captured once per statement), fully
         // decoupled from query parameters. Client-supplied session variables
-        // replace the session snapshot; otherwise the snapshot (set via
-        // `LET $name = expr`) is used.
+        // override only the keys they name; all other keys keep the session
+        // snapshot values (set via `LET $name = expr`).
+        let merged_session_variables = match session_variables {
+            Some(client_variables) => {
+                let mut merged = session.variables_snapshot();
+                merged.extend(client_variables);
+                Some(merged)
+            }
+            None => Some(session.variables_snapshot()),
+        };
         let query_request = crate::api::core::QueryRequest {
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
             transaction_id: transaction_id.or_else(|| session.current_transaction()),
             parameters,
-            session_variables: session_variables.or_else(|| Some(session.variables_snapshot())),
+            session_variables: merged_session_variables,
             query_id: None,
             parsed_statement: parsed_ast,
         };

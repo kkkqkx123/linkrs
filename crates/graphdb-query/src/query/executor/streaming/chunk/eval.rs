@@ -221,6 +221,19 @@ impl DataChunk {
                 Ok(vec![val; self.rows.len()])
             }
 
+            Expression::SessionVariable(name) => {
+                let val = env
+                    .and_then(|env| env.session_variables.as_ref())
+                    .and_then(|v| v.get(name).cloned())
+                    .ok_or_else(|| {
+                        ExpressionError::type_error(format!(
+                            "Session variable `{}` is not defined",
+                            name
+                        ))
+                    })?;
+                Ok(vec![val; self.rows.len()])
+            }
+
             Expression::Unary { op, operand } => {
                 let values = self.eval_with_cache(operand, col_cache, env, typed_used)?;
                 values
@@ -304,6 +317,18 @@ impl DataChunk {
                     .and_then(|env| env.params.as_ref())
                     .and_then(|p| p.get(name).cloned())
                     .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
+                Ok(typed_literal_batch(&val, self.rows.len()))
+            }
+            Expression::SessionVariable(name) => {
+                let val = env
+                    .and_then(|env| env.session_variables.as_ref())
+                    .and_then(|v| v.get(name).cloned())
+                    .ok_or_else(|| {
+                        ExpressionError::type_error(format!(
+                            "Session variable `{}` is not defined",
+                            name
+                        ))
+                    })?;
                 Ok(typed_literal_batch(&val, self.rows.len()))
             }
             Expression::Variable(name) => {

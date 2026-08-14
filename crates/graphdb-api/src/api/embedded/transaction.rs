@@ -198,7 +198,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             auto_commit: false,
             transaction_id: Some(self.txn_handle.0),
             parameters: None,
-            session_variables: None,
+            session_variables: Some(self.session.variables_snapshot()),
             query_id: None,
             parsed_statement: None,
         };
@@ -237,7 +237,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             auto_commit: false,
             transaction_id: Some(self.txn_handle.0),
             parameters: Some(params),
-            session_variables: None,
+            session_variables: Some(self.session.variables_snapshot()),
             query_id: None,
             parsed_statement: None,
         };

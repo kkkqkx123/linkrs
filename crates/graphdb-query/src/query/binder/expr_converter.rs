@@ -88,6 +88,10 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
 
         BoundExpression::ParameterRef(name, _) => Ok(Expression::Parameter(name.clone())),
 
+        BoundExpression::SessionVariable(name, _) => {
+            Ok(Expression::SessionVariable(name.clone()))
+        }
+
         BoundExpression::Cast {
             expr, target_type, ..
         } => {

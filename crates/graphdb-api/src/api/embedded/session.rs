@@ -62,6 +62,8 @@ pub struct Session<S: StorageClient + Clone + 'static> {
     statistics: SessionStatistics,
     /// Session-level function registry
     function_registry: Arc<RwLock<FunctionRegistry>>,
+    /// Session-scoped user variables (`$name`) with transaction overlay.
+    session_variables: Arc<crate::api::session_variables::SessionVariables>,
 }
 
 /// Internal structure of the database, used for sharing data between Session and GraphDatabase
@@ -91,6 +93,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             current_transaction: Arc::new(RwLock::new(None)),
             statistics: SessionStatistics::new(),
             function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
+            session_variables: Arc::new(crate::api::session_variables::SessionVariables::new()),
         }
     }
 
@@ -195,6 +198,22 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         self.auto_commit
     }
 
+    // ── Session variables (`$name`) ─────────────────────────────────────
+
+    /// Assign a session variable. Inside a text-begun transaction the
+    /// assignment is recorded on the overlay so ROLLBACK / ROLLBACK TO
+    /// SAVEPOINT restore the previous value.
+    pub fn set_variable(&self, name: String, value: Value) {
+        self.session_variables
+            .set_variable(name, value, self.current_transaction.read().is_some());
+    }
+
+    /// Snapshot of all session variables (base + overlay) for injection as
+    /// query inputs.
+    pub fn variables_snapshot(&self) -> HashMap<String, Value> {
+        self.session_variables.variables_snapshot()
+    }
+
     /// Execute the query statement.
     ///
     /// # Parameters
@@ -219,11 +238,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
-                    Stmt::AssignVariable(_) => {
-                        return Err(CoreError::InvalidParameter(
-                            "LET is not supported in embedded sessions (no session-variable store)"
-                                .to_string(),
-                        ));
+                    Stmt::AssignVariable(assign) => {
+                        return self.execute_variable_assignment(
+                            query,
+                            parsed_ast.clone(),
+                            assign,
+                            None,
+                            None,
+                        );
                     }
                     stmt => {
                         return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
@@ -252,7 +274,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: None,
-            session_variables: None,
+            session_variables: Some(self.variables_snapshot()),
             query_id: None,
             parsed_statement: None,
         };
@@ -366,6 +388,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                     .commit_transaction(txn_id)
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
                 *self.current_transaction.write() = None;
+                self.session_variables.commit_variables();
                 self.execute_command_plan(query, parsed_ast, Some(txn_id), false)
             }
             Stmt::RollbackTransaction(rollback_stmt) => {
@@ -385,6 +408,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                     txn_manager
                         .rollback_to_savepoint(txn_id, savepoint_info.id, &*storage)
                         .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                    self.session_variables.rollback_variables_to(savepoint_name);
                     self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
                 } else {
                     let txn_id = require_transaction("rollback")?;
@@ -396,6 +420,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                         .abort_transaction_with_undo(txn_id, &mut *storage)
                         .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
                     *self.current_transaction.write() = None;
+                    self.session_variables.rollback_variables();
                     self.execute_command_plan(query, parsed_ast, Some(txn_id), false)
                 }
             }
@@ -404,6 +429,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                 txn_manager
                     .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                self.session_variables
+                    .push_variable_savepoint(&savepoint_stmt.name);
                 self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
             }
             Stmt::ReleaseSavepoint(release_stmt) => {
@@ -422,6 +449,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                 txn_manager
                     .release_savepoint(txn_id, savepoint_info.id)
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+                self.session_variables
+                    .release_variable_savepoint(&release_stmt.name);
                 self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
             }
             _ => Err(CoreError::InvalidParameter(
@@ -448,7 +477,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id,
             parameters: None,
-            session_variables: None,
+            session_variables: Some(self.variables_snapshot()),
             query_id: None,
             parsed_statement: Some(parsed_ast),
         };
@@ -494,7 +523,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: false,
             transaction_id: Some(txn_id),
             parameters,
-            session_variables: None,
+            session_variables: Some(self.variables_snapshot()),
             query_id: None,
             parsed_statement: None,
         };
@@ -507,6 +536,104 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             .finish_statement(&ctx, statement_start)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
         Ok(QueryResult::from_core(result))
+    }
+
+    /// Execute a `LET $name = expr` session-variable assignment.
+    ///
+    /// The right-hand side is evaluated through the query engine (the LET
+    /// statement plans to a single-row, single-column expression evaluation);
+    /// the value is stored on the session variable store. Inside a text-begun
+    /// transaction the assignment is recorded on the overlay so ROLLBACK /
+    /// ROLLBACK TO SAVEPOINT restore the previous value. Client-supplied
+    /// parameters and session variables are passed through to the evaluation.
+    fn execute_variable_assignment(
+        &self,
+        query: &str,
+        parsed_ast: Arc<crate::query::parser::ast::stmt::Ast>,
+        assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
+        parameters: Option<HashMap<String, Value>>,
+        session_variables: Option<HashMap<String, Value>>,
+    ) -> CoreResult<QueryResult> {
+        // Client-supplied session variables override only the keys they name;
+        // all other keys keep the session snapshot.
+        let merged_variables = match session_variables {
+            Some(client_variables) => {
+                let mut merged = self.variables_snapshot();
+                merged.extend(client_variables);
+                Some(merged)
+            }
+            None => Some(self.variables_snapshot()),
+        };
+
+        let ctx = QueryRequest {
+            space_id: *self.space_id.read(),
+            space_name: self.space_name.read().clone(),
+            auto_commit: self.auto_commit,
+            transaction_id: *self.current_transaction.read(),
+            parameters,
+            session_variables: merged_variables,
+            query_id: None,
+            parsed_statement: Some(parsed_ast),
+        };
+
+        let mut query_api = self.db.query_api.write();
+        let result = if let Some(txn_id) = *self.current_transaction.read() {
+            let txn_manager = self.txn_manager();
+            let (statement_ctx, statement_start) = txn_manager
+                .begin_statement(txn_id)
+                .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+            let execution = txn_manager
+                .create_execution(txn_id, false)
+                .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+            let result = query_api.execute_with_execution(query, ctx, &execution)?;
+            txn_manager
+                .finish_statement(&statement_ctx, statement_start)
+                .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
+            result
+        } else if self.auto_commit {
+            let storage = self
+                .db
+                .storage
+                .read()
+                .bind_auto_commit_context()
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            query_api.execute_with_operation_storage(query, ctx, storage)?
+        } else {
+            query_api.execute(query, ctx)?
+        };
+
+        self.statistics.record_changes(result.metadata.rows_returned);
+
+        // Contract: the LET plan evaluates to exactly one row with one value
+        // column. Guard instead of silently taking the first value if a
+        // planner regression changes the shape.
+        if result.rows.len() != 1 {
+            return Err(CoreError::InvalidParameter(format!(
+                "LET expression must evaluate to a single row, got {} rows",
+                result.rows.len()
+            )));
+        }
+        if result.columns.len() != 1 {
+            return Err(CoreError::InvalidParameter(format!(
+                "LET expression must evaluate to a single value, got {} columns",
+                result.columns.len()
+            )));
+        }
+        let columns = result.columns.clone();
+        let mut rows = result.rows;
+        let row = rows
+            .first()
+            .ok_or_else(|| CoreError::InvalidParameter("LET expression returned no value".to_string()))?;
+        let value = row
+            .get(&columns[0])
+            .cloned()
+            .ok_or_else(|| CoreError::InvalidParameter("LET expression returned no value".to_string()))?;
+        self.set_variable(assign.name.clone(), value);
+        Ok(QueryResult::from_core(crate::api::core::QueryResult {
+            columns,
+            rows,
+            metadata: result.metadata,
+        }))
     }
 
     /// Execute a parameterized query
@@ -530,11 +657,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
-                    Stmt::AssignVariable(_) => {
-                        return Err(CoreError::InvalidParameter(
-                            "LET is not supported in embedded sessions (no session-variable store)"
-                                .to_string(),
-                        ));
+                    Stmt::AssignVariable(assign) => {
+                        return self.execute_variable_assignment(
+                            query,
+                            parsed_ast.clone(),
+                            assign,
+                            Some(params),
+                            None,
+                        );
                     }
                     stmt => {
                         return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
@@ -556,7 +686,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             auto_commit: self.auto_commit,
             transaction_id: None,
             parameters: Some(params),
-            session_variables: None,
+            session_variables: Some(self.variables_snapshot()),
             query_id: None,
             parsed_statement: None,
         };
@@ -599,11 +729,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
-                    Stmt::AssignVariable(_) => {
-                        return Err(CoreError::InvalidParameter(
-                            "LET is not supported in embedded sessions (no session-variable store)"
-                                .to_string(),
-                        ));
+                    Stmt::AssignVariable(assign) => {
+                        return self.execute_variable_assignment(
+                            query,
+                            parsed_ast.clone(),
+                            assign,
+                            Some(params),
+                            None,
+                        );
                     }
                     stmt => {
                         return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
