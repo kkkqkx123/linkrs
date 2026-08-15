@@ -379,7 +379,7 @@ impl DataChunk {
             };
             let mut ok = true;
             let mut has_null = false;
-            let mut bitmap = vec![0u64; (num_rows + 63) / 64];
+            let mut bitmap = vec![0u64; num_rows.div_ceil(64)];
             let mut mark_valid = |i: usize| {
                 bitmap[i / 64] |= 1u64 << (i % 64);
             };

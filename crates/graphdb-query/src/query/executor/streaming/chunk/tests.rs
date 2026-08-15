@@ -242,7 +242,7 @@ fn typed_columns_build_date_and_string_columns() {
                     month: 1,
                     day: i as u32 + 1,
                 }),
-                Value::string(&format!("s{i}")),
+                Value::string(format!("s{i}")),
                 Value::string("constant"),
             ]
         })
@@ -319,7 +319,7 @@ fn typed_eval_matches_value_path_for_date_and_string() {
                     month: 1,
                     day: (i % 28) as u32 + 1,
                 }),
-                Value::string(&format!("v{:03}", i)),
+                Value::string(format!("v{:03}", i)),
             ]
         })
         .collect();

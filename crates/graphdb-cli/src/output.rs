@@ -12,13 +12,26 @@
 //!
 //! # Usage
 //! ```rust
-//! use graphdb_cli::output::{OutputFormat, OutputFormatter};
 //! use graphdb_cli::client::QueryResult;
+//! use graphdb_cli::output::{OutputFormat, OutputFormatter};
 //!
-//! let formatter = OutputFormatter::new()
-//!     .with_format(OutputFormat::Json);
+//! let mut formatter = OutputFormatter::new();
+//! formatter.set_format(OutputFormat::JSON);
 //!
-//! let output = formatter.format_result(&query_result);
+//! let result = QueryResult {
+//!     columns: vec!["name".to_string()],
+//!     rows: vec![std::collections::HashMap::from([(
+//!         "name".to_string(),
+//!         serde_json::json!("alice"),
+//!     )])],
+//!     row_count: 1,
+//!     execution_time_ms: 0,
+//!     rows_scanned: 1,
+//!     error: None,
+//! };
+//!
+//! let output = formatter.format_result(&result);
+//! assert!(output.contains("alice"), "JSON output must contain the row value");
 //! ```
 
 pub mod csv;

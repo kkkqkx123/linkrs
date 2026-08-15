@@ -16,7 +16,7 @@ impl DdlParser {
     ) -> Result<Vec<PropertyDef>, ParseError> {
         let mut defs = Vec::new();
         if ctx.match_token(TokenKind::LParen) {
-            while !ctx.match_token(TokenKind::RParen) {
+            while !ctx.check_token(TokenKind::RParen) {
                 let name = ctx.expect_identifier()?;
                 let _ = ctx.match_token(TokenKind::Colon);
                 let mut serial = false;
@@ -60,6 +60,7 @@ impl DdlParser {
                     break;
                 }
             }
+            ctx.expect_token(TokenKind::RParen)?;
         }
         Ok(defs)
     }
@@ -259,6 +260,24 @@ impl DdlParser {
         self.parse_data_type_inner(ctx, 0)
     }
 
+    /// Parse a scalar type from a keyword token. The canonical type name is
+    /// resolved through the core `DataType::from_str` parser (single source
+    /// of truth for the keyword -> type mapping, including alias rulings).
+    fn scalar_type_from_keyword(
+        &mut self,
+        ctx: &mut ParseContext,
+        canonical: &str,
+    ) -> Result<DataType, ParseError> {
+        ctx.next_token();
+        canonical.parse::<DataType>().map_err(|e| {
+            ParseError::new(
+                ParseErrorKind::SyntaxError,
+                format!("Unknown data type: {}", e.name),
+                ctx.current_position(),
+            )
+        })
+    }
+
     /// Maximum STRUCT/ARRAY nesting depth (prevents stack overflow on
     /// maliciously nested type declarations).
     const MAX_COMPOSITE_TYPE_DEPTH: usize = 16;
@@ -361,21 +380,24 @@ impl DdlParser {
             | TokenKind::Int8
             | TokenKind::Int16
             | TokenKind::Int32
-            | TokenKind::Int64 => {
-                ctx.next_token();
-                Ok(DataType::Int)
-            }
-            TokenKind::Float => {
-                ctx.next_token();
-                Ok(DataType::Float)
-            }
-            TokenKind::Double => {
-                ctx.next_token();
-                Ok(DataType::Double)
-            }
-            TokenKind::String => {
-                ctx.next_token();
-                Ok(DataType::String)
+            | TokenKind::Int64
+            | TokenKind::Float
+            | TokenKind::Double
+            | TokenKind::String
+            | TokenKind::Bool
+            | TokenKind::Date
+            | TokenKind::Time
+            | TokenKind::Timestamp
+            | TokenKind::Datetime
+            | TokenKind::Geography
+            | TokenKind::List
+            | TokenKind::Map
+            | TokenKind::Set
+            | TokenKind::UUID
+            | TokenKind::Text
+            | TokenKind::Null => {
+                let canonical = token.lexeme.to_ascii_uppercase();
+                self.scalar_type_from_keyword(ctx, &canonical)
             }
             TokenKind::FixedString => {
                 ctx.next_token();
@@ -404,26 +426,6 @@ impl DdlParser {
                 } else {
                     Ok(DataType::FixedString(32))
                 }
-            }
-            TokenKind::Bool => {
-                ctx.next_token();
-                Ok(DataType::Bool)
-            }
-            TokenKind::Date => {
-                ctx.next_token();
-                Ok(DataType::Date)
-            }
-            TokenKind::Timestamp => {
-                ctx.next_token();
-                Ok(DataType::DateTime)
-            }
-            TokenKind::Datetime => {
-                ctx.next_token();
-                Ok(DataType::DateTime)
-            }
-            TokenKind::Geography => {
-                ctx.next_token();
-                Ok(DataType::Geography)
             }
             TokenKind::KeywordVector => {
                 ctx.next_token();
@@ -457,10 +459,6 @@ impl DdlParser {
                 let type_name = s.clone();
                 ctx.next_token();
                 match type_name.to_uppercase().as_str() {
-                    "INT" | "INTEGER" | "INT8" | "INT16" | "INT32" | "INT64" => Ok(DataType::Int),
-                    "FLOAT" => Ok(DataType::Float),
-                    "DOUBLE" => Ok(DataType::Double),
-                    "STRING" | "VARCHAR" | "TEXT" => Ok(DataType::String),
                     "FIXED_STRING" | "FIXEDSTRING" => {
                         if ctx.current_token().kind == TokenKind::LParen {
                             ctx.next_token();
@@ -488,11 +486,6 @@ impl DdlParser {
                             Ok(DataType::FixedString(32))
                         }
                     }
-                    "BOOL" | "BOOLEAN" => Ok(DataType::Bool),
-                    "DATE" => Ok(DataType::Date),
-                    "TIMESTAMP" => Ok(DataType::DateTime),
-                    "DATETIME" => Ok(DataType::DateTime),
-                    "GEOGRAPHY" => Ok(DataType::Geography),
                     "VECTOR" => {
                         if ctx.current_token().kind == TokenKind::LParen {
                             ctx.next_token();
@@ -520,11 +513,16 @@ impl DdlParser {
                             Ok(DataType::Vector)
                         }
                     }
-                    _ => Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        format!("Unknown data type: {}", type_name),
-                        ctx.current_position(),
-                    )),
+                    // All other type names (including aliases) are resolved by
+                    // the core `DataType::from_str` parser (single source of
+                    // truth for the keyword -> type mapping).
+                    _ => type_name.parse::<DataType>().map_err(|e| {
+                        ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            format!("Unknown data type: {}", e.name),
+                            ctx.current_position(),
+                        )
+                    }),
                 }
             }
             _ => Err(ParseError::new(

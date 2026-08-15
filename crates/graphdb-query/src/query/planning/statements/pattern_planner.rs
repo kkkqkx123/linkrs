@@ -868,6 +868,7 @@ mod tests {
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;
 
+    #[allow(clippy::arc_with_non_send_sync)]
     fn create_test_components() -> (
         Arc<QueryContext>,
         ValidationInfo,

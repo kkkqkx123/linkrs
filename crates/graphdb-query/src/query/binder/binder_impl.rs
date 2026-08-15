@@ -1614,6 +1614,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    #[allow(clippy::arc_with_non_send_sync)]
     fn test_qctx() -> Arc<crate::query::QueryContext> {
         Arc::new(crate::query::QueryContext::new(Arc::new(
             crate::query::QueryRequestContext {

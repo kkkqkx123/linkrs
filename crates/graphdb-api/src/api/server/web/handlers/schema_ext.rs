@@ -32,20 +32,11 @@ use crate::storage::{
 };
 
 /// Parse data type string to DataType
+///
+/// Delegates to the core `DataType::from_str` parser (single source of
+/// truth).
 fn parse_data_type(type_str: &str) -> Option<crate::core::DataType> {
-    match type_str.to_uppercase().as_str() {
-        "BOOL" => Some(crate::core::DataType::Bool),
-        "SMALLINT" | "INT16" => Some(crate::core::DataType::SmallInt),
-        "INT" | "INT32" | "INTEGER" => Some(crate::core::DataType::Int),
-        "BIGINT" | "INT64" => Some(crate::core::DataType::BigInt),
-        "FLOAT" | "REAL" => Some(crate::core::DataType::Float),
-        "DOUBLE" | "DOUBLE PRECISION" => Some(crate::core::DataType::Double),
-        "STRING" => Some(crate::core::DataType::String),
-        "DATE" => Some(crate::core::DataType::Date),
-        "TIME" => Some(crate::core::DataType::Time),
-        "DATETIME" | "TIMESTAMP" => Some(crate::core::DataType::DateTime),
-        _ => None,
-    }
+    type_str.parse().ok()
 }
 
 /// Create schema extension routes (without state)

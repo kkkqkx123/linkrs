@@ -1312,7 +1312,7 @@ mod tests {
                 vec![Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("visible".to_string())),
+                        ("name".to_string(), Value::string("visible")),
                         ("age".to_string(), Value::BigInt(1)),
                     ]
                     .into_iter()
@@ -1358,7 +1358,7 @@ mod tests {
                 vec![Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("keep".to_string())),
+                        ("name".to_string(), Value::string("keep")),
                         ("age".to_string(), Value::BigInt(1)),
                     ]
                     .into_iter()
@@ -1376,7 +1376,7 @@ mod tests {
                 vec![Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("changed".to_string())),
+                        ("name".to_string(), Value::string("changed")),
                         ("age".to_string(), Value::BigInt(2)),
                     ]
                     .into_iter()
@@ -1394,7 +1394,7 @@ mod tests {
                 vec![Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("also_keep".to_string())),
+                        ("name".to_string(), Value::string("also_keep")),
                         ("age".to_string(), Value::BigInt(3)),
                     ]
                     .into_iter()
@@ -1437,7 +1437,7 @@ mod tests {
                 vec![Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::string("mem".to_string())),
+                        ("name".to_string(), Value::string("mem")),
                         ("age".to_string(), Value::BigInt(1)),
                     ]
                     .into_iter()

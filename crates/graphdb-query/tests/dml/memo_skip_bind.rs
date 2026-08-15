@@ -67,8 +67,7 @@ impl Fixture {
             .read()
             .get_vertex(space, &VertexId::from_string(vid))
             .expect("vertex read")
-            .map(|v| v.properties.get("name").cloned())
-            .flatten()
+            .and_then(|v| v.properties.get("name").cloned())
     }
 }
 

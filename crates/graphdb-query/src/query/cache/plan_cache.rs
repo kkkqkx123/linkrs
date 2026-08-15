@@ -1278,7 +1278,7 @@ mod tests {
     fn partition_fingerprint_changes_with_source_and_layout_version() {
         let base = make_spec(&[(0, 100)], Some(1));
         let other_source = PartitionSpec::try_new(
-            vec![0..100],
+            std::iter::once(0..100).collect(),
             PartitionSource::EdgeId {
                 edge_type: "Link".to_string(),
             },

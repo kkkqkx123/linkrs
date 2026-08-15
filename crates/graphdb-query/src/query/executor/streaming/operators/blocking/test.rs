@@ -433,7 +433,7 @@ fn test_columnar_sort_non_bare_expression() {
     sort_rows(
         &mut row_sort,
         &["val".to_string()],
-        &[expr.clone()],
+        std::slice::from_ref(&expr),
         &[SortDirection::Ascending],
     );
 

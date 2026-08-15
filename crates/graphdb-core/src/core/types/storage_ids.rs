@@ -365,11 +365,7 @@ impl VertexId {
     pub fn checked_add(self, rhs: u64) -> Option<Self> {
         if let Some(id) = self.as_u64() {
             Some(Self::from_u64(id + rhs))
-        } else if let Some(id) = self.as_int64() {
-            Some(Self::from_int64(id + rhs as i64))
-        } else {
-            None
-        }
+        } else { self.as_int64().map(|id| Self::from_int64(id + rhs as i64)) }
     }
 }
 

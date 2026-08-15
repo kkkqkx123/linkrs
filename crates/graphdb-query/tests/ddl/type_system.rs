@@ -111,3 +111,74 @@ fn test_create_space_vid_type_fixed_string_is_accepted() {
         .query("DESC SPACE fs_space")
         .assert_result_contains(vec![Value::string("FixedString(32)")]);
 }
+
+// ==================== Unified Type Name Parsing ====================
+
+/// TC-TY-001: Types previously rejected as "Unknown data type" in DDL (they
+/// were accepted by the HTTP/CAST parsers) are now supported through the core
+/// `DataType::from_str` source of truth.
+#[test]
+fn test_create_tag_new_scalar_types() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl(
+            r#"CREATE TAG Types(
+                a SMALLINT, b BIGINT, c TIME, d UUID,
+                e JSON, f JSONB, g BLOB, h INTERVAL, i DATASET)"#,
+        )
+        .assert_success()
+        .query("DESC TAG Types")
+        .assert_result_contains(vec![Value::string("SMALLINT")])
+        .assert_result_contains(vec![Value::string("BIGINT")])
+        .assert_result_contains(vec![Value::string("TIME")])
+        .assert_result_contains(vec![Value::string("UUID")])
+        .assert_result_contains(vec![Value::string("JSON")])
+        .assert_result_contains(vec![Value::string("JSONB")])
+        .assert_result_contains(vec![Value::string("BLOB")])
+        .assert_result_contains(vec![Value::string("INTERVAL")])
+        .assert_result_contains(vec![Value::string("DATASET")]);
+}
+
+/// TC-TY-002: `INT8` maps to `BIGINT` in DDL (PostgreSQL convention by bit
+/// width), consistent with the CAST and HTTP parsers.
+#[test]
+fn test_create_tag_int8_maps_to_bigint() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG IntAlias(v INT8)")
+        .assert_success()
+        .query("DESC TAG IntAlias")
+        .assert_result_contains(vec![Value::string("BIGINT")]);
+}
+
+/// TC-TY-003: `INT16`/`INT32` map to `INT`, `INT8`/`INT64` to `BIGINT`,
+/// `INT2` to `SMALLINT`.
+#[test]
+fn test_create_tag_int_width_aliases() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl(
+            r#"CREATE TAG IntWidth(a INT16, b INT32, c INT64, d INT2, e INT4)"#,
+        )
+        .assert_success()
+        .query("DESC TAG IntWidth")
+        .assert_result_contains(vec![Value::string("SMALLINT")])
+        .assert_result_contains(vec![Value::string("BIGINT")])
+        .assert_result_contains(vec![Value::string("INT")]);
+}
+
+/// TC-TY-004: `TIMESTAMP` remains normalized to `DATETIME`; the unified
+/// parser keeps the established DDL/HTTP/CAST semantics.
+#[test]
+fn test_timestamp_keyword_still_normalizes_to_datetime() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Ts(v TIMESTAMP)")
+        .assert_success()
+        .query("DESC TAG Ts")
+        .assert_result_contains(vec![Value::string("DATETIME")]);
+}

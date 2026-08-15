@@ -1270,67 +1270,13 @@ impl<
     }
 
     /// Parse a DataType from its Display string representation.
-    /// Mirrors the Display impl in graphdb_core::core::types::mod.rs.
     ///
-    /// Returns `None` for the removed `VID` type (rejected at DDL time) so the
-    /// caller falls back to a concrete type.
+    /// Delegates to the core `DataType::from_str` parser (single source of
+    /// truth). Returns `None` for invalid or unsupported names, including the
+    /// removed `VID` type (rejected at DDL time) so the caller falls back to
+    /// a concrete type.
     fn parse_data_type(s: &str) -> Option<DataType> {
-        match s.to_uppercase().as_str() {
-            "EMPTY" => Some(DataType::Empty),
-            "NULL" => Some(DataType::Null),
-            "BOOL" => Some(DataType::Bool),
-            "SMALLINT" => Some(DataType::SmallInt),
-            "INT" => Some(DataType::Int),
-            "BIGINT" => Some(DataType::BigInt),
-            "FLOAT" => Some(DataType::Float),
-            "DOUBLE" => Some(DataType::Double),
-            "DECIMAL128" => Some(DataType::Decimal128),
-            "STRING" => Some(DataType::String),
-            "DATE" => Some(DataType::Date),
-            "TIME" => Some(DataType::Time),
-            "DATETIME" => Some(DataType::DateTime),
-            "VERTEX" => Some(DataType::Vertex),
-            "EDGE" => Some(DataType::Edge),
-            "PATH" => Some(DataType::Path),
-            "LIST" => Some(DataType::List),
-            "MAP" => Some(DataType::Map),
-            "SET" => Some(DataType::Set),
-            "GEOGRAPHY" => Some(DataType::Geography),
-            "DATASET" => Some(DataType::DataSet),
-            "VID" => None,
-            "BLOB" => Some(DataType::Blob),
-            "TIMESTAMP" => Some(DataType::DateTime),
-            "VECTOR" => Some(DataType::Vector),
-            "JSON" => Some(DataType::Json),
-            "JSONB" => Some(DataType::JsonB),
-            "UUID" => Some(DataType::Uuid),
-            "INTERVAL" => Some(DataType::Interval),
-            _ if s.starts_with("FIXEDSTRING(") => {
-                let n = s
-                    .trim_start_matches("FIXEDSTRING(")
-                    .trim_end_matches(')')
-                    .parse::<usize>()
-                    .unwrap_or(0);
-                Some(DataType::FixedString(n))
-            }
-            _ if s.starts_with("VECTOR_DENSE(") => {
-                let n = s
-                    .trim_start_matches("VECTOR_DENSE(")
-                    .trim_end_matches(')')
-                    .parse::<usize>()
-                    .unwrap_or(0);
-                Some(DataType::VectorDense(n))
-            }
-            _ if s.starts_with("VECTOR_SPARSE(") => {
-                let n = s
-                    .trim_start_matches("VECTOR_SPARSE(")
-                    .trim_end_matches(')')
-                    .parse::<usize>()
-                    .unwrap_or(0);
-                Some(DataType::VectorSparse(n))
-            }
-            _ => None,
-        }
+        s.parse().ok()
     }
 
     /// Extract SpaceSummary from an ExecutionResult DataSet that contains space info.

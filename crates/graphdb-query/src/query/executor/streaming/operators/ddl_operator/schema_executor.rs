@@ -42,7 +42,7 @@ pub(super) fn execute_space_manage(
             space_name,
             vid_type,
         } => super::exec_ddl(storage, |s| {
-            let vid_type = parse_vid_type_str(vid_type).map_err(|e| QueryError::execution(e))?;
+            let vid_type = parse_vid_type_str(vid_type).map_err(QueryError::execution)?;
             let mut space_info = SpaceInfo::new(space_name.clone()).with_vid_type(vid_type);
             StorageSchemaOps::create_space(s, &mut space_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;

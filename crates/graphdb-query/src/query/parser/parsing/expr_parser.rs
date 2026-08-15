@@ -345,34 +345,13 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                     ));
                 }
             } else {
-                let target_type = match type_name.to_uppercase().as_str() {
-                    "BOOL" | "BOOLEAN" => DataType::Bool,
-                    "INT" | "INTEGER" | "INT4" => DataType::Int,
-                    "BIGINT" | "INT8" => DataType::BigInt,
-                    "SMALLINT" | "INT2" => DataType::SmallInt,
-                    "FLOAT" | "FLOAT4" => DataType::Float,
-                    "DOUBLE" | "FLOAT8" | "DOUBLE PRECISION" => DataType::Double,
-                    "STRING" | "TEXT" | "VARCHAR" => DataType::String,
-                    "DATE" => DataType::Date,
-                    "TIME" => DataType::Time,
-                    "DATETIME" | "TIMESTAMP" => DataType::DateTime,
-                    "LIST" => DataType::List,
-                    "MAP" => DataType::Map,
-                    "SET" => DataType::Set,
-                    "JSON" => DataType::Json,
-                    "JSONB" => DataType::JsonB,
-                    "UUID" => DataType::Uuid,
-                    "INTERVAL" => DataType::Interval,
-                    "BLOB" => DataType::Blob,
-                    "GEOGRAPHY" => DataType::Geography,
-                    _ => {
-                        return Err(ParseError::new(
-                            ParseErrorKind::SyntaxError,
-                            format!("Unknown type cast target: {}", type_name),
-                            span.start,
-                        ));
-                    }
-                };
+                let target_type = type_name.parse::<DataType>().map_err(|e| {
+                    ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        format!("Unknown type cast target: {}", e),
+                        span.start,
+                    )
+                })?;
                 expression = ParseResult {
                     expr: Expression::TypeCast {
                         expression: Box::new(expression.expr),
@@ -1501,10 +1480,10 @@ mod tests {
                 other => panic!("expected Expression::Exists, got {:?}", other),
             };
             for pattern_str in &body.patterns {
-                let mut ctx = &mut ParseContext::new(pattern_str);
+                let ctx = &mut ParseContext::new(pattern_str);
                 let mut parser =
                     crate::query::parser::parsing::traversal_parser::TraversalParser::new();
-                let pattern = parser.parse_pattern(&mut ctx);
+                let pattern = parser.parse_pattern(ctx);
                 assert!(
                     pattern.is_ok(),
                     "stored pattern `{pattern_str}` must be re-parseable: {:?}",

@@ -67,8 +67,7 @@ fn nullable_cmp_at<T>(
 /// Append validity bits (packed, one bit per row) to a bitmap starting at
 /// row `rows_before`.
 fn extend_bitmap(bm: &mut Vec<u64>, rows_before: usize, valid: impl Iterator<Item = bool>) {
-    let mut row = rows_before;
-    for is_valid in valid {
+    for (row, is_valid) in (rows_before..).zip(valid) {
         let word = row / 64;
         if word >= bm.len() {
             bm.resize(word + 1, 0u64);
@@ -76,14 +75,13 @@ fn extend_bitmap(bm: &mut Vec<u64>, rows_before: usize, valid: impl Iterator<Ite
         if is_valid {
             bm[word] |= 1u64 << (row % 64);
         }
-        row += 1;
     }
 }
 
 /// Build a packed validity bitmap marking the rows at `indices` that are
 /// valid in the source bitmap.
 fn bitmap_from_indices(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
-    let mut out = vec![0u64; (indices.len() + 63) / 64];
+    let mut out = vec![0u64; indices.len().div_ceil(64)];
     for (j, &i) in indices.iter().enumerate() {
         if bitmap_is_valid(bitmap, i) {
             out[j / 64] |= 1u64 << (j % 64);
@@ -605,22 +603,22 @@ impl BatchColumn {
     fn to_nullable(current: &Self) -> Self {
         match current {
             BatchColumn::I64(v) => {
-                BatchColumn::NullableI64(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableI64(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             BatchColumn::F64(v) => {
-                BatchColumn::NullableF64(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableF64(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             BatchColumn::I32(v) => {
-                BatchColumn::NullableI32(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableI32(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             BatchColumn::Bool(v) => {
-                BatchColumn::NullableBool(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableBool(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             BatchColumn::Date(v) => {
-                BatchColumn::NullableDate(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableDate(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             BatchColumn::Utf8(v) => {
-                BatchColumn::NullableUtf8(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+                BatchColumn::NullableUtf8(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             _ => current.clone(),
         }
@@ -755,27 +753,27 @@ impl BatchColumn {
             BatchColumn::Utf8(v) => v.truncate(len),
             BatchColumn::NullableI64(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::NullableF64(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::NullableI32(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::NullableBool(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::NullableDate(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::NullableUtf8(v, bm) => {
                 v.truncate(len);
-                bm.truncate((len + 63) / 64);
+                bm.truncate(len.div_ceil(64));
             }
             BatchColumn::Fallback(v) => v.truncate(len),
         }

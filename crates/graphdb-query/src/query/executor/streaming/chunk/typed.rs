@@ -78,7 +78,7 @@ pub(super) fn bitmap_set_bit(bitmap: &mut [u64], idx: usize, valid: bool) {
 
 /// Gather the validity bits at `indices` into a new bitmap.
 fn gather_bitmap(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
-    let mut out = vec![0u64; (indices.len() + 63) / 64];
+    let mut out = vec![0u64; indices.len().div_ceil(64)];
     for (j, &i) in indices.iter().enumerate() {
         bitmap_set_bit(&mut out, j, bitmap_is_valid(bitmap, i));
     }
@@ -679,8 +679,6 @@ fn nullable_compare_batches(
     None
 }
 
-/// Arithmetic operators with NULL-aware bitmaps (at least one nullable
-
 /// View an integer batch as `Vec<i64>` (allocation-free for I64, promoted
 /// for I32) plus its validity bitmap (`None` = all valid).
 fn numeric_i64_view(batch: &TypedBatch) -> Option<(Vec<i64>, Option<Vec<u64>>)> {
@@ -722,8 +720,11 @@ fn numeric_f64_view(batch: &TypedBatch) -> Option<(Vec<f64>, Option<Vec<u64>>)> 
     }
 }
 
+/// String batch view: values plus optional validity bitmap (`None` = all valid).
+type Utf8View = (Vec<Arc<str>>, Option<Vec<u64>>);
+
 /// View a string batch plus its validity bitmap.
-fn utf8_view(batch: &TypedBatch) -> Option<(Vec<Arc<str>>, Option<Vec<u64>>)> {
+fn utf8_view(batch: &TypedBatch) -> Option<Utf8View> {
     match batch {
         TypedBatch::Utf8(v) => Some((v.clone(), None)),
         TypedBatch::NullableUtf8(v, b) => Some((v.clone(), Some(b.clone()))),

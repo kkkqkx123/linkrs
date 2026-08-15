@@ -20,7 +20,7 @@ pub use batch::{BatchError, BatchItem, BatchResult, BatchStatus, BatchType, Edge
 pub use config::{ClientConfig, SessionInfo};
 pub use config_types::{ConfigItem, ConfigSection, ServerConfig};
 pub use http_client::HttpClient;
-pub use schema::{DataType, PropertyDef};
+pub use schema::PropertyDef;
 pub use snapshot::ColdSnapshotInfo;
 pub use stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
 pub use transaction::{TransactionInfo, TransactionOptions};

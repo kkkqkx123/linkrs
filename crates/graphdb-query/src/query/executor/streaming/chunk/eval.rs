@@ -440,14 +440,14 @@ impl DataChunk {
             Expression::Variable(name) => self
                 .layout
                 .slot_id(name)
-                .is_some_and(|slot| slot_has_null(slot)),
+                .is_some_and(&slot_has_null),
             Expression::Property { object, property } => {
                 if let Expression::Variable(var) = object.as_ref() {
                     let compound = format!("{}.{}", var, property);
                     return self
                         .layout
                         .slot_id(&compound)
-                        .is_some_and(|slot| slot_has_null(slot));
+                        .is_some_and(slot_has_null);
                 }
                 false
             }

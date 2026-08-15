@@ -9,6 +9,7 @@ pub mod import_export;
 pub mod index;
 pub mod metadata_version;
 pub mod operators;
+pub mod parse;
 pub mod property;
 pub mod property_trait;
 pub mod query;
@@ -41,6 +42,7 @@ use std::sync::Arc;
 pub mod type_info;
 
 pub use type_info::{data_type_from_info, type_info_of, ArrayTypeInfo, StructTypeInfo, TypeInfo};
+pub use parse::ParseDataTypeError;
 
 /// Error decoding a `DataType` from its compact byte code.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -388,9 +390,8 @@ mod tests {
     fn test_from_u8_never_yields_empty_for_nonzero_code() {
         // Regression guard: unknown codes must not collapse into `Empty`.
         for code in 1..=255 {
-            match DataType::from_u8(code) {
-                Ok(DataType::Empty) => panic!("code {code} must not decode to Empty"),
-                _ => {}
+            if let Ok(DataType::Empty) = DataType::from_u8(code) {
+                panic!("code {code} must not decode to Empty");
             }
         }
     }
