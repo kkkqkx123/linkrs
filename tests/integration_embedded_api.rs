@@ -221,7 +221,9 @@ fn test_session_text_transaction_commands() {
         .expect("INSERT inside text transaction should succeed");
 
     // ROLLBACK undoes the transaction writes.
-    session.execute("ROLLBACK").expect("ROLLBACK should succeed");
+    session
+        .execute("ROLLBACK")
+        .expect("ROLLBACK should succeed");
     let count = session
         .execute("MATCH (p:person) RETURN count(p) AS c")
         .expect("MATCH should succeed");
@@ -237,7 +239,9 @@ fn test_session_text_transaction_commands() {
     session
         .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
         .expect("INSERT p1 should succeed");
-    session.execute("SAVEPOINT sp1").expect("SAVEPOINT should succeed");
+    session
+        .execute("SAVEPOINT sp1")
+        .expect("SAVEPOINT should succeed");
     session
         .execute("INSERT VERTEX person(name, age) VALUES 'p2':('Bob', 25)")
         .expect("INSERT p2 should succeed");
@@ -254,9 +258,7 @@ fn test_session_text_transaction_commands() {
         "ROLLBACK TO must undo post-savepoint writes only"
     );
 
-    session
-        .execute("COMMIT")
-        .expect("COMMIT should succeed");
+    session.execute("COMMIT").expect("COMMIT should succeed");
     let count = session
         .execute("MATCH (p:person) RETURN count(p) AS c")
         .expect("MATCH should succeed");

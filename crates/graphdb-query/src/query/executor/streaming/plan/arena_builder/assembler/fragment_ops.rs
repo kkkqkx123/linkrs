@@ -635,10 +635,7 @@ impl ArenaPlanAssembler {
             input_layout: None,
             // Transaction commands produce a structured two-column result
             // (command / result) through [`TransactionCommandResult`].
-            output_layout: SlotLayout::from_names(&[
-                "command".to_string(),
-                "result".to_string(),
-            ]),
+            output_layout: SlotLayout::from_names(&["command".to_string(), "result".to_string()]),
             properties: PhysicalProperties::single_blocking(),
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,

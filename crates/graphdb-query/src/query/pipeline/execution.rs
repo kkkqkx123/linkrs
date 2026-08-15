@@ -229,9 +229,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 );
                 if let Some(txn_id) = query_context.request_context().transaction_id {
                     let read_write = !query_context.request_context().read_only;
-                    ctrl.begin_tracking(txn_id, read_write).map_err(|error| {
-                        DBError::from(QueryError::execution(error.to_string()))
-                    })?;
+                    ctrl.begin_tracking(txn_id, read_write)
+                        .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
                 }
                 *ctrl_guard = Some(ctrl.clone());
                 ctrl

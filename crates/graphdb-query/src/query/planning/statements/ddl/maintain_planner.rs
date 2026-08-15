@@ -22,7 +22,9 @@ use crate::query::planning::plan::core::{
     ShowStatsNode, ShowStatsType, ShowUsersNode,
 };
 use crate::query::planning::plan::SubPlan;
-use crate::query::planning::plan::{BeginTransactionNode, CommitNode, ReleaseSavepointNode, RollbackNode, SavepointNode};
+use crate::query::planning::plan::{
+    BeginTransactionNode, CommitNode, ReleaseSavepointNode, RollbackNode, SavepointNode,
+};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
 use std::sync::Arc;

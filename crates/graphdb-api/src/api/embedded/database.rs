@@ -253,15 +253,23 @@ impl GraphDatabase<GraphStorage> {
             #[cfg(not(feature = "fulltext-search"))]
             {
                 #[cfg(feature = "qdrant")]
-                setup_sync_with_vector_only(vector_runtime.handle())?;
+                {
+                    setup_sync_with_vector_only(vector_runtime.handle())?
+                }
                 #[cfg(not(feature = "qdrant"))]
-                (None, None)
+                {
+                    (None, None)
+                }
             }
         } else {
             #[cfg(feature = "qdrant")]
-            setup_sync_with_vector_only(vector_runtime.handle())?;
+            {
+                setup_sync_with_vector_only(vector_runtime.handle())?
+            }
             #[cfg(not(feature = "qdrant"))]
-            (None, None)
+            {
+                (None, None)
+            }
         };
 
         if let (Some(path), Some(manager)) =

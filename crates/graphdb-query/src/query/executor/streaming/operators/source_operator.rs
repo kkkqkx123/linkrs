@@ -431,6 +431,7 @@ impl SourceOperator {
         Ok(())
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<DataChunk>, QueryError> {
         use crate::query::executor::streaming::operators::state::SourceState;
         use crate::query::executor::streaming::state::GlobalState;

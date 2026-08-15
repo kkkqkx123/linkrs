@@ -13,6 +13,7 @@ use crate::query::executor::streaming::slot::SlotLayout;
 
 use super::build_combined_names;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_nested_loop_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,

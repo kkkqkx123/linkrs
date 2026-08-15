@@ -303,16 +303,11 @@ pub enum BlockingSpec {
 /// The logical plan always builds from the right child (the default); a left
 /// build side is a physical alternative selected by the plan conversion when
 /// the right child is not hashable but the left child is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BuildSide {
     Left,
+    #[default]
     Right,
-}
-
-impl Default for BuildSide {
-    fn default() -> Self {
-        Self::Right
-    }
 }
 
 /// Immutable config for binary join operators.
@@ -924,13 +919,19 @@ pub enum TxnSpec {
     Rollback,
     /// Roll back to a savepoint: validates the controller is in `Active`
     /// state but does NOT transition out of it.
-    RollbackToSavepoint { name: String },
+    RollbackToSavepoint {
+        name: String,
+    },
     /// Create a savepoint (validation only — the TransactionManager
     /// operation is performed by the API layer beforehand).
-    Savepoint { name: String },
+    Savepoint {
+        name: String,
+    },
     /// Release a savepoint (validation only — the TransactionManager
     /// operation is performed by the API layer beforehand).
-    ReleaseSavepoint { name: String },
+    ReleaseSavepoint {
+        name: String,
+    },
 }
 
 // ── RecursiveFragment spec (M7) ──────────────────────────────────────────────

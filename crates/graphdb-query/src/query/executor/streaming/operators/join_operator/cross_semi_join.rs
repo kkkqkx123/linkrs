@@ -11,6 +11,7 @@ use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_cross_join(
     all_left_rows: &mut Vec<Vec<Value>>,
     all_right_rows: &mut Vec<Vec<Value>>,
@@ -90,6 +91,7 @@ pub(super) fn next_cross_join(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_semi_join(
     join_condition: &mut Option<Expression>,
     right_rows: &mut Vec<Vec<Value>>,

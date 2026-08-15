@@ -675,6 +675,7 @@ impl<
     /// the transaction id semantics of §3.1, ③ plan execution through the
     /// query API (the `TxnOperator` validates the session controller and
     /// produces a structured result), ④ API-layer session post-processing.
+    #[allow(clippy::too_many_arguments)]
     fn execute_transaction_command(
         &self,
         session: &Arc<ClientSession>,
@@ -716,10 +717,9 @@ impl<
                             crate::transaction::TransactionErrorKind::WriteTransactionConflict
                         ) {
                             txn_manager.cleanup_expired_transactions();
-                            match txn_manager.begin_transaction_with_owner(
-                                options,
-                                session.id().to_string(),
-                            ) {
+                            match txn_manager
+                                .begin_transaction_with_owner(options, session.id().to_string())
+                            {
                                 Ok(txn_id) => txn_id,
                                 Err(retry_err) => {
                                     return Err(format!(
@@ -926,7 +926,6 @@ impl<
         }
     }
 
-
     /// Execute the transaction-command plan: permission check + query API
     /// invocation with the explicit transaction id + result conversion.
     ///
@@ -936,6 +935,7 @@ impl<
     /// through `create_execution` (preserving timestamps and the read-only
     /// mode for G2); finished transactions (COMMIT / ROLLBACK already
     /// performed the TM side effect) bind an auto-commit context.
+    #[allow(clippy::too_many_arguments)]
     fn run_transaction_command_plan(
         &self,
         session_id: i64,
@@ -1001,6 +1001,7 @@ impl<
     /// is recorded on the variable overlay so ROLLBACK / ROLLBACK TO
     /// SAVEPOINT restore the previous value. Client-supplied parameters and
     /// session variables are passed through to the evaluation.
+    #[allow(clippy::too_many_arguments)]
     fn execute_variable_assignment(
         &self,
         session: &Arc<ClientSession>,
@@ -1076,7 +1077,8 @@ impl<
         // check so any authenticated user can switch to a space. LET assigns a
         // session variable without touching data, so it is exempt the same way.
         let stmt_upper = stmt.trim().to_uppercase();
-        let session_only_statement = stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
+        let session_only_statement =
+            stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
         if !self.permission_manager.is_admin(&username) && !session_only_statement {
             let permission = self.extract_permission_from_statement(stmt);
             if let Err(e) = self
@@ -1171,6 +1173,7 @@ impl<
     /// after `begin_statement`); `None` binds an auto-commit context.
     /// `parsed_ast` is the classification-pass AST for command statements;
     /// the engine reuses it instead of re-parsing the text.
+    #[allow(clippy::too_many_arguments)]
     fn run_query_plan(
         &self,
         session: &Arc<ClientSession>,
@@ -1472,7 +1475,6 @@ impl<
         }
         Ok(())
     }
-
 }
 
 impl<S> GraphService<S>
@@ -1729,9 +1731,8 @@ fn merge_batch_outcomes<S>(
         }
         match permitted_outcomes.next() {
             Some(Ok(result)) => {
-                results[*original_index] = Some(Ok(GraphService::<S>::convert_to_execution_result(
-                    result,
-                )));
+                results[*original_index] =
+                    Some(Ok(GraphService::<S>::convert_to_execution_result(result)));
             }
             Some(Err(error)) => results[*original_index] = Some(Err(error.to_string())),
             None => results[*original_index] = Some(Err("Batch outcome missing".to_string())),
@@ -1798,15 +1799,18 @@ mod tests {
         ));
 
         // Regular statements and malformed commands are not classified.
-        assert!(GraphService::<MockStorage>::parse_command("MATCH (n) RETURN n")
-            .unwrap()
-            .is_none());
+        assert!(
+            GraphService::<MockStorage>::parse_command("MATCH (n) RETURN n")
+                .unwrap()
+                .is_none()
+        );
         assert!(GraphService::<MockStorage>::parse_command("COMMIT junk")
             .unwrap()
             .is_none());
 
         // Malformed commands surface the first specific parse error.
-        let err = GraphService::<MockStorage>::parse_command("LET $x").expect_err("LET $x must fail");
+        let err =
+            GraphService::<MockStorage>::parse_command("LET $x").expect_err("LET $x must fail");
         assert!(
             err.contains("LET requires an assignment"),
             "unexpected error: {}",
@@ -1814,8 +1818,8 @@ mod tests {
         );
 
         // A bare `LET` also surfaces a specific error (command-like).
-        let bare_let = GraphService::<MockStorage>::parse_command("LET")
-            .expect_err("bare LET must fail");
+        let bare_let =
+            GraphService::<MockStorage>::parse_command("LET").expect_err("bare LET must fail");
         assert!(
             bare_let.contains("Invalid session variable name"),
             "unexpected error: {}",

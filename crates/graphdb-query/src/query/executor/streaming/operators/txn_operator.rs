@@ -67,12 +67,10 @@ impl TxnOperator {
                 name: name.clone(),
                 emitted: false,
             },
-            super::spec::TxnSpec::ReleaseSavepoint { name } => {
-                TxnOperatorKind::ReleaseSavepoint {
-                    name: name.clone(),
-                    emitted: false,
-                }
-            }
+            super::spec::TxnSpec::ReleaseSavepoint { name } => TxnOperatorKind::ReleaseSavepoint {
+                name: name.clone(),
+                emitted: false,
+            },
         };
         Self::new(kind, output_layout)
     }

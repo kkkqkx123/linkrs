@@ -946,7 +946,7 @@ pub(super) fn execute_delete_index(
         return Ok(None);
     }
     *emitted = true;
-    let result = super::exec_ddl(storage, |schema| {
+    super::exec_ddl(storage, |schema| {
         // Try tag index first, then edge index
         if StorageSchemaOps::drop_tag_index(schema, space_name, index_name).is_ok() {
             return Ok(());
@@ -954,8 +954,7 @@ pub(super) fn execute_delete_index(
         StorageSchemaOps::drop_edge_index(schema, space_name, index_name)
             .map(|_| ())
             .map_err(|error| QueryError::execution(error.to_string()))
-    });
-    result
+    })
 }
 
 fn parse_vid_type_str(s: &str) -> crate::core::types::DataType {

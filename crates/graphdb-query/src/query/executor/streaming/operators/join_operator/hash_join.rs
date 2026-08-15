@@ -49,6 +49,7 @@ fn build_side_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_hash_join(
     join_condition: &mut Option<Expression>,
     hash_keys: &mut [Expression],
@@ -150,6 +151,7 @@ pub(super) fn next_hash_join(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_hash_left_join(
     join_condition: &mut Option<Expression>,
     hash_keys: &mut [Expression],

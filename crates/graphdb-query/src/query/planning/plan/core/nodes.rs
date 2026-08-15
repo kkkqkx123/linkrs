@@ -17,8 +17,8 @@ pub use access::{IndexLimit, IndexScanNode, OrderByItem, ScanType};
 pub use base::plan_node_traits::*;
 pub use base::{PlanNodeCategory, PlanNodeEnum, PlanNodeVisitor};
 pub use control_flow::{
-    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode, ReleaseSavepointNode,
-    RollbackNode, SavepointNode, SelectNode, StartNode,
+    ArgumentNode, BeginTransactionNode, CommitNode, LoopNode, PassThroughNode,
+    ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode, StartNode,
 };
 pub use data_modification::{
     DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode, EdgeDeleteInfo,

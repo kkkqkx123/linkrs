@@ -1407,14 +1407,7 @@ impl ArenaPlanAssembler {
                     },
                     None => TxnSpec::Rollback,
                 };
-                Self::push_txn_op(
-                    operators,
-                    fragments,
-                    op_alloc,
-                    frag_alloc,
-                    node.id(),
-                    spec,
-                )
+                Self::push_txn_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
             }
             PlanNodeEnum::Savepoint(savepoint_node) => Self::push_txn_op(
                 operators,

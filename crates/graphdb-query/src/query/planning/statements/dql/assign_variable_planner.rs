@@ -58,8 +58,8 @@ impl Planner for AssignVariablePlanner {
             alias: assign.name,
             is_matched: false,
         };
-        let project_node = ProjectNode::new(current_node.clone(), vec![yield_column])
-            .map_err(|e| {
+        let project_node =
+            ProjectNode::new(current_node.clone(), vec![yield_column]).map_err(|e| {
                 PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
             })?;
         let current_node = PlanNodeEnum::Project(project_node);

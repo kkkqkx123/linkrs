@@ -248,7 +248,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                         );
                     }
                     stmt => {
-                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                        return self.execute_transaction_command(query, stmt, parsed_ast.clone());
                     }
                 }
             }
@@ -602,7 +602,8 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_api.execute(query, ctx)?
         };
 
-        self.statistics.record_changes(result.metadata.rows_returned);
+        self.statistics
+            .record_changes(result.metadata.rows_returned);
 
         // Contract: the LET plan evaluates to exactly one row with one value
         // column. Guard instead of silently taking the first value if a
@@ -620,14 +621,13 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             )));
         }
         let columns = result.columns.clone();
-        let mut rows = result.rows;
-        let row = rows
-            .first()
-            .ok_or_else(|| CoreError::InvalidParameter("LET expression returned no value".to_string()))?;
-        let value = row
-            .get(&columns[0])
-            .cloned()
-            .ok_or_else(|| CoreError::InvalidParameter("LET expression returned no value".to_string()))?;
+        let rows = result.rows;
+        let row = rows.first().ok_or_else(|| {
+            CoreError::InvalidParameter("LET expression returned no value".to_string())
+        })?;
+        let value = row.get(&columns[0]).cloned().ok_or_else(|| {
+            CoreError::InvalidParameter("LET expression returned no value".to_string())
+        })?;
         self.set_variable(assign.name.clone(), value);
         Ok(QueryResult::from_core(crate::api::core::QueryResult {
             columns,
@@ -667,7 +667,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                         );
                     }
                     stmt => {
-                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                        return self.execute_transaction_command(query, stmt, parsed_ast.clone());
                     }
                 }
             }
@@ -739,7 +739,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
                         );
                     }
                     stmt => {
-                        return self.execute_transaction_command(query, &stmt, parsed_ast.clone());
+                        return self.execute_transaction_command(query, stmt, parsed_ast.clone());
                     }
                 }
             }

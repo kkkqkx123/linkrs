@@ -1430,11 +1430,7 @@ mod tests {
     fn test_parse_let_statement() {
         let mut ctx = create_parser_context("LET $x = 1 + 2");
         let result = StmtParser::parse_statement(&mut ctx);
-        assert!(
-            result.is_ok(),
-            "LET parse failure: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "LET parse failure: {:?}", result.err());
         if let Ok(Stmt::AssignVariable(stmt)) = result {
             assert_eq!(stmt.name, "x");
             let expr = stmt
@@ -1442,10 +1438,7 @@ mod tests {
                 .get_expression()
                 .expect("expression should resolve");
             assert!(
-                matches!(
-                    expr,
-                    crate::core::types::expr::Expression::Binary { .. }
-                ),
+                matches!(expr, crate::core::types::expr::Expression::Binary { .. }),
                 "LET RHS should parse as a binary expression, got {:?}",
                 expr
             );

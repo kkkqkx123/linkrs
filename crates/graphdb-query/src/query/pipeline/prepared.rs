@@ -722,8 +722,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             } else {
                 TransactionScope::explicit(transaction_id, !request.read_only)
             }
-        } else if requires_auto_commit(stmt) {
-            TransactionScope::None
         } else {
             TransactionScope::None
         }

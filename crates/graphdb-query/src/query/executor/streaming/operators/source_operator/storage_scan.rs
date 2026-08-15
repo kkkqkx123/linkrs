@@ -221,6 +221,7 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
 /// rows (fixed-size scalar columns only; NULL/mixed/string columns fall
 /// back), and the extra typed allocation is accounted in the chunk's memory
 /// reservation.
+#[allow(clippy::too_many_arguments)]
 fn next_cursor_chunk_inner<C, R, FRow, FBatch>(
     cursor: &mut Option<C>,
     space_name: &str,

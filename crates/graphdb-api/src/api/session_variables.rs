@@ -47,9 +47,7 @@ impl SessionVariables {
     pub fn set_variable(&self, name: String, value: Value, in_transaction: bool) {
         if in_transaction {
             let prev = self.variable_value(&name);
-            self.ops
-                .write()
-                .push(VariableOp::Set { name, prev, value });
+            self.ops.write().push(VariableOp::Set { name, prev, value });
         } else {
             self.base.write().insert(name, value);
         }
@@ -119,9 +117,9 @@ impl SessionVariables {
     /// SAVEPOINT: record a variable-overlay boundary so ROLLBACK TO can
     /// restore assignments made after the savepoint.
     pub fn push_variable_savepoint(&self, savepoint_name: &str) {
-        self.ops
-            .write()
-            .push(VariableOp::Savepoint { name: savepoint_name.to_string() });
+        self.ops.write().push(VariableOp::Savepoint {
+            name: savepoint_name.to_string(),
+        });
     }
 
     /// Restore variable values for operations at or after `savepoint_name`

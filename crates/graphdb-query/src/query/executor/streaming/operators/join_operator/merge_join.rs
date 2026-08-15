@@ -45,6 +45,7 @@ fn drain_build_side(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_inner_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
@@ -107,6 +108,7 @@ pub(super) fn next_inner_join(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_left_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
@@ -189,6 +191,7 @@ pub(super) fn next_left_join(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_right_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
@@ -279,6 +282,7 @@ pub(super) fn next_right_join(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_full_outer_join(
     join_condition: &mut Option<Expression>,
     left_rows: &mut Vec<Vec<Value>>,
