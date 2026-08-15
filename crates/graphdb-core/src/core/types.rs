@@ -11,7 +11,6 @@ pub mod metadata_version;
 pub mod operators;
 pub mod property;
 pub mod property_trait;
-pub mod property_value;
 pub mod query;
 pub mod schema_change;
 pub mod schema_trait;
@@ -37,6 +36,15 @@ pub mod memory_estimation;
 pub mod c_api;
 
 use serde::{Deserialize, Serialize};
+
+/// Error decoding a `DataType` from its compact byte code.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TypeCodecError {
+    #[error("unknown data type code {0}")]
+    UnknownTypeCode(u8),
+    #[error("reserved data type code {0}")]
+    ReservedTypeCode(u8),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataType {
@@ -64,9 +72,7 @@ pub enum DataType {
     Geography,
     DataSet,
     FixedString(usize),
-    VID,
     Blob,
-    Timestamp,
     Vector,
     VectorDense(usize),
     VectorSparse(usize),
@@ -106,9 +112,7 @@ impl std::fmt::Display for DataType {
             DataType::Geography => write!(f, "GEOGRAPHY"),
             DataType::DataSet => write!(f, "DATASET"),
             DataType::FixedString(n) => write!(f, "FIXEDSTRING({})", n),
-            DataType::VID => write!(f, "VID"),
             DataType::Blob => write!(f, "BLOB"),
-            DataType::Timestamp => write!(f, "TIMESTAMP"),
             DataType::Vector => write!(f, "VECTOR"),
             DataType::VectorDense(n) => write!(f, "VECTOR_DENSE({})", n),
             DataType::VectorSparse(n) => write!(f, "VECTOR_SPARSE({})", n),
@@ -121,6 +125,11 @@ impl std::fmt::Display for DataType {
 }
 
 impl DataType {
+    /// Compact byte code of the data type.
+    ///
+    /// Codes 0-31 are fixed. Codes 22 and 24 are reserved (previously used by
+    /// the removed `VID` and `Timestamp` types) and must not be reused.
+    /// New types are allocated from code 64 onwards.
     pub fn as_u8(&self) -> u8 {
         match self {
             DataType::Empty => 0,
@@ -145,9 +154,7 @@ impl DataType {
             DataType::Geography => 19,
             DataType::DataSet => 20,
             DataType::FixedString(_) => 21,
-            DataType::VID => 22,
             DataType::Blob => 23,
-            DataType::Timestamp => 24,
             DataType::Vector => 25,
             DataType::VectorDense(_) => 26,
             DataType::VectorSparse(_) => 27,
@@ -158,41 +165,154 @@ impl DataType {
         }
     }
 
-    pub fn from_u8(value: u8) -> Self {
+    /// Decode a data type from its compact byte code.
+    ///
+    /// Returns an error for unknown codes, for the reserved codes 22/24
+    /// (previously `VID`/`Timestamp`), and for codes >= 64 that were not yet
+    /// allocated by a newer version. Unknown codes never silently decode to
+    /// `Empty`; forward compatibility failures surface explicitly.
+    pub fn from_u8(value: u8) -> Result<DataType, TypeCodecError> {
         match value {
-            0 => DataType::Empty,
-            1 => DataType::Null,
-            2 => DataType::Bool,
-            3 => DataType::SmallInt,
-            4 => DataType::Int,
-            5 => DataType::BigInt,
-            6 => DataType::Float,
-            7 => DataType::Double,
-            8 => DataType::Decimal128,
-            9 => DataType::String,
-            10 => DataType::Date,
-            11 => DataType::Time,
-            12 => DataType::DateTime,
-            13 => DataType::Vertex,
-            14 => DataType::Edge,
-            15 => DataType::Path,
-            16 => DataType::List,
-            17 => DataType::Map,
-            18 => DataType::Set,
-            19 => DataType::Geography,
-            20 => DataType::DataSet,
-            21 => DataType::FixedString(0),
-            22 => DataType::VID,
-            23 => DataType::Blob,
-            24 => DataType::Timestamp,
-            25 => DataType::Vector,
-            26 => DataType::VectorDense(0),
-            27 => DataType::VectorSparse(0),
-            28 => DataType::Json,
-            29 => DataType::JsonB,
-            30 => DataType::Uuid,
-            31 => DataType::Interval,
-            _ => DataType::Empty,
+            0 => Ok(DataType::Empty),
+            1 => Ok(DataType::Null),
+            2 => Ok(DataType::Bool),
+            3 => Ok(DataType::SmallInt),
+            4 => Ok(DataType::Int),
+            5 => Ok(DataType::BigInt),
+            6 => Ok(DataType::Float),
+            7 => Ok(DataType::Double),
+            8 => Ok(DataType::Decimal128),
+            9 => Ok(DataType::String),
+            10 => Ok(DataType::Date),
+            11 => Ok(DataType::Time),
+            12 => Ok(DataType::DateTime),
+            13 => Ok(DataType::Vertex),
+            14 => Ok(DataType::Edge),
+            15 => Ok(DataType::Path),
+            16 => Ok(DataType::List),
+            17 => Ok(DataType::Map),
+            18 => Ok(DataType::Set),
+            19 => Ok(DataType::Geography),
+            20 => Ok(DataType::DataSet),
+            21 => Ok(DataType::FixedString(0)),
+            22 => Err(TypeCodecError::ReservedTypeCode(22)),
+            23 => Ok(DataType::Blob),
+            24 => Err(TypeCodecError::ReservedTypeCode(24)),
+            25 => Ok(DataType::Vector),
+            26 => Ok(DataType::VectorDense(0)),
+            27 => Ok(DataType::VectorSparse(0)),
+            28 => Ok(DataType::Json),
+            29 => Ok(DataType::JsonB),
+            30 => Ok(DataType::Uuid),
+            31 => Ok(DataType::Interval),
+            _ => Err(TypeCodecError::UnknownTypeCode(value)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `DataType` variant with its compact byte code.
+    ///
+    /// Codes 22 and 24 are intentionally absent: they were previously used by
+    /// the removed `VID`/`Timestamp` types and are now reserved.
+    fn all_data_types() -> Vec<DataType> {
+        vec![
+            DataType::Empty,
+            DataType::Null,
+            DataType::Bool,
+            DataType::SmallInt,
+            DataType::Int,
+            DataType::BigInt,
+            DataType::Float,
+            DataType::Double,
+            DataType::Decimal128,
+            DataType::String,
+            DataType::Date,
+            DataType::Time,
+            DataType::DateTime,
+            DataType::Vertex,
+            DataType::Edge,
+            DataType::Path,
+            DataType::List,
+            DataType::Map,
+            DataType::Set,
+            DataType::Geography,
+            DataType::DataSet,
+            DataType::FixedString(0),
+            DataType::Blob,
+            DataType::Vector,
+            DataType::VectorDense(0),
+            DataType::VectorSparse(0),
+            DataType::Json,
+            DataType::JsonB,
+            DataType::Uuid,
+            DataType::Interval,
+        ]
+    }
+
+    #[test]
+    fn test_as_u8_codes_are_stable_within_range() {
+        // All assigned codes must stay in 0-31; new types start at 64.
+        for data_type in all_data_types() {
+            assert!(
+                data_type.as_u8() <= 31,
+                "assigned code {} for {data_type:?} must stay within 0-31",
+                data_type.as_u8()
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_u8_roundtrip_for_all_variants() {
+        for data_type in all_data_types() {
+            let code = data_type.as_u8();
+            let decoded = DataType::from_u8(code)
+                .unwrap_or_else(|e| panic!("code {code} for {data_type:?} must decode: {e}"));
+            assert_eq!(
+                decoded, data_type,
+                "roundtrip mismatch for {data_type:?} (code {code})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_u8_rejects_reserved_codes() {
+        // 22 (former `VID`) and 24 (former `Timestamp`) must never silently
+        // decode into a valid type.
+        assert_eq!(
+            DataType::from_u8(22),
+            Err(TypeCodecError::ReservedTypeCode(22))
+        );
+        assert_eq!(
+            DataType::from_u8(24),
+            Err(TypeCodecError::ReservedTypeCode(24))
+        );
+    }
+
+    #[test]
+    fn test_from_u8_rejects_unknown_codes_instead_of_empty() {
+        // The reserved expansion range (64+) and any unassigned code must fail
+        // loudly instead of silently degrading to `Empty`.
+        for code in [32u8, 63, 64, 128, 255] {
+            assert_eq!(
+                DataType::from_u8(code),
+                Err(TypeCodecError::UnknownTypeCode(code)),
+                "unassigned code {code} must error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_u8_never_yields_empty_for_nonzero_code() {
+        // Regression guard: unknown codes must not collapse into `Empty`.
+        for code in 1..=255 {
+            match DataType::from_u8(code) {
+                Ok(DataType::Empty) => panic!("code {code} must not decode to Empty"),
+                _ => {}
+            }
         }
     }
 }
@@ -211,7 +331,6 @@ pub use self::fulltext_query::{
     SortOrder,
 };
 pub use self::property::PropertyDef;
-pub use self::property_value::PropertyValue;
 pub use self::space::{EngineType, IsolationLevel, SpaceInfo, SpaceStatus, SpaceSummary};
 pub use self::tag::TagInfo;
 

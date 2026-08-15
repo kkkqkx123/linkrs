@@ -1271,44 +1271,47 @@ impl<
 
     /// Parse a DataType from its Display string representation.
     /// Mirrors the Display impl in graphdb_core::core::types::mod.rs.
-    fn parse_data_type(s: &str) -> DataType {
+    ///
+    /// Returns `None` for the removed `VID` type (rejected at DDL time) so the
+    /// caller falls back to a concrete type.
+    fn parse_data_type(s: &str) -> Option<DataType> {
         match s.to_uppercase().as_str() {
-            "EMPTY" => DataType::Empty,
-            "NULL" => DataType::Null,
-            "BOOL" => DataType::Bool,
-            "SMALLINT" => DataType::SmallInt,
-            "INT" => DataType::Int,
-            "BIGINT" => DataType::BigInt,
-            "FLOAT" => DataType::Float,
-            "DOUBLE" => DataType::Double,
-            "DECIMAL128" => DataType::Decimal128,
-            "STRING" => DataType::String,
-            "DATE" => DataType::Date,
-            "TIME" => DataType::Time,
-            "DATETIME" => DataType::DateTime,
-            "VERTEX" => DataType::Vertex,
-            "EDGE" => DataType::Edge,
-            "PATH" => DataType::Path,
-            "LIST" => DataType::List,
-            "MAP" => DataType::Map,
-            "SET" => DataType::Set,
-            "GEOGRAPHY" => DataType::Geography,
-            "DATASET" => DataType::DataSet,
-            "VID" => DataType::VID,
-            "BLOB" => DataType::Blob,
-            "TIMESTAMP" => DataType::Timestamp,
-            "VECTOR" => DataType::Vector,
-            "JSON" => DataType::Json,
-            "JSONB" => DataType::JsonB,
-            "UUID" => DataType::Uuid,
-            "INTERVAL" => DataType::Interval,
+            "EMPTY" => Some(DataType::Empty),
+            "NULL" => Some(DataType::Null),
+            "BOOL" => Some(DataType::Bool),
+            "SMALLINT" => Some(DataType::SmallInt),
+            "INT" => Some(DataType::Int),
+            "BIGINT" => Some(DataType::BigInt),
+            "FLOAT" => Some(DataType::Float),
+            "DOUBLE" => Some(DataType::Double),
+            "DECIMAL128" => Some(DataType::Decimal128),
+            "STRING" => Some(DataType::String),
+            "DATE" => Some(DataType::Date),
+            "TIME" => Some(DataType::Time),
+            "DATETIME" => Some(DataType::DateTime),
+            "VERTEX" => Some(DataType::Vertex),
+            "EDGE" => Some(DataType::Edge),
+            "PATH" => Some(DataType::Path),
+            "LIST" => Some(DataType::List),
+            "MAP" => Some(DataType::Map),
+            "SET" => Some(DataType::Set),
+            "GEOGRAPHY" => Some(DataType::Geography),
+            "DATASET" => Some(DataType::DataSet),
+            "VID" => None,
+            "BLOB" => Some(DataType::Blob),
+            "TIMESTAMP" => Some(DataType::DateTime),
+            "VECTOR" => Some(DataType::Vector),
+            "JSON" => Some(DataType::Json),
+            "JSONB" => Some(DataType::JsonB),
+            "UUID" => Some(DataType::Uuid),
+            "INTERVAL" => Some(DataType::Interval),
             _ if s.starts_with("FIXEDSTRING(") => {
                 let n = s
                     .trim_start_matches("FIXEDSTRING(")
                     .trim_end_matches(')')
                     .parse::<usize>()
                     .unwrap_or(0);
-                DataType::FixedString(n)
+                Some(DataType::FixedString(n))
             }
             _ if s.starts_with("VECTOR_DENSE(") => {
                 let n = s
@@ -1316,7 +1319,7 @@ impl<
                     .trim_end_matches(')')
                     .parse::<usize>()
                     .unwrap_or(0);
-                DataType::VectorDense(n)
+                Some(DataType::VectorDense(n))
             }
             _ if s.starts_with("VECTOR_SPARSE(") => {
                 let n = s
@@ -1324,9 +1327,9 @@ impl<
                     .trim_end_matches(')')
                     .parse::<usize>()
                     .unwrap_or(0);
-                DataType::VectorSparse(n)
+                Some(DataType::VectorSparse(n))
             }
-            _ => DataType::BigInt,
+            _ => None,
         }
     }
 
@@ -1348,7 +1351,9 @@ impl<
                     _ => return None,
                 };
                 let vid_type = match vid_type_idx.and_then(|idx| row.get(idx)) {
-                    Some(crate::core::Value::String(s)) => Self::parse_data_type(s),
+                    Some(crate::core::Value::String(s)) => {
+                        Self::parse_data_type(s).unwrap_or(DataType::BigInt)
+                    }
                     _ => DataType::BigInt,
                 };
                 Some(SpaceSummary::new(id, name, vid_type))

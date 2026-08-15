@@ -8,8 +8,8 @@ use crate::core::StorageError;
 use crate::transaction::undo_log::{UndoLogEntry, UndoTarget};
 
 pub use crate::transaction::undo_log::{
-    CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, PropertyValue,
-    RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, UpdateEdgePropUndo, UpdateVertexPropUndo,
+    CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, RelatedEdgeInfo,
+    RemoveEdgeUndo, RemoveVertexUndo, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
 
 /// Operation logging context trait
@@ -144,7 +144,7 @@ pub struct CreateUpdateEdgePropUndoParams {
     pub edge_label: LabelId,
     pub rank: i64,
     pub col_id: ColumnId,
-    pub old_value: PropertyValue,
+    pub old_value: crate::core::Value,
 }
 
 /// Parameters for create_remove_vertex_undo operation
@@ -179,7 +179,7 @@ impl RollbackHelper {
         label: LabelId,
         vid: u64,
         col_id: ColumnId,
-        old_value: PropertyValue,
+        old_value: crate::core::Value,
     ) -> UndoLogEntry {
         UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
             v_label: label,
@@ -326,7 +326,7 @@ mod tests {
             1,
             100,
             ColumnId(0),
-            PropertyValue::Int(42),
+            crate::core::Value::BigInt(42),
         );
         assert!(undo.description().contains("UpdateVertexPropUndo"));
     }

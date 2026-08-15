@@ -1,6 +1,6 @@
 use crate::core::types::{
-    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, PropertyValue, Timestamp,
-    UndoLogError, UndoLogResult, UndoTarget, VertexIdentifier,
+    ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, Timestamp, UndoLogError,
+    UndoLogResult, UndoTarget, VertexIdentifier,
 };
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::graph_storage::GraphStorageContext;
@@ -97,7 +97,7 @@ impl UndoTarget for GraphStorageContext {
         &self,
         vertex: VertexIdentifier,
         col_id: ColumnId,
-        value: PropertyValue,
+        value: crate::core::Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         self.data_store()
@@ -119,7 +119,7 @@ impl UndoTarget for GraphStorageContext {
         &self,
         edge_id: EdgeIdentifier,
         col_id: ColumnId,
-        value: PropertyValue,
+        value: crate::core::Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let params = UpdateEdgePropertyUndoParams {

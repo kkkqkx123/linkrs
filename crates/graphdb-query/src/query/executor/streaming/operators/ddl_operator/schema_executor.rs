@@ -42,7 +42,7 @@ pub(super) fn execute_space_manage(
             space_name,
             vid_type,
         } => super::exec_ddl(storage, |s| {
-            let vid_type = parse_vid_type_str(vid_type);
+            let vid_type = parse_vid_type_str(vid_type).map_err(|e| QueryError::execution(e))?;
             let mut space_info = SpaceInfo::new(space_name.clone()).with_vid_type(vid_type);
             StorageSchemaOps::create_space(s, &mut space_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -957,29 +957,29 @@ pub(super) fn execute_delete_index(
     })
 }
 
-fn parse_vid_type_str(s: &str) -> crate::core::types::DataType {
+fn parse_vid_type_str(s: &str) -> Result<crate::core::types::DataType, String> {
     let upper = s.trim().to_uppercase();
     if upper == "INT64" {
-        crate::core::types::DataType::BigInt
+        Ok(crate::core::types::DataType::BigInt)
     } else if upper == "INT32" {
-        crate::core::types::DataType::Int
+        Ok(crate::core::types::DataType::Int)
     } else if upper == "INT16" || upper == "INT8" {
-        crate::core::types::DataType::SmallInt
+        Ok(crate::core::types::DataType::SmallInt)
     } else if upper == "STRING" {
-        crate::core::types::DataType::String
+        Ok(crate::core::types::DataType::String)
     } else if upper == "VID" {
-        crate::core::types::DataType::VID
+        Err("VID is not a valid vertex ID type; use INT64, INT32, INT16, STRING or FIXED_STRING instead".to_string())
     } else if upper.starts_with("FIXED_STRING(") || upper.starts_with("FIXEDSTRING(") {
         let inner = upper
             .trim_start_matches("FIXED_STRING(")
             .trim_start_matches("FIXEDSTRING(")
             .trim_end_matches(')');
         if let Ok(n) = inner.parse::<usize>() {
-            crate::core::types::DataType::FixedString(n)
+            Ok(crate::core::types::DataType::FixedString(n))
         } else {
-            crate::core::types::DataType::FixedString(32)
+            Ok(crate::core::types::DataType::FixedString(32))
         }
     } else {
-        crate::core::types::DataType::String
+        Ok(crate::core::types::DataType::String)
     }
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::parser::ast::stmt::{Ast, Stmt};
-use crate::query::parser::core::error::ParseError;
+use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::{ParseContext, RecoveryScope};
 use crate::query::parser::parsing::stmt_parser::StmtParser;
@@ -131,6 +131,25 @@ impl<'a> Parser<'a> {
         self.ctx.reset_recovery_count();
 
         let stmt = self.parse_statement()?;
+
+        // A statement must consume the whole input. An optional trailing
+        // semicolon terminator is allowed; any further token is a syntax
+        // error, otherwise trailing garbage such as `COMMIT junk` would be
+        // silently truncated to `COMMIT` and executed.
+        if self.ctx.match_token(TokenKind::Semicolon) {
+            // Optional statement terminator consumed.
+        }
+        if self.ctx.current_token().kind != TokenKind::Eof {
+            self.ctx.add_error(ParseError::new(
+                ParseErrorKind::UnexpectedToken,
+                format!(
+                    "Unexpected token after end of statement: {:?}",
+                    self.ctx.current_token().kind
+                ),
+                self.ctx.current_position(),
+            ));
+        }
+
         let ast = Ast::new(stmt, self.expr_context.clone());
         Ok(ParserResult { ast: Arc::new(ast) })
     }

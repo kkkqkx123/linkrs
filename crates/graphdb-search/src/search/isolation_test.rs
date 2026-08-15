@@ -18,7 +18,6 @@ mod tests {
     use tempfile::TempDir;
 
     const FULLTEXT_INDEX_PREFIX: &str = "space_ft";
-    const VECTOR_COLLECTION_PREFIX: &str = "space";
 
     // ==================== Index Naming Tests ====================
 
@@ -37,6 +36,8 @@ mod tests {
     #[test]
     fn test_vector_index_naming_format() {
         use graphdb_sync::sync::vector_sync::VectorIndexLocation;
+
+        const VECTOR_COLLECTION_PREFIX: &str = "space";
 
         let location = VectorIndexLocation::new(1, "Article", "content");
         let collection_name = location.to_collection_name();

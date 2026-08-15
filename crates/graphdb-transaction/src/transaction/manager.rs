@@ -1441,7 +1441,7 @@ mod tests {
         ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
     };
     use crate::transaction::error::TransactionErrorKind;
-    use crate::transaction::undo_log::{PropertyValue, UndoLogResult, UndoTarget};
+    use crate::transaction::undo_log::{UndoLogResult, UndoTarget};
     use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]
@@ -1700,7 +1700,7 @@ mod tests {
                 &self,
                 _vertex: VertexIdentifier,
                 _col_id: ColumnId,
-                _value: PropertyValue,
+                _value: crate::core::Value,
                 _ts: crate::transaction::Timestamp,
             ) -> UndoLogResult<()> {
                 Ok(())
@@ -1709,7 +1709,7 @@ mod tests {
                 &self,
                 _edge_id: EdgeIdentifier,
                 _col_id: ColumnId,
-                _value: PropertyValue,
+                _value: crate::core::Value,
                 _ts: crate::transaction::Timestamp,
             ) -> UndoLogResult<()> {
                 Ok(())

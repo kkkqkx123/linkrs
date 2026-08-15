@@ -63,7 +63,7 @@ pub fn element_size(data_type: &DataType) -> usize {
         DataType::Double => 8,
         DataType::Date => 12,
         DataType::Time => 8,
-        DataType::DateTime | DataType::Timestamp => 28,
+        DataType::DateTime => 28,
         DataType::Uuid => 16,
         _ => 0,
     }

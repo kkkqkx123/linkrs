@@ -11,8 +11,7 @@ use parking_lot::RwLock;
 use crate::core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::Value;
 use crate::storage::edge::UpdateEdgePropertyByOffsetParams;
-use crate::transaction::codec::property_value_to_value;
-use crate::transaction::undo_log::{PropertyValue, UndoLogError, UndoLogResult};
+use crate::transaction::undo_log::{UndoLogError, UndoLogResult};
 
 use crate::storage::edge::EdgeStore;
 use crate::storage::engine::data_store::EdgeTableKey;
@@ -275,7 +274,7 @@ impl TransactionOps {
         label: LabelId,
         vid: VertexId,
         col_id: ColumnId,
-        old_value: PropertyValue,
+        old_value: Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
@@ -285,9 +284,8 @@ impl TransactionOps {
         let internal_id =
             Self::resolve_vertex_id(table, vid, ts).ok_or(UndoLogError::VertexNotFound(vid))?;
 
-        let value = property_value_to_value(old_value);
         table
-            .update_property_by_id(internal_id, col_id.0 as i32, &value, ts)
+            .update_property_by_id(internal_id, col_id.0 as i32, &old_value, ts)
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }
@@ -337,17 +335,16 @@ impl TransactionOps {
         table: &mut EdgeStore,
         params: UpdateEdgePropertyUndoParams,
         prop_id: u16,
-        old_value: PropertyValue,
+        old_value: Value,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
-        let value = property_value_to_value(old_value);
         table
             .update_edge_property_by_offset(UpdateEdgePropertyByOffsetParams {
                 src: params.src_vid,
                 dst: params.dst_vid,
                 rank: params.rank,
                 prop_id,
-                value,
+                value: old_value,
                 ts,
             })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;

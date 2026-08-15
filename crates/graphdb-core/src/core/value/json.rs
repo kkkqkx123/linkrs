@@ -55,9 +55,28 @@ pub struct Json {
 /// - Parsing and validation required on write
 /// - Better query performance
 /// - Supports GIN index creation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Serialization note: `JsonValue` (`serde_json::Value`) is a content-tagged
+/// enum that postcard (used by WAL/undo persistence) cannot decode. JsonB is
+/// therefore serialized as its JSON string, which round-trips losslessly.
+#[derive(Debug, Clone)]
 pub struct JsonB {
     value: JsonValue,
+}
+
+impl Serialize for JsonB {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.value.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for JsonB {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        serde_json::from_str(&text)
+            .map(Self::from_value)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Json {

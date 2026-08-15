@@ -50,25 +50,41 @@ impl Expression {
     }
 
     /// Deriving value types
+    ///
+    /// Exhaustive over all `Value` variants: adding a new variant without a
+    /// branch here fails to compile (no `_ => DataType::Empty` fallback).
     fn deduce_value_type(value: &Value) -> DataType {
         match value {
+            Value::Empty => DataType::Empty,
             Value::Null(_) => DataType::Null,
             Value::Bool(_) => DataType::Bool,
+            Value::SmallInt(_) => DataType::SmallInt,
             Value::Int(_) => DataType::Int,
+            Value::BigInt(_) => DataType::BigInt,
             Value::Float(_) => DataType::Float,
+            Value::Double(_) => DataType::Double,
+            Value::Decimal128(_) => DataType::Decimal128,
             Value::String(_) => DataType::String,
-            Value::List(_) => DataType::List,
-            Value::Map(_) => DataType::Map,
-            Value::Vertex(_) => DataType::Vertex,
-            Value::Edge(_) => DataType::Edge,
-            Value::Path(_) => DataType::Path,
+            Value::FixedString { len, .. } => DataType::FixedString(*len),
+            Value::Blob(_) => DataType::Blob,
             Value::Date(_) => DataType::Date,
             Value::Time(_) => DataType::Time,
             Value::DateTime(_) => DataType::DateTime,
+            Value::Vertex(_) => DataType::Vertex,
+            Value::Edge(_) => DataType::Edge,
+            Value::Path(_) => DataType::Path,
+            Value::List(_) => DataType::List,
+            Value::Map(_) => DataType::Map,
+            Value::Set(_) => DataType::Set,
+            Value::Geography(_) => DataType::Geography,
+            Value::Vector(v) => DataType::VectorDense(v.dimension()),
+            Value::DataSet(_) => DataType::DataSet,
+            Value::Json(_) => DataType::Json,
+            Value::JsonB(_) => DataType::JsonB,
             Value::Uuid(_) => DataType::Uuid,
             Value::Interval(_) => DataType::Interval,
-            Value::Empty => DataType::Empty,
-            _ => DataType::Empty,
+            Value::VertexId(_) => DataType::Vertex,
+            Value::EdgeId(_) => DataType::Edge,
         }
     }
 
@@ -106,12 +122,11 @@ impl Expression {
     }
 
     /// Deriving arithmetic operation result types
+    ///
+    /// Reuses the numeric promotion hierarchy of `TypeUtils::get_common_type`
+    /// so this cannot drift from the executor-level type computation.
     fn deduce_arithmetic_type(left: &DataType, right: &DataType) -> DataType {
-        match (left, right) {
-            (DataType::Float, _) | (_, DataType::Float) => DataType::Float,
-            (DataType::Int, DataType::Int) => DataType::Int,
-            _ => DataType::Empty,
-        }
+        crate::core::type_system::TypeUtils::get_common_type(left, right)
     }
 
     /// Derive the type of unary operation
@@ -242,5 +257,187 @@ impl Expression {
             DataType::Path => DataType::Vertex,
             _ => DataType::Empty,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::storage_ids::{EdgeId, VertexId};
+    use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
+    use crate::core::value::decimal128::Decimal128Value;
+    use crate::core::value::geography::Geography;
+    use crate::core::value::interval::IntervalValue;
+    use crate::core::value::json::{Json, JsonB};
+    use crate::core::value::list::List;
+    use crate::core::value::null::NullType;
+    use crate::core::value::uuid::UuidValue;
+    use crate::core::vertex_edge_path::{Edge, Path, Vertex};
+    use crate::core::DataSet;
+    use std::collections::HashMap;
+
+    fn literal(value: Value) -> Expression {
+        Expression::Literal(value)
+    }
+
+    #[test]
+    fn test_deduce_value_type_exhaustive() {
+        // One case per Value variant; a new variant fails to compile here.
+        let cases = vec![
+            (Value::Empty, DataType::Empty),
+            (Value::Null(NullType::Null), DataType::Null),
+            (Value::Bool(true), DataType::Bool),
+            (Value::SmallInt(1), DataType::SmallInt),
+            (Value::Int(1), DataType::Int),
+            (Value::BigInt(1), DataType::BigInt),
+            (Value::Float(1.0), DataType::Float),
+            (Value::Double(1.0), DataType::Double),
+            (
+                Value::Decimal128(Decimal128Value::from_i64(1)),
+                DataType::Decimal128,
+            ),
+            (Value::string("s"), DataType::String),
+            (
+                Value::fixed_string(4, "ab".to_string()),
+                DataType::FixedString(4),
+            ),
+            (Value::Blob(vec![1]), DataType::Blob),
+            (
+                Value::Date(DateValue {
+                    year: 2026,
+                    month: 1,
+                    day: 1,
+                }),
+                DataType::Date,
+            ),
+            (
+                Value::Time(TimeValue {
+                    hour: 1,
+                    minute: 2,
+                    sec: 3,
+                    microsec: 4,
+                }),
+                DataType::Time,
+            ),
+            (
+                Value::DateTime(DateTimeValue {
+                    year: 2026,
+                    month: 1,
+                    day: 1,
+                    hour: 1,
+                    minute: 2,
+                    sec: 3,
+                    microsec: 4,
+                }),
+                DataType::DateTime,
+            ),
+            (
+                Value::Vertex(Box::new(Vertex::with_vid(VertexId::from_int64(1)))),
+                DataType::Vertex,
+            ),
+            (
+                Value::Edge(Box::new(Edge::new_empty(
+                    VertexId::from_int64(1),
+                    VertexId::from_int64(2),
+                    "E".to_string(),
+                    0,
+                ))),
+                DataType::Edge,
+            ),
+            (
+                Value::Path(Box::new(Path::new(Vertex::with_vid(VertexId::from_int64(
+                    1,
+                ))))),
+                DataType::Path,
+            ),
+            (
+                Value::list(List {
+                    values: vec![Value::Int(1)],
+                }),
+                DataType::List,
+            ),
+            (
+                Value::map(HashMap::from([("k".to_string(), Value::Int(1))])),
+                DataType::Map,
+            ),
+            (
+                Value::set(std::collections::HashSet::from([Value::Int(1)])),
+                DataType::Set,
+            ),
+            (
+                Value::Geography(Geography::from_wkt("POINT(1 2)").expect("wkt")),
+                DataType::Geography,
+            ),
+            (Value::vector(vec![1.0, 2.0]), DataType::VectorDense(2)),
+            (
+                Value::DataSet(Box::new(DataSet::from_rows(
+                    vec![vec![Value::Int(1)]],
+                    vec!["c".to_string()],
+                ))),
+                DataType::DataSet,
+            ),
+            (
+                Value::Json(Box::new(Json::parse("{}").expect("json"))),
+                DataType::Json,
+            ),
+            (
+                Value::JsonB(Box::new(JsonB::parse("{}").expect("jsonb"))),
+                DataType::JsonB,
+            ),
+            (Value::Uuid(UuidValue([0u8; 16])), DataType::Uuid),
+            (
+                Value::Interval(IntervalValue::new(1, 2, 3)),
+                DataType::Interval,
+            ),
+            (Value::VertexId(VertexId::from_int64(1)), DataType::Vertex),
+            (Value::EdgeId(EdgeId::new(1)), DataType::Edge),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(
+                Expression::deduce_type(&literal(value)),
+                expected,
+                "deduced type for literal must match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_deduce_arithmetic_type_reuses_promotion() {
+        assert_eq!(
+            Expression::literal(Value::Int(1)).deduce_type(),
+            DataType::Int
+        );
+        // Int + Float promotes to Float.
+        let expr = Expression::Binary {
+            op: BinaryOperator::Add,
+            left: Box::new(literal(Value::Int(1))),
+            right: Box::new(literal(Value::Float(1.0))),
+        };
+        assert_eq!(expr.deduce_type(), DataType::Float);
+
+        // BigInt + Decimal128 promotes to Decimal128.
+        let expr = Expression::Binary {
+            op: BinaryOperator::Add,
+            left: Box::new(literal(Value::BigInt(1))),
+            right: Box::new(literal(Value::Decimal128(Decimal128Value::from_i64(1)))),
+        };
+        assert_eq!(expr.deduce_type(), DataType::Decimal128);
+
+        // Decimal128 + Float promotes to Double.
+        let expr = Expression::Binary {
+            op: BinaryOperator::Multiply,
+            left: Box::new(literal(Value::Decimal128(Decimal128Value::from_i64(1)))),
+            right: Box::new(literal(Value::Float(1.0))),
+        };
+        assert_eq!(expr.deduce_type(), DataType::Double);
+
+        // String + Int has no common type.
+        let expr = Expression::Binary {
+            op: BinaryOperator::Add,
+            left: Box::new(literal(Value::string("a"))),
+            right: Box::new(literal(Value::Int(1))),
+        };
+        assert_eq!(expr.deduce_type(), DataType::Empty);
     }
 }

@@ -50,9 +50,7 @@ impl TypeUtils {
             DataType::FixedString(_) => 41,
             DataType::Date => 50,
             DataType::Time => 60,
-            DataType::Timestamp => 61,
             DataType::DateTime => 62,
-            DataType::VID => 70,
             DataType::Vertex => 80,
             DataType::Edge => 90,
             DataType::Path => 100,
@@ -72,6 +70,41 @@ impl TypeUtils {
         }
     }
 
+    /// Rank of a type within the numeric promotion hierarchy:
+    /// `SmallInt < Int < BigInt < Decimal128 < Float < Double`.
+    /// Returns `None` for non-numeric types.
+    fn numeric_promotion_rank(type_: &DataType) -> Option<u8> {
+        match type_ {
+            DataType::SmallInt => Some(1),
+            DataType::Int => Some(2),
+            DataType::BigInt => Some(3),
+            DataType::Decimal128 => Some(4),
+            DataType::Float => Some(5),
+            DataType::Double => Some(6),
+            _ => None,
+        }
+    }
+
+    /// Common supertype of two types following the numeric promotion hierarchy.
+    fn common_numeric_type(type1: &DataType, type2: &DataType) -> DataType {
+        let rank1 = Self::numeric_promotion_rank(type1);
+        let rank2 = Self::numeric_promotion_rank(type2);
+        let (Some(r1), Some(r2)) = (rank1, rank2) else {
+            return DataType::Empty;
+        };
+        // Fixed-point / floating-point crossing promotes to Double.
+        let is_decimal = type1 == &DataType::Decimal128 || type2 == &DataType::Decimal128;
+        let is_float = type1 == &DataType::Float || type2 == &DataType::Float;
+        if is_decimal && is_float {
+            return DataType::Double;
+        }
+        if r1 >= r2 {
+            type1.clone()
+        } else {
+            type2.clone()
+        }
+    }
+
     /// Obtaining two types of common supertypes
     pub fn get_common_type(type1: &DataType, type2: &DataType) -> DataType {
         if type1 == type2 {
@@ -85,10 +118,18 @@ impl TypeUtils {
             return type1.clone();
         }
 
-        if (type1 == &DataType::Int && type2 == &DataType::Float)
-            || (type1 == &DataType::Float && type2 == &DataType::Int)
+        // Numeric promotion hierarchy.
+        if Self::numeric_promotion_rank(type1).is_some()
+            && Self::numeric_promotion_rank(type2).is_some()
         {
-            return DataType::Float;
+            return Self::common_numeric_type(type1, type2);
+        }
+
+        // Temporal hierarchy: Date promotes to DateTime.
+        if (type1 == &DataType::Date && type2 == &DataType::DateTime)
+            || (type1 == &DataType::DateTime && type2 == &DataType::Date)
+        {
+            return DataType::DateTime;
         }
 
         DataType::Empty
@@ -121,13 +162,18 @@ impl TypeUtils {
         right_type: &DataType,
     ) -> DataType {
         match op {
-            "+" | "-" | "*" | "/" => {
-                if left_type == &DataType::Float || right_type == &DataType::Float {
-                    DataType::Float
-                } else {
-                    DataType::Int
-                }
-            }
+            "+" | "-" | "*" => Self::get_common_type(left_type, right_type),
+            // Division always produces a floating-point result so integer
+            // division does not silently truncate.
+            "/" => match Self::get_common_type(left_type, right_type) {
+                DataType::Float => DataType::Float,
+                DataType::SmallInt
+                | DataType::Int
+                | DataType::BigInt
+                | DataType::Decimal128
+                | DataType::Double => DataType::Double,
+                _ => DataType::Empty,
+            },
             "==" | "!=" | "<" | "<=" | ">" | ">=" => DataType::Bool,
             _ => DataType::Empty,
         }
@@ -139,6 +185,12 @@ impl TypeUtils {
     }
 
     /// Check whether the type of the source data can be converted into the target type.
+    ///
+    /// Hand-written whitelist, grouped by source category:
+    /// - integer / floating-point / decimal128 / string cross-conversions
+    /// - temporal types (Date/Time/DateTime) to/from String, Date <-> DateTime
+    /// - Json <-> JsonB
+    /// - Uuid -> String
     pub fn can_cast(from: &DataType, to: &DataType) -> bool {
         if from == to {
             return true;
@@ -168,7 +220,19 @@ impl TypeUtils {
             (DataType::Double, DataType::BigInt) => true,
             (DataType::Double, DataType::String) => true,
 
-            // String can be converted to numeric types
+            // Decimal128 converts to/from numeric types and String (lossless).
+            (DataType::Decimal128, DataType::Int) => true,
+            (DataType::Decimal128, DataType::BigInt) => true,
+            (DataType::Decimal128, DataType::Float) => true,
+            (DataType::Decimal128, DataType::Double) => true,
+            (DataType::Decimal128, DataType::String) => true,
+            (DataType::Int, DataType::Decimal128) => true,
+            (DataType::BigInt, DataType::Decimal128) => true,
+            (DataType::Float, DataType::Decimal128) => true,
+            (DataType::Double, DataType::Decimal128) => true,
+            (DataType::String, DataType::Decimal128) => true,
+
+            // String can be converted to numeric types and temporal types
             (DataType::String, DataType::SmallInt) => true,
             (DataType::String, DataType::Int) => true,
             (DataType::String, DataType::BigInt) => true,
@@ -176,7 +240,23 @@ impl TypeUtils {
             (DataType::String, DataType::Double) => true,
             (DataType::String, DataType::Bool) => true,
             (DataType::String, DataType::Date) => true,
+            (DataType::String, DataType::Time) => true,
             (DataType::String, DataType::DateTime) => true,
+            (DataType::String, DataType::Uuid) => true,
+
+            // Temporal types convert to String; Date and DateTime inter-convert.
+            (DataType::Date, DataType::String) => true,
+            (DataType::Date, DataType::DateTime) => true,
+            (DataType::Time, DataType::String) => true,
+            (DataType::DateTime, DataType::String) => true,
+            (DataType::DateTime, DataType::Date) => true,
+
+            // Json <-> JsonB
+            (DataType::Json, DataType::JsonB) => true,
+            (DataType::JsonB, DataType::Json) => true,
+
+            // Uuid -> String
+            (DataType::Uuid, DataType::String) => true,
 
             // FixedString can be converted to various types
             (DataType::FixedString(_), DataType::String) => true,
@@ -230,12 +310,14 @@ impl TypeUtils {
                 DataType::BigInt,
                 DataType::Float,
                 DataType::Double,
+                DataType::Decimal128,
                 DataType::String,
             ],
             DataType::BigInt => vec![
                 DataType::BigInt,
                 DataType::Float,
                 DataType::Double,
+                DataType::Decimal128,
                 DataType::String,
             ],
             DataType::Float => vec![
@@ -243,12 +325,22 @@ impl TypeUtils {
                 DataType::Double,
                 DataType::Int,
                 DataType::BigInt,
+                DataType::Decimal128,
                 DataType::String,
             ],
             DataType::Double => vec![
                 DataType::Double,
                 DataType::Int,
                 DataType::BigInt,
+                DataType::Decimal128,
+                DataType::String,
+            ],
+            DataType::Decimal128 => vec![
+                DataType::Decimal128,
+                DataType::Int,
+                DataType::BigInt,
+                DataType::Float,
+                DataType::Double,
                 DataType::String,
             ],
             DataType::String => vec![
@@ -258,9 +350,12 @@ impl TypeUtils {
                 DataType::BigInt,
                 DataType::Float,
                 DataType::Double,
+                DataType::Decimal128,
                 DataType::Bool,
                 DataType::Date,
+                DataType::Time,
                 DataType::DateTime,
+                DataType::Uuid,
             ],
             DataType::FixedString(_) => vec![
                 DataType::String,
@@ -273,6 +368,12 @@ impl TypeUtils {
                 DataType::Date,
                 DataType::DateTime,
             ],
+            DataType::Date => vec![DataType::Date, DataType::String, DataType::DateTime],
+            DataType::Time => vec![DataType::Time, DataType::String],
+            DataType::DateTime => vec![DataType::DateTime, DataType::String, DataType::Date],
+            DataType::Json => vec![DataType::Json, DataType::JsonB],
+            DataType::JsonB => vec![DataType::JsonB, DataType::Json],
+            DataType::Uuid => vec![DataType::Uuid, DataType::String],
             DataType::Bool => vec![
                 DataType::Bool,
                 DataType::SmallInt,
@@ -328,9 +429,7 @@ impl TypeUtils {
             DataType::FixedString(len) => format!("fixed_string({})", len),
             DataType::Date => "date".to_string(),
             DataType::Time => "time".to_string(),
-            DataType::Timestamp => "timestamp".to_string(),
             DataType::DateTime => "datetime".to_string(),
-            DataType::VID => "vid".to_string(),
             DataType::Vertex => "vertex".to_string(),
             DataType::Edge => "edge".to_string(),
             DataType::Path => "path".to_string(),
@@ -351,25 +450,11 @@ impl TypeUtils {
     }
 
     /// Check whether the type can be used for indexing.
+    ///
+    /// Delegates to `OrderedCodec::supports_ordered_key` so the index-creation
+    /// validation (DDL) and the index-write encoding share one source of truth.
     pub fn is_indexable_type(type_def: &DataType) -> bool {
-        matches!(
-            type_def,
-            DataType::Bool
-                | DataType::SmallInt
-                | DataType::Int
-                | DataType::BigInt
-                | DataType::Float
-                | DataType::Double
-                | DataType::String
-                | DataType::FixedString(_)
-                | DataType::DateTime
-                | DataType::Date
-                | DataType::Time
-                | DataType::Timestamp
-                | DataType::VID
-                | DataType::Blob
-                | DataType::Geography
-        )
+        crate::core::value::ordered_codec::OrderedCodec::supports_ordered_key(type_def)
     }
 
     /// Get the default value of the type.
@@ -453,6 +538,107 @@ mod tests {
         assert_eq!(
             TypeUtils::get_common_type(&DataType::Int, &DataType::String),
             DataType::Empty
+        );
+    }
+
+    #[test]
+    fn test_get_common_type_numeric_promotion() {
+        // SmallInt < Int < BigInt < Decimal128 < Float < Double
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::SmallInt, &DataType::Int),
+            DataType::Int
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Int, &DataType::BigInt),
+            DataType::BigInt
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::BigInt, &DataType::Decimal128),
+            DataType::Decimal128
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Int, &DataType::Decimal128),
+            DataType::Decimal128
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Decimal128, &DataType::Float),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Decimal128, &DataType::Double),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Int, &DataType::Float),
+            DataType::Float
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Float, &DataType::Double),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Int, &DataType::Int),
+            DataType::Int
+        );
+        // String and Blob do not promote.
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::String, &DataType::Blob),
+            DataType::Empty
+        );
+        // Temporal hierarchy.
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::Date, &DataType::DateTime),
+            DataType::DateTime
+        );
+        assert_eq!(
+            TypeUtils::get_common_type(&DataType::DateTime, &DataType::Date),
+            DataType::DateTime
+        );
+    }
+
+    #[test]
+    fn test_binary_operation_result_type_numeric_promotion() {
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("+", &DataType::Int, &DataType::Int),
+            DataType::Int
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("+", &DataType::Int, &DataType::Float),
+            DataType::Float
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("*", &DataType::BigInt, &DataType::Decimal128),
+            DataType::Decimal128
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("+", &DataType::Decimal128, &DataType::Float),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("-", &DataType::SmallInt, &DataType::BigInt),
+            DataType::BigInt
+        );
+        // Division always produces a floating-point result.
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("/", &DataType::Int, &DataType::Int),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("/", &DataType::Decimal128, &DataType::Int),
+            DataType::Double
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("/", &DataType::Float, &DataType::Float),
+            DataType::Float
+        );
+        // Non-numeric arithmetic has no result type.
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("+", &DataType::String, &DataType::Int),
+            DataType::Empty
+        );
+        assert_eq!(
+            TypeUtils::binary_operation_result_type("==", &DataType::Int, &DataType::Int),
+            DataType::Bool
         );
     }
 
@@ -562,6 +748,58 @@ mod tests {
         // Empty conversion
         assert!(TypeUtils::can_cast(&DataType::Empty, &DataType::Int));
         assert!(TypeUtils::can_cast(&DataType::Empty, &DataType::String));
+    }
+
+    #[test]
+    fn test_can_cast_extended_matrix() {
+        // Decimal128 <-> numeric / string
+        assert!(TypeUtils::can_cast(&DataType::Decimal128, &DataType::Int));
+        assert!(TypeUtils::can_cast(
+            &DataType::Decimal128,
+            &DataType::BigInt
+        ));
+        assert!(TypeUtils::can_cast(&DataType::Decimal128, &DataType::Float));
+        assert!(TypeUtils::can_cast(
+            &DataType::Decimal128,
+            &DataType::Double
+        ));
+        assert!(TypeUtils::can_cast(
+            &DataType::Decimal128,
+            &DataType::String
+        ));
+        assert!(TypeUtils::can_cast(&DataType::Int, &DataType::Decimal128));
+        assert!(TypeUtils::can_cast(
+            &DataType::BigInt,
+            &DataType::Decimal128
+        ));
+        assert!(TypeUtils::can_cast(&DataType::Float, &DataType::Decimal128));
+        assert!(TypeUtils::can_cast(
+            &DataType::Double,
+            &DataType::Decimal128
+        ));
+        assert!(TypeUtils::can_cast(
+            &DataType::String,
+            &DataType::Decimal128
+        ));
+        assert!(!TypeUtils::can_cast(&DataType::Decimal128, &DataType::Bool));
+
+        // Temporal types
+        assert!(TypeUtils::can_cast(&DataType::DateTime, &DataType::String));
+        assert!(TypeUtils::can_cast(&DataType::Date, &DataType::String));
+        assert!(TypeUtils::can_cast(&DataType::Time, &DataType::String));
+        assert!(TypeUtils::can_cast(&DataType::String, &DataType::Time));
+        assert!(TypeUtils::can_cast(&DataType::String, &DataType::Uuid));
+        assert!(TypeUtils::can_cast(&DataType::Date, &DataType::DateTime));
+        assert!(TypeUtils::can_cast(&DataType::DateTime, &DataType::Date));
+        assert!(!TypeUtils::can_cast(&DataType::Time, &DataType::Date));
+
+        // Json <-> JsonB
+        assert!(TypeUtils::can_cast(&DataType::Json, &DataType::JsonB));
+        assert!(TypeUtils::can_cast(&DataType::JsonB, &DataType::Json));
+
+        // Uuid -> String
+        assert!(TypeUtils::can_cast(&DataType::Uuid, &DataType::String));
+        assert!(!TypeUtils::can_cast(&DataType::String, &DataType::Json));
     }
 
     #[test]

@@ -2000,7 +2000,7 @@ impl crate::transaction::UndoTarget for GraphStorage {
         &self,
         vertex: crate::core::types::VertexIdentifier,
         col_id: crate::core::types::ColumnId,
-        value: crate::transaction::undo_log::PropertyValue,
+        value: crate::core::Value,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         crate::core::types::UndoTarget::undo_update_vertex_property(
@@ -2012,7 +2012,7 @@ impl crate::transaction::UndoTarget for GraphStorage {
         &self,
         edge_id: crate::core::types::EdgeIdentifier,
         col_id: crate::core::types::ColumnId,
-        value: crate::transaction::undo_log::PropertyValue,
+        value: crate::core::Value,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         crate::core::types::UndoTarget::undo_update_edge_property(

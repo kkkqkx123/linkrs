@@ -293,7 +293,7 @@ impl DdlParser {
             }
             TokenKind::Timestamp => {
                 ctx.next_token();
-                Ok(DataType::Timestamp)
+                Ok(DataType::DateTime)
             }
             TokenKind::Datetime => {
                 ctx.next_token();
@@ -368,7 +368,7 @@ impl DdlParser {
                     }
                     "BOOL" | "BOOLEAN" => Ok(DataType::Bool),
                     "DATE" => Ok(DataType::Date),
-                    "TIMESTAMP" => Ok(DataType::Timestamp),
+                    "TIMESTAMP" => Ok(DataType::DateTime),
                     "DATETIME" => Ok(DataType::DateTime),
                     "GEOGRAPHY" => Ok(DataType::Geography),
                     "VECTOR" => {

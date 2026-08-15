@@ -606,7 +606,7 @@ impl<S: StorageClient> SchemaApi<S> {
                 month: 1,
                 day: 1,
             }),
-            DataType::DateTime | DataType::Timestamp => Value::DateTime(DateTimeValue {
+            DataType::DateTime => Value::DateTime(DateTimeValue {
                 year: 1970,
                 month: 1,
                 day: 1,

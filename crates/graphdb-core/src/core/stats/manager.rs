@@ -1372,6 +1372,20 @@ mod tests {
     fn test_aggregated_stats_integration() {
         let stats = StatsManager::new();
 
+        // Align to a wall-clock second boundary so both records land in the
+        // same second and the QPS counter is deterministic (the counter
+        // resets on each second boundary).
+        let unix_secs = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        };
+        let current = unix_secs();
+        while unix_secs() == current {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
         // Create test profiles
         let mut profile1 =
             QueryProfile::new(1, "MATCH (n:Person) WHERE n.id = 1 RETURN n".to_string());

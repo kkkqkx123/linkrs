@@ -34,6 +34,7 @@ impl PartialEq for Value {
             (Value::Set(a), Value::Set(b)) => a == b,
             (Value::Geography(a), Value::Geography(b)) => a == b,
             (Value::Vector(a), Value::Vector(b)) => a == b,
+            (Value::DataSet(a), Value::DataSet(b)) => a == b,
             (Value::Json(a), Value::Json(b)) => a == b,
             (Value::JsonB(a), Value::JsonB(b)) => a == b,
             // JSON and JSONB can be compared
@@ -42,6 +43,8 @@ impl PartialEq for Value {
             (Value::Blob(a), Value::Blob(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
             (Value::Interval(a), Value::Interval(b)) => a == b,
+            (Value::VertexId(a), Value::VertexId(b)) => a == b,
+            (Value::EdgeId(a), Value::EdgeId(b)) => a == b,
 
             // Cross-type integer comparisons: promote to i64
             (Value::SmallInt(a), Value::Int(b)) => *a as i64 == *b as i64,

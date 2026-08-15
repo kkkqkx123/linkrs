@@ -13,7 +13,6 @@ use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Verte
 use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::index::traits::VertexIndexOps;
 use crate::storage::index::types::EdgeIdentity;
-use crate::transaction::codec::value_to_property_value;
 use crate::transaction::undo_log::{
     InsertEdgeUndo, InsertVertexUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogEntry,
     UpdateVertexPropUndo,
@@ -136,8 +135,8 @@ fn record_vertex_property_update(
                 vid,
                 col_id,
                 old_value: old_value
-                    .map(value_to_property_value)
-                    .unwrap_or(crate::transaction::undo_log::PropertyValue::Null),
+                    .cloned()
+                    .unwrap_or(Value::Null(crate::core::value::null::NullType::Null)),
             })),
             redo_entry,
             modified_table: Some("vertex".to_string()),

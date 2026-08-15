@@ -33,6 +33,9 @@ pub mod value_convert;
 pub mod value_def;
 pub mod vector;
 
+#[cfg(test)]
+mod serialization_roundtrip_test;
+
 // Re-export all public types
 pub use date_time::{DateTimeValue, DateValue, TimeValue};
 pub use decimal128::Decimal128Value;

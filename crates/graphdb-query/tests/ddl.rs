@@ -23,3 +23,5 @@ mod schema_evolution;
 mod tag_alter;
 #[path = "ddl/tag_basic.rs"]
 mod tag_basic;
+#[path = "ddl/type_system.rs"]
+mod type_system;

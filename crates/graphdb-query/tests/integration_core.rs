@@ -472,9 +472,7 @@ fn test_datatype_variants() {
         DataType::Geography,
         DataType::DataSet,
         DataType::FixedString(100),
-        DataType::VID,
         DataType::Blob,
-        DataType::Timestamp,
     ];
 
     // Ensure that all types can be cloned and compared

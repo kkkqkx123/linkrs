@@ -1329,7 +1329,9 @@ impl PropertyTable {
                 .map_err(|_| StorageError::deserialize_error("failed to read prop_id"))?;
             let prop_id = i32::from_le_bytes(prop_id_bytes);
             offset += 4;
-            let data_type = DataType::from_u8(data[offset]);
+            let data_type = DataType::from_u8(data[offset]).map_err(|e| {
+                StorageError::deserialize_error(format!("failed to decode data type: {}", e))
+            })?;
             offset += 1;
             let nullable = data[offset] == 1;
             offset += 1;

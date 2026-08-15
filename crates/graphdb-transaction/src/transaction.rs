@@ -25,7 +25,6 @@
 pub mod certify;
 pub mod checkpoint;
 pub mod cleaner;
-pub mod codec;
 pub mod conflict;
 pub mod context;
 pub mod error;
@@ -72,9 +71,9 @@ pub use rollback::{
 pub use types::*;
 pub use undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo,
-    PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo,
-    UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget,
-    UpdateEdgePropUndo, UpdateVertexPropUndo,
+    RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogConfig,
+    UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
+    UpdateVertexPropUndo,
 };
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,

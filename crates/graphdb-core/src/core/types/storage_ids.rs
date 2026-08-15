@@ -355,12 +355,20 @@ impl Add<u64> for VertexId {
     type Output = Self;
 
     fn add(self, rhs: u64) -> Self::Output {
+        self.checked_add(rhs)
+            .expect("Cannot add to non-integer VertexId")
+    }
+}
+
+impl VertexId {
+    /// Add a `u64` offset, returning `None` for non-integer vertex IDs.
+    pub fn checked_add(self, rhs: u64) -> Option<Self> {
         if let Some(id) = self.as_u64() {
-            Self::from_u64(id + rhs)
+            Some(Self::from_u64(id + rhs))
         } else if let Some(id) = self.as_int64() {
-            Self::from_int64(id + rhs as i64)
+            Some(Self::from_int64(id + rhs as i64))
         } else {
-            panic!("Cannot add to non-integer VertexId");
+            None
         }
     }
 }
@@ -609,5 +617,44 @@ impl EdgeDeletionContext {
             ie_offset: params.ie_offset,
             timestamp: params.timestamp,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_add_works_for_integer_ids() {
+        assert_eq!(
+            VertexId::from_int64(41).checked_add(1),
+            Some(VertexId::from_int64(42))
+        );
+        assert_eq!(
+            VertexId::from_u64(u64::MAX - 1).checked_add(1),
+            Some(VertexId::from_u64(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn checked_add_returns_none_for_non_integer_ids() {
+        // "abcdefgh" is 9 bytes, so it is not treated as an int64 ID.
+        assert_eq!(VertexId::from_string("abcdefghi").checked_add(1), None);
+    }
+
+    #[test]
+    fn checked_add_preserves_empty_vertex_id() {
+        // Empty IDs are neither integer nor string; must return None.
+        assert_eq!(VertexId::new().checked_add(1), None);
+    }
+
+    #[test]
+    fn add_trait_keeps_working_for_integer_ids() {
+        let next = VertexId::from_int64(1) + 1;
+        assert_eq!(next, VertexId::from_int64(2));
+
+        let mut vid = VertexId::from_int64(1);
+        vid += 2;
+        assert_eq!(vid, VertexId::from_int64(3));
     }
 }

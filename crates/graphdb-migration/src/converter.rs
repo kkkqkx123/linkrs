@@ -35,7 +35,6 @@ fn type_name(dt: &DataType) -> &'static str {
         DataType::Time => "TIME",
         DataType::DateTime => "DATETIME",
         DataType::Blob => "BLOB",
-        DataType::Timestamp => "TIMESTAMP",
         DataType::Uuid => "UUID",
         DataType::Interval => "INTERVAL",
         DataType::Json => "JSON",

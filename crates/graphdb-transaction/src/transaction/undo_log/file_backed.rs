@@ -380,8 +380,7 @@ impl Drop for FileBackedUndoLog {
 mod tests {
     use super::*;
     use crate::core::types::{
-        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, PropertyValue, UndoLogError,
-        VertexIdentifier,
+        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, UndoLogError, VertexIdentifier,
     };
     use crate::transaction::undo_log::UpdateVertexPropUndo;
     use crate::transaction::wal::{LabelId, VertexId};
@@ -448,7 +447,7 @@ mod tests {
             &self,
             vertex: VertexIdentifier,
             col_id: ColumnId,
-            value: PropertyValue,
+            value: crate::core::Value,
             ts: Timestamp,
         ) -> UndoLogResult<()> {
             self.record(format!(
@@ -460,7 +459,7 @@ mod tests {
             &self,
             edge_id: EdgeIdentifier,
             col_id: ColumnId,
-            value: PropertyValue,
+            value: crate::core::Value,
             ts: Timestamp,
         ) -> UndoLogResult<()> {
             self.record(format!(
@@ -579,7 +578,7 @@ mod tests {
             v_label: 7,
             vid: VertexId::from_int64(99),
             col_id: ColumnId(4),
-            old_value: PropertyValue::Int(42),
+            old_value: crate::core::Value::BigInt(42),
         }))
         .expect("Failed to append undo log");
 
@@ -590,7 +589,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert!(calls[0].contains("7"));
         assert!(calls[0].contains("99"));
-        assert!(calls[0].contains("Int(42)"));
+        assert!(calls[0].contains("BigInt(42)"));
         assert!(calls[0].ends_with(":55"));
     }
 

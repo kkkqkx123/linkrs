@@ -11,7 +11,7 @@ use crate::transaction::context::TransactionContext;
 use crate::transaction::types::{
     DurabilityLevel, OperationLog, TransactionConfig, TransactionId, TransactionState,
 };
-use crate::transaction::undo_log::{InsertVertexUndo, PropertyValue, UndoLogEntry};
+use crate::transaction::undo_log::{InsertVertexUndo, UndoLogEntry};
 use crate::transaction::undo_log::{UndoLogResult, UndoTarget};
 use crate::transaction::TransactionErrorKind;
 
@@ -34,7 +34,7 @@ impl UndoTarget for MockUndoTarget {
         &self,
         _vertex: VertexIdentifier,
         _col_id: ColumnId,
-        _value: PropertyValue,
+        _value: crate::core::Value,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         Ok(())
@@ -43,7 +43,7 @@ impl UndoTarget for MockUndoTarget {
         &self,
         _edge_id: EdgeIdentifier,
         _col_id: ColumnId,
-        _value: PropertyValue,
+        _value: crate::core::Value,
         _ts: Timestamp,
     ) -> UndoLogResult<()> {
         Ok(())

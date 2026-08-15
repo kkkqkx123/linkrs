@@ -442,7 +442,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         &self,
         vertex: crate::core::types::VertexIdentifier,
         col_id: crate::core::types::ColumnId,
-        value: crate::transaction::undo_log::PropertyValue,
+        value: crate::core::Value,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         self.inner
@@ -453,7 +453,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         &self,
         edge_id: crate::core::types::EdgeIdentifier,
         col_id: crate::core::types::ColumnId,
-        value: crate::transaction::undo_log::PropertyValue,
+        value: crate::core::Value,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         self.inner

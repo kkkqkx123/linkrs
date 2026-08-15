@@ -458,6 +458,37 @@ mod tests {
     }
 
     #[test]
+    fn test_trailing_tokens_are_rejected() {
+        // A statement must consume the whole input; trailing garbage is a
+        // syntax error instead of being silently truncated.
+        let mut parser = Parser::new("COMMIT junk");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "statement should still parse structurally: {:?}",
+            result.err()
+        );
+        assert!(parser.has_errors(), "trailing token must be reported");
+        let result = result.expect("statement should parse");
+        assert!(
+            matches!(result.ast.stmt(), Stmt::CommitTransaction(_)),
+            "leading COMMIT should still parse"
+        );
+    }
+
+    #[test]
+    fn test_trailing_semicolon_is_allowed() {
+        let mut parser = Parser::new("MATCH (v) RETURN v;");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "trailing semicolon parses: {:?}",
+            result.err()
+        );
+        assert!(!parser.has_errors(), "trailing semicolon is not an error");
+    }
+
+    #[test]
     fn test_error_recovery_stops_at_limit() {
         let query = "INVALID INVALID INVALID INVALID INVALID INVALID";
         let mut parser = Parser::new(query);

@@ -72,6 +72,33 @@ impl OrderedCodec {
         self.version
     }
 
+    /// Whether `OrderedCodec` can encode values of the given type as an
+    /// ordered index key.
+    ///
+    /// This is the single source of truth for the set of indexable types:
+    /// it must stay in sync with [`OrderedCodec::encode_value`]. A type that
+    /// returns `false` here is rejected at index-creation time and would also
+    /// be rejected at encode time.
+    pub fn supports_ordered_key(data_type: &crate::core::DataType) -> bool {
+        matches!(
+            data_type,
+            crate::core::DataType::Bool
+                | crate::core::DataType::SmallInt
+                | crate::core::DataType::Int
+                | crate::core::DataType::BigInt
+                | crate::core::DataType::Float
+                | crate::core::DataType::Double
+                | crate::core::DataType::Decimal128
+                | crate::core::DataType::String
+                | crate::core::DataType::FixedString(_)
+                | crate::core::DataType::Blob
+                | crate::core::DataType::Date
+                | crate::core::DataType::Time
+                | crate::core::DataType::DateTime
+                | crate::core::DataType::Uuid
+        )
+    }
+
     /// Encode a single `Value` into order-preserving bytes.
     pub fn encode(&self, value: &Value) -> Result<Vec<u8>, StorageError> {
         let mut buf = Vec::new();

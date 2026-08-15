@@ -43,8 +43,7 @@ fn parse_data_type(type_str: &str) -> Option<crate::core::DataType> {
         "STRING" => Some(crate::core::DataType::String),
         "DATE" => Some(crate::core::DataType::Date),
         "TIME" => Some(crate::core::DataType::Time),
-        "DATETIME" => Some(crate::core::DataType::DateTime),
-        "TIMESTAMP" => Some(crate::core::DataType::Timestamp),
+        "DATETIME" | "TIMESTAMP" => Some(crate::core::DataType::DateTime),
         _ => None,
     }
 }

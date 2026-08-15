@@ -710,7 +710,7 @@ impl Value {
             },
             DataType::Date => self.to_date(),
             DataType::Time => self.to_time(),
-            DataType::DateTime | DataType::Timestamp => self.to_datetime(),
+            DataType::DateTime => self.to_datetime(),
             DataType::List => self.to_list(),
             DataType::Map => self.to_map(),
             DataType::Geography => match self {

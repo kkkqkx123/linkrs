@@ -18,9 +18,6 @@ pub use crate::core::types::UndoLogError;
 /// Undo log result type
 pub use crate::core::types::UndoLogResult;
 
-/// Property value type for undo operations
-pub use crate::core::types::PropertyValue;
-
 /// Target for undo operations (will be GraphStorageContext in phase 2)
 pub use crate::core::types::UndoTarget;
 
@@ -156,7 +153,7 @@ pub struct UpdateVertexPropUndo {
     pub v_label: LabelId,
     pub vid: VertexId,
     pub col_id: ColumnId,
-    pub old_value: PropertyValue,
+    pub old_value: crate::core::Value,
 }
 
 impl UpdateVertexPropUndo {
@@ -187,7 +184,7 @@ pub struct UpdateEdgePropUndo {
     pub edge_label: LabelId,
     pub rank: i64,
     pub col_id: ColumnId,
-    pub old_value: PropertyValue,
+    pub old_value: crate::core::Value,
 }
 
 impl UpdateEdgePropUndo {
@@ -379,7 +376,7 @@ pub struct AddUpdateEdgePropParams {
     pub edge_label: LabelId,
     pub rank: i64,
     pub col_id: ColumnId,
-    pub old_value: PropertyValue,
+    pub old_value: crate::core::Value,
 }
 
 impl UndoLogManager {
@@ -424,7 +421,7 @@ impl UndoLogManager {
         label: LabelId,
         vid: VertexId,
         col_id: ColumnId,
-        old_value: PropertyValue,
+        old_value: crate::core::Value,
     ) -> UndoLogResult<()> {
         self.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
             v_label: label,
@@ -514,7 +511,7 @@ mod tests {
             &self,
             _vertex: VertexIdentifier,
             _col_id: ColumnId,
-            _value: PropertyValue,
+            _value: crate::core::Value,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -524,7 +521,7 @@ mod tests {
             &self,
             _edge_id: EdgeIdentifier,
             _col_id: ColumnId,
-            _value: PropertyValue,
+            _value: crate::core::Value,
             _ts: Timestamp,
         ) -> UndoLogResult<()> {
             Ok(())
@@ -683,7 +680,7 @@ mod tests {
             v_label: 1,
             vid: VertexId::from_int64(100),
             col_id: ColumnId(0),
-            old_value: PropertyValue::Int(42),
+            old_value: crate::core::Value::BigInt(42),
         };
 
         let target = MockUndoTarget;
@@ -700,7 +697,7 @@ mod tests {
             edge_label: 3,
             rank: 0,
             col_id: ColumnId(0),
-            old_value: PropertyValue::String("test".to_string()),
+            old_value: crate::core::Value::string("test"),
         };
 
         let target = MockUndoTarget;
@@ -768,13 +765,6 @@ mod tests {
         manager.execute_undo(&target, 1).expect("Undo failed");
 
         assert!(manager.is_empty());
-    }
-
-    #[test]
-    fn test_property_value_is_null() {
-        assert!(PropertyValue::Null.is_null());
-        assert!(!PropertyValue::Int(0).is_null());
-        assert!(!PropertyValue::String(String::new()).is_null());
     }
 
     #[test]
