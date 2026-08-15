@@ -235,14 +235,19 @@ pub(super) fn typed_binary_batch(
 }
 
 /// Comparison operators on same-kind raw batches.
+///
+/// Same-kind paths are handled first (including the NaN-aware `cmp_f64`
+/// ordering for doubles); then mixed integer kinds promote to i64 and
+/// integer-vs-double promotes to f64, mirroring the `Value` cross-kind
+/// semantics exactly.
 fn compare_typed_batches(
     op: &BinaryOperator,
     left: &TypedBatch,
     right: &TypedBatch,
 ) -> Option<TypedBatch> {
     use BinaryOperator::*;
-    let batch = match (left, right) {
-        (TypedBatch::I64(l), TypedBatch::I64(r)) => TypedBatch::Bool(match op {
+    if let Some(result) = match (left, right) {
+        (TypedBatch::I64(l), TypedBatch::I64(r)) => Some(TypedBatch::Bool(match op {
             Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
             NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
             LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
@@ -250,8 +255,8 @@ fn compare_typed_batches(
             GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
             GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
             _ => return None,
-        }),
-        (TypedBatch::F64(l), TypedBatch::F64(r)) => TypedBatch::Bool(match op {
+        })),
+        (TypedBatch::F64(l), TypedBatch::F64(r)) => Some(TypedBatch::Bool(match op {
             Equal => l
                 .iter()
                 .zip(r)
@@ -283,8 +288,8 @@ fn compare_typed_batches(
                 .map(|(&a, &b)| cmp_f64_value(a, b) != Ordering::Less)
                 .collect(),
             _ => return None,
-        }),
-        (TypedBatch::I32(l), TypedBatch::I32(r)) => TypedBatch::Bool(match op {
+        })),
+        (TypedBatch::I32(l), TypedBatch::I32(r)) => Some(TypedBatch::Bool(match op {
             Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
             NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
             LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
@@ -292,10 +297,10 @@ fn compare_typed_batches(
             GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
             GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
             _ => return None,
-        }),
+        })),
         // Date values compare by days-since-epoch, which matches the
         // year/month/day ordering of `Value` exactly.
-        (TypedBatch::Date(l), TypedBatch::Date(r)) => TypedBatch::Bool(match op {
+        (TypedBatch::Date(l), TypedBatch::Date(r)) => Some(TypedBatch::Bool(match op {
             Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
             NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
             LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
@@ -303,10 +308,10 @@ fn compare_typed_batches(
             GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
             GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
             _ => return None,
-        }),
+        })),
         // Strings compare lexicographically (bytewise), mirroring the
         // `Value::String` ordering used by the per-row path.
-        (TypedBatch::Utf8(l), TypedBatch::Utf8(r)) => TypedBatch::Bool(match op {
+        (TypedBatch::Utf8(l), TypedBatch::Utf8(r)) => Some(TypedBatch::Bool(match op {
             Equal => l.iter().zip(r).map(|(a, b)| a == b).collect(),
             NotEqual => l.iter().zip(r).map(|(a, b)| a != b).collect(),
             LessThan => l
@@ -330,17 +335,95 @@ fn compare_typed_batches(
                 .map(|(a, b)| a.as_ref() >= b.as_ref())
                 .collect(),
             _ => return None,
-        }),
+        })),
         (TypedBatch::Bool(l), TypedBatch::Bool(r)) if matches!(op, Equal | NotEqual) => {
-            TypedBatch::Bool(match op {
+            Some(TypedBatch::Bool(match op {
                 Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
                 NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
                 _ => return None,
-            })
+            }))
         }
+        _ => None,
+    } {
+        return Some(result);
+    }
+
+    // Mixed integer kinds promote to i64 (mirrors `Value` cross-type
+    // integer comparison: promote to i64).
+    if let (Some(l), Some(r)) = (numeric_i64_view(left), numeric_i64_view(right)) {
+        return Some(TypedBatch::Bool(match op {
+            Equal => l.iter().zip(&r).map(|(&a, &b)| a == b).collect(),
+            NotEqual => l.iter().zip(&r).map(|(&a, &b)| a != b).collect(),
+            LessThan => l.iter().zip(&r).map(|(&a, &b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(&r).map(|(&a, &b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(&r).map(|(&a, &b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(&r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        }));
+    }
+
+    // Integer vs double promotes to f64. `Value` uses plain `partial_cmp`
+    // for cross-kind ordering (a NaN operand compares Equal to anything) and
+    // exact `==` for equality — distinct from the same-kind NaN-aware
+    // `cmp_f64`, so the cross-kind path must NOT reuse it.
+    if let (Some(l), TypedBatch::F64(r)) = (int_as_f64(left), right) {
+        return int_f64_compare(op, &l, r);
+    }
+    if let (TypedBatch::F64(l), Some(r)) = (left, int_as_f64(right)) {
+        return int_f64_compare(op, l, &r);
+    }
+    None
+}
+
+/// View an integer batch as `Vec<i64>` (allocation-free for I64, promoted
+/// for I32).
+fn numeric_i64_view(batch: &TypedBatch) -> Option<Vec<i64>> {
+    match batch {
+        TypedBatch::I64(v) => Some(v.clone()),
+        TypedBatch::I32(v) => Some(v.iter().map(|&x| i64::from(x)).collect()),
+        _ => None,
+    }
+}
+
+/// View an integer batch as `Vec<f64>` (for int-vs-double promotion).
+fn int_as_f64(batch: &TypedBatch) -> Option<Vec<f64>> {
+    match batch {
+        TypedBatch::I64(v) => Some(v.iter().map(|&x| x as f64).collect()),
+        TypedBatch::I32(v) => Some(v.iter().map(|&x| x as f64).collect()),
+        _ => None,
+    }
+}
+
+/// Cross-kind integer-vs-double comparison mirroring `Value` semantics:
+/// ordering via `partial_cmp().unwrap_or(Equal)`, equality via exact `==`.
+/// Returns `None` for non-comparison operators.
+fn int_f64_compare(op: &BinaryOperator, left: &[f64], right: &[f64]) -> Option<TypedBatch> {
+    use BinaryOperator::*;
+    Some(TypedBatch::Bool(match op {
+        Equal => left.iter().zip(right).map(|(&a, &b)| a == b).collect(),
+        NotEqual => left.iter().zip(right).map(|(&a, &b)| a != b).collect(),
+        LessThan => left
+            .iter()
+            .zip(right)
+            .map(|(&a, &b)| a.partial_cmp(&b).unwrap_or(Ordering::Equal) == Ordering::Less)
+            .collect(),
+        LessThanOrEqual => left
+            .iter()
+            .zip(right)
+            .map(|(&a, &b)| a.partial_cmp(&b).unwrap_or(Ordering::Equal) != Ordering::Greater)
+            .collect(),
+        GreaterThan => left
+            .iter()
+            .zip(right)
+            .map(|(&a, &b)| a.partial_cmp(&b).unwrap_or(Ordering::Equal) == Ordering::Greater)
+            .collect(),
+        GreaterThanOrEqual => left
+            .iter()
+            .zip(right)
+            .map(|(&a, &b)| a.partial_cmp(&b).unwrap_or(Ordering::Equal) != Ordering::Less)
+            .collect(),
         _ => return None,
-    };
-    Some(batch)
+    }))
 }
 
 /// f64 ordering mirroring `Value::cmp_f64` (NaN ordering: NaN == NaN, NaN < x).
@@ -356,14 +439,18 @@ fn cmp_f64_value(a: f64, b: f64) -> Ordering {
     }
 }
 
-/// Arithmetic operators on same-kind raw batches (wrapping for ints).
+/// Arithmetic operators on raw batches.
+///
+/// Same-kind paths are handled first (wrapping for ints); mixed integer
+/// kinds promote to i64 and integer-vs-double promotes to f64, mirroring
+/// the `Value` promotion rules.
 fn arith_typed_batches(
     op: &BinaryOperator,
     left: &TypedBatch,
     right: &TypedBatch,
 ) -> Option<TypedBatch> {
     use BinaryOperator::{Add, Multiply, Subtract};
-    match (left, right) {
+    if let Some(result) = match (left, right) {
         (TypedBatch::I64(l), TypedBatch::I64(r)) => Some(TypedBatch::I64(
             l.iter()
                 .zip(r)
@@ -397,6 +484,51 @@ fn arith_typed_batches(
                 })
                 .collect(),
         )),
+        _ => None,
+    } {
+        return Some(result);
+    }
+
+    // Mixed integer kinds promote to i64 (mirrors `Value` promotion, e.g.
+    // Int + BigInt -> BigInt).
+    if let (Some(l), Some(r)) = (numeric_i64_view(left), numeric_i64_view(right)) {
+        return Some(TypedBatch::I64(
+            l.iter()
+                .zip(&r)
+                .map(|(&a, &b)| match op {
+                    Add => a.wrapping_add(b),
+                    Subtract => a.wrapping_sub(b),
+                    Multiply => a.wrapping_mul(b),
+                    _ => unreachable!("arith only"),
+                })
+                .collect(),
+        ));
+    }
+
+    // Integer vs double promotes to f64 (mirrors `Value` promotion, e.g.
+    // Int + Double -> Double).
+    if let (Some(l), Some(r)) = (numeric_f64_view(left), numeric_f64_view(right)) {
+        return Some(TypedBatch::F64(
+            l.iter()
+                .zip(&r)
+                .map(|(&a, &b)| match op {
+                    Add => a + b,
+                    Subtract => a - b,
+                    Multiply => a * b,
+                    _ => unreachable!("arith only"),
+                })
+                .collect(),
+        ));
+    }
+    None
+}
+
+/// View a numeric batch as `Vec<f64>` (for int-vs-double promotion).
+fn numeric_f64_view(batch: &TypedBatch) -> Option<Vec<f64>> {
+    match batch {
+        TypedBatch::F64(v) => Some(v.clone()),
+        TypedBatch::I64(v) => Some(v.iter().map(|&x| x as f64).collect()),
+        TypedBatch::I32(v) => Some(v.iter().map(|&x| x as f64).collect()),
         _ => None,
     }
 }

@@ -231,28 +231,145 @@ impl BuiltinFunction {
 
     /// Whether the function is deterministic and free of side effects.
     ///
-    /// Non-pure functions (`rand*`, `now`, `current_date`, ...) must never be
-    /// constant-folded: folding would evaluate them once at plan time and bake
-    /// a stale result into the plan. Purity defaults to `true`; every
-    /// non-pure variant is listed explicitly. The conservative direction
-    /// lives on the folding side: functions that are not registered at all
-    /// are never folded.
+    /// Purity gates constant folding: a function classified as pure may be
+    /// evaluated once at plan time and its result baked into the plan as a
+    /// literal. Classifying a non-deterministic or context-dependent
+    /// function as pure would fold a stale result into a (possibly cached)
+    /// plan, so the classification is a **whitelist**: categories that are
+    /// pure for every variant return `true`; mixed categories enumerate the
+    /// pure variants explicitly; anything not listed — including future
+    /// variants — defaults to `false`.
+    ///
+    /// Never folded:
+    /// - non-deterministic: `rand*`, `now`, `timestamp`, `current_date`,
+    ///   `current_timestamp`, `gen_random_uuid`
+    /// - session-dependent: `current_user`, `current_database` (currently
+    ///   stubbed, but conceptually per-session)
+    /// - need row-group / storage / index context: aggregates, window
+    ///   functions, graph functions, fulltext search, vector functions
     pub fn is_pure(&self) -> bool {
         match self {
-            BuiltinFunction::Math(f) => !matches!(
-                f,
-                MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64
-            ),
-            BuiltinFunction::DateTime(f) => !matches!(
-                f,
-                DateTimeFunction::Now
-                    | DateTimeFunction::TimeStamp
-                    | DateTimeFunction::CurrentDate
-                    | DateTimeFunction::CurrentTimestamp
-            ),
-            BuiltinFunction::Utility(f) => !matches!(f, UtilityFunction::GenRandomUuid),
-            _ => true,
+            // Every variant of these categories is a deterministic
+            // value-level operator.
+            BuiltinFunction::String(_)
+            | BuiltinFunction::Regex(_)
+            | BuiltinFunction::Conversion(_)
+            | BuiltinFunction::Geography(_)
+            | BuiltinFunction::Container(_)
+            | BuiltinFunction::Path(_)
+            | BuiltinFunction::Vector(_) => true,
+
+            // Mixed categories: whitelist the pure variants; anything not
+            // listed (including future variants) is conservatively non-pure.
+            BuiltinFunction::Math(f) => Self::pure_math(f),
+            BuiltinFunction::DateTime(f) => Self::pure_datetime(f),
+            BuiltinFunction::Utility(f) => Self::pure_utility(f),
+
+            // Need row-group / storage / index / session context: never fold.
+            BuiltinFunction::Aggregate(_)
+            | BuiltinFunction::Graph(_)
+            | BuiltinFunction::Fulltext(_)
+            | BuiltinFunction::Window(_) => false,
         }
+    }
+
+    /// Whitelist of deterministic math functions.
+    ///
+    /// `rand*` and future variants are not listed and therefore never fold.
+    fn pure_math(f: &MathFunction) -> bool {
+        matches!(
+            f,
+            MathFunction::Abs
+                | MathFunction::Sqrt
+                | MathFunction::Pow
+                | MathFunction::Log
+                | MathFunction::Log10
+                | MathFunction::Sin
+                | MathFunction::Cos
+                | MathFunction::Tan
+                | MathFunction::Round
+                | MathFunction::Ceil
+                | MathFunction::Floor
+                | MathFunction::Asin
+                | MathFunction::Acos
+                | MathFunction::Atan
+                | MathFunction::Cbrt
+                | MathFunction::Hypot
+                | MathFunction::Sign
+                | MathFunction::E
+                | MathFunction::Pi
+                | MathFunction::Exp2
+                | MathFunction::Log2
+                | MathFunction::Radians
+                | MathFunction::BitAnd
+                | MathFunction::BitOr
+                | MathFunction::BitXor
+                | MathFunction::Atan2
+                | MathFunction::Sinh
+                | MathFunction::Cosh
+                | MathFunction::Tanh
+                | MathFunction::Degrees
+                | MathFunction::Gcd
+                | MathFunction::Lcm
+        )
+    }
+
+    /// Whitelist of deterministic date/time functions.
+    ///
+    /// `now`, `timestamp`, `current_date`, `current_timestamp` and future
+    /// variants are not listed and therefore never fold.
+    fn pure_datetime(f: &DateTimeFunction) -> bool {
+        matches!(
+            f,
+            DateTimeFunction::Date
+                | DateTimeFunction::Time
+                | DateTimeFunction::DateTime
+                | DateTimeFunction::Year
+                | DateTimeFunction::Month
+                | DateTimeFunction::Day
+                | DateTimeFunction::Hour
+                | DateTimeFunction::Minute
+                | DateTimeFunction::Second
+                | DateTimeFunction::DateAdd
+                | DateTimeFunction::DateSub
+                | DateTimeFunction::DateDiff
+                | DateTimeFunction::DateTrunc
+                | DateTimeFunction::ToChar
+                | DateTimeFunction::ToDate
+                | DateTimeFunction::Age
+                | DateTimeFunction::LastDay
+                | DateTimeFunction::GenerateSeries
+        )
+    }
+
+    /// Whitelist of deterministic utility functions.
+    ///
+    /// `gen_random_uuid` is non-deterministic; `current_user` /
+    /// `current_database` depend on session state (even though the current
+    /// implementation stubs them); future variants are not listed and
+    /// therefore never fold.
+    fn pure_utility(f: &UtilityFunction) -> bool {
+        matches!(
+            f,
+            UtilityFunction::Coalesce
+                | UtilityFunction::Hash
+                | UtilityFunction::JsonExtract
+                | UtilityFunction::JsonBuildObject
+                | UtilityFunction::JsonBuildArray
+                | UtilityFunction::JsonObjectKeys
+                | UtilityFunction::NullIf
+                | UtilityFunction::Greatest
+                | UtilityFunction::Least
+                | UtilityFunction::JsonEach
+                | UtilityFunction::JsonTypeOf
+                | UtilityFunction::JsonStripNulls
+                | UtilityFunction::IfNull
+                | UtilityFunction::TypeOf
+                | UtilityFunction::Version
+                | UtilityFunction::Corr
+                | UtilityFunction::CovarPop
+                | UtilityFunction::CovarSamp
+        )
     }
 
     /// Get function description
@@ -618,5 +735,116 @@ impl ExpressionFunction for CustomFunction {
 
     fn description(&self) -> &str {
         &self.description
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All explicitly known non-deterministic / context-dependent functions
+    /// must be classified as non-pure (never constant-folded).
+    #[test]
+    fn test_is_pure_impure_functions_never_fold() {
+        let registry = global_registry();
+        for name in [
+            "rand",
+            "rand32",
+            "rand64",
+            "now",
+            "timestamp",
+            "current_date",
+            "current_timestamp",
+            "gen_random_uuid",
+            "current_user",
+            "current_database",
+        ] {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            assert!(!f.is_pure(), "`{name}` is non-pure and must never fold");
+        }
+    }
+
+    /// Representative deterministic value operators must be foldable.
+    #[test]
+    fn test_is_pure_representative_pure_functions() {
+        let registry = global_registry();
+        for name in [
+            "abs",
+            "sqrt",
+            "pow",
+            "upper",
+            "length",
+            "regex_match",
+            "to_string",
+            "to_int",
+            "year",
+            "to_char",
+            "st_distance",
+            "coalesce",
+            "json_extract",
+            "version",
+            "keys",
+            "nodes",
+            "cosine_similarity",
+        ] {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            assert!(f.is_pure(), "`{name}` is a deterministic value operator");
+        }
+    }
+
+    /// Every registered builtin function must be consciously classified.
+    ///
+    /// The non-pure set is exactly {context-bound categories} ∪ {explicitly
+    /// listed non-pure variants}. Adding a function without updating either
+    /// `is_pure` or this table fails the test, so new functions can never
+    /// silently inherit a wrong purity default.
+    #[test]
+    fn test_is_pure_classification_is_explicit_for_all_registered() {
+        let registry = global_registry();
+        for name in registry.function_names() {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            let impure_by_category = matches!(
+                f,
+                BuiltinFunction::Aggregate(_)
+                    | BuiltinFunction::Graph(_)
+                    | BuiltinFunction::Fulltext(_)
+                    | BuiltinFunction::Window(_)
+            );
+            let impure_by_variant = matches!(
+                f,
+                BuiltinFunction::Math(f)
+                    if matches!(f, MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64)
+            ) || matches!(
+                f,
+                BuiltinFunction::DateTime(f)
+                    if matches!(
+                        f,
+                        DateTimeFunction::Now
+                            | DateTimeFunction::TimeStamp
+                            | DateTimeFunction::CurrentDate
+                            | DateTimeFunction::CurrentTimestamp
+                    )
+            ) || matches!(
+                f,
+                BuiltinFunction::Utility(f)
+                    if matches!(
+                        f,
+                        UtilityFunction::GenRandomUuid
+                            | UtilityFunction::CurrentUser
+                            | UtilityFunction::CurrentDatabase
+                    )
+            );
+            assert_eq!(
+                f.is_pure(),
+                !(impure_by_category || impure_by_variant),
+                "function `{name}` is not explicitly classified as pure or non-pure"
+            );
+        }
     }
 }

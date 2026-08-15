@@ -428,6 +428,164 @@ fn typed_eval_supports_arithmetic_and_cast() {
 }
 
 #[test]
+fn typed_eval_promotes_mixed_int_kinds() {
+    let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i * 10)]).collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+    chunk.build_typed_columns(true);
+    assert!(matches!(chunk.typed_column(0), Some(TypedColumn::I64(_))));
+
+    let add = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::Add,
+        Expression::literal(Value::Int(1)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&add, None).expect("add"),
+        (0..10)
+            .map(|i| Value::BigInt(i * 10 + 1))
+            .collect::<Vec<_>>()
+    );
+
+    let less = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::LessThan,
+        Expression::literal(Value::Int(45)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&less, None).expect("less"),
+        (0..10)
+            .map(|i| Value::Bool(i * 10 < 45))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        stats.columnar_typed_hits.load(Ordering::Relaxed),
+        2,
+        "mixed int-kind expressions must be served by the typed batch path"
+    );
+}
+
+#[test]
+fn typed_eval_promotes_int_to_double() {
+    let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::Int(i * 10)]).collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+    chunk.build_typed_columns(true);
+    assert!(matches!(chunk.typed_column(0), Some(TypedColumn::I32(_))));
+
+    let add = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::Add,
+        Expression::literal(Value::Double(0.5)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&add, None).expect("add"),
+        (0..10)
+            .map(|i| Value::Double(i as f64 * 10.0 + 0.5))
+            .collect::<Vec<_>>()
+    );
+
+    let mul = Expression::binary(
+        Expression::literal(Value::Double(2.0)),
+        BinaryOperator::Multiply,
+        Expression::variable("a"),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&mul, None).expect("mul"),
+        (0..10)
+            .map(|i| Value::Double(i as f64 * 20.0))
+            .collect::<Vec<_>>()
+    );
+
+    let ge = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::GreaterThanOrEqual,
+        Expression::literal(Value::Double(25.0)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&ge, None).expect("ge"),
+        (0..10)
+            .map(|i| Value::Bool(i as f64 * 10.0 >= 25.0))
+            .collect::<Vec<_>>()
+    );
+
+    assert_eq!(
+        stats.columnar_typed_hits.load(Ordering::Relaxed),
+        3,
+        "int-vs-double expressions must be served by the typed batch path"
+    );
+}
+
+#[test]
+fn typed_eval_cross_kind_nan_matches_value_semantics() {
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..4).map(|i| vec![Value::Int(i)]).collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+
+    let nan = Expression::literal(Value::Double(f64::NAN));
+    let cases = [
+        (
+            BinaryOperator::Equal,
+            vec![false, false, false, false],
+            "int == NaN is false",
+        ),
+        (
+            BinaryOperator::NotEqual,
+            vec![true, true, true, true],
+            "int != NaN is true",
+        ),
+        (
+            BinaryOperator::LessThan,
+            vec![false, false, false, false],
+            "int < NaN is false",
+        ),
+        (
+            BinaryOperator::LessThanOrEqual,
+            vec![true, true, true, true],
+            "int <= NaN is true (partial_cmp unwraps to Equal)",
+        ),
+        (
+            BinaryOperator::GreaterThan,
+            vec![false, false, false, false],
+            "int > NaN is false",
+        ),
+        (
+            BinaryOperator::GreaterThanOrEqual,
+            vec![true, true, true, true],
+            "int >= NaN is true (partial_cmp unwraps to Equal)",
+        ),
+    ];
+    for (op, expected, msg) in cases {
+        let expr = Expression::binary(Expression::variable("a"), op, nan.clone());
+        assert_eq!(
+            chunk.evaluate_expression(&expr, None).expect("eval"),
+            expected.iter().map(|&b| Value::Bool(b)).collect::<Vec<_>>(),
+            "{}",
+            msg
+        );
+    }
+
+    let lt = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::LessThan,
+        Expression::literal(Value::Double(2.5)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&lt, None).expect("eval"),
+        vec![
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(false)
+        ]
+    );
+}
+
+#[test]
 fn typed_columns_disabled_falls_back() {
     let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
     let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::BigInt(i as i64)]).collect();

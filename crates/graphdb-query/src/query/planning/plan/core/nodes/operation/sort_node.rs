@@ -95,6 +95,11 @@ impl SortNode {
         &self.sort_items
     }
 
+    /// Replace the sort items (preserving `limit`).
+    pub fn set_sort_items(&mut self, sort_items: Vec<SortItem>) {
+        self.sort_items = sort_items;
+    }
+
     /// Obtain a limited quantity.
     pub fn limit(&self) -> Option<i64> {
         self.limit

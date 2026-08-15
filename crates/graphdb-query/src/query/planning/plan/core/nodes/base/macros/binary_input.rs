@@ -82,8 +82,16 @@ macro_rules! define_join_node {
                 &self.hash_keys
             }
 
+            pub fn set_hash_keys(&mut self, keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>) {
+                self.hash_keys = keys;
+            }
+
             pub fn probe_keys(&self) -> &[$crate::core::types::expr::contextual::ContextualExpression] {
                 &self.probe_keys
+            }
+
+            pub fn set_probe_keys(&mut self, keys: Vec<$crate::core::types::expr::contextual::ContextualExpression>) {
+                self.probe_keys = keys;
             }
 
             pub fn left_input(&self) -> &$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {

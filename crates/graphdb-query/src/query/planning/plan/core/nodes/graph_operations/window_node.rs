@@ -45,4 +45,9 @@ impl WindowNode {
     pub fn window_functions(&self) -> &[WindowFunctionSpec] {
         &self.window_functions
     }
+
+    /// Replace the window function specifications.
+    pub fn set_window_functions(&mut self, window_functions: Vec<WindowFunctionSpec>) {
+        self.window_functions = window_functions;
+    }
 }

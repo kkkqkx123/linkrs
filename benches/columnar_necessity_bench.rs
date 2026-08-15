@@ -39,6 +39,119 @@ fn create_wide_chunk(size: usize) -> DataChunk {
     DataChunk::new_with_layout(rows, layout)
 }
 
+/// Mixed-kind numeric expressions: batch numeric promotion (typed columns)
+/// vs. per-row Value evaluation (no typed columns).
+///
+/// Before the promotion work, every mixed I32/I64/F64 expression fell back to
+/// the per-row Value path; this group quantifies the throughput of the batch
+/// paths (`numeric_i64_view` / `numeric_f64_view` promotion in `typed.rs`).
+fn bench_numeric_promotion(c: &mut Criterion) {
+    use graphdb_query::core::types::expr::Expression;
+    use graphdb_query::core::types::operators::BinaryOperator;
+
+    let mut group = c.benchmark_group("numeric_promotion");
+    group.measurement_time(Duration::from_secs(2));
+    group.sample_size(30);
+
+    // BigInt column + Int(32) literal: promoted to i64.
+    let mixed_add = Expression::Binary {
+        left: Box::new(Expression::Variable("k0".into())),
+        op: BinaryOperator::Add,
+        right: Box::new(Expression::Literal(Value::Int(7))),
+    };
+    let mixed_cmp = Expression::Binary {
+        left: Box::new(Expression::Variable("k0".into())),
+        op: BinaryOperator::LessThan,
+        right: Box::new(Expression::Literal(Value::Int(500))),
+    };
+    // Int(32) column + Double literal: promoted to f64.
+    let int_double_add = Expression::Binary {
+        left: Box::new(Expression::Variable("k0".into())),
+        op: BinaryOperator::Add,
+        right: Box::new(Expression::Literal(Value::Double(0.5))),
+    };
+
+    let i32_layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+    let make_i32_chunk = |size: usize| {
+        let rows: Vec<Vec<Value>> = (0..size)
+            .map(|i| vec![Value::Int((i % 1000) as i32)])
+            .collect();
+        DataChunk::new_with_layout(rows, i32_layout.clone())
+    };
+
+    for n in [4096usize, 65536] {
+        group.bench_function(BenchmarkId::new("batch_mixed_add", n), |b| {
+            b.iter_batched(
+                || {
+                    let mut chunk = create_wide_chunk(n);
+                    chunk.build_typed_columns(true);
+                    chunk
+                },
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&mixed_add, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new("per_row_mixed_add", n), |b| {
+            b.iter_batched(
+                || create_wide_chunk(n),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&mixed_add, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+
+        group.bench_function(BenchmarkId::new("batch_mixed_cmp", n), |b| {
+            b.iter_batched(
+                || {
+                    let mut chunk = create_wide_chunk(n);
+                    chunk.build_typed_columns(true);
+                    chunk
+                },
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&mixed_cmp, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new("per_row_mixed_cmp", n), |b| {
+            b.iter_batched(
+                || create_wide_chunk(n),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&mixed_cmp, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+
+        group.bench_function(BenchmarkId::new("batch_int_double_add", n), |b| {
+            b.iter_batched(
+                || {
+                    let mut chunk = make_i32_chunk(n);
+                    chunk.build_typed_columns(true);
+                    chunk
+                },
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&int_double_add, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new("per_row_int_double_add", n), |b| {
+            b.iter_batched(
+                || make_i32_chunk(n),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&int_double_add, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 fn bench_row_vs_column_filter(c: &mut Criterion) {
     let mut group = c.benchmark_group("row_vs_column_filter");
     group.measurement_time(Duration::from_secs(2));
@@ -443,5 +556,6 @@ criterion_group!(
     bench_selectivity_propagation,
     bench_typed_data_chunk_filter,
     bench_selection_chain,
+    bench_numeric_promotion,
 );
 criterion_main!(benches);

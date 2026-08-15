@@ -174,6 +174,11 @@ impl AssignNode {
         &self.assignments
     }
 
+    /// Replace the assignments (preserving subqueries).
+    pub fn set_assignments(&mut self, assignments: Vec<(String, ContextualExpression)>) {
+        self.assignments = assignments;
+    }
+
     /// Attach expression-level subqueries to this assign.
     pub fn with_subqueries(mut self, subqueries: Vec<PlannedSubquery>) -> Self {
         self.subqueries = subqueries;

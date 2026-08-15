@@ -23,7 +23,7 @@ default = ["server"]
 server = ["graphdb-api/server", "graphdb-config/server"]
 
 # Full-text search support
-fulltext-search = ["graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+fulltext-search = ["graphdb-api/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
 
 # Optional Chinese tokenizer support for full-text search
 jieba = ["graphdb-search/jieba"]
@@ -39,41 +39,53 @@ qdrant = [
 # Embedded API for standalone/embedded usage (Rust API only)
 embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
 
-# gRPC API
+# gRPC API (implies server)
 grpc = ["graphdb-api/grpc"]
+
+# C API bindings (requires embedded to be usable)
+c_api = ["graphdb-api/c_api"]
 ```
 
 ### Feature 依赖关系图
 
 ```
 default (server)
-├── server
-│   ├── graphdb-api/server
-│   │   ├── axum
-│   │   ├── tower
-│   │   ├── tower-http
-│   │   ├── http
-│   │   ├── sqlx
-│   │   └── async-trait
-│   └── graphdb-config/server
-├── fulltext-search
-│   ├── graphdb-search/fulltext-search
-│   └── graphdb-sync/fulltext-search
-├── jieba
-│   └── graphdb-search/jieba
-├── qdrant
-│   ├── graphdb-api/qdrant
-│   ├── graphdb-config/qdrant
-│   ├── graphdb-sync/qdrant
-│   └── graphdb-query/qdrant
-├── embedded
-│   ├── graphdb-api/embedded
-│   └── graphdb-config/embedded
-└── grpc
-    └── graphdb-api/grpc
+└── server
+    ├── graphdb-api/server
+    │   ├── axum
+    │   ├── tower
+    │   ├── tower-http
+    │   ├── http
+    │   ├── sqlx
+    │   └── async-trait
+    └── graphdb-config/server
 
-embedded (standalone)
-└── (no additional dependencies)
+fulltext-search
+├── graphdb-api/fulltext-search
+│   ├── graphdb-search/fulltext-search
+│   ├── graphdb-sync/fulltext-search
+│   └── graphdb-query/fulltext-search
+├── graphdb-search/fulltext-search
+└── graphdb-sync/fulltext-search
+
+jieba
+└── graphdb-search/jieba
+
+qdrant
+├── graphdb-api/qdrant
+├── graphdb-config/qdrant
+├── graphdb-sync/qdrant
+└── graphdb-query/qdrant
+
+embedded
+├── graphdb-api/embedded
+└── graphdb-config/embedded
+
+grpc
+└── graphdb-api/grpc (implies server)
+
+c_api
+└── graphdb-api/c_api (requires embedded 才能生效)
 ```
 
 ## 使用场景
@@ -94,9 +106,12 @@ cargo build --release --features server
 - ✅ Web 管理界面后端
 - ✅ 用户认证与权限管理
 - ✅ 批处理接口
-- ✅ 全文搜索（BM25 + Inverted Index）
+- ⚠️ 全文搜索（BM25 + Inverted Index，需额外启用 `fulltext-search` feature）
 - ✅ 可选的向量搜索集成（启用 `qdrant` 时）
 - ❌ C API（不包含）
+
+**说明**：默认构建（`default = ["server"]`）不包含全文搜索，如需全文检索请使用
+`cargo build --release --features fulltext-search`。
 
 **适用场景**：
 - 部署为独立服务
@@ -202,7 +217,7 @@ cargo build --release --features embedded,server,qdrant
 ### 模块级别条件编译
 
 ```rust
-// src/api/mod.rs
+// crates/graphdb-api/src/api.rs
 pub mod core;
 
 #[cfg(feature = "server")]
@@ -212,19 +227,23 @@ pub mod server;
 pub mod embedded;
 
 #[cfg(feature = "qdrant")]
-pub mod vector;
+pub use core::{VectorApi, VectorSearchResult};
 ```
 
 ```rust
 // src/lib.rs
-pub mod api;
-pub mod core;
-pub mod storage;
-// ... 其他模块
+pub use graphdb_api::api;
+// ... 其他子 crate 的 re-export
 
-#[cfg(feature = "server")]
-pub use api::server::{session, HttpServer};
+#[cfg(feature = "embedded")]
+pub mod c_api;
+
+pub mod test_utils;
 ```
+
+**注意**：C API 模块同时受两个 feature 控制——`src/lib.rs` 中 `pub mod c_api` 由
+`embedded` 控制，`src/c_api.rs` 中的 re-export 由 `c_api` 控制，因此实际使用 C API
+需要同时启用 `embedded` 和 `c_api`。
 
 ### 测试文件条件编译
 
@@ -239,12 +258,22 @@ fn test_embedded_database() {
 ```
 
 ```rust
-// tests/integration_vector.rs
-#![cfg(feature = "qdrant")]
+// tests/integration_web_management.rs
+#![cfg(feature = "server")]
 
 #[test]
-fn test_vector_support() {
-    // 向量相关测试
+fn test_web_management() {
+    // Web 管理界面测试
+}
+```
+
+```rust
+// tests/integration_c_api.rs
+#![cfg(feature = "embedded")]
+
+#[test]
+fn test_c_api_database_open_close() {
+    // C API 测试
 }
 ```
 
@@ -254,12 +283,14 @@ fn test_vector_support() {
 
 | Feature 组合 | 库类型 | 二进制 | 主要能力 |
 |-------------|--------|--------|----------|
-| `default` | rlib | graphdb-server | HTTP 服务器 |
-| `embedded` | rlib | 无 | Embedded Rust API |
-| `server` | rlib | graphdb-server | HTTP 服务器 |
-| `server,qdrant` | rlib | graphdb-server | HTTP 服务器 + 向量检索 |
-| `embedded,server,qdrant` | rlib | graphdb-server | Embedded + Server + 向量检索 |
-| `server,grpc` | rlib | graphdb-server | HTTP 服务器 + gRPC |
+| `default` | cdylib + rlib | graphdb-server | HTTP 服务器 |
+| `embedded` | cdylib + rlib | 无 | Embedded Rust API |
+| `server` | cdylib + rlib | graphdb-server | HTTP 服务器 |
+| `server,fulltext-search` | cdylib + rlib | graphdb-server | HTTP 服务器 + 全文搜索 |
+| `server,qdrant` | cdylib + rlib | graphdb-server | HTTP 服务器 + 向量检索 |
+| `embedded,server,qdrant` | cdylib + rlib | graphdb-server | Embedded + Server + 向量检索 |
+| `server,grpc` | cdylib + rlib | graphdb-server | HTTP 服务器 + gRPC |
+| `embedded,c_api` | cdylib + rlib | 无 | Embedded + C API |
 
 ---
 
@@ -297,26 +328,39 @@ winapi = { version = "0.3", features = ["..."] }
 
 ## Build Script 行为
 
-`crates/vector-client/build.rs` 会根据 feature flags 决定是否生成 Qdrant gRPC 的 protobuf 代码：
+`crates/vector-client/build.rs` 根据其自身的 `qdrant-grpc` feature 决定是否生成 Qdrant gRPC 的 protobuf 代码：
 
 ```rust
-fn main() {
-    if env::var("CARGO_FEATURE_QDRANT_GRPC").is_ok() {
-        compile_qdrant_protos();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "qdrant-grpc")]
+    {
+        // 设置重新编译触发条件
+        println!("cargo:rerun-if-changed=proto/");
+
+        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+        let proto_dir = manifest_dir.join("proto");
+
+        tonic_build::configure()
+            .build_server(false)
+            .build_client(true)
+            .compile_protos(
+                &[
+                    proto_dir.join("collections_service.proto"),
+                    proto_dir.join("points_service.proto"),
+                ],
+                &[proto_dir],
+            )?;
     }
-    
-    // 设置重新编译触发条件
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=proto/");
+
+    Ok(())
 }
 ```
 
-**环境变量检测**：
-- `CARGO_FEATURE_QDRANT`：当启用 `qdrant` feature 时设置
-- `CARGO_FEATURE_GRPC`：当启用 `grpc` feature 时设置
-- `CARGO_FEATURE_QDRANT_GRPC`：当启用 `qdrant-grpc` feature 时设置
-- `CARGO_FEATURE_EMBEDDED`：当启用 `embedded` feature 时设置
-- `CARGO_FEATURE_SERVER`：当启用 `server` feature 时设置
+**说明**：
+- 生成逻辑通过 `#[cfg(feature = "qdrant-grpc")]` 条件编译控制，而非运行时检查环境变量。
+- `qdrant-grpc` 是 `vector-client` 自身定义的 feature（其 `qdrant` feature 会隐式启用它），与根 crate 的 `grpc` feature 无关。
+- 仅生成客户端代码（`build_server(false)`），只编译 `collections_service.proto` 和 `points_service.proto` 两个文件。
+- Cargo 会在构建时自动为每个启用的 feature 设置 `CARGO_FEATURE_<NAME>` 环境变量（例如启用 `qdrant-grpc` 时设置 `CARGO_FEATURE_QDRANT_GRPC`），可供自定义 build 逻辑使用。
 
 ---
 
@@ -350,11 +394,11 @@ graphdb = { version = "0.1.0", default-features = false, features = ["embedded"]
 // tests/integration_embedded_api.rs
 #![cfg(feature = "embedded")]
 
-// tests/integration_server_api.rs
+// tests/integration_web_management.rs
 #![cfg(feature = "server")]
 
-// tests/integration_vector_api.rs
-#![cfg(feature = "qdrant")]
+// tests/integration_c_api.rs
+#![cfg(feature = "embedded")]
 ```
 
 ### 4. 文档示例
@@ -388,28 +432,3 @@ cargo build --lib --no-default-features --features embedded
 cargo build --release --features server,grpc
 ```
 
----
-
-## 版本历史
-
-| 版本 | 日期 | 变更说明 |
-|------|------|----------|
-| 0.1.0 | 2026-04-03 | 初始版本，移除未使用的 `system_monitor` 和 `executor_internal` features |
-
----
-
-## 参考文档
-
-- [Cargo Features](https://doc.rust-lang.org/cargo/reference/features.html)
-- [Conditional Compilation](https://doc.rust-lang.org/reference/conditional-compilation.html)
-- [Build Scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html)
-- [crate-type 字段](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#the-crate-type-field)
-
----
-
-## 维护者备注
-
-- 添加新 feature 时，确保在文档中更新依赖关系图
-- 删除 feature 前，检查所有代码引用和测试文件
-- 保持 feature 名称的语义清晰，避免歧义
-- 定期审查 optional dependencies，移除未使用的依赖
