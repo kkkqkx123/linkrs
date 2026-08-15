@@ -56,6 +56,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -91,6 +92,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         let fragment = fragments
@@ -121,6 +123,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         let fragment = ctx
@@ -155,6 +158,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name: "Exchange",
         });
         fragments.push(FragmentSpec {
@@ -200,6 +204,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name: "HashExchange",
         });
         fragments.push(FragmentSpec {
@@ -240,6 +245,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -281,6 +287,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -318,6 +325,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -355,6 +363,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -397,6 +406,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         ctx.fragments.push(FragmentSpec {
@@ -439,6 +449,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -476,6 +487,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -520,6 +532,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -557,6 +570,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -594,6 +608,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {
@@ -640,6 +655,7 @@ impl ArenaPlanAssembler {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name,
         });
         fragments.push(FragmentSpec {

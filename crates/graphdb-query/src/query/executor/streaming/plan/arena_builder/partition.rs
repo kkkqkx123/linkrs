@@ -247,15 +247,16 @@ fn build_partition_local_fragments(
                         exec_ctx,
                     )?;
                     let spec = build_filter_spec(filter, subquery_runners)?;
-                    fid = ArenaPlanAssembler::push_unary_op(
+                    let (new_fid, op_id) = ArenaPlanAssembler::push_unary_op(
                         operators,
                         fragments,
                         op_alloc,
                         fid,
                         op.id(),
                         spec,
-                    )?
-                    .0;
+                    )?;
+                    operators[op_id.0].has_folded_expressions = filter.has_folded_expressions();
+                    fid = new_fid;
                 }
                 PlanNodeEnum::Project(project) => {
                     let subquery_runners = super::assembler::build_subquery_runner_specs(
@@ -263,15 +264,16 @@ fn build_partition_local_fragments(
                         exec_ctx,
                     )?;
                     let spec = build_project_spec(project, subquery_runners)?;
-                    fid = ArenaPlanAssembler::push_unary_op(
+                    let (new_fid, op_id) = ArenaPlanAssembler::push_unary_op(
                         operators,
                         fragments,
                         op_alloc,
                         fid,
                         op.id(),
                         spec,
-                    )?
-                    .0;
+                    )?;
+                    operators[op_id.0].has_folded_expressions = project.has_folded_expressions();
+                    fid = new_fid;
                 }
                 PlanNodeEnum::ExpandAll(expand) => {
                     // A1.4: drive count_only from the node annotation so only
@@ -805,7 +807,7 @@ fn push_global_op(
             let subquery_runners =
                 super::assembler::build_subquery_runner_specs(filter.subqueries(), exec_ctx)?;
             let spec = build_filter_spec(filter, subquery_runners)?;
-            ArenaPlanAssembler::push_global_unary_op(
+            let (fid, op_id) = ArenaPlanAssembler::push_global_unary_op(
                 operators,
                 fragments,
                 op_alloc,
@@ -813,13 +815,15 @@ fn push_global_op(
                 child_fid,
                 op.id(),
                 spec,
-            )
+            )?;
+            operators[op_id.0].has_folded_expressions = filter.has_folded_expressions();
+            Ok((fid, op_id))
         }
         PlanNodeEnum::Project(project) => {
             let subquery_runners =
                 super::assembler::build_subquery_runner_specs(project.subqueries(), exec_ctx)?;
             let spec = build_project_spec(project, subquery_runners)?;
-            ArenaPlanAssembler::push_global_unary_op(
+            let (fid, op_id) = ArenaPlanAssembler::push_global_unary_op(
                 operators,
                 fragments,
                 op_alloc,
@@ -827,7 +831,9 @@ fn push_global_op(
                 child_fid,
                 op.id(),
                 spec,
-            )
+            )?;
+            operators[op_id.0].has_folded_expressions = project.has_folded_expressions();
+            Ok((fid, op_id))
         }
         PlanNodeEnum::Limit(limit) => {
             let spec = build_limit_spec(limit)?;
@@ -843,7 +849,7 @@ fn push_global_op(
         }
         PlanNodeEnum::Sort(sort) => {
             let spec = build_sort_spec(sort)?;
-            ArenaPlanAssembler::push_global_blocking_op(
+            let (fid, op_id) = ArenaPlanAssembler::push_global_blocking_op(
                 operators,
                 fragments,
                 op_alloc,
@@ -852,11 +858,13 @@ fn push_global_op(
                 op.id(),
                 spec,
                 PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD),
-            )
+            )?;
+            operators[op_id.0].has_folded_expressions = sort.has_folded_expressions();
+            Ok((fid, op_id))
         }
         PlanNodeEnum::Aggregate(agg) => {
             let spec = build_aggregate_spec(agg)?;
-            ArenaPlanAssembler::push_global_blocking_op(
+            let (fid, op_id) = ArenaPlanAssembler::push_global_blocking_op(
                 operators,
                 fragments,
                 op_alloc,
@@ -865,7 +873,9 @@ fn push_global_op(
                 op.id(),
                 spec,
                 PhysicalProperties::single_blocking_with_budget(),
-            )
+            )?;
+            operators[op_id.0].has_folded_expressions = agg.has_folded_expressions();
+            Ok((fid, op_id))
         }
         PlanNodeEnum::TopN(topn) => {
             let spec = build_topn_spec(topn)?;
@@ -892,7 +902,7 @@ fn push_global_op(
         ),
         PlanNodeEnum::Window(window) => {
             let spec = build_window_spec(window)?;
-            ArenaPlanAssembler::push_global_blocking_op(
+            let (fid, op_id) = ArenaPlanAssembler::push_global_blocking_op(
                 operators,
                 fragments,
                 op_alloc,
@@ -901,7 +911,9 @@ fn push_global_op(
                 op.id(),
                 spec,
                 PhysicalProperties::single_blocking_with_budget(),
-            )
+            )?;
+            operators[op_id.0].has_folded_expressions = window.has_folded_expressions();
+            Ok((fid, op_id))
         }
         _ => Err(PlanBuildError::unsupported(
             op.name(),

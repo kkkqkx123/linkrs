@@ -19,6 +19,8 @@ pub struct WindowFunctionSpec {
 define_plan_node_with_deps! {
     pub struct WindowNode {
         window_functions: Vec<WindowFunctionSpec>,
+        // Whether constant folding replaced part of the window specs.
+        has_folded_expressions: bool,
     }
     enum: Window
     input: SingleInputNode
@@ -36,6 +38,7 @@ impl WindowNode {
             input: Some(Box::new(input.clone())),
             deps: vec![input],
             window_functions,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -49,5 +52,15 @@ impl WindowNode {
     /// Replace the window function specifications.
     pub fn set_window_functions(&mut self, window_functions: Vec<WindowFunctionSpec>) {
         self.window_functions = window_functions;
+    }
+
+    /// Whether constant folding replaced part of the window specs.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the window specs.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 }

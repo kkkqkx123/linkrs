@@ -54,8 +54,6 @@ impl RewriteError {
 /// Rewrite the result in the desired format.
 pub type RewriteResult<T> = std::result::Result<T, RewriteError>;
 
-/// Of course! Please provide the text you would like to have translated.
-///
 /// Record the results after the application of the rule rewriting rules.
 #[derive(Debug, Default, Clone)]
 pub struct TransformResult {
@@ -67,6 +65,8 @@ pub struct TransformResult {
     pub new_nodes: Vec<crate::query::planning::plan::PlanNodeEnum>,
     /// New dependencies
     pub new_dependencies: Vec<usize>,
+    /// Whether the rule folded constant expressions into literals.
+    pub has_folded: bool,
 }
 
 impl TransformResult {
@@ -101,6 +101,11 @@ impl TransformResult {
     pub fn with_erased(mut self) -> Self {
         self.erase_curr = true;
         self
+    }
+
+    /// Mark that the rule folded constant expressions into literals.
+    pub fn mark_folded(&mut self) {
+        self.has_folded = true;
     }
 
     /// Check whether there are any new nodes.
@@ -173,6 +178,7 @@ mod tests {
     fn test_transform_result() {
         let mut result = TransformResult::new();
         assert!(!result.has_new_nodes());
+        assert!(!result.has_folded);
 
         let node = crate::query::planning::plan::PlanNodeEnum::ScanVertices(ScanVerticesNode::new(
             1, "default",
@@ -181,6 +187,9 @@ mod tests {
 
         assert!(result.has_new_nodes());
         assert!(result.first_new_node().is_some());
+
+        result.mark_folded();
+        assert!(result.has_folded);
     }
 
     #[test]

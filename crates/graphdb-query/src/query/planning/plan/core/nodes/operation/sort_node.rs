@@ -65,6 +65,8 @@ define_plan_node_with_deps! {
     pub struct SortNode {
         sort_items: Vec<SortItem>,
         limit: Option<i64>,
+        // Whether constant folding replaced part of the sort items.
+        has_folded_expressions: bool,
     }
     enum: Sort
     input: SingleInputNode
@@ -84,6 +86,7 @@ impl SortNode {
             deps: vec![input],
             sort_items,
             limit: None,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -98,6 +101,16 @@ impl SortNode {
     /// Replace the sort items (preserving `limit`).
     pub fn set_sort_items(&mut self, sort_items: Vec<SortItem>) {
         self.sort_items = sort_items;
+    }
+
+    /// Whether constant folding replaced part of the sort items.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the sort items.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 
     /// Obtain a limited quantity.

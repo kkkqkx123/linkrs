@@ -8,6 +8,8 @@ use crate::define_join_node;
 
 define_join_node! {
     pub struct InnerJoinNode {
+        // Whether constant folding replaced part of the join keys.
+        has_folded_expressions: bool,
     }
     enum: InnerJoin
 }
@@ -48,6 +50,7 @@ impl InnerJoinNode {
             hash_keys,
             probe_keys,
             deps,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -59,10 +62,22 @@ impl InnerJoinNode {
     ) -> &crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
         &self.right
     }
+
+    /// Whether constant folding replaced part of the join keys.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the join keys.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
+    }
 }
 
 define_join_node! {
     pub struct LeftJoinNode {
+        // Whether constant folding replaced part of the join keys.
+        has_folded_expressions: bool,
     }
     enum: LeftJoin
 }
@@ -103,10 +118,21 @@ impl LeftJoinNode {
             hash_keys,
             probe_keys,
             deps,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
         })
+    }
+
+    /// Whether constant folding replaced part of the join keys.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the join keys.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 }
 
@@ -160,6 +186,8 @@ impl CrossJoinNode {
 
 define_join_node! {
     pub struct FullOuterJoinNode {
+        // Whether constant folding replaced part of the join keys.
+        has_folded_expressions: bool,
     }
     enum: FullOuterJoin
 }
@@ -197,15 +225,28 @@ impl FullOuterJoinNode {
             hash_keys,
             probe_keys,
             deps,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
         })
     }
+
+    /// Whether constant folding replaced part of the join keys.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the join keys.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
+    }
 }
 
 define_join_node! {
     pub struct RightJoinNode {
+        // Whether constant folding replaced part of the join keys.
+        has_folded_expressions: bool,
     }
     enum: RightJoin
 }
@@ -243,6 +284,7 @@ impl RightJoinNode {
             hash_keys,
             probe_keys,
             deps,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -258,11 +300,23 @@ impl RightJoinNode {
         )
         .expect("Failed to convert RightJoin to LeftJoin")
     }
+
+    /// Whether constant folding replaced part of the join keys.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the join keys.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
+    }
 }
 
 define_join_node! {
     pub struct SemiJoinNode {
         anti: bool,
+        // Whether constant folding replaced part of the join keys.
+        has_folded_expressions: bool,
     }
     enum: SemiJoin
 }
@@ -304,6 +358,7 @@ impl SemiJoinNode {
             probe_keys,
             deps,
             anti,
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -312,6 +367,16 @@ impl SemiJoinNode {
 
     pub fn is_anti(&self) -> bool {
         self.anti
+    }
+
+    /// Whether constant folding replaced part of the join keys.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the join keys.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 }
 

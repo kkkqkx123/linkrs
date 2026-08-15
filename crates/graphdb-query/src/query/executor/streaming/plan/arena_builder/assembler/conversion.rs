@@ -61,6 +61,7 @@ impl ArenaPlanAssembler {
                     state_ownership: StateOwnership::TreeLocal,
                     estimated_cardinality: estimate_source_cardinality(&spec),
                     choice_reason: None,
+                    has_folded_expressions: false,
                     explain_name: source_explain_name(&spec),
                 });
 
@@ -90,7 +91,16 @@ impl ArenaPlanAssembler {
                 let subquery_runners =
                     build_subquery_runner_specs(filter_node.subqueries(), exec_ctx)?;
                 let spec = build_filter_spec(filter_node, subquery_runners)?;
-                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
+                let (fid, op_id) = Self::push_unary_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    child_fid,
+                    node.id(),
+                    spec,
+                )?;
+                operators[op_id.0].has_folded_expressions = filter_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::Project(project_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -104,7 +114,16 @@ impl ArenaPlanAssembler {
                 let subquery_runners =
                     build_subquery_runner_specs(project_node.subqueries(), exec_ctx)?;
                 let spec = build_project_spec(project_node, subquery_runners)?;
-                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
+                let (fid, op_id) = Self::push_unary_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    child_fid,
+                    node.id(),
+                    spec,
+                )?;
+                operators[op_id.0].has_folded_expressions = project_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::Limit(limit_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -154,7 +173,16 @@ impl ArenaPlanAssembler {
                 let subquery_runners =
                     build_subquery_runner_specs(assign_node.subqueries(), exec_ctx)?;
                 let spec = build_assign_spec(assign_node, subquery_runners)?;
-                Self::push_unary_op(operators, fragments, op_alloc, child_fid, node.id(), spec)
+                let (fid, op_id) = Self::push_unary_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    child_fid,
+                    node.id(),
+                    spec,
+                )?;
+                operators[op_id.0].has_folded_expressions = assign_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::Unwind(unwind_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -180,7 +208,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_sort_spec(sort_node)?;
-                Self::push_blocking_op(
+                let (fid, op_id) = Self::push_blocking_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -190,7 +218,9 @@ impl ArenaPlanAssembler {
                     node.id(),
                     spec,
                     PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD),
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = sort_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::Aggregate(agg_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -202,7 +232,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_aggregate_spec(agg_node)?;
-                Self::push_blocking_op(
+                let (fid, op_id) = Self::push_blocking_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -212,7 +242,9 @@ impl ArenaPlanAssembler {
                     node.id(),
                     spec,
                     PhysicalProperties::single_blocking_with_budget(),
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = agg_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::Dedup(dedup_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -267,7 +299,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_window_spec(window_node)?;
-                Self::push_blocking_op(
+                let (fid, op_id) = Self::push_blocking_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -277,7 +309,9 @@ impl ArenaPlanAssembler {
                     node.id(),
                     spec,
                     PhysicalProperties::single_blocking_with_budget(),
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = window_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::DataCollect(collect_node) => {
                 let (child_fid, _) = Self::convert_node(
@@ -547,7 +581,7 @@ impl ArenaPlanAssembler {
                     }
                     _ => build_inner_join_spec(join_node)?,
                 };
-                Self::push_binary_op(
+                let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -558,7 +592,9 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = join_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::LeftJoin(join_node) => {
                 let (left_fid, _) = Self::convert_node(
@@ -586,7 +622,7 @@ impl ArenaPlanAssembler {
                     }
                     _ => build_left_join_spec(join_node)?,
                 };
-                Self::push_binary_op(
+                let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -597,7 +633,9 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = join_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::CrossJoin(join_node) => {
                 let (left_fid, _) = Self::convert_node(
@@ -647,7 +685,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_right_join_spec(join_node)?;
-                Self::push_binary_op(
+                let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -658,7 +696,9 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = join_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::FullOuterJoin(join_node) => {
                 let (left_fid, _) = Self::convert_node(
@@ -678,7 +718,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_full_outer_join_spec(join_node)?;
-                Self::push_binary_op(
+                let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -689,7 +729,9 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = join_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
             PlanNodeEnum::SemiJoin(join_node) => {
                 let (left_fid, _) = Self::convert_node(
@@ -709,7 +751,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 let spec = build_semi_join_spec(join_node)?;
-                Self::push_binary_op(
+                let (fid, op_id) = Self::push_binary_op(
                     &mut FragmentCtx {
                         operators,
                         fragments,
@@ -720,7 +762,9 @@ impl ArenaPlanAssembler {
                     right_fid,
                     node.id(),
                     spec,
-                )
+                )?;
+                operators[op_id.0].has_folded_expressions = join_node.has_folded_expressions();
+                Ok((fid, op_id))
             }
 
             // ── Set/Apply nodes ─────────────────────────────────────────────────

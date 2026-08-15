@@ -313,6 +313,32 @@ impl FoldConstantsRule {
         Ok(Some(result))
     }
 
+    /// Mark the replacement node (and the result) as having folded constant
+    /// expressions so EXPLAIN can surface `folded: true`.
+    fn mark_folded(result: &mut Option<TransformResult>) {
+        let Some(result) = result.as_mut() else {
+            return;
+        };
+        result.mark_folded();
+        if let Some(node) = result.new_nodes.first_mut() {
+            use crate::query::planning::plan::PlanNodeEnum::*;
+            match node {
+                Filter(n) => n.set_has_folded_expressions(true),
+                Project(n) => n.set_has_folded_expressions(true),
+                Assign(n) => n.set_has_folded_expressions(true),
+                Sort(n) => n.set_has_folded_expressions(true),
+                Window(n) => n.set_has_folded_expressions(true),
+                Aggregate(n) => n.set_has_folded_expressions(true),
+                InnerJoin(n) => n.set_has_folded_expressions(true),
+                LeftJoin(n) => n.set_has_folded_expressions(true),
+                FullOuterJoin(n) => n.set_has_folded_expressions(true),
+                RightJoin(n) => n.set_has_folded_expressions(true),
+                SemiJoin(n) => n.set_has_folded_expressions(true),
+                _ => {}
+            }
+        }
+    }
+
     fn apply_filter(
         &self,
         ctx: &RewriteContext,
@@ -324,7 +350,9 @@ impl FoldConstantsRule {
         };
         let mut new_filter = filter.clone();
         new_filter.set_condition(new_condition);
-        Self::replace_node(PlanNodeEnum::Filter(new_filter))
+        let mut result = Self::replace_node(PlanNodeEnum::Filter(new_filter))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_project(
@@ -345,7 +373,9 @@ impl FoldConstantsRule {
         }
         let mut new_project = project.clone();
         new_project.set_columns(new_columns);
-        Self::replace_node(PlanNodeEnum::Project(new_project))
+        let mut result = Self::replace_node(PlanNodeEnum::Project(new_project))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_assign(
@@ -366,7 +396,9 @@ impl FoldConstantsRule {
         }
         let mut new_assign = assign.clone();
         new_assign.set_assignments(new_assignments);
-        Self::replace_node(PlanNodeEnum::Assign(new_assign))
+        let mut result = Self::replace_node(PlanNodeEnum::Assign(new_assign))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_sort(&self, sort: &SortNode) -> RewriteResult<Option<TransformResult>> {
@@ -383,7 +415,9 @@ impl FoldConstantsRule {
         }
         let mut new_sort = sort.clone();
         new_sort.set_sort_items(new_sort_items);
-        Self::replace_node(PlanNodeEnum::Sort(new_sort))
+        let mut result = Self::replace_node(PlanNodeEnum::Sort(new_sort))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_window(&self, window: &WindowNode) -> RewriteResult<Option<TransformResult>> {
@@ -400,7 +434,9 @@ impl FoldConstantsRule {
         }
         let mut new_window = window.clone();
         new_window.set_window_functions(new_specs);
-        Self::replace_node(PlanNodeEnum::Window(new_window))
+        let mut result = Self::replace_node(PlanNodeEnum::Window(new_window))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_aggregate(&self, aggregate: &AggregateNode) -> RewriteResult<Option<TransformResult>> {
@@ -420,7 +456,9 @@ impl FoldConstantsRule {
         }
         let mut new_aggregate = aggregate.clone();
         new_aggregate.set_aggregation_filters(new_filters);
-        Self::replace_node(PlanNodeEnum::Aggregate(new_aggregate))
+        let mut result = Self::replace_node(PlanNodeEnum::Aggregate(new_aggregate))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_inner_join(
@@ -436,7 +474,9 @@ impl FoldConstantsRule {
         let mut new_join = join.clone();
         new_join.set_hash_keys(hash_keys);
         new_join.set_probe_keys(probe_keys);
-        Self::replace_node(PlanNodeEnum::InnerJoin(new_join))
+        let mut result = Self::replace_node(PlanNodeEnum::InnerJoin(new_join))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_left_join(
@@ -452,7 +492,9 @@ impl FoldConstantsRule {
         let mut new_join = join.clone();
         new_join.set_hash_keys(hash_keys);
         new_join.set_probe_keys(probe_keys);
-        Self::replace_node(PlanNodeEnum::LeftJoin(new_join))
+        let mut result = Self::replace_node(PlanNodeEnum::LeftJoin(new_join))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_full_outer_join(
@@ -468,7 +510,9 @@ impl FoldConstantsRule {
         let mut new_join = join.clone();
         new_join.set_hash_keys(hash_keys);
         new_join.set_probe_keys(probe_keys);
-        Self::replace_node(PlanNodeEnum::FullOuterJoin(new_join))
+        let mut result = Self::replace_node(PlanNodeEnum::FullOuterJoin(new_join))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_right_join(
@@ -484,7 +528,9 @@ impl FoldConstantsRule {
         let mut new_join = join.clone();
         new_join.set_hash_keys(hash_keys);
         new_join.set_probe_keys(probe_keys);
-        Self::replace_node(PlanNodeEnum::RightJoin(new_join))
+        let mut result = Self::replace_node(PlanNodeEnum::RightJoin(new_join))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply_semi_join(
@@ -500,7 +546,9 @@ impl FoldConstantsRule {
         let mut new_join = join.clone();
         new_join.set_hash_keys(hash_keys);
         new_join.set_probe_keys(probe_keys);
-        Self::replace_node(PlanNodeEnum::SemiJoin(new_join))
+        let mut result = Self::replace_node(PlanNodeEnum::SemiJoin(new_join))?;
+        Self::mark_folded(&mut result);
+        Ok(result)
     }
 
     fn apply(

@@ -16,7 +16,7 @@ use crate::core::value::date_time::DateValue;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::core::DataChunk;
-use crate::query::executor::streaming::chunk::typed::{TypedColumn, TypedKind};
+use crate::query::executor::streaming::chunk::typed::{bitmap_is_valid, TypedColumn, TypedKind};
 use crate::query::executor::streaming::helpers::compare_values;
 
 /// Column-major accumulation of one output column across chunks.
@@ -32,8 +32,64 @@ pub enum BatchColumn {
     Date(Vec<i64>),
     /// String column stored as `Vec<Arc<str>>`, avoiding per-row `Value` boxing.
     Utf8(Vec<Arc<str>>),
+    /// Typed column with a validity bitmap (`1` = valid, `0` = NULL).
+    /// Invalid rows materialize as NULL and sort last.
+    NullableI64(Vec<i64>, Vec<u64>),
+    NullableF64(Vec<f64>, Vec<u64>),
+    NullableI32(Vec<i32>, Vec<u64>),
+    NullableBool(Vec<bool>, Vec<u64>),
+    NullableDate(Vec<i64>, Vec<u64>),
+    NullableUtf8(Vec<Arc<str>>, Vec<u64>),
     /// Mixed-kind or NULL-bearing column; value-level semantics preserved.
     Fallback(Vec<Value>),
+}
+
+/// Compare two rows of a nullable column with NULL-last ordering (mirrors
+/// [`compare_values`]: NULL equals NULL and sorts last).
+fn nullable_cmp_at<T>(
+    bitmap: &[u64],
+    a: &T,
+    b: &T,
+    a_idx: usize,
+    b_idx: usize,
+    cmp: fn(&T, &T) -> Ordering,
+) -> Ordering {
+    let a_valid = bitmap_is_valid(bitmap, a_idx);
+    let b_valid = bitmap_is_valid(bitmap, b_idx);
+    match (a_valid, b_valid) {
+        (true, true) => cmp(a, b),
+        (false, false) => Ordering::Equal,
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+    }
+}
+
+/// Append validity bits (packed, one bit per row) to a bitmap starting at
+/// row `rows_before`.
+fn extend_bitmap(bm: &mut Vec<u64>, rows_before: usize, valid: impl Iterator<Item = bool>) {
+    let mut row = rows_before;
+    for is_valid in valid {
+        let word = row / 64;
+        if word >= bm.len() {
+            bm.resize(word + 1, 0u64);
+        }
+        if is_valid {
+            bm[word] |= 1u64 << (row % 64);
+        }
+        row += 1;
+    }
+}
+
+/// Build a packed validity bitmap marking the rows at `indices` that are
+/// valid in the source bitmap.
+fn bitmap_from_indices(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
+    let mut out = vec![0u64; (indices.len() + 63) / 64];
+    for (j, &i) in indices.iter().enumerate() {
+        if bitmap_is_valid(bitmap, i) {
+            out[j / 64] |= 1u64 << (j % 64);
+        }
+    }
+    out
 }
 
 impl BatchColumn {
@@ -46,6 +102,12 @@ impl BatchColumn {
             BatchColumn::Bool(v) => v.len(),
             BatchColumn::Date(v) => v.len(),
             BatchColumn::Utf8(v) => v.len(),
+            BatchColumn::NullableI64(v, _) => v.len(),
+            BatchColumn::NullableF64(v, _) => v.len(),
+            BatchColumn::NullableI32(v, _) => v.len(),
+            BatchColumn::NullableBool(v, _) => v.len(),
+            BatchColumn::NullableDate(v, _) => v.len(),
+            BatchColumn::NullableUtf8(v, _) => v.len(),
             BatchColumn::Fallback(v) => v.len(),
         }
     }
@@ -63,16 +125,17 @@ impl BatchColumn {
     pub fn kind(&self) -> Option<TypedKind> {
         match self {
             BatchColumn::Empty | BatchColumn::Fallback(_) => None,
-            BatchColumn::I64(_) => Some(TypedKind::I64),
-            BatchColumn::F64(_) => Some(TypedKind::F64),
-            BatchColumn::I32(_) => Some(TypedKind::I32),
-            BatchColumn::Bool(_) => Some(TypedKind::Bool),
-            BatchColumn::Date(_) => Some(TypedKind::Date),
-            BatchColumn::Utf8(_) => Some(TypedKind::Utf8),
+            BatchColumn::I64(_) | BatchColumn::NullableI64(..) => Some(TypedKind::I64),
+            BatchColumn::F64(_) | BatchColumn::NullableF64(..) => Some(TypedKind::F64),
+            BatchColumn::I32(_) | BatchColumn::NullableI32(..) => Some(TypedKind::I32),
+            BatchColumn::Bool(_) | BatchColumn::NullableBool(..) => Some(TypedKind::Bool),
+            BatchColumn::Date(_) | BatchColumn::NullableDate(..) => Some(TypedKind::Date),
+            BatchColumn::Utf8(_) | BatchColumn::NullableUtf8(..) => Some(TypedKind::Utf8),
         }
     }
 
-    /// Materialize the value at `idx` (O(1) for typed variants).
+    /// Materialize the value at `idx` (O(1) for typed variants; NULL for
+    /// invalid rows of the `Nullable*` variants).
     pub fn value_at(&self, idx: usize) -> Value {
         match self {
             BatchColumn::Empty => Value::Null(NullType::Null),
@@ -82,6 +145,48 @@ impl BatchColumn {
             BatchColumn::Bool(v) => Value::Bool(v[idx]),
             BatchColumn::Date(v) => Value::Date(DateValue::from_days(v[idx])),
             BatchColumn::Utf8(v) => Value::String(v[idx].as_ref().into()),
+            BatchColumn::NullableI64(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::BigInt(v[idx])
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableF64(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::Double(v[idx])
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableI32(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::Int(v[idx])
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableBool(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::Bool(v[idx])
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableDate(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::Date(DateValue::from_days(v[idx]))
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableUtf8(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::String(v[idx].as_ref().into())
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
             BatchColumn::Fallback(v) => v[idx].clone(),
         }
     }
@@ -91,10 +196,10 @@ impl BatchColumn {
     /// Typed columns compare on raw scalars (identical ordering to
     /// [`compare_values`] for same-kind values: i64/i32/bool use the
     /// primitive order, f64 mirrors `Value` float ordering, strings are
-    /// lexicographic). Date columns and fallback columns delegate to
-    /// [`compare_values`] (the row path falls back to the string
-    /// representation there, which diverges from the day order for
-    /// pre-epoch dates).
+    /// lexicographic). NULL ordering matches [`compare_values`] (NULLs last).
+    /// Date columns and fallback columns delegate to [`compare_values`] (the
+    /// row path falls back to the string representation there, which
+    /// diverges from the day order for pre-epoch dates).
     pub fn compare_at(&self, a: usize, b: usize) -> Ordering {
         match self {
             BatchColumn::Empty => Ordering::Equal,
@@ -117,14 +222,38 @@ impl BatchColumn {
                 &Value::Date(DateValue::from_days(v[b])),
             ),
             BatchColumn::Utf8(v) => v[a].cmp(&v[b]),
+            BatchColumn::NullableI64(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
+            BatchColumn::NullableF64(v, bm) => nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| {
+                if x < y {
+                    Ordering::Less
+                } else if x > y {
+                    Ordering::Greater
+                } else {
+                    Ordering::Equal
+                }
+            }),
+            BatchColumn::NullableI32(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
+            BatchColumn::NullableBool(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
+            BatchColumn::NullableDate(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
+            BatchColumn::NullableUtf8(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
             BatchColumn::Fallback(v) => compare_values(&v[a], &v[b]),
         }
     }
 
     /// Compare the value `v` against row `idx` of this column.
     ///
-    /// Uses the raw fast path when `v` matches the typed column kind;
-    /// otherwise delegates to [`compare_values`] exactly.
+    /// Uses the raw fast path when `v` matches the typed column kind and the
+    /// row is valid; otherwise delegates to [`compare_values`] exactly.
     pub fn compare_value_at(&self, v: &Value, idx: usize) -> Ordering {
         let raw = match (self, v) {
             (BatchColumn::I64(col), Value::BigInt(x)) => Some(x.cmp(&col[idx])),
@@ -141,6 +270,30 @@ impl BatchColumn {
             (BatchColumn::I32(col), Value::Int(x)) => Some(x.cmp(&col[idx])),
             (BatchColumn::Bool(col), Value::Bool(x)) => Some(x.cmp(&col[idx])),
             (BatchColumn::Utf8(col), Value::String(x)) => Some(x.as_str().cmp(&col[idx])),
+            (BatchColumn::NullableI64(col, b), Value::BigInt(x)) => {
+                bitmap_is_valid(b, idx).then(|| x.cmp(&col[idx]))
+            }
+            (BatchColumn::NullableF64(col, b), Value::Double(x)) => {
+                bitmap_is_valid(b, idx).then(|| {
+                    let y = col[idx];
+                    if *x < y {
+                        Ordering::Less
+                    } else if *x > y {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Equal
+                    }
+                })
+            }
+            (BatchColumn::NullableI32(col, b), Value::Int(x)) => {
+                bitmap_is_valid(b, idx).then(|| x.cmp(&col[idx]))
+            }
+            (BatchColumn::NullableBool(col, b), Value::Bool(x)) => {
+                bitmap_is_valid(b, idx).then(|| x.cmp(&col[idx]))
+            }
+            (BatchColumn::NullableUtf8(col, b), Value::String(x)) => {
+                bitmap_is_valid(b, idx).then(|| x.as_str().cmp(&col[idx]))
+            }
             _ => None,
         };
         match raw {
@@ -159,6 +312,29 @@ impl BatchColumn {
             BatchColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
             BatchColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
             BatchColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
+            BatchColumn::NullableI64(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableF64(v, b) => {
+                v.capacity() * std::mem::size_of::<f64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableI32(v, b) => {
+                v.capacity() * std::mem::size_of::<i32>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableBool(v, b) => {
+                v.capacity() * std::mem::size_of::<bool>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableDate(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableUtf8(v, b) => {
+                v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
+            }
             BatchColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
     }
@@ -168,53 +344,211 @@ impl BatchColumn {
     /// When `self` is Empty the kind is taken from the chunk column (a
     /// fallback chunk column starts a fallback batch column). A kind
     /// mismatch degrades the accumulated column to [`BatchColumn::Fallback`].
+    /// A NULL introduced by a `Nullable*` chunk column upgrades a plain
+    /// typed column to its `Nullable*` form (past rows become valid).
     fn append_typed(&mut self, col: &TypedColumn, indices: &[usize]) {
         match self {
             BatchColumn::Empty => {
                 *self = Self::gather(col, indices);
             }
-            BatchColumn::I64(buf) => {
-                if let TypedColumn::I64(src) = col {
-                    buf.extend(indices.iter().map(|&i| src[i]));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+            BatchColumn::I64(buf) => match col {
+                TypedColumn::I64(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableI64(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableI64(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
                 }
-            }
-            BatchColumn::F64(buf) => {
-                if let TypedColumn::F64(src) = col {
-                    buf.extend(indices.iter().map(|&i| src[i]));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::F64(buf) => match col {
+                TypedColumn::F64(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableF64(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableF64(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
                 }
-            }
-            BatchColumn::I32(buf) => {
-                if let TypedColumn::I32(src) = col {
-                    buf.extend(indices.iter().map(|&i| src[i]));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::I32(buf) => match col {
+                TypedColumn::I32(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableI32(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableI32(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
                 }
-            }
-            BatchColumn::Bool(buf) => {
-                if let TypedColumn::Bool(src) = col {
-                    buf.extend(indices.iter().map(|&i| src[i]));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::Bool(buf) => match col {
+                TypedColumn::Bool(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableBool(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableBool(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
                 }
-            }
-            BatchColumn::Date(buf) => {
-                if let TypedColumn::Date(src) = col {
-                    buf.extend(indices.iter().map(|&i| src[i]));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::Date(buf) => match col {
+                TypedColumn::Date(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableDate(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableDate(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
                 }
-            }
-            BatchColumn::Utf8(buf) => {
-                if let TypedColumn::Utf8(src) = col {
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::Utf8(buf) => match col {
+                TypedColumn::Utf8(src) => buf.extend(indices.iter().map(|&i| src[i].clone())),
+                TypedColumn::NullableUtf8(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableUtf8(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i].clone()));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableI64(buf, bm_out) => match col {
+                TypedColumn::NullableI64(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::I64(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableF64(buf, bm_out) => match col {
+                TypedColumn::NullableF64(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::F64(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableI32(buf, bm_out) => match col {
+                TypedColumn::NullableI32(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::I32(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableBool(buf, bm_out) => match col {
+                TypedColumn::NullableBool(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::Bool(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableDate(buf, bm_out) => match col {
+                TypedColumn::NullableDate(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::Date(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableUtf8(buf, bm_out) => match col {
+                TypedColumn::NullableUtf8(src, bm) => {
+                    let rows_before = buf.len();
                     buf.extend(indices.iter().map(|&i| src[i].clone()));
-                } else {
-                    *self = Self::degraded_append(self, col, indices);
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
                 }
-            }
+                TypedColumn::Utf8(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i].clone()));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
             BatchColumn::Fallback(buf) => {
                 buf.extend(indices.iter().map(|&i| {
                     col.value_at(i)
@@ -236,9 +570,59 @@ impl BatchColumn {
             TypedColumn::Utf8(v) => {
                 BatchColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect())
             }
+            TypedColumn::NullableI64(v, bm) => BatchColumn::NullableI64(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableF64(v, bm) => BatchColumn::NullableF64(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableI32(v, bm) => BatchColumn::NullableI32(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableBool(v, bm) => BatchColumn::NullableBool(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableDate(v, bm) => BatchColumn::NullableDate(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableUtf8(v, bm) => BatchColumn::NullableUtf8(
+                indices.iter().map(|&i| v[i].clone()).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
             TypedColumn::Fallback(v) => {
                 BatchColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
             }
+        }
+    }
+
+    /// Upgrade a plain typed column to its `Nullable*` form (past rows all
+    /// valid), used when a later chunk introduces NULLs into the column.
+    fn to_nullable(current: &Self) -> Self {
+        match current {
+            BatchColumn::I64(v) => {
+                BatchColumn::NullableI64(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            BatchColumn::F64(v) => {
+                BatchColumn::NullableF64(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            BatchColumn::I32(v) => {
+                BatchColumn::NullableI32(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            BatchColumn::Bool(v) => {
+                BatchColumn::NullableBool(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            BatchColumn::Date(v) => {
+                BatchColumn::NullableDate(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            BatchColumn::Utf8(v) => {
+                BatchColumn::NullableUtf8(v.clone(), vec![!0u64; (v.len() + 63) / 64])
+            }
+            _ => current.clone(),
         }
     }
 
@@ -302,6 +686,54 @@ impl BatchColumn {
                     *self = BatchColumn::degraded_push(self, value);
                 }
             }
+            BatchColumn::NullableI64(buf, bm) => {
+                if let Value::BigInt(x) = value {
+                    buf.push(*x);
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableF64(buf, bm) => {
+                if let Value::Double(x) = value {
+                    buf.push(*x);
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableI32(buf, bm) => {
+                if let Value::Int(x) = value {
+                    buf.push(*x);
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableBool(buf, bm) => {
+                if let Value::Bool(x) = value {
+                    buf.push(*x);
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableDate(buf, bm) => {
+                if let Value::Date(x) = value {
+                    buf.push(x.to_days());
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableUtf8(buf, bm) => {
+                if let Value::String(x) = value {
+                    buf.push(Arc::from(x.as_str()));
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
             BatchColumn::Fallback(buf) => buf.push(value.clone()),
         }
     }
@@ -321,6 +753,30 @@ impl BatchColumn {
             BatchColumn::Bool(v) => v.truncate(len),
             BatchColumn::Date(v) => v.truncate(len),
             BatchColumn::Utf8(v) => v.truncate(len),
+            BatchColumn::NullableI64(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
+            BatchColumn::NullableF64(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
+            BatchColumn::NullableI32(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
+            BatchColumn::NullableBool(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
+            BatchColumn::NullableDate(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
+            BatchColumn::NullableUtf8(v, bm) => {
+                v.truncate(len);
+                bm.truncate((len + 63) / 64);
+            }
             BatchColumn::Fallback(v) => v.truncate(len),
         }
     }
@@ -351,6 +807,36 @@ impl BatchColumn {
             BatchColumn::Utf8(v) => {
                 let old = std::mem::take(v);
                 *v = perm.iter().map(|&i| old[i].clone()).collect();
+            }
+            BatchColumn::NullableI64(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableF64(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableI32(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableBool(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableDate(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableUtf8(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i].clone()).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
             }
             BatchColumn::Fallback(v) => {
                 let old = std::mem::take(v);

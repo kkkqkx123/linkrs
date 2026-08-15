@@ -13,6 +13,8 @@ define_plan_node_with_deps! {
         aggregation_distinct: Vec<bool>,
         aggregation_filters: Vec<Option<Expression>>,
         grouping_sets: Vec<Vec<String>>,
+        // Whether constant folding replaced part of the aggregation filters.
+        has_folded_expressions: bool,
     }
     enum: Aggregate
     input: SingleInputNode
@@ -40,6 +42,7 @@ impl AggregateNode {
             aggregation_distinct: vec![false; num_agg],
             aggregation_filters: vec![None; num_agg],
             grouping_sets: Vec::new(),
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -68,6 +71,7 @@ impl AggregateNode {
             aggregation_distinct: vec![false; num_agg],
             aggregation_filters: vec![None; num_agg],
             grouping_sets: Vec::new(),
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -112,6 +116,16 @@ impl AggregateNode {
     /// Set grouping sets for ROLLUP/CUBE/GROUPING SETS support
     pub fn set_grouping_sets(&mut self, sets: Vec<Vec<String>>) {
         self.grouping_sets = sets;
+    }
+
+    /// Whether constant folding replaced part of the aggregation filters.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the aggregation filters.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 
     /// Obtaining aggregate expressions (also known as alias methods, which are the same as aggregation_functions)

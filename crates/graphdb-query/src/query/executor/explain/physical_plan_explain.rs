@@ -109,6 +109,10 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         if let Some(reason) = &op_spec.choice_reason {
             pairs.push(Pair::new("reason", reason.clone()));
         }
+        // Constant folding applied on the source logical node.
+        if op_spec.has_folded_expressions {
+            pairs.push(Pair::new("folded", "true"));
+        }
 
         let props = &op_spec.properties;
         if let crate::query::executor::streaming::plan::properties::Ordering::Sorted(orders) =

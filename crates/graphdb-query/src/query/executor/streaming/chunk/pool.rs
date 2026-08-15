@@ -171,6 +171,50 @@ impl RowPool {
                     p.push(buf);
                 }
             }
+            // Nullable variants recycle the values buffer (the validity
+            // bitmap is dropped and rebuilt by the chunk builder).
+            TypedColumn::NullableI64(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_i64.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableF64(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_f64.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableI32(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_i32.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableBool(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_bool.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableDate(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_date.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableUtf8(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_utf8.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
             TypedColumn::Fallback(_) => {}
         }
     }

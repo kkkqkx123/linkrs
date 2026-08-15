@@ -547,6 +547,64 @@ fn bench_selectivity_propagation(c: &mut Criterion) {
     group.finish();
 }
 
+/// NULL-bearing typed columns vs Fallback: does the validity bitmap keep
+/// low-NULL-density columns on the typed fast path (Q3 follow-up)?
+fn bench_nullable_typed_column_filter(c: &mut Criterion) {
+    use graphdb_query::core::types::expr::Expression;
+    use graphdb_query::core::types::operators::BinaryOperator;
+    use graphdb_query::core::value::NullType;
+
+    let mut group = c.benchmark_group("nullable_typed_column_filter");
+    group.measurement_time(Duration::from_secs(2));
+    group.sample_size(30);
+
+    let n = 262144usize;
+    let predicate = Expression::Binary {
+        left: Box::new(Expression::Variable("k0".into())),
+        op: BinaryOperator::GreaterThan,
+        right: Box::new(Expression::Literal(Value::BigInt(500))),
+    };
+
+    for null_rate in [0.0f64, 0.01, 0.1, 0.3, 0.8] {
+        let make_chunk = |typed: bool| {
+            let layout = Arc::new(SlotLayout::from_names(&["k0".to_string()]));
+            let rows: Vec<Vec<Value>> = (0..n)
+                .map(|i| {
+                    if (i as f64) / (n as f64) < null_rate {
+                        vec![Value::Null(NullType::Null)]
+                    } else {
+                        vec![Value::BigInt((i % 1000) as i64)]
+                    }
+                })
+                .collect();
+            let mut chunk = DataChunk::new_with_layout(rows, layout);
+            chunk.build_typed_columns(typed);
+            chunk
+        };
+
+        group.bench_function(BenchmarkId::new("nullable_typed", null_rate), |b| {
+            b.iter_batched(
+                || make_chunk(true),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&predicate, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+
+        group.bench_function(BenchmarkId::new("fallback", null_rate), |b| {
+            b.iter_batched(
+                || make_chunk(false),
+                |mut chunk| {
+                    let _ = chunk.evaluate_expression(&predicate, None);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_row_vs_column_filter,
@@ -557,5 +615,6 @@ criterion_group!(
     bench_typed_data_chunk_filter,
     bench_selection_chain,
     bench_numeric_promotion,
+    bench_nullable_typed_column_filter,
 );
 criterion_main!(benches);

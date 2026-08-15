@@ -6,6 +6,7 @@
 
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::core::value::date_time::DateValue;
+use crate::core::value::NullType;
 use crate::core::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -27,8 +28,14 @@ pub enum TypedKind {
 ///
 /// `I64`/`F64`/`I32`/`Bool`/`Date`/`Utf8` columns are stored as dense raw
 /// `Vec`s so that batch evaluation operates on scalars (auto-vectorizable)
-/// instead of constructing one `Value` per row. Columns that contain NULLs,
-/// mixed types, or non-scalar values fall back to [`TypedColumn::Fallback`].
+/// instead of constructing one `Value` per row. Columns that contain NULLs
+/// keep the typed representation through the matching `Nullable*` variants
+/// (raw values + validity bitmap); columns that mix kinds or carry
+/// non-scalar values fall back to [`TypedColumn::Fallback`].
+///
+/// Bitmap encoding: bit `i` of `bitmap[i / 64]` marks row `i` valid (`1` =
+/// valid value, `0` = NULL). Invalid rows keep a placeholder in the value
+/// vector so element access stays index-aligned.
 #[derive(Debug, Clone)]
 pub enum TypedColumn {
     I64(Vec<i64>),
@@ -38,7 +45,44 @@ pub enum TypedColumn {
     /// Days since epoch per row (see [`DateValue::to_days`]).
     Date(Vec<i64>),
     Utf8(Vec<Arc<str>>),
+    /// I64 column with a validity bitmap (see the encoding note above).
+    NullableI64(Vec<i64>, Vec<u64>),
+    /// F64 column with a validity bitmap.
+    NullableF64(Vec<f64>, Vec<u64>),
+    /// I32 column with a validity bitmap.
+    NullableI32(Vec<i32>, Vec<u64>),
+    /// Bool column with a validity bitmap.
+    NullableBool(Vec<bool>, Vec<u64>),
+    /// Date column with a validity bitmap.
+    NullableDate(Vec<i64>, Vec<u64>),
+    /// Utf8 column with a validity bitmap.
+    NullableUtf8(Vec<Arc<str>>, Vec<u64>),
     Fallback(Vec<Value>),
+}
+
+/// Whether row `idx` is valid in `bitmap` (bit set = valid, bit clear = NULL).
+#[inline]
+pub(super) fn bitmap_is_valid(bitmap: &[u64], idx: usize) -> bool {
+    bitmap[idx / 64] & (1u64 << (idx % 64)) != 0
+}
+
+/// Set (`valid == true`) or clear the validity bit of row `idx`.
+#[inline]
+pub(super) fn bitmap_set_bit(bitmap: &mut [u64], idx: usize, valid: bool) {
+    if valid {
+        bitmap[idx / 64] |= 1u64 << (idx % 64);
+    } else {
+        bitmap[idx / 64] &= !(1u64 << (idx % 64));
+    }
+}
+
+/// Gather the validity bits at `indices` into a new bitmap.
+fn gather_bitmap(bitmap: &[u64], indices: &[usize]) -> Vec<u64> {
+    let mut out = vec![0u64; (indices.len() + 63) / 64];
+    for (j, &i) in indices.iter().enumerate() {
+        bitmap_set_bit(&mut out, j, bitmap_is_valid(bitmap, i));
+    }
+    out
 }
 
 impl TypedColumn {
@@ -50,6 +94,12 @@ impl TypedColumn {
             TypedColumn::Bool(v) => v.len(),
             TypedColumn::Date(v) => v.len(),
             TypedColumn::Utf8(v) => v.len(),
+            TypedColumn::NullableI64(v, _) => v.len(),
+            TypedColumn::NullableF64(v, _) => v.len(),
+            TypedColumn::NullableI32(v, _) => v.len(),
+            TypedColumn::NullableBool(v, _) => v.len(),
+            TypedColumn::NullableDate(v, _) => v.len(),
+            TypedColumn::NullableUtf8(v, _) => v.len(),
             TypedColumn::Fallback(v) => v.len(),
         }
     }
@@ -63,8 +113,10 @@ impl TypedColumn {
         !matches!(self, TypedColumn::Fallback(_))
     }
 
-    /// Materialize the value at `idx` (O(1) for typed variants).
+    /// Materialize the value at `idx` (O(1) for typed variants; NULL for
+    /// invalid rows of the `Nullable*` variants).
     pub fn value_at(&self, idx: usize) -> Option<Value> {
+        let null = || Some(Value::Null(NullType::Null));
         match self {
             TypedColumn::I64(v) => v.get(idx).map(|&x| Value::BigInt(x)),
             TypedColumn::F64(v) => v.get(idx).map(|&x| Value::Double(x)),
@@ -72,6 +124,48 @@ impl TypedColumn {
             TypedColumn::Bool(v) => v.get(idx).map(|&x| Value::Bool(x)),
             TypedColumn::Date(v) => v.get(idx).map(|&x| Value::Date(DateValue::from_days(x))),
             TypedColumn::Utf8(v) => v.get(idx).map(|x| Value::String(x.as_ref().into())),
+            TypedColumn::NullableI64(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|&x| Value::BigInt(x))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableF64(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|&x| Value::Double(x))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableI32(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|&x| Value::Int(x))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableBool(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|&x| Value::Bool(x))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableDate(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|&x| Value::Date(DateValue::from_days(x)))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableUtf8(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).map(|x| Value::String(x.as_ref().into()))
+                } else {
+                    null()
+                }
+            }
             TypedColumn::Fallback(v) => v.get(idx).cloned(),
         }
     }
@@ -88,6 +182,72 @@ impl TypedColumn {
                 .map(|&x| Value::Date(DateValue::from_days(x)))
                 .collect(),
             TypedColumn::Utf8(v) => v.iter().map(|x| Value::String(x.as_ref().into())).collect(),
+            TypedColumn::NullableI64(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::BigInt(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableF64(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::Double(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableI32(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::Int(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableBool(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::Bool(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableDate(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::Date(DateValue::from_days(x))
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableUtf8(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::String(x.as_ref().into())
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
             TypedColumn::Fallback(v) => v.clone(),
         }
     }
@@ -101,6 +261,29 @@ impl TypedColumn {
             TypedColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
             TypedColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
             TypedColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
+            TypedColumn::NullableI64(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableF64(v, b) => {
+                v.capacity() * std::mem::size_of::<f64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableI32(v, b) => {
+                v.capacity() * std::mem::size_of::<i32>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableBool(v, b) => {
+                v.capacity() * std::mem::size_of::<bool>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableDate(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableUtf8(v, b) => {
+                v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
+            }
             TypedColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
     }
@@ -112,7 +295,8 @@ impl TypedColumn {
 ///
 /// Mirrors `Value::BigInt`/`Value::Double`/`Value::Int`/`Value::Bool`/
 /// `Value::Date`/`Value::String` in raw space; converted to `Vec<Value>`
-/// once at the end of evaluation.
+/// once at the end of evaluation. The `Nullable*` variants carry a validity
+/// bitmap (`1` = valid, `0` = NULL) and materialize NULL for invalid rows.
 #[derive(Debug, Clone)]
 pub(super) enum TypedBatch {
     I64(Vec<i64>),
@@ -122,6 +306,18 @@ pub(super) enum TypedBatch {
     /// Days since epoch per row (see [`DateValue::to_days`]).
     Date(Vec<i64>),
     Utf8(Vec<Arc<str>>),
+    /// I64 batch with a validity bitmap.
+    NullableI64(Vec<i64>, Vec<u64>),
+    /// F64 batch with a validity bitmap.
+    NullableF64(Vec<f64>, Vec<u64>),
+    /// I32 batch with a validity bitmap.
+    NullableI32(Vec<i32>, Vec<u64>),
+    /// Bool batch with a validity bitmap.
+    NullableBool(Vec<bool>, Vec<u64>),
+    /// Date batch with a validity bitmap.
+    NullableDate(Vec<i64>, Vec<u64>),
+    /// Utf8 batch with a validity bitmap.
+    NullableUtf8(Vec<Arc<str>>, Vec<u64>),
 }
 
 impl TypedBatch {
@@ -139,6 +335,72 @@ impl TypedBatch {
                 .into_iter()
                 .map(|s| Value::String(s.as_ref().into()))
                 .collect(),
+            TypedBatch::NullableI64(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::BigInt(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableF64(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::Double(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableI32(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::Int(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableBool(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::Bool(x)
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableDate(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::Date(DateValue::from_days(d))
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableUtf8(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::String(s.as_ref().into())
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -154,6 +416,12 @@ pub(super) fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
         TypedColumn::Bool(v) => Some(TypedBatch::Bool(v.clone())),
         TypedColumn::Date(v) => Some(TypedBatch::Date(v.clone())),
         TypedColumn::Utf8(v) => Some(TypedBatch::Utf8(v.clone())),
+        TypedColumn::NullableI64(v, b) => Some(TypedBatch::NullableI64(v.clone(), b.clone())),
+        TypedColumn::NullableF64(v, b) => Some(TypedBatch::NullableF64(v.clone(), b.clone())),
+        TypedColumn::NullableI32(v, b) => Some(TypedBatch::NullableI32(v.clone(), b.clone())),
+        TypedColumn::NullableBool(v, b) => Some(TypedBatch::NullableBool(v.clone(), b.clone())),
+        TypedColumn::NullableDate(v, b) => Some(TypedBatch::NullableDate(v.clone(), b.clone())),
+        TypedColumn::NullableUtf8(v, b) => Some(TypedBatch::NullableUtf8(v.clone(), b.clone())),
         TypedColumn::Fallback(_) => None,
     }
 }
@@ -175,7 +443,9 @@ pub(super) fn typed_literal_batch(value: &Value, n: usize) -> Option<TypedBatch>
 /// Unary operators on raw typed batches.
 ///
 /// Mirrors `UnaryOperationEvaluator` for the supported subset; anything else
-/// returns `None` so the caller falls back to the value path.
+/// returns `None` so the caller falls back to the value path. NULL-aware:
+/// `+` is the identity (NULL stays NULL); `-` and `NOT` error on NULL in
+/// the value path, so `Nullable*` operands fall back (`None`).
 pub(super) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option<TypedBatch> {
     match op {
         UnaryOperator::Plus => Some(batch),
@@ -189,9 +459,18 @@ pub(super) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option
             )),
             TypedBatch::Bool(_) => None,
             TypedBatch::Date(_) | TypedBatch::Utf8(_) => None,
+            // NULL negation errors in the value path; fall back.
+            TypedBatch::NullableI64(..)
+            | TypedBatch::NullableF64(..)
+            | TypedBatch::NullableI32(..)
+            | TypedBatch::NullableBool(..)
+            | TypedBatch::NullableDate(..)
+            | TypedBatch::NullableUtf8(..) => None,
         },
         UnaryOperator::Not => match batch {
             TypedBatch::Bool(v) => Some(TypedBatch::Bool(v.into_iter().map(|b| !b).collect())),
+            // NULL NOT errors in the value path; fall back.
+            TypedBatch::NullableBool(..) => None,
             _ => None,
         },
         _ => None,
@@ -203,7 +482,13 @@ pub(super) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option
 /// Mirrors `BinaryOperationEvaluator` / `Value` comparison and arithmetic
 /// semantics for the supported subset (same-kind operands only); mixed kinds
 /// and unsupported operators return `None` so the caller falls back to the
-/// value path, which handles cross-type coercion exactly.
+/// value path, which handles cross-type coercion exactly. NULL-aware:
+///
+/// - comparisons: NULL rows compare by `Value` type priority (a NULL sorts
+///   below every typed kind; NULL == NULL is true), so the result is always
+///   a plain `Bool` batch;
+/// - arithmetic and boolean And/Or on NULL rows error in the value path, so
+///   nullable operands fall back (`None`).
 pub(super) fn typed_binary_batch(
     op: &BinaryOperator,
     left: &TypedBatch,
@@ -212,8 +497,34 @@ pub(super) fn typed_binary_batch(
     use BinaryOperator::*;
     match op {
         Equal | NotEqual | LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual => {
-            compare_typed_batches(op, left, right)
+            if is_nullable_batch(left) || is_nullable_batch(right) {
+                nullable_compare_batches(op, left, right)
+            } else {
+                compare_typed_batches(op, left, right)
+            }
         }
+        Add | Subtract | Multiply | And | Or => {
+            if is_nullable_batch(left) || is_nullable_batch(right) {
+                // NULL operands make the value path error (arithmetic on
+                // non-numeric types / And-Or on non-bools); fall back so the
+                // error semantics stay exact.
+                None
+            } else {
+                compare_or_arith_or_bool(op, left, right)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Non-nullable binary operators: arithmetic, boolean And/Or.
+fn compare_or_arith_or_bool(
+    op: &BinaryOperator,
+    left: &TypedBatch,
+    right: &TypedBatch,
+) -> Option<TypedBatch> {
+    use BinaryOperator::*;
+    match op {
         Add | Subtract | Multiply => arith_typed_batches(op, left, right),
         And | Or => match (left, right) {
             (TypedBatch::Bool(l), TypedBatch::Bool(r)) => {
@@ -230,6 +541,201 @@ pub(super) fn typed_binary_batch(
             }
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// Whether the batch carries a validity bitmap.
+fn is_nullable_batch(batch: &TypedBatch) -> bool {
+    matches!(
+        batch,
+        TypedBatch::NullableI64(..)
+            | TypedBatch::NullableF64(..)
+            | TypedBatch::NullableI32(..)
+            | TypedBatch::NullableBool(..)
+            | TypedBatch::NullableDate(..)
+            | TypedBatch::NullableUtf8(..)
+    )
+}
+
+/// Validity of row `idx`; `None` bitmap means all rows are valid.
+#[inline]
+fn valid_at(bitmap: Option<&[u64]>, idx: usize) -> bool {
+    match bitmap {
+        None => true,
+        Some(b) => bitmap_is_valid(b, idx),
+    }
+}
+
+/// Elementwise comparison producing `Vec<bool>`.
+///
+/// NULL rows compare by `Value` type priority: a NULL is smaller than every
+/// typed kind (`Less` when the left operand is NULL, `Greater` when the
+/// right operand is NULL, `Equal` when both are NULL), mirroring
+/// `cmp_by_type_priority` for the `Value::Null(NullType::Null)` rows that
+/// `build_typed_columns` admits into `Nullable*` columns.
+fn zip_compare<T>(
+    op: &BinaryOperator,
+    l: &[T],
+    r: &[T],
+    lb: Option<&[u64]>,
+    rb: Option<&[u64]>,
+    cmp: fn(&T, &T) -> Ordering,
+) -> Vec<bool> {
+    use BinaryOperator::*;
+    let mut out = Vec::with_capacity(l.len());
+    for i in 0..l.len() {
+        let o = match (valid_at(lb, i), valid_at(rb, i)) {
+            (true, true) => cmp(&l[i], &r[i]),
+            (false, true) => Ordering::Less,
+            (true, false) => Ordering::Greater,
+            (false, false) => Ordering::Equal,
+        };
+        let v = match op {
+            Equal => o == Ordering::Equal,
+            NotEqual => o != Ordering::Equal,
+            LessThan => o == Ordering::Less,
+            LessThanOrEqual => o != Ordering::Greater,
+            GreaterThan => o == Ordering::Greater,
+            GreaterThanOrEqual => o != Ordering::Less,
+            _ => return out,
+        };
+        out.push(v);
+    }
+    out
+}
+
+/// Comparison operators with NULL-aware rows (at least one nullable
+/// operand). Returns a plain `Bool` batch mirroring the value path.
+fn nullable_compare_batches(
+    op: &BinaryOperator,
+    left: &TypedBatch,
+    right: &TypedBatch,
+) -> Option<TypedBatch> {
+    use BinaryOperator::{Equal, NotEqual};
+    // Integer family (i64/i32 and their nullable forms) promotes to i64.
+    if let (Some((l, lb)), Some((r, rb))) = (numeric_i64_view(left), numeric_i64_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &i64, b: &i64| a.cmp(b),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
+    // Same-kind doubles use the NaN-aware ordering.
+    if let (Some((l, lb)), Some((r, rb))) = (f64_view(left), f64_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &f64, b: &f64| cmp_f64_value(*a, *b),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
+    // Integer vs double promotes to f64 with `partial_cmp` semantics
+    // (mirrors the cross-kind `Value` ordering).
+    if let (Some((l, lb)), Some((r, rb))) = (numeric_f64_view(left), numeric_f64_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
+    // Strings compare lexicographically (bytewise).
+    if let (Some((l, lb)), Some((r, rb))) = (utf8_view(left), utf8_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &Arc<str>, b: &Arc<str>| a.as_ref().cmp(b.as_ref()),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
+    // Booleans support equality only.
+    if matches!(op, Equal | NotEqual) {
+        if let (Some((l, lb)), Some((r, rb))) = (bool_view(left), bool_view(right)) {
+            let vals = zip_compare(
+                op,
+                &l,
+                &r,
+                lb.as_deref(),
+                rb.as_deref(),
+                |a: &bool, b: &bool| a.cmp(b),
+            );
+            return Some(TypedBatch::Bool(vals));
+        }
+    }
+    None
+}
+
+/// Arithmetic operators with NULL-aware bitmaps (at least one nullable
+
+/// View an integer batch as `Vec<i64>` (allocation-free for I64, promoted
+/// for I32) plus its validity bitmap (`None` = all valid).
+fn numeric_i64_view(batch: &TypedBatch) -> Option<(Vec<i64>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::I64(v) => Some((v.clone(), None)),
+        TypedBatch::NullableI64(v, b) => Some((v.clone(), Some(b.clone()))),
+        TypedBatch::I32(v) => Some((v.iter().map(|&x| i64::from(x)).collect(), None)),
+        TypedBatch::NullableI32(v, b) => {
+            Some((v.iter().map(|&x| i64::from(x)).collect(), Some(b.clone())))
+        }
+        _ => None,
+    }
+}
+
+/// View an f64 batch (same-kind doubles only) plus its validity bitmap.
+fn f64_view(batch: &TypedBatch) -> Option<(Vec<f64>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::F64(v) => Some((v.clone(), None)),
+        TypedBatch::NullableF64(v, b) => Some((v.clone(), Some(b.clone()))),
+        _ => None,
+    }
+}
+
+/// View a numeric batch as `Vec<f64>` (for int-vs-double promotion) plus
+/// its validity bitmap.
+fn numeric_f64_view(batch: &TypedBatch) -> Option<(Vec<f64>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::F64(v) => Some((v.clone(), None)),
+        TypedBatch::NullableF64(v, b) => Some((v.clone(), Some(b.clone()))),
+        TypedBatch::I64(v) => Some((v.iter().map(|&x| x as f64).collect(), None)),
+        TypedBatch::NullableI64(v, b) => {
+            Some((v.iter().map(|&x| x as f64).collect(), Some(b.clone())))
+        }
+        TypedBatch::I32(v) => Some((v.iter().map(|&x| x as f64).collect(), None)),
+        TypedBatch::NullableI32(v, b) => {
+            Some((v.iter().map(|&x| x as f64).collect(), Some(b.clone())))
+        }
+        _ => None,
+    }
+}
+
+/// View a string batch plus its validity bitmap.
+fn utf8_view(batch: &TypedBatch) -> Option<(Vec<Arc<str>>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::Utf8(v) => Some((v.clone(), None)),
+        TypedBatch::NullableUtf8(v, b) => Some((v.clone(), Some(b.clone()))),
+        _ => None,
+    }
+}
+
+/// View a bool batch plus its validity bitmap.
+fn bool_view(batch: &TypedBatch) -> Option<(Vec<bool>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::Bool(v) => Some((v.clone(), None)),
+        TypedBatch::NullableBool(v, b) => Some((v.clone(), Some(b.clone()))),
         _ => None,
     }
 }
@@ -349,8 +855,9 @@ fn compare_typed_batches(
     }
 
     // Mixed integer kinds promote to i64 (mirrors `Value` cross-type
-    // integer comparison: promote to i64).
-    if let (Some(l), Some(r)) = (numeric_i64_view(left), numeric_i64_view(right)) {
+    // integer comparison: promote to i64). The validity bitmaps are always
+    // `None` here (the nullable path never reaches this function).
+    if let (Some((l, _)), Some((r, _))) = (numeric_i64_view(left), numeric_i64_view(right)) {
         return Some(TypedBatch::Bool(match op {
             Equal => l.iter().zip(&r).map(|(&a, &b)| a == b).collect(),
             NotEqual => l.iter().zip(&r).map(|(&a, &b)| a != b).collect(),
@@ -373,16 +880,6 @@ fn compare_typed_batches(
         return int_f64_compare(op, l, &r);
     }
     None
-}
-
-/// View an integer batch as `Vec<i64>` (allocation-free for I64, promoted
-/// for I32).
-fn numeric_i64_view(batch: &TypedBatch) -> Option<Vec<i64>> {
-    match batch {
-        TypedBatch::I64(v) => Some(v.clone()),
-        TypedBatch::I32(v) => Some(v.iter().map(|&x| i64::from(x)).collect()),
-        _ => None,
-    }
 }
 
 /// View an integer batch as `Vec<f64>` (for int-vs-double promotion).
@@ -490,8 +987,9 @@ fn arith_typed_batches(
     }
 
     // Mixed integer kinds promote to i64 (mirrors `Value` promotion, e.g.
-    // Int + BigInt -> BigInt).
-    if let (Some(l), Some(r)) = (numeric_i64_view(left), numeric_i64_view(right)) {
+    // Int + BigInt -> BigInt). The validity bitmaps are always `None` here
+    // (the nullable path never reaches this function).
+    if let (Some((l, _)), Some((r, _))) = (numeric_i64_view(left), numeric_i64_view(right)) {
         return Some(TypedBatch::I64(
             l.iter()
                 .zip(&r)
@@ -506,8 +1004,9 @@ fn arith_typed_batches(
     }
 
     // Integer vs double promotes to f64 (mirrors `Value` promotion, e.g.
-    // Int + Double -> Double).
-    if let (Some(l), Some(r)) = (numeric_f64_view(left), numeric_f64_view(right)) {
+    // Int + Double -> Double). The validity bitmaps are always `None` here
+    // (the nullable path never reaches this function).
+    if let (Some((l, _)), Some((r, _))) = (numeric_f64_view(left), numeric_f64_view(right)) {
         return Some(TypedBatch::F64(
             l.iter()
                 .zip(&r)
@@ -523,21 +1022,12 @@ fn arith_typed_batches(
     None
 }
 
-/// View a numeric batch as `Vec<f64>` (for int-vs-double promotion).
-fn numeric_f64_view(batch: &TypedBatch) -> Option<Vec<f64>> {
-    match batch {
-        TypedBatch::F64(v) => Some(v.clone()),
-        TypedBatch::I64(v) => Some(v.iter().map(|&x| x as f64).collect()),
-        TypedBatch::I32(v) => Some(v.iter().map(|&x| x as f64).collect()),
-        _ => None,
-    }
-}
-
 /// Type casts on raw typed batches.
 ///
 /// Mirrors `ExpressionEvaluator::eval_type_cast` for numeric targets. Casts
 /// that may produce NULL (e.g. non-finite f64 → int) are NOT served by the
-/// typed path and fall back to the value path.
+/// typed path and fall back to the value path. `Nullable*` batches keep
+/// their validity bitmap unchanged.
 pub(super) fn typed_cast_batch(
     batch: TypedBatch,
     target_type: &crate::core::types::DataType,
@@ -547,12 +1037,26 @@ pub(super) fn typed_cast_batch(
         DataType::Int | DataType::BigInt => match batch {
             TypedBatch::I64(v) => Some(TypedBatch::I64(v)),
             TypedBatch::I32(v) => Some(TypedBatch::I64(v.into_iter().map(i64::from).collect())),
+            TypedBatch::NullableI64(v, b) => Some(TypedBatch::NullableI64(v, b)),
+            TypedBatch::NullableI32(v, b) => Some(TypedBatch::NullableI64(
+                v.into_iter().map(i64::from).collect(),
+                b,
+            )),
             _ => None,
         },
         DataType::Double => match batch {
             TypedBatch::F64(v) => Some(TypedBatch::F64(v)),
             TypedBatch::I64(v) => Some(TypedBatch::F64(v.into_iter().map(|x| x as f64).collect())),
             TypedBatch::I32(v) => Some(TypedBatch::F64(v.into_iter().map(|x| x as f64).collect())),
+            TypedBatch::NullableF64(v, b) => Some(TypedBatch::NullableF64(v, b)),
+            TypedBatch::NullableI64(v, b) => Some(TypedBatch::NullableF64(
+                v.into_iter().map(|x| x as f64).collect(),
+                b,
+            )),
+            TypedBatch::NullableI32(v, b) => Some(TypedBatch::NullableF64(
+                v.into_iter().map(|x| x as f64).collect(),
+                b,
+            )),
             _ => None,
         },
         DataType::Bool => match batch {
@@ -560,6 +1064,19 @@ pub(super) fn typed_cast_batch(
             TypedBatch::F64(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0.0).collect())),
             TypedBatch::I32(v) => Some(TypedBatch::Bool(v.into_iter().map(|x| x != 0).collect())),
             TypedBatch::Bool(v) => Some(TypedBatch::Bool(v)),
+            TypedBatch::NullableI64(v, b) => Some(TypedBatch::NullableBool(
+                v.into_iter().map(|x| x != 0).collect(),
+                b,
+            )),
+            TypedBatch::NullableF64(v, b) => Some(TypedBatch::NullableBool(
+                v.into_iter().map(|x| x != 0.0).collect(),
+                b,
+            )),
+            TypedBatch::NullableI32(v, b) => Some(TypedBatch::NullableBool(
+                v.into_iter().map(|x| x != 0).collect(),
+                b,
+            )),
+            TypedBatch::NullableBool(v, b) => Some(TypedBatch::NullableBool(v, b)),
             _ => None,
         },
         _ => None,
@@ -575,6 +1092,30 @@ pub(super) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> Ty
         TypedColumn::Bool(v) => TypedColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Date(v) => TypedColumn::Date(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Utf8(v) => TypedColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect()),
+        TypedColumn::NullableI64(v, b) => TypedColumn::NullableI64(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableF64(v, b) => TypedColumn::NullableF64(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableI32(v, b) => TypedColumn::NullableI32(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableBool(v, b) => TypedColumn::NullableBool(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableDate(v, b) => TypedColumn::NullableDate(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableUtf8(v, b) => TypedColumn::NullableUtf8(
+            indices.iter().map(|&i| v[i].clone()).collect(),
+            gather_bitmap(b, indices),
+        ),
         TypedColumn::Fallback(v) => {
             TypedColumn::Fallback(indices.iter().map(|&i| v[i].clone()).collect())
         }

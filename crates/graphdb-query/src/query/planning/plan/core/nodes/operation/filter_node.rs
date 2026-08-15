@@ -17,6 +17,8 @@ define_plan_node_with_deps! {
         // Expression-level EXISTS / IN subqueries compiled for this filter
         // Pre-execution only; never serialized.
         subqueries: Vec<PlannedSubquery>,
+        // Whether constant folding replaced part of the condition.
+        has_folded_expressions: bool,
     }
     enum: Filter
     input: SingleInputNode
@@ -37,6 +39,7 @@ impl FilterNode {
             condition,
             condition_serializable: None,
             subqueries: Vec::new(),
+            has_folded_expressions: false,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -52,6 +55,16 @@ impl FilterNode {
     /// Expression-level subqueries compiled for this filter.
     pub fn subqueries(&self) -> &[PlannedSubquery] {
         &self.subqueries
+    }
+
+    /// Whether constant folding replaced part of the condition.
+    pub fn has_folded_expressions(&self) -> bool {
+        self.has_folded_expressions
+    }
+
+    /// Mark whether constant folding replaced part of the condition.
+    pub fn set_has_folded_expressions(&mut self, val: bool) {
+        self.has_folded_expressions = val;
     }
 
     /// Obtain the filtering criteria

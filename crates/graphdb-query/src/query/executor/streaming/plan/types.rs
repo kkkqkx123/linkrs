@@ -409,6 +409,10 @@ pub struct PhysicalOperatorSpec {
     /// `join_order: greedy`), scan-mode choice, or `None` when the operator
     /// is dictated by the plan shape. Surfaced in EXPLAIN diagnostics.
     pub choice_reason: Option<String>,
+    /// Whether the optimizer folded constant expressions into literals on
+    /// this operator's source logical node. Surfaced in EXPLAIN diagnostics
+    /// as `folded: true`.
+    pub has_folded_expressions: bool,
     pub explain_name: &'static str,
 }
 
@@ -613,6 +617,7 @@ mod tests {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name: "Start",
         }];
         let fp1 = PlanFingerprint::compute(&ops);
@@ -634,6 +639,7 @@ mod tests {
                 state_ownership: StateOwnership::TaskLocal,
                 estimated_cardinality: None,
                 choice_reason: None,
+                has_folded_expressions: false,
                 explain_name: "Distinct",
             },
         ];
@@ -659,6 +665,7 @@ mod tests {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name: "Start",
         }];
         let ops_b = vec![PhysicalOperatorSpec {
@@ -674,6 +681,7 @@ mod tests {
             state_ownership: StateOwnership::TreeLocal,
             estimated_cardinality: None,
             choice_reason: None,
+            has_folded_expressions: false,
             explain_name: "Start",
         }];
         assert_eq!(

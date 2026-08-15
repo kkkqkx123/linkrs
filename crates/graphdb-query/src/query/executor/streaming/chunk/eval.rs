@@ -383,10 +383,37 @@ impl DataChunk {
 
     #[cfg(debug_assertions)]
     pub(super) fn columnar_promise_holds(&self, expr: &Expression) -> bool {
+        use crate::core::types::operators::{BinaryOperator, UnaryOperator};
         match expr {
             Expression::Literal(_) | Expression::Parameter(_) | Expression::Variable(_) => true,
-            Expression::Unary { operand, .. } => self.columnar_promise_holds(operand),
-            Expression::Binary { left, right, .. } => {
+            Expression::Unary { op, operand } => {
+                // `-` and `NOT` on a NULL row error in the value path, so the
+                // promise does not hold over nullable columns.
+                if matches!(op, UnaryOperator::Minus | UnaryOperator::Not)
+                    && self.expr_references_nullable_column(operand)
+                {
+                    return false;
+                }
+                self.columnar_promise_holds(operand)
+            }
+            Expression::Binary { left, op, right } => {
+                // Arithmetic and boolean And/Or error on NULL rows in the
+                // value path.
+                if matches!(
+                    op,
+                    BinaryOperator::Add
+                        | BinaryOperator::Subtract
+                        | BinaryOperator::Multiply
+                        | BinaryOperator::Divide
+                        | BinaryOperator::Modulo
+                        | BinaryOperator::Exponent
+                        | BinaryOperator::And
+                        | BinaryOperator::Or
+                ) && (self.expr_references_nullable_column(left)
+                    || self.expr_references_nullable_column(right))
+                {
+                    return false;
+                }
                 self.columnar_promise_holds(left) && self.columnar_promise_holds(right)
             }
             Expression::TypeCast { expression, .. } => self.columnar_promise_holds(expression),
@@ -396,6 +423,41 @@ impl DataChunk {
                     return self.layout.slot_id(&compound).is_some();
                 }
                 false
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether any column referenced by `expr` contains a NULL row.
+    #[cfg(debug_assertions)]
+    fn expr_references_nullable_column(&self, expr: &Expression) -> bool {
+        let slot_has_null = |slot: usize| {
+            self.rows
+                .iter()
+                .any(|row| row.get(slot).is_some_and(Value::is_null))
+        };
+        match expr {
+            Expression::Variable(name) => self
+                .layout
+                .slot_id(name)
+                .is_some_and(|slot| slot_has_null(slot)),
+            Expression::Property { object, property } => {
+                if let Expression::Variable(var) = object.as_ref() {
+                    let compound = format!("{}.{}", var, property);
+                    return self
+                        .layout
+                        .slot_id(&compound)
+                        .is_some_and(|slot| slot_has_null(slot));
+                }
+                false
+            }
+            Expression::Unary { operand, .. } => self.expr_references_nullable_column(operand),
+            Expression::Binary { left, right, .. } => {
+                self.expr_references_nullable_column(left)
+                    || self.expr_references_nullable_column(right)
+            }
+            Expression::TypeCast { expression, .. } => {
+                self.expr_references_nullable_column(expression)
             }
             _ => false,
         }

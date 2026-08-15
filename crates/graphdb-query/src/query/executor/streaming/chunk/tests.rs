@@ -761,3 +761,264 @@ fn typed_bool_column_and_or() {
         ]
     );
 }
+
+// ── Nullable (validity bitmap) typed columns ──
+
+#[test]
+fn nullable_column_builds_typed_with_bitmap() {
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows = vec![
+        vec![Value::BigInt(10)],
+        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::BigInt(30)],
+        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::BigInt(50)],
+    ];
+    let mut chunk = DataChunk::new_with_layout(rows.clone(), layout);
+    chunk.build_typed_columns(true);
+    assert!(
+        matches!(chunk.typed_column(0), Some(TypedColumn::NullableI64(..))),
+        "NULL-bearing homogeneous column must stay typed via the bitmap"
+    );
+    let col = chunk.typed_column(0).expect("typed column");
+    assert_eq!(
+        col.value_at(0),
+        Some(Value::BigInt(10)),
+        "valid rows materialize normally"
+    );
+    assert_eq!(
+        col.value_at(1),
+        Some(Value::Null(crate::core::value::NullType::Null)),
+        "invalid rows materialize as NULL"
+    );
+    assert_eq!(
+        col.to_values(),
+        rows.iter().map(|r| r[0].clone()).collect::<Vec<_>>(),
+        "to_values must preserve NULL rows"
+    );
+}
+
+#[test]
+fn nullable_eval_matches_row_path() {
+    use crate::core::value::NullType;
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string(), "b".to_string()]));
+    let rows = vec![
+        vec![Value::BigInt(10), Value::BigInt(2)],
+        vec![Value::Null(NullType::Null), Value::BigInt(5)],
+        vec![Value::BigInt(30), Value::Null(NullType::Null)],
+        vec![Value::Null(NullType::Null), Value::Null(NullType::Null)],
+        vec![Value::BigInt(50), Value::BigInt(10)],
+    ];
+
+    let mut chunk_typed = DataChunk::new_with_layout(rows.clone(), Arc::clone(&layout));
+    chunk_typed.build_typed_columns(true);
+    assert!(
+        matches!(
+            chunk_typed.typed_column(0),
+            Some(TypedColumn::NullableI64(..))
+        ),
+        "column a must be NullableI64"
+    );
+
+    let mut chunk_row = DataChunk::new_with_layout(rows, layout);
+
+    for (op_name, op) in [
+        ("==", BinaryOperator::Equal),
+        ("!=", BinaryOperator::NotEqual),
+        ("<", BinaryOperator::LessThan),
+        ("<=", BinaryOperator::LessThanOrEqual),
+        (">", BinaryOperator::GreaterThan),
+        (">=", BinaryOperator::GreaterThanOrEqual),
+    ] {
+        let expr = Expression::binary(Expression::variable("a"), op, Expression::variable("b"));
+        let result_typed = chunk_typed
+            .evaluate_expression(&expr, None)
+            .expect("typed eval");
+        let result_row = chunk_row
+            .evaluate_expression(&expr, None)
+            .expect("row eval");
+        assert_eq!(result_typed, result_row, "comparison {} mismatch", op_name);
+    }
+
+    for (op_name, op) in [
+        ("+", BinaryOperator::Add),
+        ("-", BinaryOperator::Subtract),
+        ("*", BinaryOperator::Multiply),
+    ] {
+        let expr = Expression::binary(Expression::variable("a"), op, Expression::variable("b"));
+        let result_typed = chunk_typed.evaluate_expression(&expr, None);
+        let result_row = chunk_row.evaluate_expression(&expr, None);
+        assert_eq!(
+            result_typed, result_row,
+            "arithmetic {} must match the row path (including NULL errors)",
+            op_name
+        );
+    }
+}
+
+#[test]
+fn nullable_eval_literal_and_cast() {
+    use crate::core::value::NullType;
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows = vec![
+        vec![Value::BigInt(1)],
+        vec![Value::Null(NullType::Null)],
+        vec![Value::BigInt(3)],
+    ];
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+
+    // Comparisons treat NULL as the smallest value (Value type priority):
+    // `NULL < 2` is true, mirroring the per-row evaluator.
+    let less = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::LessThan,
+        Expression::literal(Value::BigInt(2)),
+    );
+    assert_eq!(
+        chunk.evaluate_expression(&less, None).expect("less"),
+        vec![Value::Bool(true), Value::Bool(true), Value::Bool(false),]
+    );
+
+    // Arithmetic on NULL rows errors in the value path; the typed path must
+    // fall back and surface the same error.
+    let add = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::Add,
+        Expression::literal(Value::BigInt(10)),
+    );
+    assert!(
+        chunk.evaluate_expression(&add, None).is_err(),
+        "NULL arithmetic must error exactly like the row path"
+    );
+
+    // Cast preserves NULL (NULL -> NULL in the value path).
+    let cast = Expression::TypeCast {
+        expression: Box::new(Expression::variable("a")),
+        target_type: crate::core::DataType::Double,
+    };
+    assert_eq!(
+        chunk.evaluate_expression(&cast, None).expect("cast"),
+        vec![
+            Value::Double(1.0),
+            Value::Null(NullType::Null),
+            Value::Double(3.0),
+        ]
+    );
+}
+
+#[test]
+fn nullable_column_served_by_typed_batch_path() {
+    use crate::core::value::NullType;
+    let stats = Arc::new(crate::query::executor::streaming::runtime::ColumnarStats::new());
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let rows: Vec<Vec<Value>> = (0..100)
+        .map(|i| {
+            if i % 50 == 0 {
+                vec![Value::Null(NullType::Null)]
+            } else {
+                vec![Value::BigInt(i as i64)]
+            }
+        })
+        .collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout).with_columnar_stats(stats.clone());
+    chunk.build_typed_columns(true);
+
+    let expr = Expression::binary(
+        Expression::variable("a"),
+        BinaryOperator::GreaterThan,
+        Expression::literal(Value::BigInt(80)),
+    );
+    let results = chunk.evaluate_expression(&expr, None).expect("eval");
+    assert_eq!(results.len(), 100);
+    assert_eq!(
+        results[0],
+        Value::Bool(false),
+        "NULL compares as the smallest value, so NULL > 80 is false"
+    );
+    assert_eq!(results[99], Value::Bool(true));
+    assert_eq!(
+        stats.columnar_typed_hits.load(Ordering::Relaxed),
+        1,
+        "nullable predicate must be served by the typed batch path"
+    );
+}
+
+#[test]
+fn nullable_bool_and_or_errors_like_row_path() {
+    use crate::core::value::NullType;
+    let layout = Arc::new(SlotLayout::from_names(&["x".to_string(), "y".to_string()]));
+    let rows = vec![
+        vec![Value::Bool(true), Value::Bool(false)],
+        vec![Value::Null(NullType::Null), Value::Bool(true)],
+        vec![Value::Bool(false), Value::Null(NullType::Null)],
+        vec![Value::Null(NullType::Null), Value::Null(NullType::Null)],
+    ];
+    let mut chunk_typed = DataChunk::new_with_layout(rows.clone(), Arc::clone(&layout));
+    chunk_typed.build_typed_columns(true);
+    assert!(
+        matches!(
+            chunk_typed.typed_column(0),
+            Some(TypedColumn::NullableBool(..))
+        ),
+        "column x must be NullableBool"
+    );
+    let mut chunk_row = DataChunk::new_with_layout(rows, layout);
+
+    for (op_name, op) in [("and", BinaryOperator::And), ("or", BinaryOperator::Or)] {
+        let expr = Expression::binary(Expression::variable("x"), op, Expression::variable("y"));
+        let result_typed = chunk_typed.evaluate_expression(&expr, None);
+        let result_row = chunk_row.evaluate_expression(&expr, None);
+        assert_eq!(
+            result_typed, result_row,
+            "{op_name} on NULL rows must error like the row path"
+        );
+        assert!(result_typed.is_err(), "{op_name} must error on NULL rows");
+    }
+}
+
+#[test]
+fn columnar_batch_keeps_nullable_typed_columns() {
+    use crate::core::value::NullType;
+    use crate::query::executor::streaming::chunk::columnar_batch::ColumnarBatch;
+    use crate::query::executor::streaming::chunk::schema::{ColumnInfo, Schema};
+
+    let mut chunk = DataChunk::new(
+        vec![
+            vec![Value::BigInt(1)],
+            vec![Value::Null(NullType::Null)],
+            vec![Value::BigInt(3)],
+        ],
+        Arc::new(Schema::new(vec![ColumnInfo {
+            name: "a".to_string(),
+            data_type: "bigint".to_string(),
+        }])),
+    );
+    chunk.build_typed_columns(true);
+    assert!(matches!(
+        chunk.typed_column(0),
+        Some(TypedColumn::NullableI64(..))
+    ));
+
+    let mut batch = ColumnarBatch::new(1);
+    batch.append_chunk(&chunk);
+    assert_eq!(batch.num_rows(), 3);
+    assert!(batch.column(0).is_typed(), "nullable column stays typed");
+    assert_eq!(
+        batch.to_rows(),
+        vec![
+            vec![Value::BigInt(1)],
+            vec![Value::Null(NullType::Null)],
+            vec![Value::BigInt(3)],
+        ]
+    );
+    // NULL sorts last (mirrors compare_values).
+    assert_eq!(
+        batch.column(0).compare_at(1, 0),
+        std::cmp::Ordering::Greater
+    );
+    assert_eq!(
+        batch.column(0).compare_at(1, 2),
+        std::cmp::Ordering::Greater
+    );
+}
