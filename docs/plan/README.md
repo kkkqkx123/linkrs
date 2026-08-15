@@ -2,7 +2,7 @@
 
 > 本目录存放各查询引擎功能的设计/方案文档。本文档是进度索引：
 > 说明各方案的实施状态、剩余任务与验证基线，并链接到详细方案文档。
-> 更新日期：2026-08-14。
+> 更新日期：2026-08-15。
 
 ## 1. 文档索引
 
@@ -12,6 +12,9 @@
 | [query_session_variables.md](query_session_variables.md) | 会话级用户变量（$var） | 已完成（走 Parameter 复用路径，改进方案见下） |
 | [query_followup_improvements.md](query_followup_improvements.md) | 实现差异改进（SessionVariable 表达式变体 + 函数纯度标记） | **已完成（2026-08-14）** |
 | [executor_operator_context_refactor.md](executor_operator_context_refactor.md) | 执行器算子上下文重构（拆分 OperatorBase + left/right 角色显式化） | **待实施** |
+| [type_system_integrity_plan.md](type_system_integrity_plan.md) | 类型系统完整性整改（PropertyValue 统一、孤儿类型、序列化单轨、类型矩阵、索引对齐） | **已完成（2026-08-15）**：P0-A/B、P1-C/D/E/F、P2-G/H 全部落地；补充测试：`from_u8` 码位单测、`vid_type=VID` 拒绝与 `TIMESTAMP` 归一 DDL 用例（`tests/ddl/type_system.rs`） |
+| [type_system_serial_plan.md](type_system_serial_plan.md) | SERIAL 自增列（P2-I 正式设计） | **设计方案（待实施）** |
+| [type_system_composite_types_plan.md](type_system_composite_types_plan.md) | STRUCT/ARRAY 复合类型与 TypeInfo 元数据机制（P2-J 正式设计） | **设计方案（待实施）** |
 
 > 原 `query_verification_backlog.md` 已删除，其遗留验证项与低优先小项并入
 > 本文档第 4 节。原 `query_exists_in_subquery*.md` 系列方案文档（P0-P3
@@ -95,6 +98,48 @@ P0-P3 四阶段全部完成（P0 双侧键重构、P1 合取位置转换、P2 �
     每语句快照经 `QueryRequest.session_variables` 注入；HTTP handler 与
     embedded API 同步接入；EXPLAIN 展示 `$x`；集成测试 6 例通过，详见
     [query_followup_improvements.md](query_followup_improvements.md) 方案 A。
+
+### 3.3 类型系统完整性整改（type_system_integrity_plan.md）
+
+**已完成（2026-08-15）**：
+
+- **P0-A undo 统一复用 `Value`**：删除 `PropertyValue` 枚举与
+  `value_to_property_value`/`property_value_to_value`（codec.rs），
+  `UpdateVertexPropUndo`/`UpdateEdgePropUndo.old_value` 改 `Value`；
+  回滚旧值不再静默 Null 化。集成测试
+  `crates/graphdb-transaction/tests/non_scalar_undo_rollback.rs`（Decimal128/
+  Date/DateTime/List/Map/Vector/Uuid 恢复原值断言）。
+- **P0-B 孤儿类型清除**：`DataType::Timestamp`/`VID` 删除；DDL/API 中
+  `TIMESTAMP` 归一 `DateTime`；`vid_type=VID` 显式拒绝。
+- **P1-C 序列化单轨**：删 `Value::to_bytes/from_bytes`；新增
+  `serialization_roundtrip_test.rs` 全变体 postcard 往返 + `matches!` 穷尽门禁。
+- **P1-D 可索引类型对齐**：`OrderedCodec::supports_ordered_key` 单一真相源
+  （+Decimal128/Uuid，-Geography），`is_indexable_type` 委托之。
+- **P1-E 转换矩阵/数值提升**：`can_cast` 增补 Decimal128/时间/Json↔JsonB/Uuid；
+  `get_common_type` 按 `SmallInt<Int<BigInt<Decimal128<Float<Double` 提升；
+  `binary_operation_result_type` 复用同一函数。
+- **P1-F 推导穷尽化**：`deduce_value_type` 覆盖全部 Value 变体（无兜底）；
+  `deduce_arithmetic_type` 复用提升。
+- **P2-G 类型码严格化**：`from_u8 -> Result`，22/24 保留码报错，新码自 64 分配。
+- **P2-H `VertexId` checked 算术**：`checked_add -> Option`，非整型不再 panic。
+- 补充测试（本日）：`types.rs` 码位/保留码/未知码单测；
+  `tests/ddl/type_system.rs`（`vid_type=VID` 拒绝、`TIMESTAMP`→`DATETIME` 归一、
+  合法 vid_type 用例）。
+- 已知偏差：`can_cast` 未实现"List/Map/Set 同构互转"（`DataType` 无 shape 信息，
+  归入复合类型方案一并解决）；CLI 客户端本地 `DataType` 枚举残留 `Timestamp`
+  变体（展示用，待 CLI 清理）。
+
+### 3.4 类型系统长期设计（设计方案，待实施）
+
+- **[type_system_serial_plan.md](type_system_serial_plan.md)**：SERIAL 自增列。
+  核心决策：SERIAL 是列属性（`PropertyDef.serial: bool`）而非 `DataType` 变体，
+  绑定期展开为 BigInt；`AtomicU64` 分配器 + `SERIAL_NEXT` 持久化，恢复取
+  `max(持久化, 列max+1)` 保证 id 单调不重用；分配即消耗（undo 不回退计数器）。
+- **[type_system_composite_types_plan.md](type_system_composite_types_plan.md)**：
+  STRUCT/ARRAY 复合类型。核心决策：`TypeInfo` 元数据载体（Arc 共享，对齐
+  Ladybug ExtraTypeInfo）+ `DataType::Struct/Array` 变体（码 64/65）+ schema
+  持久化格式 `code + postcard(TypeInfo)`（旧格式兼容）；Value/存储/索引/表达式
+  四阶段（M1-M4）推进，Map 键泛化收尾。
 
 ## 4. 遗留验证项与低优先小项（原 backlog 并入）
 

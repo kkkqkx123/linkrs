@@ -23,6 +23,7 @@ use crate::transaction::{MutationEntityKey, MutationResult};
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
 use super::reader;
+use super::serial::{scan_edge_serial_column, scan_vertex_serial_column};
 
 #[derive(Debug)]
 struct InsertedVertexTag {
@@ -293,8 +294,8 @@ fn insert_vertex_at_timestamp(
     Ok(vertex.vid)
 }
 
-/// Apply tag schema constraints (DEFAULT values and NOT NULL) to a property
-/// list before persisting a vertex tag.
+/// Apply tag schema constraints (DEFAULT values, NOT NULL and SERIAL) to a
+/// property list before persisting a vertex tag.
 fn apply_tag_constraints(
     ctx: &GraphStorageContext,
     space: &str,
@@ -305,12 +306,35 @@ fn apply_tag_constraints(
         .schema_manager()
         .get_tag(space, tag_name)?
         .ok_or_else(|| StorageError::label_not_found(tag_name.to_string()))?;
+    let space_id = ctx
+        .schema_manager()
+        .get_space(space)?
+        .map(|space| space.space_id)
+        .unwrap_or(0);
     let mut result = props;
     for prop_def in &tag.properties {
         if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
+            if prop_def.serial {
+                validate_explicit_serial_value(
+                    ctx,
+                    space_id,
+                    tag_name,
+                    tag.tag_id,
+                    &prop_def.name,
+                    value,
+                    scan_vertex_serial_column,
+                )?;
+            }
+            continue;
+        }
+        if prop_def.serial {
+            // Auto-allocate the next value for this tag's serial column.
+            let key = super::serial::SerialKey::new(space_id, tag_name.to_string());
+            let next = ctx.serial_allocator().next(&key);
+            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
             continue;
         }
         if let Some(default) = &prop_def.default {
@@ -322,8 +346,8 @@ fn apply_tag_constraints(
     Ok(result)
 }
 
-/// Apply edge schema constraints (DEFAULT values and NOT NULL) to a property
-/// list before persisting an edge.
+/// Apply edge schema constraints (DEFAULT values, NOT NULL and SERIAL) to a
+/// property list before persisting an edge.
 fn apply_edge_type_constraints(
     ctx: &GraphStorageContext,
     space: &str,
@@ -334,12 +358,35 @@ fn apply_edge_type_constraints(
         .schema_manager()
         .get_edge_type(space, edge_type)?
         .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+    let space_id = ctx
+        .schema_manager()
+        .get_space(space)?
+        .map(|space| space.space_id)
+        .unwrap_or(0);
     let mut result = props;
     for prop_def in &et.properties {
         if let Some((_, value)) = result.iter().find(|(name, _)| name == &prop_def.name) {
             if !prop_def.nullable && value.is_null() {
                 return Err(StorageError::null_value_not_allowed(&prop_def.name));
             }
+            if prop_def.serial {
+                validate_explicit_serial_value(
+                    ctx,
+                    space_id,
+                    edge_type,
+                    et.edge_type_id,
+                    &prop_def.name,
+                    value,
+                    scan_edge_serial_column,
+                )?;
+            }
+            continue;
+        }
+        if prop_def.serial {
+            // Auto-allocate the next value for this edge type's serial column.
+            let key = super::serial::SerialKey::new(space_id, edge_type.to_string());
+            let next = ctx.serial_allocator().next(&key);
+            result.push((prop_def.name.clone(), Value::BigInt(next as i64)));
             continue;
         }
         if let Some(default) = &prop_def.default {
@@ -349,6 +396,48 @@ fn apply_edge_type_constraints(
         }
     }
     Ok(result)
+}
+
+/// Validate an explicitly supplied SERIAL value and advance the counter.
+///
+/// Explicit values are rejected when they collide with an already-allocated
+/// value in the column's occupied interval. On success the counter is advanced
+/// past the supplied value so later auto-allocations never collide with it.
+fn validate_explicit_serial_value(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    table_name: &str,
+    label: LabelId,
+    prop_name: &str,
+    value: &Value,
+    scan_column: fn(&GraphStorageContext, LabelId, &str) -> Option<super::serial::SerialColumnScan>,
+) -> StorageResult<()> {
+    let Some(integer) = serial_value_as_i64(value) else {
+        // Non-integer values are rejected later by the column type coercion.
+        return Ok(());
+    };
+    if integer >= 0 {
+        if let Some(scan) = scan_column(ctx, label, prop_name) {
+            if scan.contains(integer) {
+                return Err(StorageError::invalid_operation(format!(
+                    "Duplicate value {} for SERIAL column '{}': the value is already allocated",
+                    integer, prop_name
+                )));
+            }
+        }
+        ctx.serial_allocator()
+            .advance_to(&super::serial::SerialKey::new(space_id, table_name), integer as u64);
+    }
+    Ok(())
+}
+
+fn serial_value_as_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::BigInt(v) => Some(*v),
+        Value::Int(v) => Some(*v as i64),
+        Value::SmallInt(v) => Some(*v as i64),
+        _ => None,
+    }
 }
 
 fn rollback_vertex_tags(
@@ -1096,19 +1185,20 @@ pub(crate) fn insert_vertex_data(
     let vid = VertexId::try_from(&info.vertex_id)
         .map_err(|e| StorageError::invalid_input(e.to_string()))?;
 
+    let props = apply_tag_constraints(ctx, space, &info.tag_name, info.props.clone())?;
     let redo = InsertVertexRedo {
         label: label_id,
         vid,
-        properties: info.props.clone(),
+        properties: props.clone(),
     };
     let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
     let result = if let Some(id_int) = vid.as_int64() {
-        ctx.insert_vertex_by_i64(label_id, id_int, &info.props, ts)
+        ctx.insert_vertex_by_i64(label_id, id_int, &props, ts)
     } else if let Some(id_str) = vid.as_str() {
-        ctx.insert_vertex(label_id, id_str, &info.props, ts)
+        ctx.insert_vertex(label_id, id_str, &props, ts)
     } else {
         let id_str = vid.to_string();
-        ctx.insert_vertex(label_id, &id_str, &info.props, ts)
+        ctx.insert_vertex(label_id, &id_str, &props, ts)
     };
     let final_result = match result {
         Ok(_) => {
@@ -1118,7 +1208,7 @@ pub(crate) fn insert_vertex_data(
                 space_info.space_id,
                 &info.vertex_id,
                 &info.tag_name,
-                &info.props,
+                &props,
                 ts,
             )?;
             record_vertex_insert(ctx, label_id, vid, Some(redo_entry))?;
@@ -1178,6 +1268,7 @@ pub(crate) fn insert_edge_data(
                 edge_type.dst_tag_name
             ))
         })?;
+    let props = apply_edge_type_constraints(ctx, space, &info.edge_name, info.props.clone())?;
     let redo = InsertEdgeRedo {
         src_label: src_label_id,
         src_vid,
@@ -1185,7 +1276,7 @@ pub(crate) fn insert_edge_data(
         dst_vid,
         edge_label: edge_label_id,
         rank: info.rank,
-        properties: info.props.clone(),
+        properties: props.clone(),
     };
     let redo_entry = ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?;
     let result = ctx.insert_edge(InsertEdgeParams {
@@ -1195,7 +1286,7 @@ pub(crate) fn insert_edge_data(
         dst_label: dst_label_id,
         dst_id: dst_vid,
         rank: info.rank,
-        properties: &info.props,
+        properties: &props,
         ts,
     });
 
@@ -1210,7 +1301,7 @@ pub(crate) fn insert_edge_data(
                 &info.edge_name,
                 info.rank,
             );
-            match ctx.update_all_edge_indexes_mvcc(&edge_identity, &info.props, ts) {
+            match ctx.update_all_edge_indexes_mvcc(&edge_identity, &props, ts) {
                 Ok(()) => {
                     record_edge_insert(
                         ctx,

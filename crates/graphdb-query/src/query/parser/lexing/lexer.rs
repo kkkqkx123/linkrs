@@ -433,6 +433,7 @@ impl<'a> Lexer<'a> {
             "DATE" => Tk::Date,
             "TIME" => Tk::Time,
             "DATETIME" => Tk::Datetime,
+            "SERIAL" => Tk::Serial,
             "DURATION" => Tk::Duration,
             "GEOGRAPHY" => Tk::Geography,
             "POINT" => Tk::Point,

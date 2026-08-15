@@ -16,11 +16,39 @@ use super::ops::{
     edge_type_storage_name, endpoint_label_id, tag_label_id, vertex_type_storage_name,
 };
 
-fn schema_properties(properties: &[PropertyDef]) -> Vec<(String, String)> {
+fn schema_properties(properties: &[PropertyDef]) -> Vec<(String, String, bool)> {
     properties
         .iter()
-        .map(|prop| (prop.name.clone(), prop.data_type.to_string()))
+        .map(|prop| {
+            (
+                prop.name.clone(),
+                prop.data_type.to_string(),
+                prop.serial,
+            )
+        })
         .collect()
+}
+
+/// Validate SERIAL column constraints before a DDL change is applied.
+///
+/// - A SERIAL column cannot carry a DEFAULT.
+/// - A tag / edge type can have at most one SERIAL column.
+fn validate_serial_columns(properties: &[PropertyDef]) -> StorageResult<()> {
+    let serials: Vec<&PropertyDef> = properties.iter().filter(|prop| prop.serial).collect();
+    if serials.len() > 1 {
+        return Err(StorageError::invalid_operation(
+            "only one SERIAL column is allowed".to_string(),
+        ));
+    }
+    for prop in serials {
+        if prop.default.is_some() {
+            return Err(StorageError::invalid_operation(format!(
+                "SERIAL column '{}' cannot have DEFAULT",
+                prop.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn append_schema_redo<T: serde::Serialize>(
@@ -118,7 +146,9 @@ pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResul
         ctx.drop_vertex_type(&storage_name)?;
     }
 
-    ctx.schema_manager().drop_space(space)
+    ctx.schema_manager().drop_space(space)?;
+    ctx.serial_allocator().clear_space(space_id);
+    Ok(true)
 }
 
 pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResult<bool> {
@@ -146,7 +176,9 @@ pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResu
         ctx.drop_vertex_type(&storage_name)?;
     }
 
-    ctx.schema_manager().clear_space(space)
+    ctx.schema_manager().clear_space(space)?;
+    ctx.serial_allocator().clear_space(space_id);
+    Ok(true)
 }
 
 pub(crate) fn alter_space_comment(
@@ -267,6 +299,8 @@ pub(crate) fn create_tag(
     }
     let tag_id = ctx.schema_manager().peek_next_tag_id();
 
+    validate_serial_columns(&tag.properties)?;
+
     // Prepare WAL data before executing storage changes
     let wal_redo = CreateVertexTypeRedo {
         space_name: space.to_string(),
@@ -356,7 +390,10 @@ pub(crate) fn drop_tag(
     let storage_name = vertex_type_storage_name(space_id, tag_name);
     ctx.drop_vertex_type(&storage_name)?;
 
-    ctx.schema_manager().drop_tag(space, tag_name)
+    ctx.schema_manager().drop_tag(space, tag_name)?;
+    ctx.serial_allocator()
+        .remove(&super::serial::SerialKey::new(space_id, tag_name.to_string()));
+    Ok(true)
 }
 
 pub(crate) fn alter_tag(
@@ -371,6 +408,14 @@ pub(crate) fn alter_tag(
         .schema_manager()
         .get_tag(space, tag_name)?
         .ok_or_else(|| StorageError::label_not_found(tag_name.to_string()))?;
+
+    let mut combined = tag.properties.clone();
+    for addition in &additions {
+        if !combined.iter().any(|prop| prop.name == addition.name) {
+            combined.push(addition.clone());
+        }
+    }
+    validate_serial_columns(&combined)?;
 
     // Execute modifications in schema_manager first
     let result =
@@ -446,6 +491,8 @@ pub(crate) fn create_edge_type(
         })?;
     let edge_type_id = ctx.schema_manager().peek_next_edge_type_id();
 
+    validate_serial_columns(&edge_type.properties)?;
+
     // Prepare WAL data before executing storage changes
     let wal_redo = CreateEdgeTypeRedo {
         space_name: space.to_string(),
@@ -508,7 +555,11 @@ pub(crate) fn drop_edge_type(
     let storage_name = edge_type_storage_name(space_id, edge_type_name);
     ctx.drop_edge_type(&storage_name)?;
 
-    ctx.schema_manager().drop_edge_type(space, edge_type_name)
+    ctx.schema_manager()
+        .drop_edge_type(space, edge_type_name)?;
+    ctx.serial_allocator()
+        .remove(&super::serial::SerialKey::new(space_id, edge_type_name.to_string()));
+    Ok(true)
 }
 
 pub(crate) fn ensure_graph_types_from_schema(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -594,6 +645,13 @@ pub(crate) fn alter_edge_type(
         .schema_manager()
         .get_edge_type(space, edge_type_name)?
         .ok_or_else(|| StorageError::label_not_found(edge_type_name.to_string()))?;
+    let mut combined = edge_type.properties.clone();
+    for addition in &additions {
+        if !combined.iter().any(|prop| prop.name == addition.name) {
+            combined.push(addition.clone());
+        }
+    }
+    validate_serial_columns(&combined)?;
     let src_label_id =
         endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
             StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))

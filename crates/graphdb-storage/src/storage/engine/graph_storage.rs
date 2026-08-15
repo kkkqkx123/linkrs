@@ -13,6 +13,7 @@ mod persistence;
 mod reader;
 mod schema_engine;
 mod schema_writer;
+mod serial;
 mod writer;
 
 #[cfg(test)]

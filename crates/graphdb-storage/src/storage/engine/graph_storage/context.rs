@@ -205,6 +205,8 @@ struct GraphStoragePersistent {
     /// Self-proven vertex-id domains keyed by label (see
     /// [`VertexIdDomainEvidence`]).
     vertex_id_domains: Arc<RwLock<std::collections::HashMap<LabelId, Arc<VertexIdDomainEvidence>>>>,
+    /// SERIAL column allocators (one counter per space + table).
+    serial_allocator: crate::storage::engine::graph_storage::serial::SerialAllocator,
 }
 
 impl GraphStoragePersistent {
@@ -306,6 +308,7 @@ impl GraphStoragePersistent {
             staged_wal: Arc::new(dashmap::DashMap::new()),
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            serial_allocator: crate::storage::engine::graph_storage::serial::SerialAllocator::new(),
         }
     }
 
@@ -401,6 +404,7 @@ impl GraphStoragePersistent {
             staged_wal: Arc::new(dashmap::DashMap::new()),
             layout_version: LayoutVersion::new(),
             vertex_id_domains: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            serial_allocator: crate::storage::engine::graph_storage::serial::SerialAllocator::new(),
         })
     }
 }

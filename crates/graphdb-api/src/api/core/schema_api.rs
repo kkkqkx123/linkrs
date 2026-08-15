@@ -643,6 +643,7 @@ impl From<PropertyDef> for crate::core::types::PropertyDef {
             nullable: prop.nullable,
             default: prop.default_value,
             comment: prop.comment,
+            serial: false,
         }
     }
 }

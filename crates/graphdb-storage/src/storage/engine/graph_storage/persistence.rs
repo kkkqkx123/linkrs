@@ -120,6 +120,7 @@ pub(crate) fn initialize_with_recovery(
     bootstrap_from_disk(ctx)?;
 
     if !needs_recovery(ctx) {
+        super::serial::seed_serial_allocators(ctx)?;
         return Ok(None);
     }
 
@@ -131,6 +132,11 @@ pub(crate) fn initialize_with_recovery(
         stats.wal_entries_replayed,
         stats.recovery_time_ms
     );
+
+    // Seed SERIAL counters after replay so the column max includes replayed
+    // rows (redo entries carry final property values; the counters themselves
+    // are never replayed).
+    super::serial::seed_serial_allocators(ctx)?;
 
     Ok(Some(stats))
 }
@@ -193,6 +199,9 @@ pub(crate) fn create_checkpoint(
         |checkpoint_dir, _timestamp| {
             let checkpoint_paths = StoragePaths::new(checkpoint_dir);
             std::fs::create_dir_all(checkpoint_paths.schema_dir())?;
+            graph
+                .schema_manager()
+                .set_serial_next(super::serial::serial_next_snapshot(&graph));
             graph
                 .schema_manager()
                 .save_schema(&checkpoint_paths.schema_file())?;
@@ -417,7 +426,8 @@ pub(crate) fn compact_transactional(
 pub(crate) fn load_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
     load_schema_and_index_metadata(ctx)?;
     super::schema_writer::ensure_graph_types_from_schema(ctx)?;
-    restore_full_state_from_disk(ctx)
+    restore_full_state_from_disk(ctx)?;
+    super::serial::seed_serial_allocators(ctx)
 }
 
 pub(crate) fn save_to_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -428,6 +438,8 @@ pub(crate) fn save_to_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
         let schema_dir = paths.schema_dir();
         std::fs::create_dir_all(&schema_dir).map_err(|e| StorageError::io_error(e.to_string()))?;
         let schema_path = paths.schema_file();
+        ctx.schema_manager()
+            .set_serial_next(super::serial::serial_next_snapshot(ctx));
         ctx.schema_manager().save_schema(&schema_path)?;
 
         let index_meta_dir = paths.index_meta_dir();

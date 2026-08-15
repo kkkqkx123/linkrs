@@ -96,7 +96,8 @@ pub struct CreateVertexTypeRedo {
     pub space_name: String,
     pub label_id: Option<LabelId>,
     pub label_name: String,
-    pub schema: Vec<(String, String)>,
+    /// (property name, type name, is_serial) triples.
+    pub schema: Vec<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +107,8 @@ pub struct CreateEdgeTypeRedo {
     pub src_label: String,
     pub dst_label: String,
     pub edge_label: String,
-    pub schema: Vec<(String, String)>,
+    /// (property name, type name, is_serial) triples.
+    pub schema: Vec<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,7 +128,8 @@ pub struct DeleteEdgeTypeRedo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddVertexPropRedo {
     pub label: LabelId,
-    pub properties: Vec<(String, String)>,
+    /// (property name, type name, is_serial) triples.
+    pub properties: Vec<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,7 +137,8 @@ pub struct AddEdgePropRedo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
     pub edge_label: LabelId,
-    pub properties: Vec<(String, String)>,
+    /// (property name, type name, is_serial) triples.
+    pub properties: Vec<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

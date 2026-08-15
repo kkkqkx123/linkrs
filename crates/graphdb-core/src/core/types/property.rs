@@ -11,6 +11,10 @@ pub struct PropertyDef {
     pub nullable: bool,
     pub default: Option<Value>,
     pub comment: Option<String>,
+    /// Auto-increment flag (DDL sugar for `SERIAL`). The column is stored as a
+    /// plain `BigInt`; this flag only drives value allocation on insert.
+    #[serde(default)]
+    pub serial: bool,
 }
 
 impl PropertyTypeTrait for PropertyDef {
@@ -68,6 +72,7 @@ impl PropertyDef {
             nullable: true,
             default: None,
             comment: None,
+            serial: false,
         }
     }
 
@@ -83,6 +88,15 @@ impl PropertyDef {
 
     pub fn with_comment(mut self, comment: Option<String>) -> Self {
         self.comment = comment;
+        self
+    }
+
+    /// Mark the column as auto-increment (SERIAL). Implies NOT NULL.
+    pub fn with_serial(mut self, serial: bool) -> Self {
+        self.serial = serial;
+        if serial {
+            self.nullable = false;
+        }
         self
     }
 }

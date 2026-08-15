@@ -553,6 +553,12 @@ impl GraphStorageContext {
         &self.persistent.schema_manager
     }
 
+    pub(crate) fn serial_allocator(
+        &self,
+    ) -> &crate::storage::engine::graph_storage::serial::SerialAllocator {
+        &self.persistent.serial_allocator
+    }
+
     pub(crate) fn index_metadata_manager(&self) -> &Arc<crate::core::metadata::IndexManager> {
         &self.persistent.index_metadata_manager
     }

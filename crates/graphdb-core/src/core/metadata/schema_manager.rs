@@ -18,6 +18,9 @@ struct SchemaSnapshot {
     space_id_counter: u64,
     tag_id_counters: Vec<(u64, u32)>,
     edge_type_id_counters: Vec<(u64, u32)>,
+    /// Persisted SERIAL counters: (space_id, table name, next value).
+    #[serde(default)]
+    serial_next: Vec<(u64, String, u64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +46,7 @@ pub struct SchemaManager {
     space_id_counter: Arc<AtomicU64>,
     tag_id_counter: Arc<DashMap<u64, AtomicU32>>,
     edge_type_id_counter: Arc<DashMap<u64, AtomicU32>>,
+    serial_next: Arc<RwLock<Vec<(u64, String, u64)>>>,
 }
 
 impl Clone for SchemaManager {
@@ -55,6 +59,7 @@ impl Clone for SchemaManager {
             space_id_counter: self.space_id_counter.clone(),
             tag_id_counter: self.tag_id_counter.clone(),
             edge_type_id_counter: self.edge_type_id_counter.clone(),
+            serial_next: self.serial_next.clone(),
         }
     }
 }
@@ -77,7 +82,19 @@ impl SchemaManager {
             space_id_counter: Arc::new(AtomicU64::new(0)),
             tag_id_counter: Arc::new(DashMap::new()),
             edge_type_id_counter: Arc::new(DashMap::new()),
+            serial_next: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// Set the persisted SERIAL counters (space_id, table name, next value).
+    /// Called by the storage layer before the schema snapshot is saved.
+    pub fn set_serial_next(&self, entries: Vec<(u64, String, u64)>) {
+        *self.serial_next.write() = entries;
+    }
+
+    /// Persisted SERIAL counters as (space_id, table name, next value) triples.
+    pub fn serial_next(&self) -> Vec<(u64, String, u64)> {
+        self.serial_next.read().clone()
     }
 
     fn get_next_space_id(&self) -> u64 {
@@ -723,6 +740,7 @@ impl SchemaManager {
             space_id_counter,
             tag_id_counters,
             edge_type_id_counters,
+            serial_next: self.serial_next.read().clone(),
         };
 
         let json = serde_json::to_string_pretty(&snapshot)
@@ -834,6 +852,8 @@ impl SchemaManager {
         }
         self.edge_type_id_counter
             .insert(0, AtomicU32::new(max_edge_type_counter));
+
+        *self.serial_next.write() = snapshot.serial_next;
 
         Ok(())
     }

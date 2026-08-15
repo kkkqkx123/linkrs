@@ -18,7 +18,13 @@ impl DdlParser {
             while !ctx.match_token(TokenKind::RParen) {
                 let name = ctx.expect_identifier()?;
                 let _ = ctx.match_token(TokenKind::Colon);
-                let dtype = self.parse_data_type(ctx)?;
+                let mut serial = false;
+                let dtype = if ctx.match_token(TokenKind::Serial) {
+                    serial = true;
+                    DataType::BigInt
+                } else {
+                    self.parse_data_type(ctx)?
+                };
                 let mut nullable = true;
                 if ctx.check_token(TokenKind::Not) {
                     ctx.next_token();
@@ -28,6 +34,10 @@ impl DdlParser {
                     }
                 } else if ctx.match_token(TokenKind::Null) {
                     nullable = true;
+                }
+                if serial {
+                    // SERIAL columns are implicitly NOT NULL.
+                    nullable = false;
                 }
                 let mut default = None;
                 if ctx.match_token(TokenKind::Default) {
@@ -43,6 +53,7 @@ impl DdlParser {
                     nullable,
                     default,
                     comment,
+                    serial,
                 });
                 if !ctx.match_token(TokenKind::Comma) {
                     break;
@@ -137,7 +148,13 @@ impl DdlParser {
     ) -> Result<PropertyDef, ParseError> {
         let name = ctx.expect_identifier()?;
         ctx.match_token(TokenKind::Colon);
-        let dtype = self.parse_data_type(ctx)?;
+        let mut serial = false;
+        let dtype = if ctx.match_token(TokenKind::Serial) {
+            serial = true;
+            DataType::BigInt
+        } else {
+            self.parse_data_type(ctx)?
+        };
         let mut nullable = true;
         if ctx.check_token(TokenKind::Not) {
             ctx.next_token();
@@ -147,6 +164,10 @@ impl DdlParser {
             }
         } else if ctx.match_token(TokenKind::Null) {
             nullable = true;
+        }
+        if serial {
+            // SERIAL columns are implicitly NOT NULL.
+            nullable = false;
         }
         let mut default = None;
         if ctx.match_token(TokenKind::Default) {
@@ -162,6 +183,7 @@ impl DdlParser {
             nullable,
             default,
             comment,
+            serial,
         })
     }
 

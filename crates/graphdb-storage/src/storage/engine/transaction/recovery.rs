@@ -250,7 +250,7 @@ impl RecoveryApplier for GraphStorageContext {
         _ts: Timestamp,
     ) -> StorageResult<()> {
         let mut properties = Vec::with_capacity(redo.schema.len());
-        for (name, type_name) in &redo.schema {
+        for (name, type_name, _serial) in &redo.schema {
             properties.push(StoragePropertyDef::new(
                 name.clone(),
                 parse_data_type(type_name)?,
@@ -295,9 +295,11 @@ impl RecoveryApplier for GraphStorageContext {
         let tag = TagInfo::new(redo.label_name.clone()).with_properties(
             redo.schema
                 .iter()
-                .map(|(name, type_name)| {
+                .map(|(name, type_name, serial)| {
                     parse_data_type(type_name).map(|data_type| {
-                        PropertyDef::new(name.clone(), data_type).with_nullable(false)
+                        PropertyDef::new(name.clone(), data_type)
+                            .with_nullable(false)
+                            .with_serial(*serial)
                     })
                 })
                 .collect::<StorageResult<Vec<_>>>()?,
@@ -336,7 +338,7 @@ impl RecoveryApplier for GraphStorageContext {
         let dst_label = get_label_id(&redo.dst_label)?;
 
         let mut properties = Vec::with_capacity(redo.schema.len());
-        for (name, type_name) in &redo.schema {
+        for (name, type_name, _serial) in &redo.schema {
             properties.push(StoragePropertyDef::new(
                 name.clone(),
                 parse_data_type(type_name)?,
@@ -387,9 +389,11 @@ impl RecoveryApplier for GraphStorageContext {
             .with_properties(
                 redo.schema
                     .iter()
-                    .map(|(name, type_name)| {
+                    .map(|(name, type_name, serial)| {
                         parse_data_type(type_name).map(|data_type| {
-                            PropertyDef::new(name.clone(), data_type).with_nullable(false)
+                            PropertyDef::new(name.clone(), data_type)
+                                .with_nullable(false)
+                                .with_serial(*serial)
                         })
                     })
                     .collect::<StorageResult<Vec<_>>>()?,
@@ -450,7 +454,7 @@ impl RecoveryApplier for GraphStorageContext {
         _ts: Timestamp,
     ) -> StorageResult<()> {
         let mut props = Vec::with_capacity(redo.properties.len());
-        for (name, type_name) in &redo.properties {
+        for (name, type_name, _serial) in &redo.properties {
             props.push(StoragePropertyDef::new(
                 name.clone(),
                 parse_data_type(type_name)?,
@@ -490,9 +494,10 @@ impl RecoveryApplier for GraphStorageContext {
         }
 
         if let Some((space_name, mut tag)) = self.schema_manager().find_tag_by_id(redo.label) {
-            for (name, type_name) in &redo.properties {
+            for (name, type_name, serial) in &redo.properties {
                 let prop = PropertyDef::new(name.clone(), parse_data_type(type_name)?)
-                    .with_nullable(false);
+                    .with_nullable(false)
+                    .with_serial(*serial);
                 if !tag
                     .properties
                     .iter()
@@ -508,7 +513,7 @@ impl RecoveryApplier for GraphStorageContext {
 
     fn replay_add_edge_prop(&self, redo: &AddEdgePropRedo, _ts: Timestamp) -> StorageResult<()> {
         let mut props = Vec::with_capacity(redo.properties.len());
-        for (name, type_name) in &redo.properties {
+        for (name, type_name, _serial) in &redo.properties {
             props.push(StoragePropertyDef::new(
                 name.clone(),
                 parse_data_type(type_name)?,
@@ -555,9 +560,10 @@ impl RecoveryApplier for GraphStorageContext {
         if let Some((space_name, mut edge_type)) =
             self.schema_manager().find_edge_type_by_id(redo.edge_label)
         {
-            for (name, type_name) in &redo.properties {
+            for (name, type_name, serial) in &redo.properties {
                 let prop = PropertyDef::new(name.clone(), parse_data_type(type_name)?)
-                    .with_nullable(false);
+                    .with_nullable(false)
+                    .with_serial(*serial);
                 if !edge_type
                     .properties
                     .iter()
@@ -1097,8 +1103,8 @@ mod tests {
                 label_id: Some(1),
                 label_name: "Person".to_string(),
                 schema: vec![
-                    ("id".to_string(), "BIGINT".to_string()),
-                    ("name".to_string(), "STRING".to_string()),
+                    ("id".to_string(), "BIGINT".to_string(), true),
+                    ("name".to_string(), "STRING".to_string(), false),
                 ],
             },
             1,
@@ -1111,8 +1117,8 @@ mod tests {
                 label_id: Some(2),
                 label_name: "City".to_string(),
                 schema: vec![
-                    ("id".to_string(), "BIGINT".to_string()),
-                    ("name".to_string(), "STRING".to_string()),
+                    ("id".to_string(), "BIGINT".to_string(), false),
+                    ("name".to_string(), "STRING".to_string(), false),
                 ],
             },
             1,
@@ -1131,7 +1137,7 @@ mod tests {
         ctx.replay_add_vertex_prop(
             &AddVertexPropRedo {
                 label: person_label,
-                properties: vec![("age".to_string(), "INT".to_string())],
+                properties: vec![("age".to_string(), "INT".to_string(), false)],
             },
             2,
         )
@@ -1163,7 +1169,7 @@ mod tests {
                 src_label: "Person".to_string(),
                 dst_label: "City".to_string(),
                 edge_label: "LIVES_IN".to_string(),
-                schema: vec![("since".to_string(), "INT".to_string())],
+                schema: vec![("since".to_string(), "INT".to_string(), false)],
             },
             3,
         )
@@ -1177,7 +1183,7 @@ mod tests {
                 src_label: person_label,
                 dst_label: city_label,
                 edge_label: lives_in_label,
-                properties: vec![("cost".to_string(), "INT".to_string())],
+                properties: vec![("cost".to_string(), "INT".to_string(), false)],
             },
             3,
         )

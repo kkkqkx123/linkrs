@@ -159,6 +159,7 @@ pub enum TokenKind {
     Date,
     Time,
     Datetime,
+    Serial,
     Duration,
     Geography,
     Point,
