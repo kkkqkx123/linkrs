@@ -121,10 +121,10 @@ Configuration is managed via `config.toml`:
 
 | Path | Description |
 |------|-------------|
-| `crates/` | 10 sub-crates (8 core + migration + vector-client) |
+| `crates/` | 11 sub-crates (8 core + migration + vector-client + cli) |
 | `src/` | Root crate: server binary, C API, library re-exports |
 | `frontend/` | graphdb-studio: React + TypeScript web UI |
-| `graphdb-cli/` | Interactive CLI client |
+| `crates/graphdb-cli/` | Interactive CLI client |
 | `proto/` | gRPC protobuf definitions |
 | `tests/` | Integration + C API + E2E tests |
 | `benches/` | Criterion.rs benchmarks |
@@ -180,7 +180,7 @@ MATCH (a:person)-[:knows]->(b:person) RETURN a.name, b.name;
 ## CLI Client
 
 ```shell
-cd graphdb-cli
+cd crates/graphdb-cli
 cargo run -- --host localhost --port 9758
 ```
 

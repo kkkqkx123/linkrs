@@ -12,7 +12,7 @@ members = [
     "crates/graphdb-api",
     "crates/graphdb-migration",
     "crates/vector-client",
-    "graphdb-cli",
+    "crates/graphdb-cli",
 ]
 
 [patch.crates-io]

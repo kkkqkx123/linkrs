@@ -286,7 +286,7 @@ Add vector search methods if CLI needs this feature.
 ### Code Structure
 
 ```
-graphdb-cli/src/
+crates/graphdb-cli/src/
 ├── client/
 │   ├── client_trait.rs    # Trait definitions
 │   ├── http.rs            # HTTP implementation

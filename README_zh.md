@@ -121,10 +121,10 @@ cargo test --lib
 
 | 路径 | 说明 |
 |------|------|
-| `crates/` | 10 个子 crate（8 个核心 + migration + vector-client） |
+| `crates/` | 11 个子 crate（8 个核心 + migration + vector-client + cli） |
 | `src/` | 根 crate：服务端二进制、C API、库重新导出 |
 | `frontend/` | graphdb-studio：React + TypeScript Web 界面 |
-| `graphdb-cli/` | 交互式 CLI 客户端 |
+| `crates/graphdb-cli/` | 交互式 CLI 客户端 |
 | `proto/` | gRPC protobuf 定义 |
 | `tests/` | 集成测试 + C API 测试 + E2E 测试 |
 | `benches/` | Criterion.rs 基准测试 |
@@ -180,7 +180,7 @@ MATCH (a:person)-[:knows]->(b:person) RETURN a.name, b.name;
 ## CLI 客户端
 
 ```shell
-cd graphdb-cli
+cd crates/graphdb-cli
 cargo run -- --host localhost --port 9758
 ```
 

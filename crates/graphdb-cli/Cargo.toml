@@ -21,7 +21,7 @@ csv.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 
-graphdb-core = { path = "../crates/graphdb-core" }
+graphdb-core = { path = "../graphdb-core" }
 async-trait.workspace = true
 futures.workspace = true
 

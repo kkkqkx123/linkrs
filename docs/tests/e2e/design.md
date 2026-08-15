@@ -495,7 +495,7 @@ cargo run --release
 curl http://localhost:8080/v1/health
 
 # 3. 启动 graphdb-cli
-./graphdb-cli --host 127.0.0.1 --port 8080
+cargo run -p graphdb_cli -- --host 127.0.0.1 --port 8080
 ```
 
 ### 阶段 2: 数据准备

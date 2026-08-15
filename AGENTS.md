@@ -29,7 +29,7 @@ Root `src/` has `lib.rs`, `main.rs`, `c_api.rs` with `pub use dep_crate::api as 
 
 Dependency DAG: core → config → search → sync → transaction → storage → query → api
 
-Outside crates: `crates/bm25`, `crates/qdrant-client`, `./graphdb-cli`
+Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`
 
 ## Key Directories
 

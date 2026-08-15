@@ -595,7 +595,7 @@ max_size = 1000
 ### 4.2 项目结构
 
 ```
-graphdb-cli/
+crates/graphdb-cli/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                 # 入口点
