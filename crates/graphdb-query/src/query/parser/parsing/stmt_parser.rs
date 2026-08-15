@@ -966,6 +966,74 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_create_tag_with_composite_types() {
+        let mut ctx = create_parser_context(
+            "CREATE TAG Person (id INT, \
+             addr STRUCT<city STRING, street STRING, geo STRUCT<lat DOUBLE, lon DOUBLE>>, \
+             coords ARRAY<DOUBLE>(3), \
+             tags ARRAY<STRING>)",
+        );
+        let result = StmtParser::parse_statement(&mut ctx);
+        let stmt = result.expect("composite type DDL must parse");
+        let crate::query::parser::ast::Stmt::Create(create) = stmt else {
+            panic!("expected Create statement");
+        };
+        let crate::query::parser::ast::CreateTarget::Tag {
+            properties: props, ..
+        } = create.target
+        else {
+            panic!("expected Tag creation");
+        };
+        let props: Vec<_> = props
+            .iter()
+            .map(|p| (p.name.clone(), p.data_type.clone()))
+            .collect();
+        use crate::core::{ArrayTypeInfo, DataType, StructTypeInfo};
+        use std::sync::Arc;
+        assert_eq!(props[0].0, "id");
+        assert_eq!(props[0].1, DataType::Int);
+        assert_eq!(
+            props[1].1,
+            DataType::Struct(Arc::new(StructTypeInfo::new(vec![
+                ("city".to_string(), DataType::String),
+                ("street".to_string(), DataType::String),
+                (
+                    "geo".to_string(),
+                    DataType::Struct(Arc::new(StructTypeInfo::new(vec![
+                        ("lat".to_string(), DataType::Double),
+                        ("lon".to_string(), DataType::Double),
+                    ]))),
+                ),
+            ])))
+        );
+        assert_eq!(
+            props[2].1,
+            DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3))))
+        );
+        assert_eq!(
+            props[3].1,
+            DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::String, None)))
+        );
+    }
+
+    #[test]
+    fn test_parse_create_tag_composite_nesting_limit() {
+        // 17 levels of nesting exceeds the limit of 16 and must fail.
+        let mut ddl = String::from("CREATE TAG Deep (a ARRAY<");
+        for _ in 0..17 {
+            ddl.push_str("ARRAY<");
+        }
+        ddl.push_str("INT");
+        for _ in 0..17 {
+            ddl.push('>');
+        }
+        ddl.push_str(">)");
+        let mut ctx = create_parser_context(&ddl);
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(result.is_err(), "over-nested composite type must be rejected");
+    }
+
+    #[test]
     fn test_parse_insert_vertex_statement() {
         let mut ctx = create_parser_context(
             "INSERT VERTEX Person(name, age) VALUES \"player100\":(\"Tom\", 18)",

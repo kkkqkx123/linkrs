@@ -27,9 +27,9 @@ fn json_to_value_inline(json: &JsonValue) -> Value {
             Value::list(List::from(values))
         }
         JsonValue::Object(obj) => {
-            let map: std::collections::HashMap<String, Value> = obj
+            let map: std::collections::HashMap<Value, Value> = obj
                 .iter()
-                .map(|(k, v)| (k.clone(), json_to_value_inline(v)))
+                .map(|(k, v)| (Value::string(k.clone()), json_to_value_inline(v)))
                 .collect();
             Value::map(map)
         }
@@ -157,14 +157,54 @@ impl CollectionOperationEvaluator {
             }
             Value::Map(map) => {
                 if let Value::String(key) = index {
-                    map.get(key.as_str()).cloned().ok_or_else(|| {
+                    map.get(&Value::string(key.clone())).cloned().ok_or_else(|| {
                         ExpressionError::runtime_error(format!(
                             "Mapping key does not exist: {}",
                             key
                         ))
                     })
                 } else {
-                    Err(ExpressionError::type_error("Mapping key must be a string"))
+                    map.get(index).cloned().ok_or_else(|| {
+                        ExpressionError::runtime_error(format!(
+                            "Mapping key does not exist: {}",
+                            index
+                        ))
+                    })
+                }
+            }
+            Value::Struct(s) => {
+                if let Value::String(key) = index {
+                    s.fields
+                        .iter()
+                        .find(|(name, _)| name == key)
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            ExpressionError::runtime_error(format!(
+                                "STRUCT field does not exist: {}",
+                                key
+                            ))
+                        })
+                } else {
+                    Err(ExpressionError::type_error(
+                        "STRUCT subscript key must be a string",
+                    ))
+                }
+            }
+            Value::Array(a) => {
+                if let Some(i) = Self::value_to_i64(index) {
+                    let adjusted_index = if i < 0 { a.values.len() as i64 + i } else { i };
+                    if adjusted_index >= 0 && (adjusted_index as usize) < a.values.len() {
+                        Ok(a.values[adjusted_index as usize].clone())
+                    } else {
+                        Err(ExpressionError::index_out_of_bounds(
+                            adjusted_index as isize,
+                            a.values.len(),
+                        ))
+                    }
+                } else {
+                    Err(ExpressionError::type_error(
+                        "ARRAY subscripts must be integers",
+                    ))
                 }
             }
             Value::Json(j) => {
@@ -295,8 +335,14 @@ impl CollectionOperationEvaluator {
                 .cloned()
                 .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
             Value::Map(map) => Ok(map
-                .get(property)
+                .get(&Value::string(property))
                 .cloned()
+                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+            Value::Struct(s) => Ok(s
+                .fields
+                .iter()
+                .find(|(name, _)| name == property)
+                .map(|(_, value)| value.clone())
                 .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
             Value::List(list) => {
                 if let Ok(index) = property.parse::<isize>() {
@@ -339,5 +385,29 @@ impl CollectionOperationEvaluator {
     ) -> Result<Value, ExpressionError> {
         let property = format!("{}", attribute);
         Self::eval_property_access(object, &property)
+    }
+
+    /// STRUCT field access (e.g. `addr.city`).
+    ///
+    /// Resolves a named field of a STRUCT value; missing fields yield NULL.
+    pub fn eval_struct_field_access(
+        object: &Value,
+        field: &str,
+    ) -> Result<Value, ExpressionError> {
+        if object.is_null() {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+        match object {
+            Value::Struct(s) => Ok(s
+                .fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, value)| value.clone())
+                .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
+            _ => Err(ExpressionError::type_error(format!(
+                "Field access '{}' is only supported on STRUCT values",
+                field
+            ))),
+        }
     }
 }

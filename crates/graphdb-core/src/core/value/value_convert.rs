@@ -160,9 +160,24 @@ impl Value {
             Value::Map(map) => {
                 let items: Result<Vec<String>, _> = map
                     .iter()
+                    .map(|(k, v)| {
+                        v.to_string().map(|v_str| format!("{}: {}", k, v_str))
+                    })
+                    .collect();
+                items.map(|items_str| format!("{{{}}}", items_str.join(", ")))
+            }
+            Value::Struct(s) => {
+                let items: Result<Vec<String>, _> = s
+                    .fields
+                    .iter()
                     .map(|(k, v)| v.to_string().map(|v_str| format!("{}: {}", k, v_str)))
                     .collect();
                 items.map(|items_str| format!("{{{}}}", items_str.join(", ")))
+            }
+            Value::Array(a) => {
+                let items: Result<Vec<String>, _> =
+                    a.values.iter().map(|v| v.to_string()).collect();
+                items.map(|items_str| format!("[{}]", items_str.join(", ")))
             }
             _ => Err(format!("Cannot convert {:?} to string", self)),
         }
@@ -175,6 +190,9 @@ impl Value {
             Value::Set(set) => Value::List(Box::new(List::from(
                 set.iter().cloned().collect::<Vec<_>>(),
             ))),
+            // Array -> List: element-wise conversion (elements are copied
+            // unchanged; element casts are applied at the type level).
+            Value::Array(array) => Value::List(Box::new(List::from(array.values.clone()))),
             _ => Value::Null(NullType::BadData),
         }
     }
@@ -183,6 +201,16 @@ impl Value {
     pub fn to_map(&self) -> Value {
         match self {
             Value::Map(map) => Value::Map(map.clone()),
+            // Struct -> Map: field order is preserved via the ordered map
+            // building below; HashMap loses order, matching Map semantics.
+            // Field names become string keys.
+            Value::Struct(s) => {
+                let mut map = std::collections::HashMap::new();
+                for (name, value) in &s.fields {
+                    map.insert(Value::string(name.clone()), value.clone());
+                }
+                Value::Map(Box::new(map))
+            }
             _ => Value::Null(NullType::BadData),
         }
     }
@@ -713,6 +741,50 @@ impl Value {
             DataType::DateTime => self.to_datetime(),
             DataType::List => self.to_list(),
             DataType::Map => self.to_map(),
+            DataType::Struct(target_info) => match self {
+                Value::Null(_) | Value::Empty => Value::Null(NullType::Null),
+                Value::Struct(_) => self.clone(),
+                // Map -> Struct: field-name isomorphism; the Map value type
+                // must be castable to the target field types (enforced at
+                // value level by direct copy when types already match).
+                Value::Map(map) => {
+                    let fields = target_info
+                        .fields
+                        .iter()
+                        .map(|(name, _)| {
+                            let key = Value::string(name.clone());
+                            (
+                                name.clone(),
+                                map.get(&key).cloned().unwrap_or(Value::Null(
+                                    NullType::Null,
+                                )),
+                            )
+                        })
+                        .collect();
+                    Value::Struct(Box::new(crate::core::StructValue::new(fields)))
+                }
+                _ => {
+                    return Err(StorageError::type_mismatch(
+                        target.clone(),
+                        self.data_type(),
+                    ))
+                }
+            },
+            DataType::Array(_) => match self {
+                Value::Null(_) | Value::Empty => Value::Null(NullType::Null),
+                Value::Array(_) => self.clone(),
+                // List -> Array: element copy; element type compatibility is
+                // validated by `TypeUtils::can_cast` before this path runs.
+                Value::List(list) => Value::Array(Box::new(crate::core::ArrayValue::new(
+                    list.iter().cloned().collect(),
+                ))),
+                _ => {
+                    return Err(StorageError::type_mismatch(
+                        target.clone(),
+                        self.data_type(),
+                    ))
+                }
+            },
             DataType::Geography => match self {
                 Value::Null(_) | Value::Empty => Value::Null(NullType::Null),
                 Value::Geography(g) => Value::Geography(g.clone()),
@@ -805,6 +877,12 @@ impl From<Vec<Value>> for Value {
 
 impl From<std::collections::HashMap<String, Value>> for Value {
     fn from(value: std::collections::HashMap<String, Value>) -> Self {
+        Value::string_map(value)
+    }
+}
+
+impl From<std::collections::HashMap<Value, Value>> for Value {
+    fn from(value: std::collections::HashMap<Value, Value>) -> Self {
         Value::map(value)
     }
 }

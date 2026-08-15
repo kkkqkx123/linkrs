@@ -441,6 +441,8 @@ impl<'a> Lexer<'a> {
             "POLYGON" => Tk::Polygon,
             "LIST" => Tk::List,
             "MAP" => Tk::Map,
+            "STRUCT" => Tk::Struct,
+            "ARRAY" => Tk::Array,
             "DOWNLOAD" => Tk::Download,
             "HDFS" => Tk::HDFS,
             "UUID" => Tk::UUID,

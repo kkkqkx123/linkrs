@@ -45,6 +45,8 @@ impl PartialEq for Value {
             (Value::Interval(a), Value::Interval(b)) => a == b,
             (Value::VertexId(a), Value::VertexId(b)) => a == b,
             (Value::EdgeId(a), Value::EdgeId(b)) => a == b,
+            (Value::Struct(a), Value::Struct(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => a == b,
 
             // Cross-type integer comparisons: promote to i64
             (Value::SmallInt(a), Value::Int(b)) => *a as i64 == *b as i64,
@@ -126,6 +128,8 @@ impl Ord for Value {
             },
             (Value::Uuid(a), Value::Uuid(b)) => a.cmp(b),
             (Value::Interval(a), Value::Interval(b)) => Self::cmp_interval(a, b),
+            (Value::Struct(a), Value::Struct(b)) => Self::cmp_struct(a, b),
+            (Value::Array(a), Value::Array(b)) => Self::cmp_array(a, b),
 
             // Cross-type integer comparisons: promote to i64
             (Value::SmallInt(a), Value::Int(b)) => (*a as i64).cmp(&(*b as i64)),
@@ -282,9 +286,9 @@ impl Hash for Value {
             }
             Value::Map(m) => {
                 19u8.hash(state);
-                // Hash mapping by sorted key-value pairs
+                // Hash mapping by sorted key-value pairs; keys sort as `Value`.
                 let mut pairs: Vec<_> = m.iter().collect();
-                pairs.sort_by_key(|&(k, _)| k);
+                pairs.sort();
                 pairs.hash(state);
             }
             Value::Set(s) => {
@@ -329,6 +333,14 @@ impl Hash for Value {
             Value::EdgeId(eid) => {
                 29u8.hash(state);
                 eid.hash(state);
+            }
+            Value::Struct(s) => {
+                30u8.hash(state);
+                s.fields.hash(state);
+            }
+            Value::Array(a) => {
+                31u8.hash(state);
+                a.values.hash(state);
             }
         }
     }
@@ -455,12 +467,12 @@ impl Value {
     }
 
     // Mapping Comparison Helper Functions
-    fn cmp_map(a: &HashMap<String, Value>, b: &HashMap<String, Value>) -> CmpOrdering {
+    fn cmp_map(a: &HashMap<Value, Value>, b: &HashMap<Value, Value>) -> CmpOrdering {
         a.len().cmp(&b.len()).then_with(|| {
             let mut a_pairs: Vec<_> = a.iter().collect();
             let mut b_pairs: Vec<_> = b.iter().collect();
-            a_pairs.sort_by_key(|&(k, _)| k);
-            b_pairs.sort_by_key(|&(k, _)| k);
+            a_pairs.sort();
+            b_pairs.sort();
             a_pairs.iter().zip(b_pairs.iter()).fold(
                 CmpOrdering::Equal,
                 |acc, ((a_k, a_v), (b_k, b_v))| {
@@ -584,6 +596,43 @@ impl Value {
         }
     }
 
+    // Struct comparison: field count, then field-name order, then field values.
+    fn cmp_struct(
+        a: &crate::core::value::StructValue,
+        b: &crate::core::value::StructValue,
+    ) -> CmpOrdering {
+        a.fields.len().cmp(&b.fields.len()).then_with(|| {
+            a.fields
+                .iter()
+                .zip(b.fields.iter())
+                .fold(CmpOrdering::Equal, |acc, ((a_k, a_v), (b_k, b_v))| {
+                    if acc == CmpOrdering::Equal {
+                        a_k.cmp(b_k).then_with(|| a_v.cmp(b_v))
+                    } else {
+                        acc
+                    }
+                })
+        })
+    }
+
+    // Array comparison: element-by-element lexicographic, then length.
+    fn cmp_array(
+        a: &crate::core::value::ArrayValue,
+        b: &crate::core::value::ArrayValue,
+    ) -> CmpOrdering {
+        a.values
+            .iter()
+            .zip(b.values.iter())
+            .fold(CmpOrdering::Equal, |acc, (a_val, b_val)| {
+                if acc == CmpOrdering::Equal {
+                    a_val.cmp(b_val)
+                } else {
+                    acc
+                }
+            })
+            .then_with(|| a.values.len().cmp(&b.values.len()))
+    }
+
     // JSON value comparison helper functions
     fn cmp_json_values(a: &serde_json::Value, b: &serde_json::Value) -> CmpOrdering {
         use serde_json::Value as JsonValue;
@@ -682,6 +731,8 @@ impl Value {
             Value::Interval(_) => 27,
             Value::VertexId(_) => 28,
             Value::EdgeId(_) => 29,
+            Value::Struct(_) => 30,
+            Value::Array(_) => 31,
         }
     }
 }

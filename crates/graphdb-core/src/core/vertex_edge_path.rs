@@ -165,7 +165,7 @@ impl Vertex {
                 return Some(val.clone());
             }
             if tag.name == property {
-                return Some(Value::map(tag.properties.clone()));
+                return Some(Value::string_map(tag.properties.clone()));
             }
         }
         None

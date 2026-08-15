@@ -16,12 +16,14 @@ use crate::core::{
         vector::VectorValue,
     },
     vertex_edge_path::{Edge, Path, Vertex},
+    ArrayTypeInfo, StructTypeInfo,
 };
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
+    sync::Arc,
 };
 
 /// Indicates values that can be stored in node/edge attributes
@@ -54,7 +56,9 @@ pub enum Value {
     Edge(Box<Edge>),
     Path(Box<Path>),
     List(Box<List>),
-    Map(Box<HashMap<String, Value>>),
+    /// Map with generalized keys: any hashable `Value` (string keys remain
+    /// the common case; float keys use the normalized NaN/±0 hashing).
+    Map(Box<HashMap<Value, Value>>),
     Set(Box<HashSet<Value>>),
     Geography(Geography),
     Vector(VectorValue),
@@ -76,6 +80,35 @@ pub enum Value {
     /// Lightweight edge ID reference (no heap allocation).
     /// Used by expand fast path when only the edge ID is needed.
     EdgeId(EdgeId),
+
+    /// STRUCT value: ordered named fields.
+    Struct(Box<StructValue>),
+    /// ARRAY value: element-homogeneous array.
+    Array(Box<ArrayValue>),
+}
+
+/// STRUCT value: ordered field table.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StructValue {
+    pub fields: Vec<(String, Value)>,
+}
+
+/// ARRAY value: fixed-size array.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArrayValue {
+    pub values: Vec<Value>,
+}
+
+impl StructValue {
+    pub fn new(fields: Vec<(String, Value)>) -> Self {
+        Self { fields }
+    }
+}
+
+impl ArrayValue {
+    pub fn new(values: Vec<Value>) -> Self {
+        Self { values }
+    }
 }
 
 impl Value {
@@ -125,6 +158,19 @@ impl Value {
             Value::Interval(_) => DataType::Interval,
             Value::VertexId(_) => DataType::Vertex,
             Value::EdgeId(_) => DataType::Edge,
+            Value::Struct(s) => DataType::Struct(Arc::new(StructTypeInfo::new(
+                s.fields
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.get_type()))
+                    .collect(),
+            ))),
+            Value::Array(a) => DataType::Array(Arc::new(ArrayTypeInfo::new(
+                a.values
+                    .first()
+                    .map(|v| v.get_type())
+                    .unwrap_or(DataType::Empty),
+                None,
+            ))),
         }
     }
 
@@ -293,9 +339,9 @@ impl Value {
                 let mut size = std::mem::size_of::<Self>();
                 // Hash table bucket array overhead: u64 hash per entry
                 size += m.capacity()
-                    * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+                    * (8 + std::mem::size_of::<Value>() + std::mem::size_of::<Value>());
                 for (k, v) in m.as_ref() {
-                    size += k.capacity();
+                    size += k.estimated_size();
                     size += v.estimated_size();
                 }
                 size
@@ -318,6 +364,21 @@ impl Value {
             Value::Interval(_) => std::mem::size_of::<Self>(),
             Value::VertexId(_) => std::mem::size_of::<Self>(),
             Value::EdgeId(_) => std::mem::size_of::<Self>(),
+            Value::Struct(s) => {
+                let mut size = std::mem::size_of::<Self>();
+                for (name, value) in &s.fields {
+                    size += name.capacity();
+                    size += value.estimated_size();
+                }
+                size
+            }
+            Value::Array(a) => {
+                let mut size = std::mem::size_of::<Self>();
+                for value in &a.values {
+                    size += value.estimated_size();
+                }
+                size
+            }
         }
     }
 
@@ -343,9 +404,16 @@ impl Value {
         Value::List(Box::new(list))
     }
 
-    /// Create a new Map value (wraps in Box)
-    pub fn map(map: HashMap<String, Value>) -> Self {
+    /// Create a new Map value (wraps in Box).
+    pub fn map(map: HashMap<Value, Value>) -> Self {
         Value::Map(Box::new(map))
+    }
+
+    /// Create a new Map value from string-keyed entries (the common case).
+    pub fn string_map(map: HashMap<String, Value>) -> Self {
+        Value::Map(Box::new(
+            map.into_iter().map(|(k, v)| (Value::string(k), v)).collect(),
+        ))
     }
 
     /// Create a new Set value (wraps in Box)
@@ -366,6 +434,16 @@ impl Value {
     /// Create a new DataSet value (wraps in Box)
     pub fn dataset(dataset: DataSet) -> Self {
         Value::DataSet(Box::new(dataset))
+    }
+
+    /// Create a new Struct value (wraps in Box).
+    pub fn struct_(fields: Vec<(String, Value)>) -> Self {
+        Value::Struct(Box::new(StructValue::new(fields)))
+    }
+
+    /// Create a new Array value (wraps in Box).
+    pub fn array(values: Vec<Value>) -> Self {
+        Value::Array(Box::new(ArrayValue::new(values)))
     }
 }
 
@@ -437,6 +515,26 @@ impl std::fmt::Display for Value {
             Value::Interval(i) => write!(f, "Interval({})", i),
             Value::VertexId(vid) => write!(f, "VertexId({:?})", vid),
             Value::EdgeId(eid) => write!(f, "EdgeId({:?})", eid),
+            Value::Struct(s) => {
+                write!(f, "{{")?;
+                for (i, (name, value)) in s.fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, value)?;
+                }
+                write!(f, "}}")
+            }
+            Value::Array(a) => {
+                write!(f, "[")?;
+                for (i, value) in a.values.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", value)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

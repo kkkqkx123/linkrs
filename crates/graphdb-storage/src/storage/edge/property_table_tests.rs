@@ -99,6 +99,44 @@ fn test_delete() {
 }
 
 #[test]
+fn test_parameterized_schema_survives_dump_load() {
+    use crate::core::{ArrayTypeInfo, StructTypeInfo};
+    use std::sync::Arc;
+
+    let mut table = PropertyTable::new();
+    let struct_type = DataType::Struct(Arc::new(StructTypeInfo::new(vec![
+        ("city".to_string(), DataType::String),
+        ("street".to_string(), DataType::String),
+        (
+            "geo".to_string(),
+            DataType::Struct(Arc::new(StructTypeInfo::new(vec![
+                ("lat".to_string(), DataType::Double),
+                ("lon".to_string(), DataType::Double),
+            ]))),
+        ),
+    ])));
+    let array_type = DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3))));
+    table.add_property("addr".to_string(), struct_type.clone(), true).unwrap();
+    table.add_property("coords".to_string(), array_type.clone(), true).unwrap();
+    // Plain (code <= 31) column alongside parameterized ones.
+    table.add_property("weight".to_string(), DataType::Double, true).unwrap();
+
+    let data = table.dump();
+
+    let mut loaded = PropertyTable::new();
+    loaded.load(&data).expect("load must succeed");
+    let types: Vec<_> = loaded
+        .schema
+        .iter()
+        .map(|p| (p.name.clone(), p.data_type.clone()))
+        .collect();
+    assert_eq!(types.len(), 3);
+    assert_eq!(types[0].1, struct_type);
+    assert_eq!(types[1].1, array_type);
+    assert_eq!(types[2].1, DataType::Double);
+}
+
+#[test]
 fn test_dump_load_roundtrip() {
     let mut table = PropertyTable::new();
     table

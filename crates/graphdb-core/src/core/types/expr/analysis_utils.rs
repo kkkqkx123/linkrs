@@ -65,6 +65,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         Expression::Literal(_) => false,
         Expression::Variable(_) => true,
         Expression::Property { .. } => true,
+        Expression::StructField { base, .. } => requires_runtime_context(base),
         Expression::Binary { left, right, .. } => {
             requires_runtime_context(left) || requires_runtime_context(right)
         }

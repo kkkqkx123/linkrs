@@ -185,7 +185,7 @@ impl ExpressionEvaluator {
                 let mut map_values = std::collections::HashMap::new();
                 for (key, value_expression) in entries {
                     let value = Self::evaluate_recursive(value_expression, context)?;
-                    map_values.insert(key.clone(), value);
+                    map_values.insert(Value::string(key.clone()), value);
                 }
                 Ok(Value::map(map_values))
             }
@@ -240,6 +240,12 @@ impl ExpressionEvaluator {
                 }
                 let object_value = Self::evaluate_recursive(object, context)?;
                 CollectionOperationEvaluator::eval_property_access(&object_value, property)
+            }
+
+            // STRUCT field access (e.g. `addr.city`)
+            Expression::StructField { base, field } => {
+                let base_value = Self::evaluate_recursive(base, context)?;
+                CollectionOperationEvaluator::eval_struct_field_access(&base_value, field)
             }
 
             // Type conversion

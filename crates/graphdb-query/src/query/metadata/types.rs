@@ -169,6 +169,7 @@ impl From<DataType> for PropertyType {
             D::Map => Self::Map,
             D::Geography => Self::Geography,
             D::Vector | D::VectorDense(_) | D::VectorSparse(_) => Self::Vector,
+            D::Struct(_) | D::Array(_) => Self::List,
             D::Empty | D::Null => Self::String,
         }
     }

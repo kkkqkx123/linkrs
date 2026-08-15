@@ -185,13 +185,13 @@ impl PipeVariableResolver {
                 Ok(vids)
             }
             Value::Map(map) => {
-                if let Some(vid) = map.get("vid") {
+                if let Some(vid) = map.get(&Value::string("vid")) {
                     return Ok(vec![vid.clone()]);
                 }
-                if let Some(vid) = map.get("id") {
+                if let Some(vid) = map.get(&Value::string("id")) {
                     return Ok(vec![vid.clone()]);
                 }
-                if let Some(dst) = map.get("dst") {
+                if let Some(dst) = map.get(&Value::string("dst")) {
                     return Ok(vec![dst.clone()]);
                 }
                 Err(format!(
@@ -212,7 +212,7 @@ impl PipeVariableResolver {
 
     fn extract_single_vid(&self, value: &Value) -> Option<Value> {
         match value {
-            Value::Map(map) => map.get("vid").or_else(|| map.get("id")).cloned(),
+            Value::Map(map) => map.get(&Value::string("vid")).or_else(|| map.get(&Value::string("id"))).cloned(),
             Value::SmallInt(i) => Some(Value::SmallInt(*i)),
             Value::Int(i) => Some(Value::Int(*i)),
             Value::BigInt(i) => Some(Value::BigInt(*i)),
@@ -237,7 +237,7 @@ impl PipeVariableResolver {
                     .iter()
                     .filter_map(|v| {
                         if let Value::Map(map) = v {
-                            map.get(column_name).cloned()
+                            map.get(&Value::string(column_name)).cloned()
                         } else {
                             None
                         }
@@ -252,7 +252,7 @@ impl PipeVariableResolver {
                 Ok(column_values)
             }
             Value::Map(map) => {
-                if let Some(value) = map.get(column_name) {
+                if let Some(value) = map.get(&Value::string(column_name)) {
                     Ok(vec![value.clone()])
                 } else {
                     Err(format!(
@@ -292,7 +292,7 @@ impl PipeVariableResolver {
                                 .get(k)
                                 .map(ColumnDataType::from_value)
                                 .unwrap_or(ColumnDataType::Unknown);
-                            ColumnSchema::new(k.clone(), data_type)
+                            ColumnSchema::new(format!("{}", k), data_type)
                         })
                         .collect();
                 }
@@ -305,7 +305,7 @@ impl PipeVariableResolver {
                         .get(k)
                         .map(ColumnDataType::from_value)
                         .unwrap_or(ColumnDataType::Unknown);
-                    ColumnSchema::new(k.clone(), data_type)
+                    ColumnSchema::new(format!("{}", k), data_type)
                 })
                 .collect(),
             _ => vec![],
@@ -427,9 +427,9 @@ mod tests {
     }
 
     fn make_map(entries: Vec<(&str, Value)>) -> Value {
-        let map: HashMap<String, Value> = entries
+        let map: HashMap<Value, Value> = entries
             .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
+            .map(|(k, v)| (Value::string(k), v))
             .collect();
         Value::Map(Box::new(map))
     }

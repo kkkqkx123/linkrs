@@ -211,12 +211,20 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Vertex(v) => {
             let mut props = std::collections::HashMap::new();
             for tag in &v.tags {
-                props.extend(tag.properties.clone());
+                props.extend(
+                    tag.properties
+                        .iter()
+                        .map(|(k, v)| (Value::string(k.clone()), v.clone())),
+                );
             }
-            props.extend(v.properties.clone());
+            props.extend(
+                v.properties
+                    .iter()
+                    .map(|(k, v)| (Value::string(k.clone()), v.clone())),
+            );
             Ok(Value::map(props))
         }
-        Value::Edge(e) => Ok(Value::map(e.props.clone())),
+        Value::Edge(e) => Ok(Value::string_map(e.props.clone())),
         Value::Map(m) => Ok(Value::map((**m).clone())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -936,7 +944,7 @@ fn execute_pagerank_with_storage(
         result.insert(vid_str, Value::Double(scores[i]));
     }
 
-    Ok(Value::map(result))
+    Ok(Value::string_map(result))
 }
 
 #[cfg(test)]
@@ -1000,9 +1008,9 @@ mod tests {
             .execute(&[Value::Vertex(Box::new(vertex))])
             .expect("The properties function should execute successfully");
         if let Value::Map(props) = result {
-            assert!(props.contains_key("name"));
-            assert!(props.contains_key("age"));
-            assert!(props.contains_key("dept"));
+            assert!(props.contains_key(&Value::string("name")));
+            assert!(props.contains_key(&Value::string("age")));
+            assert!(props.contains_key(&Value::string("dept")));
         } else {
             panic!("The `properties` function should return a map.");
         }

@@ -44,11 +44,10 @@ impl MemoryEstimatable for Value {
             }
             Value::Map(map) => {
                 base_size
-                    + map.capacity()
-                        * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                    + map.capacity() * (8 + std::mem::size_of::<Value>() * 2)
                     + map
                         .iter()
-                        .map(|(k, v)| k.capacity() + v.estimate_memory())
+                        .map(|(k, v)| k.estimate_memory() + v.estimate_memory())
                         .sum::<usize>()
             }
             Value::Set(set) => {
@@ -78,6 +77,18 @@ impl MemoryEstimatable for Value {
 
             // Lightweight ID references (fixed size)
             Value::VertexId(_) | Value::EdgeId(_) => base_size,
+
+            // Composite values (recursive)
+            Value::Struct(s) => {
+                base_size
+                    + s.fields
+                        .iter()
+                        .map(|(k, v)| k.capacity() + v.estimate_memory())
+                        .sum::<usize>()
+            }
+            Value::Array(a) => {
+                base_size + a.values.iter().map(|v| v.estimate_memory()).sum::<usize>()
+            }
         }
     }
 }

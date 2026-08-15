@@ -12,6 +12,8 @@
 
 #[path = "e2e/common.rs"]
 pub mod common;
+#[path = "e2e/composite_types.rs"]
+pub mod composite_types;
 #[path = "e2e/data_driven.rs"]
 pub mod data_driven;
 #[path = "e2e/extended_types.rs"]

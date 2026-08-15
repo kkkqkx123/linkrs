@@ -268,6 +268,22 @@ impl Binder {
                     value_type: prop_type,
                 })
             }
+            Expression::StructField { base, field } => {
+                let obj = self.bind_inner_expr(base, None)?;
+                let field_type = self.resolve_struct_field_type(&obj, field);
+                // Binding bug guard: a resolved Struct base must not yield
+                // Empty; schema-resolved field types must flow downstream.
+                debug_assert!(
+                    !matches!(&obj.return_type(), DataType::Struct(_)) || field_type != DataType::Empty,
+                    "StructField '{}' could not be resolved against its Struct base",
+                    field
+                );
+                Ok(BoundExpression::StructField {
+                    base: Box::new(obj),
+                    field: field.clone(),
+                    return_type: field_type,
+                })
+            }
             Expression::Binary { left, op, right } => {
                 let left = self.bind_inner_expr(left, None)?;
                 let right = self.bind_inner_expr(right, None)?;
@@ -598,6 +614,21 @@ impl Binder {
                         }
                     }
                 }
+            }
+        }
+        DataType::String
+    }
+
+    /// Resolve the type of a STRUCT field access `base.field`.
+    ///
+    /// The base expression carries its own concrete type when schema context
+    /// is available (a `STRUCT{...}` literal, or a `Property` whose schema
+    /// declares a Struct type). Falls back to `String` otherwise, mirroring
+    /// `Property` semantics.
+    fn resolve_struct_field_type(&self, base: &BoundExpression, field: &str) -> DataType {
+        if let DataType::Struct(info) = base.return_type() {
+            if let Some((_, field_type)) = info.fields.iter().find(|(name, _)| name == field) {
+                return field_type.clone();
             }
         }
         DataType::String

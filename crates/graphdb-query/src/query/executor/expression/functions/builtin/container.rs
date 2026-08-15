@@ -315,7 +315,9 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
         }
         Value::Map(m) => {
             for key in m.keys() {
-                keys.insert(key.clone());
+                // Map keys are generalized Values; stringify for the keys()
+                // result list.
+                keys.insert(format!("{}", key));
             }
         }
         Value::Json(j) => {

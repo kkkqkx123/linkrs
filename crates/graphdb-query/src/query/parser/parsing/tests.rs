@@ -489,6 +489,54 @@ mod tests {
     }
 
     #[test]
+    fn test_consecutive_match_clauses_merge() {
+        // `MATCH a MATCH b ...` must parse as a single statement: patterns
+        // combine, WHERE clauses are AND-ed, RETURN comes from the last one.
+        let stmt = parse_statement(
+            "MATCH (a:tag) WHERE a.x > 1 MATCH (b:tag {name: 'n'}) MATCH (c) WHERE c.y RETURN c",
+        )
+        .expect("consecutive MATCH should parse");
+
+        let Stmt::Match(match_stmt) = stmt else {
+            panic!("expected Match statement");
+        };
+        assert_eq!(match_stmt.patterns.len(), 3, "all three patterns merge");
+        assert!(
+            match_stmt.where_clause.is_some(),
+            "WHERE clauses combine into one expression"
+        );
+        assert!(
+            match_stmt.return_clause.is_some(),
+            "RETURN clause is preserved"
+        );
+    }
+
+    #[test]
+    fn test_consecutive_match_no_merge_after_return() {
+        // A RETURN clause ends the MATCH statement; a following MATCH is left
+        // for the outer parser to reject.
+        let mut parser = Parser::new("MATCH (a) RETURN a MATCH (b)");
+        let result = parser.parse();
+        assert!(result.is_ok(), "statement structure still parses");
+        assert!(
+            parser.has_errors(),
+            "MATCH after RETURN must be reported as an error"
+        );
+    }
+
+    #[test]
+    fn test_trailing_semicolon_is_allowed_after_consecutive_match() {
+        let mut parser = Parser::new("MATCH (a) MATCH (b) RETURN b;");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "trailing semicolon after merged MATCH parses: {:?}",
+            result.err()
+        );
+        assert!(!parser.has_errors(), "trailing semicolon is not an error");
+    }
+
+    #[test]
     fn test_error_recovery_stops_at_limit() {
         let query = "INVALID INVALID INVALID INVALID INVALID INVALID";
         let mut parser = Parser::new(query);

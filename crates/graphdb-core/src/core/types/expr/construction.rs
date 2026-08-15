@@ -26,6 +26,14 @@ impl Expression {
         }
     }
 
+    /// Create a STRUCT field access expression.
+    pub fn struct_field(base: Expression, field: impl Into<String>) -> Self {
+        Expression::StructField {
+            base: Box::new(base),
+            field: field.into(),
+        }
+    }
+
     /// Create a binary operation expression
     pub fn binary(left: Expression, op: BinaryOperator, right: Expression) -> Self {
         Expression::Binary {

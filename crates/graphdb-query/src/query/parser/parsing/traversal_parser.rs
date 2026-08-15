@@ -18,6 +18,15 @@ use crate::query::parser::TokenKind;
 /// Graph Traversal Parser
 pub struct TraversalParser;
 
+/// The body of one MATCH clause, used when merging consecutive MATCH clauses.
+struct ParsedMatchClause {
+    patterns: Vec<Pattern>,
+    where_clause: Option<ContextualExpression>,
+    where_explicit: bool,
+    return_clause: Option<ReturnClause>,
+    delete_clause: Option<MatchDeleteClause>,
+}
+
 impl TraversalParser {
     pub fn new() -> Self {
         Self
@@ -32,49 +41,47 @@ impl TraversalParser {
 
         ctx.expect_token(TokenKind::Match)?;
 
-        let mut patterns = Vec::new();
-        loop {
-            let Some(pattern) = ctx.recover_clause(
-                |c| {
-                    Ok(Some(Pattern::Variable(VariablePattern {
-                        span: c.current_span(),
-                        name: String::new(),
-                    })))
-                },
-                |c| self.parse_pattern(c).map(Some),
-            )?
-            else {
-                break;
-            };
-            patterns.push(pattern);
-            if !ctx.match_token(TokenKind::Comma) {
-                break;
+        let first = self.parse_match_clause(ctx)?;
+        let mut patterns = first.patterns;
+        let mut where_clause = first.where_clause;
+        let mut where_explicit = first.where_explicit;
+        let mut return_clause = first.return_clause;
+        let mut delete_clause = first.delete_clause;
+
+        // Consecutive plain MATCH clauses (`MATCH a MATCH b ...`) are merged
+        // into a single statement: all patterns combine, WHERE clauses are
+        // AND-ed, and RETURN/DELETE come from the last clause providing one.
+        // Chains starting with OPTIONAL MATCH are left unchanged; a trailing
+        // MATCH there is still reported by the outer parser.
+        while !optional
+            && return_clause.is_none()
+            && delete_clause.is_none()
+            && ctx.check_token(TokenKind::Match)
+        {
+            ctx.expect_token(TokenKind::Match)?;
+            let next = self.parse_match_clause(ctx)?;
+            patterns.extend(next.patterns);
+
+            match (where_explicit, next.where_explicit) {
+                (false, true) => where_clause = next.where_clause,
+                (true, true) => {
+                    if let (Some(left), Some(right)) = (&where_clause, &next.where_clause) {
+                        if let Some(combined) = ctx.expression_context().and(left, right) {
+                            where_clause = Some(combined);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            where_explicit |= next.where_explicit;
+
+            if let Some(rc) = next.return_clause {
+                return_clause = Some(rc);
+            }
+            if let Some(dc) = next.delete_clause {
+                delete_clause = Some(dc);
             }
         }
-
-        let where_clause = if ctx.match_token(TokenKind::Where) {
-            Some(ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?)
-        } else {
-            Some(Self::create_true_expression(ctx)?)
-        };
-
-        let return_clause = if ctx.match_token(TokenKind::Return) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| ClauseParser::new().parse_return_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
-
-        let delete_clause = if ctx.match_token(TokenKind::Delete) {
-            ctx.recover_clause(
-                |_| Ok(None),
-                |c| self.parse_match_delete_clause(c).map(Some),
-            )?
-        } else {
-            None
-        };
 
         let (order_by, limit, skip) = if let Some(ref rc) = return_clause {
             let limit = rc.limit.as_ref().map(|l| l.count);
@@ -98,6 +105,71 @@ impl TraversalParser {
             optional,
             delete_clause,
         }))
+    }
+
+    /// Parses the body of one MATCH clause: comma-separated patterns, an
+    /// optional WHERE expression (defaulting to a literal true), an optional
+    /// RETURN clause, and an optional DELETE clause.
+    fn parse_match_clause(
+        &mut self,
+        ctx: &mut ParseContext,
+    ) -> Result<ParsedMatchClause, ParseError> {
+        let mut patterns = Vec::new();
+        loop {
+            let Some(pattern) = ctx.recover_clause(
+                |c| {
+                    Ok(Some(Pattern::Variable(VariablePattern {
+                        span: c.current_span(),
+                        name: String::new(),
+                    })))
+                },
+                |c| self.parse_pattern(c).map(Some),
+            )?
+            else {
+                break;
+            };
+            patterns.push(pattern);
+            if !ctx.match_token(TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let (where_clause, where_explicit) = if ctx.match_token(TokenKind::Where) {
+            (
+                Some(ctx.recover_clause(Self::create_true_expression, |c| {
+                    self.parse_expression(c)
+                })?),
+                true,
+            )
+        } else {
+            (Some(Self::create_true_expression(ctx)?), false)
+        };
+
+        let return_clause = if ctx.match_token(TokenKind::Return) {
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| ClauseParser::new().parse_return_clause(c).map(Some),
+            )?
+        } else {
+            None
+        };
+
+        let delete_clause = if ctx.match_token(TokenKind::Delete) {
+            ctx.recover_clause(
+                |_| Ok(None),
+                |c| self.parse_match_delete_clause(c).map(Some),
+            )?
+        } else {
+            None
+        };
+
+        Ok(ParsedMatchClause {
+            patterns,
+            where_clause,
+            where_explicit,
+            return_clause,
+            delete_clause,
+        })
     }
 
     fn parse_match_delete_clause(

@@ -248,7 +248,7 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         crate::core::Value::Map(map) => {
             let obj: serde_json::Map<String, serde_json::Value> = map
                 .into_iter()
-                .map(|(k, v)| (k, value_to_json(v)))
+                .map(|(k, v)| (format!("{}", k), value_to_json(v)))
                 .collect();
             serde_json::Value::Object(obj)
         }
@@ -275,5 +275,16 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         crate::core::Value::Interval(i) => serde_json::Value::String(i.to_postgresql()),
         crate::core::Value::VertexId(vid) => serde_json::Value::String(format!("{:?}", vid)),
         crate::core::Value::EdgeId(eid) => serde_json::Value::String(format!("{:?}", eid)),
+        crate::core::Value::Struct(s) => {
+            let obj: serde_json::Map<String, serde_json::Value> = s
+                .fields
+                .into_iter()
+                .map(|(k, v)| (k, value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(obj)
+        }
+        crate::core::Value::Array(a) => {
+            serde_json::Value::Array(a.values.into_iter().map(value_to_json).collect())
+        }
     }
 }

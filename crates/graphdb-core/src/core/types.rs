@@ -36,6 +36,11 @@ pub mod memory_estimation;
 pub mod c_api;
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+pub mod type_info;
+
+pub use type_info::{data_type_from_info, type_info_of, ArrayTypeInfo, StructTypeInfo, TypeInfo};
 
 /// Error decoding a `DataType` from its compact byte code.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -44,6 +49,8 @@ pub enum TypeCodecError {
     UnknownTypeCode(u8),
     #[error("reserved data type code {0}")]
     ReservedTypeCode(u8),
+    #[error("parameterized data type code {0} requires type metadata")]
+    ParameterizedTypeCode(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,6 +92,11 @@ pub enum DataType {
     Uuid,
     /// Interval type
     Interval,
+
+    /// STRUCT: named-field composite type with metadata.
+    Struct(Arc<StructTypeInfo>),
+    /// ARRAY: element-homogeneous composite type with metadata.
+    Array(Arc<ArrayTypeInfo>),
 }
 
 impl std::fmt::Display for DataType {
@@ -120,6 +132,23 @@ impl std::fmt::Display for DataType {
             DataType::JsonB => write!(f, "JSONB"),
             DataType::Uuid => write!(f, "UUID"),
             DataType::Interval => write!(f, "INTERVAL"),
+            DataType::Struct(info) => {
+                write!(f, "STRUCT<")?;
+                for (i, (name, field_type)) in info.fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{} {}", name, field_type)?;
+                }
+                write!(f, ">")
+            }
+            DataType::Array(info) => {
+                write!(f, "ARRAY<{}>", info.element)?;
+                if let Some(len) = info.len {
+                    write!(f, "({})", len)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -162,6 +191,8 @@ impl DataType {
             DataType::JsonB => 29,
             DataType::Uuid => 30,
             DataType::Interval => 31,
+            DataType::Struct(_) => 64,
+            DataType::Array(_) => 65,
         }
     }
 
@@ -205,6 +236,11 @@ impl DataType {
             29 => Ok(DataType::JsonB),
             30 => Ok(DataType::Uuid),
             31 => Ok(DataType::Interval),
+            // Parameterized types need TypeInfo metadata to decode; the bare
+            // code alone is not sufficient. The caller must read the metadata
+            // block and rebuild the DataType.
+            64 => Err(TypeCodecError::ParameterizedTypeCode(64)),
+            65 => Err(TypeCodecError::ParameterizedTypeCode(65)),
             _ => Err(TypeCodecError::UnknownTypeCode(value)),
         }
     }
@@ -218,6 +254,7 @@ mod tests {
     ///
     /// Codes 22 and 24 are intentionally absent: they were previously used by
     /// the removed `VID`/`Timestamp` types and are now reserved.
+    /// Parameterized types (`Struct`/`Array`) decode to code 64/65.
     fn all_data_types() -> Vec<DataType> {
         vec![
             DataType::Empty,
@@ -250,17 +287,21 @@ mod tests {
             DataType::JsonB,
             DataType::Uuid,
             DataType::Interval,
+            DataType::Struct(Arc::new(StructTypeInfo::new(vec![
+                ("city".to_string(), DataType::String),
+            ]))),
+            DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
         ]
     }
 
     #[test]
     fn test_as_u8_codes_are_stable_within_range() {
-        // All assigned codes must stay in 0-31; new types start at 64.
+        // Assigned codes stay in 0-31 or the 64+ parameterized range.
         for data_type in all_data_types() {
+            let code = data_type.as_u8();
             assert!(
-                data_type.as_u8() <= 31,
-                "assigned code {} for {data_type:?} must stay within 0-31",
-                data_type.as_u8()
+                code <= 31 || (64..=65).contains(&code),
+                "assigned code {code} for {data_type:?} must stay within 0-31 or 64-65"
             );
         }
     }
@@ -269,11 +310,40 @@ mod tests {
     fn test_from_u8_roundtrip_for_all_variants() {
         for data_type in all_data_types() {
             let code = data_type.as_u8();
-            let decoded = DataType::from_u8(code)
-                .unwrap_or_else(|e| panic!("code {code} for {data_type:?} must decode: {e}"));
+            match DataType::from_u8(code) {
+                Ok(decoded) => {
+                    assert_eq!(
+                        decoded, data_type,
+                        "roundtrip mismatch for {data_type:?} (code {code})"
+                    );
+                }
+                Err(TypeCodecError::ParameterizedTypeCode(c)) => {
+                    assert_eq!(c, code, "parameterized code {code} must roundtrip");
+                }
+                Err(e) => panic!("code {code} for {data_type:?} must decode: {e}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parameterized_codes_require_metadata() {
+        // Codes 64/65 are known but parameterized: decoding the bare code must
+        // fail with the explicit `ParameterizedTypeCode` error, never silently
+        // yield a parameter-free type.
+        assert_eq!(
+            DataType::from_u8(64),
+            Err(TypeCodecError::ParameterizedTypeCode(64))
+        );
+        assert_eq!(
+            DataType::from_u8(65),
+            Err(TypeCodecError::ParameterizedTypeCode(65))
+        );
+        // Unknown codes in the 64+ range still error as unknown.
+        for code in [66u8, 100, 255] {
             assert_eq!(
-                decoded, data_type,
-                "roundtrip mismatch for {data_type:?} (code {code})"
+                DataType::from_u8(code),
+                Err(TypeCodecError::UnknownTypeCode(code)),
+                "unassigned code {code} must error as unknown"
             );
         }
     }
@@ -296,13 +366,22 @@ mod tests {
     fn test_from_u8_rejects_unknown_codes_instead_of_empty() {
         // The reserved expansion range (64+) and any unassigned code must fail
         // loudly instead of silently degrading to `Empty`.
-        for code in [32u8, 63, 64, 128, 255] {
+        for code in [32u8, 63, 66, 100, 128, 255] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::UnknownTypeCode(code)),
                 "unassigned code {code} must error"
             );
         }
+        // Parameterized codes fail with a distinct, explicit error.
+        assert_eq!(
+            DataType::from_u8(64),
+            Err(TypeCodecError::ParameterizedTypeCode(64))
+        );
+        assert_eq!(
+            DataType::from_u8(65),
+            Err(TypeCodecError::ParameterizedTypeCode(65))
+        );
     }
 
     #[test]

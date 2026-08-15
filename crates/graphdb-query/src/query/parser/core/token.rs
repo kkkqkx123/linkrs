@@ -167,6 +167,8 @@ pub enum TokenKind {
     Polygon,
     List,
     Map,
+    Struct,
+    Array,
     Download,
     HDFS,
     UUID,

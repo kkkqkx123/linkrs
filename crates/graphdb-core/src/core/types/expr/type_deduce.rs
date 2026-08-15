@@ -6,6 +6,8 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::core::types::DataType;
 use crate::core::Value;
+use crate::core::{ArrayTypeInfo, StructTypeInfo};
+use std::sync::Arc;
 
 impl Expression {
     /// Deriving the data type of an expression
@@ -17,6 +19,7 @@ impl Expression {
             Expression::Literal(value) => Self::deduce_value_type(value),
             Expression::Variable(_) => DataType::Empty,
             Expression::Property { .. } => DataType::Empty,
+            Expression::StructField { base, field } => Self::deduce_struct_field_type(base, field),
             Expression::Binary { op, left, right } => Self::deduce_binary_type(op, left, right),
             Expression::Unary { op, operand } => Self::deduce_unary_type(op, operand),
             Expression::Function { name, args } => Self::deduce_function_type(name, args),
@@ -85,6 +88,36 @@ impl Expression {
             Value::Interval(_) => DataType::Interval,
             Value::VertexId(_) => DataType::Vertex,
             Value::EdgeId(_) => DataType::Edge,
+            Value::Struct(s) => DataType::Struct(Arc::new(StructTypeInfo::new(
+                s.fields
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.get_type()))
+                    .collect(),
+            ))),
+            Value::Array(a) => DataType::Array(Arc::new(ArrayTypeInfo::new(
+                a.values
+                    .first()
+                    .map(|v| v.get_type())
+                    .unwrap_or(DataType::Empty),
+                None,
+            ))),
+        }
+    }
+
+    /// Derive the type of a STRUCT field access `base.field`.
+    ///
+    /// Without schema context the base type is unknown, so this returns
+    /// `DataType::Empty` (the binder fills the type after schema resolution,
+    /// matching the `Property` semantics).
+    fn deduce_struct_field_type(base: &Expression, field: &str) -> DataType {
+        match base.deduce_type() {
+            DataType::Struct(info) => info
+                .fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, field_type)| field_type.clone())
+                .unwrap_or(DataType::Empty),
+            _ => DataType::Empty,
         }
     }
 
@@ -357,7 +390,7 @@ mod tests {
                 DataType::List,
             ),
             (
-                Value::map(HashMap::from([("k".to_string(), Value::Int(1))])),
+                Value::string_map(HashMap::from([("k".to_string(), Value::Int(1))])),
                 DataType::Map,
             ),
             (
@@ -391,6 +424,17 @@ mod tests {
             ),
             (Value::VertexId(VertexId::from_int64(1)), DataType::Vertex),
             (Value::EdgeId(EdgeId::new(1)), DataType::Edge),
+            (
+                Value::struct_(vec![("city".to_string(), Value::string("x"))]),
+                DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
+                    "city".to_string(),
+                    DataType::String,
+                )]))),
+            ),
+            (
+                Value::array(vec![Value::Double(1.0)]),
+                DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, None))),
+            ),
         ];
 
         for (value, expected) in cases {

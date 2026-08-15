@@ -39,6 +39,16 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
             })
         }
 
+        BoundExpression::StructField {
+            base, field, ..
+        } => {
+            let base = convert_bound_to_expression(base)?;
+            Ok(Expression::StructField {
+                base: Box::new(base),
+                field: field.clone(),
+            })
+        }
+
         BoundExpression::BinaryOp {
             left, op, right, ..
         } => {

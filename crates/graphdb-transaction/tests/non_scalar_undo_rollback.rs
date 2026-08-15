@@ -146,7 +146,9 @@ fn sample_values() -> Vec<Value> {
     list.push(Value::string("two"));
 
     let mut map = HashMap::new();
-    map.insert("key".to_string(), Value::Double(3.5));
+    map.insert(Value::string("key"), Value::Double(3.5));
+    // Non-string map keys survive the serde single-track roundtrip.
+    map.insert(Value::Int(7), Value::Bool(true));
 
     vec![
         Value::Decimal128(Decimal128Value::from_i64(12345)),
@@ -170,6 +172,14 @@ fn sample_values() -> Vec<Value> {
         Value::Uuid(UuidValue([7u8; 16])),
         Value::string("restore-me"),
         Value::Null(NullType::Null),
+        Value::struct_(vec![
+            ("city".to_string(), Value::string("shanghai")),
+            ("geo".to_string(), Value::struct_(vec![(
+                "lat".to_string(),
+                Value::Double(31.2),
+            )])),
+        ]),
+        Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
     ]
 }
 

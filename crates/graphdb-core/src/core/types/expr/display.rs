@@ -16,6 +16,9 @@ impl Expression {
             Expression::Property { object, property } => {
                 format!("{}.{}", object.to_expression_string(), property)
             }
+            Expression::StructField { base, field } => {
+                format!("{}.{}", base.to_expression_string(), field)
+            }
             Expression::Binary { left, op, right } => {
                 format!(
                     "({} {} {})",

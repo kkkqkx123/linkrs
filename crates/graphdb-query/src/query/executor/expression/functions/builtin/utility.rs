@@ -286,7 +286,15 @@ fn value_to_json_value(value: &Value) -> JsonValue {
         Value::Map(map) => {
             let obj: serde_json::Map<String, JsonValue> = map
                 .iter()
-                .map(|(k, v)| (k.clone(), value_to_json_value(v)))
+                .map(|(k, v)| {
+                    // JSON object keys must be strings; non-string keys use
+                    // their readable serialization.
+                    let key = match k {
+                        Value::String(s) => s.to_string(),
+                        other => format!("{}", other),
+                    };
+                    (key, value_to_json_value(v))
+                })
                 .collect();
             JsonValue::Object(obj)
         }
@@ -357,9 +365,9 @@ fn json_to_value(json: &JsonValue) -> Value {
             Value::list(List { values })
         }
         JsonValue::Object(obj) => {
-            let map: std::collections::HashMap<String, Value> = obj
+            let map: std::collections::HashMap<Value, Value> = obj
                 .iter()
-                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .map(|(k, v)| (Value::string(k.clone()), json_to_value(v)))
                 .collect();
             Value::map(map)
         }

@@ -59,6 +59,9 @@ pub trait ExpressionVisitor {
             Expression::Property { object, property } => {
                 self.visit_property(object, property);
             }
+            Expression::StructField { base, field } => {
+                self.visit_struct_field(base, field);
+            }
             Expression::Binary { left, op, right } => {
                 self.visit_binary(*op, left, right);
             }
@@ -183,6 +186,11 @@ pub trait ExpressionVisitor {
     /// Accessing Property Expressions
     fn visit_property(&mut self, object: &Expression, _property: &str) {
         self.visit(object);
+    }
+
+    /// Accessing STRUCT field access expressions
+    fn visit_struct_field(&mut self, base: &Expression, _field: &str) {
+        self.visit(base);
     }
 
     /// Accessing binary arithmetic expressions

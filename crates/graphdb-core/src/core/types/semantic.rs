@@ -47,6 +47,8 @@ impl ValueType {
             DataType::List => ValueType::List,
             DataType::Map => ValueType::Map,
             DataType::Set => ValueType::Set,
+            // Parameterized composite types are opaque at the semantic level.
+            DataType::Struct(_) | DataType::Array(_) => ValueType::Unknown,
             _ => ValueType::Unknown,
         }
     }

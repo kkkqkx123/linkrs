@@ -230,6 +230,13 @@ impl ParameterizingTransformer {
                     property: property.clone(),
                 }
             }
+            Expression::StructField { base, field } => {
+                let new_base = self.transform_with_params(base, result);
+                Expression::StructField {
+                    base: Box::new(new_base),
+                    field: field.clone(),
+                }
+            }
             Expression::ListComprehension {
                 variable,
                 source,
@@ -924,6 +931,9 @@ impl TemplateExtractor {
             Expression::Literal(value) => format!("{:?}", value),
             Expression::Property { object, property } => {
                 format!("{}.{}", Self::expr_to_template_string(object), property)
+            }
+            Expression::StructField { base, field } => {
+                format!("{}.{}", Self::expr_to_template_string(base), field)
             }
             Expression::Binary { left, op, right } => {
                 format!(

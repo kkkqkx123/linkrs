@@ -978,8 +978,8 @@ fn test_map_operations() {
 
     // Create a Map value
     let mut map = HashMap::new();
-    map.insert("name".to_string(), Value::string("Alice"));
-    map.insert("age".to_string(), Value::Int(30));
+    map.insert(Value::string("name"), Value::string("Alice"));
+    map.insert(Value::string("age"), Value::Int(30));
     let map_value = Value::Map(Box::new(map));
 
     assert_eq!(

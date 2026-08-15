@@ -48,5 +48,5 @@ pub use json::{Json, JsonB, JsonError};
 pub use list::List;
 pub use null::NullType;
 pub use uuid::{UuidError, UuidValue};
-pub use value_def::Value;
+pub use value_def::{ArrayValue, StructValue, Value};
 pub use vector::VectorValue;

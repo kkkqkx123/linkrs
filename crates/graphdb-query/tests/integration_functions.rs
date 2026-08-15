@@ -156,10 +156,10 @@ fn test_properties_vertex_function() {
     assert!(result.is_ok());
 
     if let Value::Map(map) = result.expect("properties函数应该成功") {
-        assert!(map.contains_key("name"));
-        assert!(map.contains_key("age"));
-        assert_eq!(map.get("name"), Some(&Value::string("Alice")));
-        assert_eq!(map.get("age"), Some(&Value::Int(30)));
+        assert!(map.contains_key(&Value::string("name")));
+        assert!(map.contains_key(&Value::string("age")));
+        assert_eq!(map.get(&Value::string("name")), Some(&Value::string("Alice")));
+        assert_eq!(map.get(&Value::string("age")), Some(&Value::Int(30)));
     } else {
         panic!("The expected return type is a map.");
     }
@@ -309,8 +309,8 @@ fn test_range_with_step_function() {
 fn test_keys_map_function() {
     let registry = FunctionRegistry::new();
     let mut map = HashMap::new();
-    map.insert("name".to_string(), Value::string("Alice"));
-    map.insert("age".to_string(), Value::Int(30));
+    map.insert(Value::string("name"), Value::string("Alice"));
+    map.insert(Value::string("age"), Value::Int(30));
     let map_value = Value::Map(Box::new(map));
 
     let result = registry.execute("keys", &[map_value]);

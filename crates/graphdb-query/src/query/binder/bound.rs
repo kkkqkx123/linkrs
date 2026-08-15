@@ -38,6 +38,13 @@ pub enum BoundExpression {
         value_type: DataType,
     },
 
+    /// STRUCT field access (e.g. `addr.city`)
+    StructField {
+        base: Box<BoundExpression>,
+        field: String,
+        return_type: DataType,
+    },
+
     /// Binary operation with resolved result type
     BinaryOp {
         left: Box<BoundExpression>,
@@ -210,6 +217,7 @@ impl BoundExpression {
             Self::ColumnRef(r) => r.value_type.clone(),
             Self::Variable(_, _) => ValueType::String,
             Self::Property { value_type, .. } => ValueType::from_data_type(value_type),
+            Self::StructField { return_type, .. } => ValueType::from_data_type(return_type),
             Self::BinaryOp { return_type, .. } => ValueType::from_data_type(return_type),
             Self::UnaryOp { return_type, .. } => ValueType::from_data_type(return_type),
             Self::Function(f) => f.return_type.clone(),
@@ -245,6 +253,7 @@ impl BoundExpression {
             Self::ColumnRef(r) => r.value_type.to_data_type(),
             Self::Variable(_, dt) => dt.clone(),
             Self::Property { value_type, .. } => value_type.clone(),
+            Self::StructField { return_type, .. } => return_type.clone(),
             Self::BinaryOp { return_type, .. } => return_type.clone(),
             Self::UnaryOp { return_type, .. } => return_type.clone(),
             Self::Function(f) => f.return_type.to_data_type(),

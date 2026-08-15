@@ -225,7 +225,7 @@ fn json_value_to_core(value: &serde_json::Value) -> crate::core::Value {
         )),
         serde_json::Value::Object(map) => crate::core::Value::Map(Box::new(
             map.iter()
-                .map(|(k, v)| (k.clone(), json_value_to_core(v)))
+                .map(|(k, v)| (crate::core::Value::string(k.clone()), json_value_to_core(v)))
                 .collect(),
         )),
     }
@@ -252,7 +252,7 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         }
         crate::core::Value::Map(map) => serde_json::Value::Object(
             map.into_iter()
-                .map(|(k, v)| (k, value_to_json(v)))
+                .map(|(k, v)| (format!("{}", k), value_to_json(v)))
                 .collect(),
         ),
         crate::core::Value::Vertex(v) => serde_json::json!({

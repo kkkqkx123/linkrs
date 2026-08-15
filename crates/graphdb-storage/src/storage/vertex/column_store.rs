@@ -89,6 +89,10 @@ pub fn is_variable_length_type(data_type: &DataType) -> bool {
             | DataType::JsonB
             | DataType::Interval
             | DataType::Null
+            // Composite types have no fixed element size; they must never fall
+            // into FixedWidthColumn (element_size = 0 would corrupt offsets).
+            | DataType::Struct(_)
+            | DataType::Array(_)
     )
 }
 
@@ -376,6 +380,13 @@ impl ColumnStorage for VariableWidthColumn {
             crate::core::value::JsonB::parse(&s)
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
+        } else if matches!(
+            self.data_type,
+            DataType::Struct(_) | DataType::Array(_)
+        ) {
+            // Composite values are stored as postcard-encoded whole `Value`s
+            // (the serde single-track format).
+            postcard::from_bytes::<Value>(bytes).ok()
         } else {
             String::from_utf8(bytes.to_vec()).ok().map(Value::string)
         }
@@ -744,6 +755,16 @@ fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> StorageResult<()> 
             let len = bytes.len() as u64;
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(bytes);
+        }
+        // Composite values (Struct/Array) serialize the whole `Value` via
+        // postcard (serde single-track format, same as the undo log).
+        Value::Struct(_) | Value::Array(_) => {
+            let bytes = postcard::to_allocvec(value).map_err(|e| {
+                StorageError::invalid_input(format!("Failed to serialize composite value: {}", e))
+            })?;
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(&bytes);
         }
         _ => {
             return Err(StorageError::type_mismatch(
@@ -1861,6 +1882,7 @@ impl Default for ColumnStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{ArrayTypeInfo, StructTypeInfo};
 
     #[test]
     fn test_column_basic() {
@@ -2459,5 +2481,31 @@ mod tests {
         assert_eq!(col.get_at_ts(0, 101), Some(Value::BigInt(9)));
         // The before-image at 100 was already superseded at the same ts.
         assert_eq!(col.get_at_ts(0, 99), None);
+    }
+
+    #[test]
+    fn test_composite_types_use_variable_width_column() {
+        // Struct/Array must never fall into FixedWidthColumn (element_size 0
+        // would corrupt offsets).
+        let struct_type = DataType::Struct(std::sync::Arc::new(StructTypeInfo::new(vec![
+            ("city".to_string(), DataType::String),
+        ])));
+        let array_type = DataType::Array(std::sync::Arc::new(ArrayTypeInfo::new(
+            DataType::Double,
+            Some(3),
+        )));
+        for (data_type, value) in [
+            (struct_type, Value::struct_(vec![("city".to_string(), Value::string("x"))])),
+            (array_type, Value::array(vec![Value::Double(1.0), Value::Double(2.0)])),
+        ] {
+            let mut col = Column::new("c".to_string(), 0, data_type.clone(), true);
+            assert!(is_variable_length_type(&data_type));
+            col.set_versioned(0, Some(&value), 10).unwrap();
+            assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
+            // MVCC before-image roundtrip through the undo path.
+            col.set_versioned(0, None, 20).unwrap();
+            assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
+            assert_eq!(col.get_at_ts(0, 20), None);
+        }
     }
 }

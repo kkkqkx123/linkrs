@@ -37,6 +37,9 @@ impl MemoryEstimatable for Expression {
             Expression::Property { object, property } => {
                 base_size + object.estimate_memory() + estimate_string_memory(property)
             }
+            Expression::StructField { base, field } => {
+                base_size + base.estimate_memory() + estimate_string_memory(field)
+            }
             Expression::TagProperty { tag_name, property } => {
                 base_size + estimate_string_memory(tag_name) + estimate_string_memory(property)
             }
@@ -249,6 +252,10 @@ impl Expression {
                 Expression::Property { object, property } => {
                     total += std::mem::size_of::<Expression>() + property.capacity();
                     stack.push(object);
+                }
+                Expression::StructField { base, field } => {
+                    total += std::mem::size_of::<Expression>() + field.capacity();
+                    stack.push(base);
                 }
                 Expression::TagProperty { tag_name, property } => {
                     total += tag_name.capacity() + property.capacity();

@@ -287,6 +287,8 @@ impl ExpressionPrecomputationOptimizer {
                 .all(|(_, v)| self.check_expression_deterministic(v)),
             // Property access is deterministic if the object is deterministic
             Expression::Property { object, .. } => self.check_expression_deterministic(object),
+            // Struct field access is deterministic if the base is deterministic
+            Expression::StructField { base, .. } => self.check_expression_deterministic(base),
             Expression::TagProperty { .. } => true,
             Expression::EdgeProperty { .. } => true,
             Expression::LabelTagProperty { tag, .. } => self.check_expression_deterministic(tag),

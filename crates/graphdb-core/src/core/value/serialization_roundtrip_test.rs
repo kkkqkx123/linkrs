@@ -19,6 +19,7 @@ use super::list::List;
 use super::null::NullType;
 use super::uuid::UuidValue;
 use super::vector::VectorValue;
+use super::{ArrayValue, StructValue};
 use crate::core::types::storage_ids::{EdgeId, VertexId};
 use crate::core::vertex_edge_path::{Edge, Path, Vertex};
 use crate::core::DataSet;
@@ -61,6 +62,8 @@ fn exhaustive_variant_check(value: &Value) {
             | Value::Interval(_)
             | Value::VertexId(_)
             | Value::EdgeId(_)
+            | Value::Struct(_)
+            | Value::Array(_)
     ));
 }
 
@@ -70,7 +73,7 @@ fn all_sample_values() -> Vec<Value> {
     list.push(Value::Int(7));
 
     let mut map = HashMap::new();
-    map.insert("k".to_string(), Value::string("v"));
+    map.insert(Value::string("k"), Value::string("v"));
 
     let mut set = HashSet::new();
     set.insert(Value::Int(1));
@@ -145,6 +148,21 @@ fn all_sample_values() -> Vec<Value> {
         Value::Interval(IntervalValue::new(14, 3, 1000)),
         Value::VertexId(VertexId::from_int64(99)),
         Value::EdgeId(EdgeId::new(99)),
+        Value::Struct(Box::new(StructValue::new(vec![
+            ("city".to_string(), Value::string("x")),
+            (
+                "geo".to_string(),
+                Value::Struct(Box::new(StructValue::new(vec![(
+                    "lat".to_string(),
+                    Value::Double(1.5),
+                )]))),
+            ),
+        ]))),
+        Value::Array(Box::new(ArrayValue::new(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+        ]))),
     ]
 }
 
@@ -172,4 +190,38 @@ fn all_value_variants_roundtrip_via_value_in_container() {
     for (decoded, original) in decoded.iter().zip(values.iter()) {
         assert_eq!(decoded, original);
     }
+}
+
+#[test]
+fn map_with_non_string_keys_roundtrips() {
+    // M4: generalized map keys (any hashable Value) survive serde.
+    let mut map = HashMap::new();
+    map.insert(Value::Int(7), Value::string("seven"));
+    map.insert(Value::string("name"), Value::string("x"));
+    map.insert(Value::Double(0.5), Value::Bool(true));
+    let value = Value::map(map);
+
+    let encoded = postcard::to_allocvec(&value).expect("encode map");
+    let decoded: Value = postcard::from_bytes(&encoded).expect("decode map");
+    assert_eq!(decoded, value);
+    assert_eq!(decoded.hash_value(), value.hash_value());
+}
+
+#[test]
+fn map_comparison_and_hash_are_key_order_independent() {
+    // Two maps with the same entries in different insertion order compare
+    // equal and hash identically.
+    let mut a = HashMap::new();
+    a.insert(Value::Int(1), Value::string("one"));
+    a.insert(Value::Int(2), Value::string("two"));
+
+    let mut b = HashMap::new();
+    b.insert(Value::Int(2), Value::string("two"));
+    b.insert(Value::Int(1), Value::string("one"));
+
+    let va = Value::map(a);
+    let vb = Value::map(b);
+    assert_eq!(va, vb);
+    assert_eq!(va.cmp(&vb), std::cmp::Ordering::Equal);
+    assert_eq!(va.hash_value(), vb.hash_value());
 }

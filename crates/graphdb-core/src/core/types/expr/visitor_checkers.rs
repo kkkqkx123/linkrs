@@ -634,6 +634,10 @@ impl WildcardReplacer {
                 object: Box::new(self.replace_internal(object)),
                 property: property.clone(),
             },
+            Expression::StructField { base, field } => Expression::StructField {
+                base: Box::new(self.replace_internal(base)),
+                field: field.clone(),
+            },
             Expression::Binary { left, op, right } => Expression::Binary {
                 left: Box::new(self.replace_internal(left)),
                 op: *op,

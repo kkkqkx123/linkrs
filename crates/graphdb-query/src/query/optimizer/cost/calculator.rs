@@ -724,6 +724,8 @@ impl CostCalculator {
             Value::List(_)
             | Value::Map(_)
             | Value::Set(_)
+            | Value::Struct(_)
+            | Value::Array(_)
             | Value::Decimal128(_)
             | Value::Geography(_)
             | Value::Date(_)

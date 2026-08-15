@@ -27,6 +27,14 @@ pub enum Expression {
         property: String,
     },
 
+    /// STRUCT field access
+    ///
+    /// Accesses a named field of a STRUCT value, e.g. `addr.city`.
+    StructField {
+        base: Box<Expression>,
+        field: String,
+    },
+
     /// binary operation
     Binary {
         left: Box<Expression>,

@@ -1,10 +1,11 @@
 use crate::core::types::PropertyDef;
-use crate::core::{NullType, Value};
+use crate::core::{ArrayTypeInfo, NullType, StructTypeInfo, Value};
 use crate::query::parser::ast::types::DataType;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::expr_parser::parse_expression;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
+use std::sync::Arc;
 
 use super::DdlParser;
 
@@ -255,8 +256,107 @@ impl DdlParser {
     }
 
     pub fn parse_data_type(&mut self, ctx: &mut ParseContext) -> Result<DataType, ParseError> {
+        self.parse_data_type_inner(ctx, 0)
+    }
+
+    /// Maximum STRUCT/ARRAY nesting depth (prevents stack overflow on
+    /// maliciously nested type declarations).
+    const MAX_COMPOSITE_TYPE_DEPTH: usize = 16;
+
+    fn parse_data_type_inner(
+        &mut self,
+        ctx: &mut ParseContext,
+        depth: usize,
+    ) -> Result<DataType, ParseError> {
         let token = ctx.current_token();
         match token.kind {
+            TokenKind::Struct => {
+                ctx.next_token();
+                if depth >= Self::MAX_COMPOSITE_TYPE_DEPTH {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        format!(
+                            "STRUCT nesting exceeds the maximum depth of {}",
+                            Self::MAX_COMPOSITE_TYPE_DEPTH
+                        ),
+                        ctx.current_position(),
+                    ));
+                }
+                if !ctx.match_token(TokenKind::Lt) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "STRUCT requires '<' after keyword".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let mut fields = Vec::new();
+                while !ctx.match_token(TokenKind::Gt) {
+                    let field_name = ctx.expect_identifier()?;
+                    let field_type = self.parse_data_type_inner(ctx, depth + 1)?;
+                    fields.push((field_name, field_type));
+                    if !ctx.match_token(TokenKind::Comma) {
+                        if !ctx.match_token(TokenKind::Gt) {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                "STRUCT expects ',' or '>' between fields".to_string(),
+                                ctx.current_position(),
+                            ));
+                        }
+                        break;
+                    }
+                }
+                Ok(DataType::Struct(Arc::new(StructTypeInfo::new(fields))))
+            }
+            TokenKind::Array => {
+                ctx.next_token();
+                if depth >= Self::MAX_COMPOSITE_TYPE_DEPTH {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        format!(
+                            "ARRAY nesting exceeds the maximum depth of {}",
+                            Self::MAX_COMPOSITE_TYPE_DEPTH
+                        ),
+                        ctx.current_position(),
+                    ));
+                }
+                if !ctx.match_token(TokenKind::Lt) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "ARRAY requires '<' after keyword".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let element = self.parse_data_type_inner(ctx, depth + 1)?;
+                if !ctx.match_token(TokenKind::Gt) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "ARRAY expects '>' after element type".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let len = if ctx.match_token(TokenKind::LParen) {
+                    if let TokenKind::IntegerLiteral(n) = ctx.current_token().kind {
+                        ctx.next_token();
+                        if !ctx.match_token(TokenKind::RParen) {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                "ARRAY length expects ')'".to_string(),
+                                ctx.current_position(),
+                            ));
+                        }
+                        Some(n as usize)
+                    } else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "ARRAY length requires an integer".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
+                } else {
+                    None
+                };
+                Ok(DataType::Array(Arc::new(ArrayTypeInfo::new(element, len))))
+            }
             TokenKind::Int
             | TokenKind::Int8
             | TokenKind::Int16

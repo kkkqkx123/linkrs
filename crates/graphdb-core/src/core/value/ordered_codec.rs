@@ -587,7 +587,9 @@ impl OrderedCodec {
             | Value::JsonB(_)
             | Value::Interval(_)
             | Value::VertexId(_)
-            | Value::EdgeId(_) => {
+            | Value::EdgeId(_)
+            | Value::Struct(_)
+            | Value::Array(_) => {
                 return Err(StorageError::invalid_input(format!(
                     "Value type {:?} is not supported by OrderedCodec",
                     value.get_type()

@@ -36,7 +36,10 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
 use crate::core::types::Timestamp;
-use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
+use crate::core::{
+    data_type_from_info, DataType, DateValue, StorageError, StorageResult, TypeCodecError,
+    TypeInfo, Value,
+};
 use crate::storage::encoding::EncodingType;
 use crate::storage::mvcc::TieredTombstoneManager;
 use crate::storage::naming::NameIndexer;
@@ -1196,6 +1199,21 @@ impl PropertyTable {
             result.extend_from_slice(name_bytes);
             result.extend_from_slice(&prop.prop_id.to_le_bytes());
             result.push(prop.data_type.as_u8());
+            // Parameterized types (code >= 64) carry a postcard-encoded
+            // TypeInfo block right after the code byte. Plain codes (<= 31)
+            // have no block, keeping the old format byte-compatible.
+            if prop.data_type.as_u8() >= 64 {
+                let info = match &prop.data_type {
+                    DataType::Struct(s) => TypeInfo::Struct(s.as_ref().clone()),
+                    DataType::Array(a) => TypeInfo::Array(a.as_ref().clone()),
+                    _ => unreachable!("code >= 64 only for Struct/Array"),
+                };
+                // Infallible for schema-valid input: only an allocation
+                // overflow could error, which would abort the process anyway.
+                let bytes = postcard::to_allocvec(&info)
+                    .expect("TypeInfo encoding cannot fail for schema-valid input");
+                result.extend_from_slice(&bytes);
+            }
             result.push(if prop.nullable { 1 } else { 0 });
             result.push(prop.encoding_type.to_u8());
         }
@@ -1329,10 +1347,40 @@ impl PropertyTable {
                 .map_err(|_| StorageError::deserialize_error("failed to read prop_id"))?;
             let prop_id = i32::from_le_bytes(prop_id_bytes);
             offset += 4;
-            let data_type = DataType::from_u8(data[offset]).map_err(|e| {
-                StorageError::deserialize_error(format!("failed to decode data type: {}", e))
-            })?;
-            offset += 1;
+            let data_type = match DataType::from_u8(data[offset]) {
+                Ok(dt) => {
+                    offset += 1;
+                    dt
+                }
+                Err(TypeCodecError::ParameterizedTypeCode(code)) => {
+                    // Known parameterized type: read the postcard TypeInfo
+                    // block that follows the code byte.
+                    let (info, rest) = postcard::take_from_bytes(&data[offset + 1..])
+                        .map_err(|e| {
+                            StorageError::deserialize_error(format!(
+                                "failed to decode TypeInfo for code {code}: {e}"
+                            ))
+                        })?;
+                    let consumed = (data.len() - rest.len()) - (offset + 1);
+                    offset += 1 + consumed;
+                    data_type_from_info(code, &info).ok_or_else(|| {
+                        StorageError::deserialize_error(format!(
+                            "TypeInfo mismatch for parameterized code {code}"
+                        ))
+                    })?
+                }
+                Err(e) => {
+                    return Err(StorageError::deserialize_error(format!(
+                        "failed to decode data type: {}",
+                        e
+                    )))
+                }
+            };
+            if offset + 2 > data.len() {
+                return Err(StorageError::deserialize_error(
+                    "unexpected end of data after parameterized type block",
+                ));
+            }
             let nullable = data[offset] == 1;
             offset += 1;
 

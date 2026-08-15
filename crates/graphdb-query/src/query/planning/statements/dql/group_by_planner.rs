@@ -105,6 +105,9 @@ impl GroupByPlanner {
             Expression::Property { object, .. } => {
                 self.collect_aggregate_functions_recursive(object, functions);
             }
+            Expression::StructField { base, .. } => {
+                self.collect_aggregate_functions_recursive(base, functions);
+            }
             Expression::Subscript { collection, index } => {
                 self.collect_aggregate_functions_recursive(collection, functions);
                 self.collect_aggregate_functions_recursive(index, functions);

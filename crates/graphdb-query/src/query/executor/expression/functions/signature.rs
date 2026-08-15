@@ -72,6 +72,8 @@ impl ValueType {
             Value::Empty => ValueType::Empty,
             Value::VertexId(_) => ValueType::Vertex,
             Value::EdgeId(_) => ValueType::Edge,
+            Value::Struct(_) => ValueType::List,
+            Value::Array(_) => ValueType::List,
         }
     }
 

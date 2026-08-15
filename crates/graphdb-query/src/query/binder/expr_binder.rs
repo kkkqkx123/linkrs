@@ -41,6 +41,16 @@ impl<'a> ExpressionBinder<'a> {
                 }
             }
 
+            Expression::StructField { base, field } => match self.resolve_type(base) {
+                DataType::Struct(info) => info
+                    .fields
+                    .iter()
+                    .find(|(name, _)| name == field)
+                    .map(|(_, field_type)| field_type.clone())
+                    .unwrap_or(DataType::String),
+                _ => DataType::String,
+            },
+
             Expression::Binary { op, left, right } => {
                 let left_type = self.resolve_type(left);
                 let right_type = self.resolve_type(right);

@@ -32,6 +32,11 @@ pub use vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
 pub use types::expr::Expression;
 pub use types::DataType;
 
+// Type metadata and codec errors
+pub use types::{
+    data_type_from_info, type_info_of, ArrayTypeInfo, StructTypeInfo, TypeCodecError, TypeInfo,
+};
+
 pub use types::graph_schema::EdgeDirection;
 
 pub use types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};

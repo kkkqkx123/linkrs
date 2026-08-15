@@ -14,6 +14,7 @@ impl Expression {
             Expression::Variable(_) => vec![],
             Expression::SessionVariable(_) => vec![],
             Expression::Property { object, .. } => vec![object.as_ref()],
+            Expression::StructField { base, .. } => vec![base.as_ref()],
             Expression::Binary { left, right, .. } => vec![left.as_ref(), right.as_ref()],
             Expression::Unary { operand, .. } => vec![operand.as_ref()],
             Expression::Function { args, .. } => args.iter().collect(),
@@ -130,6 +131,7 @@ impl Expression {
             Expression::Variable(_) => vec![],
             Expression::SessionVariable(_) => vec![],
             Expression::Property { object, .. } => vec![object.as_mut()],
+            Expression::StructField { base, .. } => vec![base.as_mut()],
             Expression::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             Expression::Unary { operand, .. } => vec![operand.as_mut()],
             Expression::Function { args, .. } => args.iter_mut().collect(),
@@ -315,6 +317,10 @@ impl Expression {
             Expression::Property { object, property } => Expression::Property {
                 object: Box::new(object.transform(transformer)),
                 property: property.clone(),
+            },
+            Expression::StructField { base, field } => Expression::StructField {
+                base: Box::new(base.transform(transformer)),
+                field: field.clone(),
             },
             Expression::Binary { left, op, right } => Expression::Binary {
                 left: Box::new(left.transform(transformer)),

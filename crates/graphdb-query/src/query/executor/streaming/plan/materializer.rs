@@ -432,7 +432,42 @@ impl PhysicalPlanMaterializer {
                 | (Value::Date(_), DataType::Date)
                 | (Value::Time(_), DataType::Time)
                 | (Value::DateTime(_), DataType::DateTime)
-        )
+        ) || Self::type_compatible_composite(value, expected_type)
+    }
+
+    /// Composite (Struct/Array) parameter type compatibility: recursive field
+    /// and element checks plus the declared fixed length for ARRAY(n).
+    fn type_compatible_composite(
+        value: &crate::core::Value,
+        expected_type: &crate::core::DataType,
+    ) -> bool {
+        use crate::core::DataType;
+        use crate::core::Value;
+        match (value, expected_type) {
+            (Value::Struct(s), DataType::Struct(expected)) => {
+                // Every field of the value must exist in the declared type
+                // with a compatible type.
+                s.fields.iter().all(|(name, field_value)| {
+                    expected
+                        .fields
+                        .iter()
+                        .find(|(field_name, _)| field_name == name)
+                        .is_some_and(|(_, field_type)| {
+                            Self::type_compatible(field_value, field_type)
+                        })
+                })
+            }
+            (Value::Array(a), DataType::Array(expected)) => {
+                let length_ok = expected
+                    .len
+                    .is_none_or(|declared_len| a.values.len() == declared_len);
+                length_ok
+                    && a.values
+                        .iter()
+                        .all(|element| Self::type_compatible(element, &expected.element))
+            }
+            _ => false,
+        }
     }
 
     // ── Runtime creation ──

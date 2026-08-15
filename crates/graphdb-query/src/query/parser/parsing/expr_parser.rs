@@ -9,7 +9,7 @@ use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::core::types::{DataType, Position, Span};
-use crate::core::Value;
+use crate::core::{StructValue, Value};
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
@@ -292,12 +292,25 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
         } else if ctx.match_token(TokenKind::Dot) {
             let property = ctx.expect_identifier()?;
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            // `p.addr.city` / `STRUCT{...}.city`: a dot on a base that is
+            // already a resolved access (Property/StructField/Subscript) is a
+            // STRUCT field access; a dot on a bare variable stays a vertex
+            // property access.
             expression = ParseResult {
-                expr: Expression::property(expression.expr, property),
+                expr: if matches!(
+                    expression.expr,
+                    Expression::Property { .. }
+                        | Expression::StructField { .. }
+                        | Expression::Subscript { .. }
+                ) {
+                    Expression::struct_field(expression.expr, property)
+                } else {
+                    Expression::property(expression.expr, property)
+                },
                 span,
             };
         } else if ctx.match_token(TokenKind::DoubleColon) {
-            let type_name = ctx.expect_identifier()?;
+            let type_name = expect_cast_type_name(ctx)?;
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
 
             if type_name.to_uppercase() == "VECTOR" {
@@ -594,6 +607,44 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
             }
         }
         TokenKind::Case => parse_case_expression(start_pos, ctx),
+        TokenKind::Struct => {
+            ctx.next_token();
+            ctx.expect_token(TokenKind::LBrace)?;
+            let fields = parse_property_list(ctx)?;
+            ctx.expect_token(TokenKind::RBrace)?;
+            let span = ctx.merge_span(start_pos, ctx.current_position());
+            // STRUCT literals must be constants: evaluate each field value at
+            // parse time (mirrors the DEFAULT expression path).
+            let mut values = Vec::with_capacity(fields.len());
+            for (name, result) in fields {
+                let value = eval_literal_expression(&result.expr, span.start)?;
+                values.push((name, value));
+            }
+            Ok(ParseResult {
+                expr: Expression::literal(Value::Struct(Box::new(StructValue::new(values)))),
+                span,
+            })
+        }
+        TokenKind::Array => {
+            ctx.next_token();
+            ctx.expect_token(TokenKind::LBracket)?;
+            let elements = parse_expression_list(ctx)?;
+            ctx.expect_token(TokenKind::RBracket)?;
+            let span = ctx.merge_span(start_pos, ctx.current_position());
+            // ARRAY literals must be constants: evaluate each element at
+            // parse time.
+            let mut values = Vec::with_capacity(elements.len());
+            for result in elements {
+                let value = eval_literal_expression(&result.expr, span.start)?;
+                values.push(value);
+            }
+            Ok(ParseResult {
+                expr: Expression::literal(Value::Array(Box::new(
+                    crate::core::ArrayValue::new(values),
+                ))),
+                span,
+            })
+        }
         TokenKind::Map => {
             ctx.next_token();
             ctx.expect_token(TokenKind::LBrace)?;
@@ -940,6 +991,72 @@ fn parse_property_list(
     Ok(properties)
 }
 
+/// Evaluate an expression to a constant value at parse time.
+///
+/// Used by STRUCT/ARRAY literal folding; variable references are rejected
+/// because composite literals carry concrete values, not expressions.
+fn eval_literal_expression(
+    expr: &Expression,
+    position: Position,
+) -> Result<Value, ParseError> {
+    use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;
+    use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+
+    let mut eval_ctx = DefaultExpressionContext::new();
+    ExpressionEvaluator::evaluate(expr, &mut eval_ctx).map_err(|e| {
+        ParseError::new(
+            ParseErrorKind::SemanticError,
+            format!("STRUCT/ARRAY literal elements must be constants: {}", e),
+            position,
+        )
+    })
+}
+
+/// Parse a cast target type name after `::` — accepts an identifier or the
+/// type-name keywords (INT, STRING, LIST, MAP, STRUCT, ARRAY, ...).
+fn expect_cast_type_name(ctx: &mut ParseContext<'_>) -> Result<String, ParseError> {
+    let token = ctx.current_token().clone();
+    match &token.kind {
+        TokenKind::Identifier(_)
+        | TokenKind::Bool
+        | TokenKind::Int
+        | TokenKind::Int8
+        | TokenKind::Int16
+        | TokenKind::Int32
+        | TokenKind::Int64
+        | TokenKind::Float
+        | TokenKind::Double
+        | TokenKind::String
+        | TokenKind::FixedString
+        | TokenKind::Timestamp
+        | TokenKind::Date
+        | TokenKind::Time
+        | TokenKind::Datetime
+        | TokenKind::Serial
+        | TokenKind::Geography
+        | TokenKind::List
+        | TokenKind::Map
+        | TokenKind::Struct
+        | TokenKind::Array
+        | TokenKind::UUID
+        | TokenKind::Duration
+        | TokenKind::KeywordVector => {
+            let name = token.lexeme.clone();
+            ctx.next_token();
+            Ok(name)
+        }
+        _ => {
+            let pos = ctx.current_position();
+            Err(ParseError::new(
+                ParseErrorKind::UnexpectedToken,
+                format!("Expected cast type name, found {:?}", token.kind),
+                pos,
+            )
+            .with_expected_tokens(vec!["type name".to_string()]))
+        }
+    }
+}
+
 fn parse_case_expression(
     start_pos: Position,
     ctx: &mut ParseContext<'_>,
@@ -1154,6 +1271,75 @@ mod tests {
         assert!(result.is_ok());
         let parse_result = result.expect("Simple expression parsing should succeed");
         assert!(matches!(parse_result.expr, Expression::Binary { .. }));
+    }
+
+    #[test]
+    fn test_parse_struct_literal_and_field_access() {
+        // STRUCT literal folds into a constant Struct value.
+        let input = "STRUCT{name: 'x', addr: STRUCT{city: 'sh', geo: STRUCT{lat: 1.0, lon: 2.0}}}";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("STRUCT literal must parse");
+        match result.expr {
+            Expression::Literal(Value::Struct(s)) => {
+                assert_eq!(s.fields.len(), 2);
+                assert_eq!(s.fields[0].0, "name");
+                assert!(matches!(
+                    s.fields[1].1,
+                    Value::Struct(_)
+                ), "nested STRUCT must fold");
+            }
+            other => panic!("expected STRUCT literal, got {:?}", other),
+        }
+
+        // `addr.city` chains as StructField.
+        let input = "p.addr.city";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("field access must parse");
+        match result.expr {
+            Expression::StructField { base, field } => {
+                assert_eq!(field, "city");
+                assert!(matches!(*base, Expression::Property { .. }));
+            }
+            other => panic!("expected StructField, got {:?}", other),
+        }
+
+        // Chained field access nests StructField on StructField.
+        let input = "p.addr.geo.lat";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("chained field access must parse");
+        match result.expr {
+            Expression::StructField { base, field } => {
+                assert_eq!(field, "lat");
+                assert!(matches!(*base, Expression::StructField { .. }));
+            }
+            other => panic!("expected nested StructField, got {:?}", other),
+        }
+
+        // A single dot on a bare variable stays a property access.
+        let input = "p.name";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("property access must parse");
+        assert!(matches!(result.expr, Expression::Property { .. }));
+    }
+
+    #[test]
+    fn test_parse_array_literal_and_subscript() {
+        // ARRAY literal folds into a constant Array value.
+        let input = "ARRAY[1, 2, 3]";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("ARRAY literal must parse");
+        match result.expr {
+            Expression::Literal(Value::Array(a)) => {
+                assert_eq!(a.values, vec![Value::BigInt(1), Value::BigInt(2), Value::BigInt(3)]);
+            }
+            other => panic!("expected ARRAY literal, got {:?}", other),
+        }
+
+        // `arr[0]` stays a Subscript.
+        let input = "arr[0]";
+        let ctx = &mut ParseContext::new(input);
+        let result = parse_expression(ctx).expect("subscript must parse");
+        assert!(matches!(result.expr, Expression::Subscript { .. }));
     }
 
     #[test]
