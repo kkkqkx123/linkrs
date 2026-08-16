@@ -98,7 +98,7 @@ impl RewriteRule for PushFilterDownGetNbrsRule {
         let mut new_get_nbrs = get_nbrs.clone();
 
         // Merge the existing filter conditions – Use the Expression::And to combine the expressions.
-        let combined_expr = if let Some(existing_ctx) = get_nbrs.expression() {
+        let combined_expr = if let Some(existing_ctx) = get_nbrs.filter() {
             if let Some(existing_expr) = existing_ctx.get_expression() {
                 Expression::Binary {
                     op: BinaryOperator::And,
@@ -117,7 +117,7 @@ impl RewriteRule for PushFilterDownGetNbrsRule {
         let new_meta = ExpressionMeta::new(combined_expr);
         let new_id = context.register_expression(new_meta);
         let new_filter = ContextualExpression::new(new_id, context);
-        new_get_nbrs.set_expression(new_filter);
+        new_get_nbrs.set_filter(new_filter);
 
         // Construct the translation result.
         let mut result = TransformResult::new();

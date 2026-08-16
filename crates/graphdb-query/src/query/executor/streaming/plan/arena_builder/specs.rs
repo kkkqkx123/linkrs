@@ -90,7 +90,7 @@ pub(super) fn build_source_spec(
                 .and_then(|v| (v >= 0).then_some(v as usize));
             let projected_properties = scan_node.projected_properties().to_vec();
             let predicate = crate::query::planning::scan_predicate::extract_scan_predicates(
-                scan_node.vertex_filter(),
+                scan_node.filter(),
                 &projected_properties,
             );
             Ok(SourceSpec::StorageScanVertices {

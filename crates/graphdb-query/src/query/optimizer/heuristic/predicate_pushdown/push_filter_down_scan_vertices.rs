@@ -55,7 +55,7 @@ impl RewriteRule for PushFilterDownScanVerticesRule {
             PlanNodeEnum::ScanVertices(s) => s,
             _ => return Ok(None),
         };
-        if scan.vertex_filter().is_some() {
+        if scan.filter().is_some() {
             return Ok(None);
         }
 
@@ -76,7 +76,7 @@ impl RewriteRule for PushFilterDownScanVerticesRule {
         let pushed_filter = ContextualExpression::new(pushed_id, ctx);
 
         let mut new_scan = scan.clone();
-        new_scan.set_vertex_filter(pushed_filter);
+        new_scan.set_filter(pushed_filter);
 
         let mut new_filter = filter.clone();
         new_filter.set_input(PlanNodeEnum::ScanVertices(new_scan));
@@ -152,7 +152,7 @@ mod tests {
         let PlanNodeEnum::ScanVertices(scan) = filter.input() else {
             panic!("expected scan");
         };
-        assert!(scan.vertex_filter().is_some());
+        assert!(scan.filter().is_some());
     }
 
     #[test]

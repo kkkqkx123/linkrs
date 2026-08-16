@@ -513,6 +513,19 @@ impl MemoryEstimatable for LoopNode {
 // ============================================================================
 // Transaction Control Nodes
 // ============================================================================
+//
+// Kept inside the plan-node system on purpose (see P1-3 in
+// docs/plan/plan_node_refactoring_plan.md). Although transaction boundaries
+// are conceptually session-level concerns, these nodes:
+// 1. Are compiled into `TxnOperator` in the streaming executor
+//    (arena_builder/assembler/conversion.rs) and produce the structured
+//    command result row;
+// 2. Act as partition boundaries in the optimizer
+//    (optimizer/partitioning.rs `has_transaction_boundary`).
+// The actual TransactionManager side effects (begin/commit/rollback/savepoint)
+// run in graphdb-server before the plan executes; the nodes carry the command
+// through scheduling and execution, so they must remain reachable from
+// PlanNodeEnum.
 
 /// Transaction isolation level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

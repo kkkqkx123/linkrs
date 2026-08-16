@@ -73,7 +73,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> Self {
         let plan_cache =
             Arc::new(QueryPlanCache::default().with_stats_manager(stats_manager.clone()));
-        let param_handler = ParameterizedQueryHandler::default();
+        let param_handler = ParameterizedQueryHandler;
 
         optimizer_engine.set_cte_cache_stats_manager(stats_manager.clone());
 
@@ -206,7 +206,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let plan_cache = Arc::new(
             QueryPlanCache::new(plan_cache_config).with_stats_manager(stats_manager.clone()),
         );
-        let param_handler = ParameterizedQueryHandler::default();
+        let param_handler = ParameterizedQueryHandler;
 
         optimizer_engine.set_cte_cache_stats_manager(stats_manager.clone());
 

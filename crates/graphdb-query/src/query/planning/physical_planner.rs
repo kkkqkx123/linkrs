@@ -56,7 +56,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             node.set_deps(deps);
             node.set_tag_props(n.tag_props);
             if let Some(expr) = n.expression {
-                node.set_expression(expr);
+                node.set_filter(expr);
             }
             node.set_dedup(n.dedup);
             if let Some(limit) = n.limit {
@@ -74,7 +74,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::GetEdges(n) => {
             let mut node = crate::query::planning::plan::core::nodes::access::graph_scan_node::GetEdgesNode::new(n.space_id, &n.src, &n.edge_type, &n.rank, &n.dst);
             if let Some(expr) = n.expression {
-                node.set_expression(expr);
+                node.set_filter(expr);
             }
             if let Some(limit) = n.limit {
                 node.set_limit(limit);
@@ -98,7 +98,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             node.set_edge_types(n.edge_types);
             node.set_direction(&n.direction);
             if let Some(expr) = n.expression {
-                node.set_expression(expr);
+                node.set_filter(expr);
             }
             node.set_dedup(n.dedup);
             if let Some(limit) = n.limit {
@@ -119,7 +119,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 node.set_tag(&tag);
             }
             if let Some(expr) = n.expression {
-                node.set_vertex_filter(expr);
+                node.set_filter(expr);
             }
             if let Some(limit) = n.limit {
                 node.set_limit(limit);

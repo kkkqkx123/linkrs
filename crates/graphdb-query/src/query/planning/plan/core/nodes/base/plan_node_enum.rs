@@ -172,6 +172,21 @@ pub enum PlanNodeEnum {
     Select(SelectNode),
 
     // Transaction Control Nodes
+    //
+    // Retained in PlanNodeEnum by design (see P1-3 in
+    // docs/plan/plan_node_refactoring_plan.md): the nodes participate in the
+    // execution pipeline, not just session-level side effects.
+    // - The streaming executor compiles them into `TxnOperator` via
+    //   `TxnSpec` (arena_builder/assembler/conversion.rs), which validates
+    //   the session controller and emits the structured command result.
+    // - The partitioning optimizer treats them as transaction boundaries
+    //   (`has_transaction_boundary` in optimizer/partitioning.rs) and
+    //   refuses to partition plans crossing one.
+    // Moving them out of PlanNodeEnum would require relocating this
+    // scheduling/execution behavior; session-level side effects (TM
+    // begin/commit/rollback) happen in graphdb-server graph_service.rs
+    // BEFORE the plan runs, so plan nodes remain the command's execution
+    // carrier rather than the state owner.
     BeginTransaction(BeginTransactionNode),
     Commit(CommitNode),
     Rollback(RollbackNode),

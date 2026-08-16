@@ -136,7 +136,7 @@ impl FingerprintCalculator {
             PlanNodeEnum::ScanVertices(n) => {
                 n.tag().hash(hasher);
                 n.projected_properties().hash(hasher);
-                if let Some(filter) = n.vertex_filter() {
+                if let Some(filter) = n.filter() {
                     self.hash_expression(filter, hasher);
                 }
                 n.limit().hash(hasher);
