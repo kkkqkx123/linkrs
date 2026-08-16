@@ -129,10 +129,8 @@ async fn list_vertices_by_tag<
     );
 
     let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(crate::query::executor::ExecutionResult::DataSet { data: ds, .. }) => ds
-            .rows
-            .first()
-            .and_then(|row| row.first())
+        Ok(result) => result
+            .first_value()
             .and_then(|val| match val {
                 Value::BigInt(c) => Some(*c),
                 _ => None,
@@ -153,17 +151,12 @@ async fn list_vertices_by_tag<
     );
 
     let result = match graph_service.execute(session_id, &query).await {
-        Ok(exec_result) => {
-            // Convert ExecutionResult to JSON values
-            let rows: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => ds
-                    .rows
-                    .iter()
-                    .filter_map(|row| row.first())
-                    .map(|val| serde_json::json!({"vertex": val}))
-                    .collect(),
-                _ => vec![],
-            };
+        Ok(result) => {
+            // Convert QueryResult to JSON values
+            let rows: Vec<serde_json::Value> = result
+                .first_column_values()
+                .map(|val| serde_json::json!({"vertex": val}))
+                .collect();
 
             Ok::<_, WebError>(PaginatedResponse::new(
                 rows,
@@ -223,10 +216,8 @@ async fn list_edges_by_type<
     );
 
     let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(crate::query::executor::ExecutionResult::DataSet { data: ds, .. }) => ds
-            .rows
-            .first()
-            .and_then(|row| row.first())
+        Ok(result) => result
+            .first_value()
             .and_then(|val| match val {
                 Value::BigInt(c) => Some(*c),
                 _ => None,
@@ -247,17 +238,12 @@ async fn list_edges_by_type<
     );
 
     let result = match graph_service.execute(session_id, &query).await {
-        Ok(exec_result) => {
-            // Convert ExecutionResult to JSON values
-            let rows: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => ds
-                    .rows
-                    .iter()
-                    .filter_map(|row| row.first())
-                    .map(|val| serde_json::json!({"edge": val}))
-                    .collect(),
-                _ => vec![],
-            };
+        Ok(result) => {
+            // Convert QueryResult to JSON values
+            let rows: Vec<serde_json::Value> = result
+                .first_column_values()
+                .map(|val| serde_json::json!({"edge": val}))
+                .collect();
 
             Ok::<_, WebError>(PaginatedResponse::new(
                 rows,

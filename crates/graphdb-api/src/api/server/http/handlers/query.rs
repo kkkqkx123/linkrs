@@ -5,7 +5,6 @@ use axum::{
 
 use crate::api::server::http::handlers::query_types::*;
 use crate::api::server::http::{error::HttpError, state::AppState};
-use crate::query::executor::ExecutionResult;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
@@ -39,8 +38,8 @@ pub async fn execute<
         .await
     {
         Ok(exec_result) => {
-            // Converting ExecutionResult to QueryResponse
-            Ok::<_, HttpError>(execution_result_to_response(exec_result))
+            // Converting QueryResult to QueryResponse
+            Ok::<_, HttpError>(query_result_to_response(exec_result))
         }
         Err(e) => Ok::<_, HttpError>(QueryResponse::error(
             "QUERY_ERROR".to_string(),
@@ -75,7 +74,7 @@ pub async fn execute_batch<
     let results = outcomes
         .into_iter()
         .map(|outcome| match outcome {
-            Ok(exec_result) => execution_result_to_response(exec_result),
+            Ok(exec_result) => query_result_to_response(exec_result),
             Err(e) => QueryResponse::error("QUERY_ERROR".to_string(), e, None),
         })
         .collect();
@@ -107,86 +106,50 @@ pub async fn validate<
     Ok(JsonResponse(ValidateResponse { valid, message }))
 }
 
-/// Converting ExecutionResult to QueryResponse
-fn execution_result_to_response(result: ExecutionResult) -> QueryResponse {
-    match result {
-        ExecutionResult::DataSet { data: dataset, .. } => {
-            let columns: Vec<String> = dataset.col_names.clone();
-            let rows: Vec<std::collections::HashMap<String, serde_json::Value>> = dataset
-                .rows
-                .into_iter()
-                .map(|row| {
-                    row.into_iter()
-                        .enumerate()
-                        .map(|(i, v)| {
-                            let col_name = columns.get(i).cloned().unwrap_or_default();
-                            (col_name, value_to_json(v))
-                        })
-                        .collect()
+/// Converting core-layer QueryResult to QueryResponse.
+///
+/// The core result carries the engine's real execution metadata
+/// (`execution_time_ms`, `rows_scanned`) as well as the result shape; the
+/// response DTO is built from it directly (no intermediate
+/// ExecutionResult round trip).
+fn query_result_to_response(result: crate::api::core::QueryResult) -> QueryResponse {
+    let space_id = extract_space_id(&result);
+    let columns = result.columns.clone();
+    let rows: Vec<std::collections::HashMap<String, serde_json::Value>> = result
+        .rows
+        .into_iter()
+        .map(|row| {
+            columns
+                .iter()
+                .filter_map(|col| {
+                    row.get(col)
+                        .cloned()
+                        .map(|v| (col.clone(), value_to_json(v)))
                 })
-                .collect();
-            let row_count = rows.len();
+                .collect()
+        })
+        .collect();
+    let row_count = rows.len();
 
-            QueryResponse::success(
-                QueryData::new(columns, rows),
-                QueryMetadata {
-                    execution_time_ms: 0,
-                    rows_scanned: 0,
-                    rows_returned: row_count,
-                    space_id: None,
-                },
-            )
-        }
-        ExecutionResult::Success => QueryResponse::success(
-            QueryData::new(vec![], vec![]),
-            QueryMetadata {
-                execution_time_ms: 0,
-                rows_scanned: 0,
-                rows_returned: 0,
-                space_id: None,
-            },
-        ),
-        ExecutionResult::Empty => QueryResponse::success(
-            QueryData::new(vec![], vec![]),
-            QueryMetadata {
-                execution_time_ms: 0,
-                rows_scanned: 0,
-                rows_returned: 0,
-                space_id: None,
-            },
-        ),
-        ExecutionResult::SpaceSwitched(summary) => QueryResponse::success(
-            QueryData::new(
-                vec![
-                    "space_name".to_string(),
-                    "space_id".to_string(),
-                    "vid_type".to_string(),
-                ],
-                vec![std::collections::HashMap::from([
-                    (
-                        "space_name".to_string(),
-                        serde_json::Value::String(summary.name.clone()),
-                    ),
-                    (
-                        "space_id".to_string(),
-                        serde_json::Value::Number(summary.id.into()),
-                    ),
-                    (
-                        "vid_type".to_string(),
-                        serde_json::Value::String(format!("{:?}", summary.vid_type)),
-                    ),
-                ])],
-            ),
-            QueryMetadata {
-                execution_time_ms: 0,
-                rows_scanned: 0,
-                rows_returned: 1,
-                space_id: Some(summary.id),
-            },
-        ),
-        ExecutionResult::Error(msg) => {
-            QueryResponse::error("EXECUTION_ERROR".to_string(), msg, None)
-        }
+    QueryResponse::success(
+        QueryData::new(columns, rows),
+        QueryMetadata {
+            execution_time_ms: result.metadata.execution_time_ms,
+            rows_scanned: result.metadata.rows_scanned,
+            rows_returned: row_count,
+            space_id,
+        },
+    )
+}
+
+/// Extract the space id from a USE-statement result row (the core converts
+/// `SpaceSwitched` into a row with a `space_id` column).
+fn extract_space_id(result: &crate::api::core::QueryResult) -> Option<u64> {
+    let idx = result.columns.iter().position(|c| c == "space_id")?;
+    let row = result.rows.first()?;
+    match row.get(&result.columns[idx])? {
+        crate::core::Value::BigInt(id) => Some(*id as u64),
+        _ => None,
     }
 }
 

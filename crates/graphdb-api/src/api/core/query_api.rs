@@ -19,7 +19,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
 #[cfg(feature = "qdrant")]
-use vector_client::{EmbeddingService, VectorClientConfig, VectorManager};
+use vector_client::VectorManager;
 
 /// Universal Query API – Core Layer
 pub struct QueryApi<S: StorageClient + 'static> {
@@ -114,27 +114,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         }
     }
 
-    /// Create a new QueryApi wired with an engine-level shared scheduler and
-    /// a query registry, both created once at server startup and reused
-    /// across all queries.
-    pub fn with_shared_scheduler(
-        storage: Arc<RwLock<S>>,
-        stats_manager: Arc<StatsManager>,
-        optimizer_engine: Arc<OptimizerEngine>,
-        shared_scheduler: Arc<SharedScheduler>,
-        query_registry: Arc<QueryRegistry>,
-    ) -> Self {
-        Self {
-            pipeline_manager: QueryPipelineManager::with_optimizer(
-                storage,
-                stats_manager,
-                optimizer_engine,
-            )
-            .with_shared_scheduler(shared_scheduler)
-            .with_query_registry(query_registry),
-        }
-    }
-
     /// Install a shared scheduler and query registry into an existing
     /// pipeline (used when the pipeline was built by another constructor).
     pub fn install_shared_scheduler(
@@ -175,53 +154,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// Number of entries currently held in the query plan cache.
     pub fn plan_cache_len(&self) -> usize {
         self.pipeline_manager.plan_cache().len()
-    }
-
-    /// Create a new QueryApi instance with vector search support
-    #[cfg(feature = "qdrant")]
-    pub async fn with_vector_search(
-        storage: Arc<RwLock<S>>,
-        stats_manager: Arc<StatsManager>,
-        vector_config: VectorClientConfig,
-        schema_manager: Option<Arc<SchemaManager>>,
-    ) -> Result<Self, String> {
-        let optimizer_engine = Arc::new(OptimizerEngine::default());
-
-        // Extract embedding config before vector_manager consumes it
-        let embedding_config = vector_config.embedding.clone();
-
-        // Create vector manager
-        let vector_manager = Arc::new(
-            VectorManager::new(vector_config)
-                .await
-                .map_err(|e| format!("Failed to create vector manager: {}", e))?,
-        );
-
-        // Create optional embedding service
-        let handle = tokio::runtime::Handle::current();
-        let embedding_service =
-            embedding_config.and_then(|ec| EmbeddingService::from_config(ec).ok().map(Arc::new));
-
-        // Create vector coordinator (embedding service is optional)
-        let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-            vector_manager.clone(),
-            embedding_service,
-            handle,
-        ));
-
-        // Create pipeline manager with vector coordinator and optional schema manager
-        let mut pipeline_manager =
-            QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine);
-
-        if let Some(sm) = schema_manager {
-            pipeline_manager = pipeline_manager
-                .with_schema_manager(sm)
-                .with_vector_coordinator(vector_coordinator);
-        } else {
-            pipeline_manager = pipeline_manager.with_vector_coordinator(vector_coordinator);
-        }
-
-        Ok(Self { pipeline_manager })
     }
 
     /// Create a new QueryApi instance with an existing shared VectorManager

@@ -17,12 +17,19 @@ pub(crate) struct LogoutRequest {
 }
 
 /// Query request
+///
+/// Mirrors the server's HTTP `QueryRequest` DTO: parameters are arbitrary
+/// JSON values bound to `@name` references, session variables are arbitrary
+/// JSON values bound to `$name` references (when omitted, the session-managed
+/// snapshot is used).
 #[derive(Debug, Serialize)]
 pub(crate) struct QueryRequest {
     pub query: String,
     pub session_id: i64,
     #[serde(default)]
-    pub parameters: HashMap<String, String>,
+    pub parameters: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub session_variables: HashMap<String, serde_json::Value>,
 }
 
 /// Batch query request: multiple auto-commit DML statements executed inside a
@@ -116,13 +123,6 @@ pub(crate) struct EdgeData {
     pub src_vid: serde_json::Value,
     pub dst_vid: serde_json::Value,
     pub properties: HashMap<String, serde_json::Value>,
-}
-
-/// Validate query request
-#[derive(Debug, Serialize)]
-pub(crate) struct ValidateQueryRequest {
-    pub query: String,
-    pub session_id: Option<i64>,
 }
 
 /// Update config request

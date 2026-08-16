@@ -10,8 +10,7 @@ use crate::client::response_types::*;
 use crate::client::schema::PropertyDef;
 use crate::client::stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
 use crate::client::transaction::{TransactionInfo, TransactionOptions};
-use crate::client::types::{EdgeTypeInfo, QueryErrorInfo, QueryResult, SpaceInfo, TagInfo};
-use crate::client::validation::{ValidationError, ValidationResult, ValidationWarning};
+use crate::client::types::{EdgeTypeInfo, QueryResult, SpaceInfo, TagInfo};
 use crate::client::vector::{VectorMatch, VectorSearchResult};
 use crate::utils::error::{CliError, Result};
 
@@ -121,6 +120,7 @@ impl HttpClient {
             query: query.to_string(),
             session_id,
             parameters: std::collections::HashMap::new(),
+            session_variables: std::collections::HashMap::new(),
         };
 
         let response = self.inner.post(&url).json(&request).send().await?;
@@ -134,9 +134,8 @@ impl HttpClient {
             )));
         }
 
-        let query_resp: QueryResponse = response.json().await?;
-
-        Ok(Self::query_response_to_result(query_resp))
+        let result: QueryResult = response.json().await?;
+        Ok(result)
     }
 
     /// Execute multiple auto-commit DML statements inside a single shared
@@ -169,54 +168,7 @@ impl HttpClient {
         }
 
         let batch_resp: BatchQueryResponse = response.json().await?;
-        Ok(batch_resp
-            .results
-            .into_iter()
-            .map(Self::query_response_to_result)
-            .collect())
-    }
-
-    /// Convert a raw `QueryResponse` into a [`QueryResult`], mapping the
-    /// `success` flag onto an inline error like the single-query path.
-    fn query_response_to_result(query_resp: QueryResponse) -> QueryResult {
-        if !query_resp.success {
-            let err = query_resp.error.unwrap_or(QueryError {
-                code: "UNKNOWN".to_string(),
-                message: "Unknown error".to_string(),
-            });
-            return QueryResult {
-                columns: Vec::new(),
-                rows: Vec::new(),
-                row_count: 0,
-                execution_time_ms: 0,
-                rows_scanned: 0,
-                error: Some(QueryErrorInfo {
-                    code: err.code,
-                    message: err.message,
-                    details: None,
-                }),
-            };
-        }
-
-        let data = query_resp.data.unwrap_or(QueryData {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            row_count: 0,
-        });
-
-        let metadata = query_resp.metadata.unwrap_or(QueryMetadata {
-            execution_time_ms: 0,
-            rows_scanned: 0,
-        });
-
-        QueryResult {
-            columns: data.columns,
-            rows: data.rows,
-            row_count: data.row_count,
-            execution_time_ms: metadata.execution_time_ms,
-            rows_scanned: metadata.rows_scanned,
-            error: None,
-        }
+        Ok(batch_resp.results)
     }
 
     /// Execute a query without variable substitution
@@ -849,55 +801,6 @@ impl HttpClient {
 
         let stats: DatabaseStatistics = response.json().await?;
         Ok(stats)
-    }
-
-    /// Validate a query without executing it
-    pub async fn validate_query(&self, query: &str) -> Result<ValidationResult> {
-        let url = format!("{}/query/validate", self.base_url);
-
-        let session_id = self.session_info.as_ref().map(|s| s.session_id);
-
-        let request = ValidateQueryRequest {
-            query: query.to_string(),
-            session_id,
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to validate query ({}): {}",
-                status, body
-            )));
-        }
-
-        let validate_resp: ValidateQueryResponse = response.json().await?;
-        Ok(ValidationResult {
-            valid: validate_resp.valid,
-            errors: validate_resp
-                .errors
-                .into_iter()
-                .map(|e| ValidationError {
-                    code: e.code,
-                    message: e.message,
-                    position: e.position,
-                    line: e.line,
-                    column: e.column,
-                })
-                .collect(),
-            warnings: validate_resp
-                .warnings
-                .into_iter()
-                .map(|w| ValidationWarning {
-                    code: w.code,
-                    message: w.message,
-                    suggestion: w.suggestion,
-                })
-                .collect(),
-            estimated_cost: validate_resp.estimated_cost,
-        })
     }
 
     /// Get server configuration

@@ -52,12 +52,25 @@ async fn exec(
     stmt: &str,
 ) -> DataSet {
     match service.execute(sid, stmt).await {
-        Ok(graphdb::query::executor::ExecutionResult::DataSet { data, .. }) => data,
-        Ok(graphdb::query::executor::ExecutionResult::Success)
-        | Ok(graphdb::query::executor::ExecutionResult::Empty) => {
-            DataSet::from_rows(vec![], vec![])
+        Ok(result) => {
+            if result.rows.is_empty() {
+                DataSet::from_rows(vec![], vec![])
+            } else {
+                let rows: Vec<Vec<graphdb::core::Value>> = result
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        result
+                            .columns
+                            .iter()
+                            .filter_map(|col| row.get(col).cloned())
+                            .collect()
+                    })
+                    .collect();
+                DataSet::from_rows(rows, result.columns)
+            }
         }
-        other => panic!("statement `{}` failed: {:?}", stmt, other),
+        Err(e) => panic!("statement `{}` failed: {}", stmt, e),
     }
 }
 

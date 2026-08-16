@@ -68,29 +68,16 @@ async fn get_vertex<
     );
 
     let result = match graph_service.execute(0, &query).await {
-        Ok(exec_result) => match exec_result {
-            crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => {
-                if let Some(row) = ds.rows.first() {
-                    if let Some(vertex) = row.first() {
-                        Ok(serde_json::json!({"vertex": vertex}))
-                    } else {
-                        Err(WebError::NotFound(format!(
-                            "Vertex '{}' not found in space '{}'",
-                            vid, params.space
-                        )))
-                    }
-                } else {
-                    Err(WebError::NotFound(format!(
-                        "Vertex '{}' not found in space '{}'",
-                        vid, params.space
-                    )))
-                }
+        Ok(result) => {
+            if let Some(vertex) = result.first_value() {
+                Ok(serde_json::json!({"vertex": vertex}))
+            } else {
+                Err(WebError::NotFound(format!(
+                    "Vertex '{}' not found in space '{}'",
+                    vid, params.space
+                )))
             }
-            _ => Err(WebError::NotFound(format!(
-                "Vertex '{}' not found in space '{}'",
-                vid, params.space
-            ))),
-        },
+        }
         Err(e) => Err(WebError::Query(format!("Failed to get vertex: {}", e))),
     };
 
@@ -130,29 +117,16 @@ async fn get_edge<
     );
 
     let result = match graph_service.execute(0, &query).await {
-        Ok(exec_result) => match exec_result {
-            crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => {
-                if let Some(row) = ds.rows.first() {
-                    if let Some(edge) = row.first() {
-                        Ok(serde_json::json!({"edge": edge}))
-                    } else {
-                        Err(WebError::NotFound(format!(
-                            "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
-                            params.src, params.dst, params.edge_type, params.space
-                        )))
-                    }
-                } else {
-                    Err(WebError::NotFound(format!(
-                        "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
-                        params.src, params.dst, params.edge_type, params.space
-                    )))
-                }
+        Ok(result) => {
+            if let Some(edge) = result.first_value() {
+                Ok(serde_json::json!({"edge": edge}))
+            } else {
+                Err(WebError::NotFound(format!(
+                    "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
+                    params.src, params.dst, params.edge_type, params.space
+                )))
             }
-            _ => Err(WebError::NotFound(format!(
-                "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
-                params.src, params.dst, params.edge_type, params.space
-            ))),
-        },
+        }
         Err(e) => Err(WebError::Query(format!("Failed to get edge: {}", e))),
     };
 
@@ -211,21 +185,18 @@ async fn get_neighbors<
     );
 
     let result = match graph_service.execute(0, &query).await {
-        Ok(exec_result) => {
-            let neighbors: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet { data: dataset, .. } => dataset
-                    .rows
-                    .into_iter()
-                    .flat_map(|row| row.into_iter())
-                    .filter_map(|v| match v {
-                        crate::core::Value::Vertex(vertex) => {
-                            Some(serde_json::json!({"vertex": vertex}))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-                _ => vec![],
-            };
+        Ok(result) => {
+            let neighbors: Vec<serde_json::Value> = result
+                .rows
+                .iter()
+                .flat_map(|row| row.values.values())
+                .filter_map(|v| match v {
+                    crate::core::Value::Vertex(vertex) => {
+                        Some(serde_json::json!({"vertex": vertex}))
+                    }
+                    _ => None,
+                })
+                .collect();
 
             Ok(serde_json::json!({
                 "vid": vid,

@@ -13,7 +13,6 @@ mod snapshot;
 mod stats;
 mod transaction;
 mod types;
-mod validation;
 mod vector;
 
 pub use batch::{BatchError, BatchItem, BatchResult, BatchStatus, BatchType, EdgeData, VertexData};
@@ -25,5 +24,4 @@ pub use snapshot::ColdSnapshotInfo;
 pub use stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
 pub use transaction::{TransactionInfo, TransactionOptions};
 pub use types::{EdgeTypeInfo, FieldInfo, QueryResult, SpaceInfo, TagInfo};
-pub use validation::{ValidationError, ValidationResult, ValidationWarning};
 pub use vector::{VectorMatch, VectorSearchResult};

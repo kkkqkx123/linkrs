@@ -1,4 +1,4 @@
-use crate::api::core::{QueryApi, SyncApi};
+use crate::api::core::{QueryApi, QueryResult, SyncApi};
 
 #[cfg(feature = "qdrant")]
 use crate::api::core::VectorApi;
@@ -402,7 +402,7 @@ impl<
         }
     }
 
-    pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<ExecutionResult, String> {
+    pub async fn execute(&self, session_id: i64, stmt: &str) -> Result<QueryResult, String> {
         self.execute_with_params(session_id, stmt, None, None).await
     }
 
@@ -419,7 +419,7 @@ impl<
         stmt: &str,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -535,10 +535,11 @@ impl<
         match Self::parse_command(stmt) {
             Err(parse_error) => return Err(parse_error),
             Ok(Some(_)) => {
-                return self
-                    .execute(session_id, stmt)
-                    .await
-                    .map(StreamingQueryResult::from_execution_result);
+                return self.execute(session_id, stmt).await.map(|result| {
+                    StreamingQueryResult::from_execution_result(
+                        Self::core_query_result_to_execution_result(result),
+                    )
+                });
             }
             Ok(None) => {}
         }
@@ -685,7 +686,7 @@ impl<
         space_id: i64,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         self.validate_session_transaction_state(session)?;
         let txn_manager = self
             .transaction_manager
@@ -945,7 +946,7 @@ impl<
         transaction_id: Option<TransactionId>,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1011,7 +1012,7 @@ impl<
         space_id: i64,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         let result = self.execute_query_with_permission(
             session.id(),
             stmt,
@@ -1021,38 +1022,41 @@ impl<
             session_variables,
         )?;
         let value = match result {
-            ExecutionResult::DataSet { data, .. } => {
+            result => {
                 // Contract: the LET plan evaluates to exactly one row with
                 // one value column. Guard instead of silently taking the
                 // first value if a planner regression changes the shape.
-                if data.rows.len() != 1 {
+                if result.columns.len() != 1 {
                     return Err(format!(
-                        "LET expression must evaluate to a single row, got {} rows",
-                        data.rows.len()
+                        "LET expression must evaluate to a single value, got {} columns",
+                        result.columns.len()
                     ));
                 }
-                let row = data
+                if result.rows.len() != 1 {
+                    return Err(format!(
+                        "LET expression must evaluate to a single row, got {} rows",
+                        result.rows.len()
+                    ));
+                }
+                let row = result
                     .rows
                     .into_iter()
                     .next()
                     .ok_or_else(|| "LET expression returned no value".to_string())?;
-                if row.len() != 1 {
-                    return Err(format!(
-                        "LET expression must evaluate to a single value, got {} columns",
-                        row.len()
-                    ));
-                }
-                row.into_iter()
+                row.values
+                    .into_iter()
                     .next()
+                    .map(|(_, value)| value)
                     .ok_or_else(|| "LET expression returned no value".to_string())?
-            }
-            _ => {
-                return Err("LET expression could not be evaluated".to_string());
             }
         };
         session.set_variable(assign.name.clone(), value);
         info!("Session {} set session variable", session.id());
-        Ok(ExecutionResult::Success)
+        Ok(QueryResult {
+            columns: vec![],
+            rows: vec![],
+            metadata: crate::api::core::ExecutionMetadata::default(),
+        })
     }
 
     fn execute_query_with_permission(
@@ -1063,7 +1067,7 @@ impl<
         space_id: i64,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         let session = self
             .session_manager
             .find_session(session_id)
@@ -1183,7 +1187,7 @@ impl<
         execution: Option<crate::transaction::types::TransactionExecution>,
         parameters: Option<HashMap<String, crate::core::Value>>,
         session_variables: Option<HashMap<String, crate::core::Value>>,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<QueryResult, String> {
         // Session variables are injected through the dedicated
         // session_variables channel (captured once per statement), fully
         // decoupled from query parameters. Client-supplied session variables
@@ -1223,16 +1227,18 @@ impl<
                 .map_err(|e| e.to_string())
         };
 
-        result.map(Self::convert_to_execution_result)
+        result
     }
 
-    /// Convert core QueryResult to query ExecutionResult
-    fn convert_to_execution_result(result: crate::api::core::QueryResult) -> ExecutionResult {
+    /// Convert a core-layer [`QueryResult`] back into an engine-level
+    /// [`ExecutionResult`]. Only used to materialize command results into a
+    /// pre-materialized streaming result (command statements take the
+    /// `execute` path, whose result carries no engine metadata).
+    fn core_query_result_to_execution_result(result: QueryResult) -> ExecutionResult {
         if result.rows.is_empty() {
             return ExecutionResult::Empty;
         }
 
-        // General case: return DataSet
         let rows: Vec<Vec<crate::core::Value>> = result
             .rows
             .into_iter()
@@ -1279,33 +1285,33 @@ impl<
         s.parse().ok()
     }
 
-    /// Extract SpaceSummary from an ExecutionResult DataSet that contains space info.
-    /// This is used for USE statement results that have been converted from SpaceSwitched.
-    fn extract_space_summary_from_result(result: &ExecutionResult) -> Option<SpaceSummary> {
-        match result {
-            ExecutionResult::DataSet { data: ds, .. } => {
-                let name_idx = ds.col_names.iter().position(|c| c == "space_name")?;
-                let id_idx = ds.col_names.iter().position(|c| c == "space_id")?;
-                let vid_type_idx = ds.col_names.iter().position(|c| c == "vid_type");
-                let row = ds.rows.first()?;
-                let name = match row.get(name_idx)? {
-                    crate::core::Value::String(s) => s.to_string(),
-                    _ => return None,
-                };
-                let id = match row.get(id_idx)? {
-                    crate::core::Value::BigInt(id) => *id as u64,
-                    _ => return None,
-                };
-                let vid_type = match vid_type_idx.and_then(|idx| row.get(idx)) {
-                    Some(crate::core::Value::String(s)) => {
-                        Self::parse_data_type(s).unwrap_or(DataType::BigInt)
-                    }
-                    _ => DataType::BigInt,
-                };
-                Some(SpaceSummary::new(id, name, vid_type))
+    /// Extract SpaceSummary from a core QueryResult that contains space info.
+    /// This is used for USE statement results, which the core QueryApi
+    /// converts from SpaceSwitched into a row with space_name/space_id/vid_type
+    /// columns.
+    fn extract_space_summary_from_result(result: &QueryResult) -> Option<SpaceSummary> {
+        let name_idx = result.columns.iter().position(|c| c == "space_name")?;
+        let id_idx = result.columns.iter().position(|c| c == "space_id")?;
+        let vid_type_idx = result.columns.iter().position(|c| c == "vid_type");
+        let row = result.rows.first()?;
+        let name = match row.get(&result.columns[name_idx])? {
+            crate::core::Value::String(s) => s.to_string(),
+            _ => return None,
+        };
+        let id = match row.get(&result.columns[id_idx])? {
+            crate::core::Value::BigInt(id) => *id as u64,
+            _ => return None,
+        };
+        let vid_type = match vid_type_idx
+            .map(|idx| &result.columns[idx])
+            .and_then(|col| row.get(col))
+        {
+            Some(crate::core::Value::String(s)) => {
+                Self::parse_data_type(s).unwrap_or(DataType::BigInt)
             }
-            _ => result.space_summary().cloned(),
-        }
+            _ => DataType::BigInt,
+        };
+        Some(SpaceSummary::new(id, name, vid_type))
     }
 
     /// Graceful shutdown of the shared execution infrastructure.
@@ -1457,7 +1463,7 @@ where
         &self,
         session_id: i64,
         statements: &[String],
-    ) -> Vec<Result<ExecutionResult, String>> {
+    ) -> Vec<Result<QueryResult, String>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
                 .iter()
@@ -1471,8 +1477,7 @@ where
         // Classification pass: transaction commands get an explicit error,
         // LET statements run per-statement through `execute`, everything
         // else joins the batch window.
-        let mut results: Vec<Option<Result<ExecutionResult, String>>> =
-            vec![None; statements.len()];
+        let mut results: Vec<Option<Result<QueryResult, String>>> = vec![None; statements.len()];
         let mut batch_indices: Vec<usize> = Vec::new();
         let mut batch_statements: Vec<String> = Vec::new();
         for (index, stmt) in statements.iter().enumerate() {
@@ -1567,7 +1572,7 @@ where
         session_id: i64,
         statements: &[String],
         group_size: usize,
-    ) -> Vec<Result<ExecutionResult, String>> {
+    ) -> Vec<Result<QueryResult, String>> {
         let Some(session) = self.session_manager.find_session(session_id) else {
             return statements
                 .iter()
@@ -1580,8 +1585,7 @@ where
 
         // Classification pass (same policy as execute_batch): transaction
         // commands get an explicit error, LET statements run per-statement.
-        let mut results: Vec<Option<Result<ExecutionResult, String>>> =
-            vec![None; statements.len()];
+        let mut results: Vec<Option<Result<QueryResult, String>>> = vec![None; statements.len()];
         let mut batch_indices: Vec<usize> = Vec::new();
         let mut batch_statements: Vec<String> = Vec::new();
         for (index, stmt) in statements.iter().enumerate() {
@@ -1652,8 +1656,8 @@ where
 
 /// Convert the per-slot batch results into the final ordered outcome vector.
 fn finalize_batch_outcomes(
-    results: Vec<Option<Result<ExecutionResult, String>>>,
-) -> Vec<Result<ExecutionResult, String>> {
+    results: Vec<Option<Result<QueryResult, String>>>,
+) -> Vec<Result<QueryResult, String>> {
     results
         .into_iter()
         .map(|slot| slot.unwrap_or_else(|| Err("Batch outcome missing".to_string())))
@@ -1662,7 +1666,7 @@ fn finalize_batch_outcomes(
 
 /// Merge the batch-window outcomes back into the per-slot results.
 fn merge_batch_outcomes<S>(
-    results: &mut [Option<Result<ExecutionResult, String>>],
+    results: &mut [Option<Result<QueryResult, String>>],
     batch_indices: &[usize],
     denied: &[(usize, String)],
     outcomes: Vec<Result<crate::api::core::QueryResult, crate::api::core::CoreError>>,
@@ -1682,8 +1686,7 @@ fn merge_batch_outcomes<S>(
         }
         match permitted_outcomes.next() {
             Some(Ok(result)) => {
-                results[*original_index] =
-                    Some(Ok(GraphService::<S>::convert_to_execution_result(result)));
+                results[*original_index] = Some(Ok(result));
             }
             Some(Err(error)) => results[*original_index] = Some(Err(error.to_string())),
             None => results[*original_index] = Some(Err("Batch outcome missing".to_string())),

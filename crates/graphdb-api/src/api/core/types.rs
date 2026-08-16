@@ -46,15 +46,34 @@ impl Default for QueryRequest {
 }
 
 /// Query results
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Row>,
     pub metadata: ExecutionMetadata,
 }
 
+impl QueryResult {
+    /// Value of the first column of the first row, if any.
+    ///
+    /// Convenience accessor for single-value projection results (e.g.
+    /// `RETURN COUNT(...) as total`), independent of map iteration order.
+    pub fn first_value(&self) -> Option<&Value> {
+        let col = self.columns.first()?;
+        self.rows.first()?.values.get(col)
+    }
+
+    /// Values of the first column across all rows, in row order.
+    pub fn first_column_values(&self) -> impl Iterator<Item = &Value> {
+        let col = self.columns.first().cloned();
+        self.rows
+            .iter()
+            .filter_map(move |row| col.as_ref().and_then(|c| row.get(c)))
+    }
+}
+
 /// Result row
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Row {
     pub values: HashMap<String, Value>,
 }

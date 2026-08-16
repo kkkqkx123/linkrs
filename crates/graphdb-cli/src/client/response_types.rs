@@ -16,43 +16,10 @@ pub(crate) struct TransactionResponse {
     pub status: String,
 }
 
-/// Query response
-#[derive(Debug, Deserialize)]
-pub(crate) struct QueryResponse {
-    pub success: bool,
-    pub data: Option<QueryData>,
-    pub error: Option<QueryError>,
-    pub metadata: Option<QueryMetadata>,
-}
-
-/// Query data
-#[derive(Debug, Deserialize)]
-pub(crate) struct QueryData {
-    pub columns: Vec<String>,
-    pub rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
-    pub row_count: usize,
-}
-
-/// Query error
-#[derive(Debug, Deserialize)]
-pub(crate) struct QueryError {
-    pub code: String,
-    pub message: String,
-}
-
-/// Query metadata
-#[derive(Debug, Deserialize)]
-pub(crate) struct QueryMetadata {
-    #[serde(default)]
-    pub execution_time_ms: u64,
-    #[serde(default)]
-    pub rows_scanned: u64,
-}
-
-/// Batch query response: one [`QueryResponse`] per input statement, in order.
+/// Batch query response: one [`QueryResult`] per input statement, in order.
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchQueryResponse {
-    pub results: Vec<QueryResponse>,
+    pub results: Vec<crate::client::types::QueryResult>,
 }
 
 /// Create batch response
@@ -123,33 +90,6 @@ pub(crate) struct BatchProgress {
     pub processed: usize,
     pub succeeded: usize,
     pub failed: usize,
-}
-
-/// Validate query response
-#[derive(Debug, Deserialize)]
-pub(crate) struct ValidateQueryResponse {
-    pub valid: bool,
-    pub errors: Vec<ValidationErrorData>,
-    pub warnings: Vec<ValidationWarningData>,
-    pub estimated_cost: Option<u64>,
-}
-
-/// Validation error data
-#[derive(Debug, Deserialize)]
-pub(crate) struct ValidationErrorData {
-    pub code: String,
-    pub message: String,
-    pub position: Option<usize>,
-    pub line: Option<usize>,
-    pub column: Option<usize>,
-}
-
-/// Validation warning data
-#[derive(Debug, Deserialize)]
-pub(crate) struct ValidationWarningData {
-    pub code: String,
-    pub message: String,
-    pub suggestion: Option<String>,
 }
 
 /// Vector search response
