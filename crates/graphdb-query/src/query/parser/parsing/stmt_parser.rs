@@ -530,15 +530,7 @@ impl StmtParser {
                 crate::query::parser::ast::stmt::ShowUsersStmt { span },
             ))
         } else if ctx.check_token(TokenKind::Roles) {
-            ctx.expect_token(TokenKind::Roles)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
-            Ok(Stmt::ShowRoles(
-                crate::query::parser::ast::stmt::ShowRolesStmt {
-                    span,
-                    space_name: None,
-                },
-            ))
+            UtilStmtParser::new().parse_show_roles_internal(ctx, start_span)
         } else if ctx.check_token(TokenKind::Create) {
             // The SHOW CREATE statement: A unified processing method delegated to UtilStmtParser
             // Supports SHOW CREATE { SPACE | TAG | EDGE | INDEX } <name>
@@ -1030,7 +1022,10 @@ mod tests {
         ddl.push_str(">)");
         let mut ctx = create_parser_context(&ddl);
         let result = StmtParser::parse_statement(&mut ctx);
-        assert!(result.is_err(), "over-nested composite type must be rejected");
+        assert!(
+            result.is_err(),
+            "over-nested composite type must be rejected"
+        );
     }
 
     #[test]

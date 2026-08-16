@@ -3,8 +3,7 @@
 
 use crate::core::types::expr::expression_utils::extract_string_from_expr;
 use crate::query::parser::ast::{FetchTarget, Stmt};
-use crate::query::planning::plan::core::nodes::GetEdgesNode;
-use crate::query::planning::plan::core::PlanNodeEnum;
+use crate::query::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
 use crate::query::planning::plan::execution_plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
@@ -67,9 +66,24 @@ impl Planner for FetchEdgesPlanner {
             1, &src_str, edge_type, &rank_str, &dst_str,
         ));
 
+        // Apply the YIELD clause as a projection when present.
+        let root = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
+            let mut columns = Vec::new();
+            for item in &yield_clause.items {
+                columns.push(crate::core::YieldColumn {
+                    expression: item.expression.clone(),
+                    alias: item.alias.clone().unwrap_or_default(),
+                    is_matched: false,
+                });
+            }
+            PlanNodeEnum::Project(ProjectNode::new(get_edges_node, columns)?)
+        } else {
+            get_edges_node
+        };
+
         // For FETCH PROP ON EDGE with specific src/dst/rank, GetEdgesNode is sufficient
-        // No need for additional Filter or Project nodes
-        let sub_plan = SubPlan::new(Some(get_edges_node), None);
+        // No need for additional Filter nodes
+        let sub_plan = SubPlan::new(Some(root), None);
 
         Ok(sub_plan)
     }

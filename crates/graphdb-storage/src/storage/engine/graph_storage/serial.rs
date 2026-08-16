@@ -68,10 +68,8 @@ pub(crate) fn scan_vertex_serial_column(
             let projection = [prop_name.to_string()];
             for record in table.get_projected_batch(&ids, ts, Some(&projection)) {
                 let record = record?;
-                if let Some((_, value)) = record
-                    .properties
-                    .iter()
-                    .find(|(name, _)| name == prop_name)
+                if let Some((_, value)) =
+                    record.properties.iter().find(|(name, _)| name == prop_name)
                 {
                     if let Some(integer) = value_as_i64(value) {
                         present.push(integer);
@@ -81,10 +79,7 @@ pub(crate) fn scan_vertex_serial_column(
             }
         }
         present.sort_unstable();
-        Some(SerialColumnScan {
-            max_value,
-            present,
-        })
+        Some(SerialColumnScan { max_value, present })
     })
 }
 
@@ -108,15 +103,12 @@ pub(crate) fn scan_edge_serial_column(
             }
             let table = arc.read();
             for record in table.scan(ts) {
-                if let Some((_, value)) = record
-                    .properties
-                    .iter()
-                    .find(|(name, _)| name == prop_name)
+                if let Some((_, value)) =
+                    record.properties.iter().find(|(name, _)| name == prop_name)
                 {
                     if let Some(integer) = value_as_i64(value) {
                         scan.present.push(integer);
-                        scan.max_value =
-                            Some(scan.max_value.map_or(integer, |m| m.max(integer)));
+                        scan.max_value = Some(scan.max_value.map_or(integer, |m| m.max(integer)));
                     }
                 }
             }
@@ -172,8 +164,7 @@ pub(crate) fn seed_serial_allocators(ctx: &GraphStorageContext) -> StorageResult
                     continue;
                 }
                 let key = SerialKey::new(space_id, edge_type.edge_type_name.clone());
-                if let Some(scan) =
-                    scan_edge_serial_column(ctx, edge_type.edge_type_id, &prop.name)
+                if let Some(scan) = scan_edge_serial_column(ctx, edge_type.edge_type_id, &prop.name)
                 {
                     if let Some(max) = scan.max().filter(|max| *max >= 0) {
                         allocator.seed(&key, (max as u64).saturating_add(1));
@@ -237,19 +228,13 @@ impl SerialAllocator {
     pub fn snapshot(&self) -> Vec<(SerialKey, u64)> {
         self.next_values
             .iter()
-            .map(|entry| {
-                (
-                    entry.key().clone(),
-                    entry.value().load(Ordering::SeqCst),
-                )
-            })
+            .map(|entry| (entry.key().clone(), entry.value().load(Ordering::SeqCst)))
             .collect()
     }
 
     /// Drop every counter of `space_id` (DROP SPACE / CLEAR SPACE).
     pub fn clear_space(&self, space_id: u64) {
-        self.next_values
-            .retain(|key, _| key.space_id != space_id);
+        self.next_values.retain(|key, _| key.space_id != space_id);
     }
 
     /// Drop one counter (DROP TAG / DROP EDGE).

@@ -77,6 +77,11 @@ impl DmlParser {
                 } else {
                     None
                 };
+                // Parse and discard an optional WHEN condition: upsert
+                // semantics do not gate the insert-or-update decision on it.
+                if ctx.match_token(TokenKind::When) {
+                    ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?;
+                }
                 // Extract vid from WHERE clause condition.
                 // The WHERE clause is used to specify the vertex ID, so we clear it
                 // after extraction since the ID is now in the target.
@@ -126,6 +131,23 @@ impl DmlParser {
                 } else {
                     None
                 };
+                // Optional edge rank (@rank) trailing the WHERE clause.
+                let rank = if ctx.match_token(TokenKind::At) {
+                    Some(self.parse_expression(ctx)?)
+                } else {
+                    None
+                };
+                // Parse YIELD clause
+                let yield_clause = if ctx.match_token(TokenKind::Yield) {
+                    Some(ClauseParser::new().parse_yield_clause(ctx)?)
+                } else {
+                    None
+                };
+                // Parse and discard an optional WHEN condition: upsert
+                // semantics do not gate the insert-or-update decision on it.
+                if ctx.match_token(TokenKind::When) {
+                    ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?;
+                }
                 // Extract src and dst from WHERE clause.
                 // The WHERE clause is used to specify src/dst, so we clear it
                 // after extraction since the IDs are now in the target.
@@ -157,12 +179,12 @@ impl DmlParser {
                         edge_type: Some(edge_type),
                         src,
                         dst,
-                        rank: None,
+                        rank,
                     },
                     set_clause,
                     where_clause: None,
                     is_upsert,
-                    yield_clause: None,
+                    yield_clause,
                 }));
             }
             self.parse_update_edge(ctx)?
@@ -228,6 +250,13 @@ impl DmlParser {
             None
         };
 
+        // Parse YIELD clause
+        let yield_clause = if ctx.match_token(TokenKind::Yield) {
+            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+        } else {
+            None
+        };
+
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
@@ -237,7 +266,7 @@ impl DmlParser {
             set_clause,
             where_clause,
             is_upsert,
-            yield_clause: None,
+            yield_clause,
         }))
     }
 
@@ -797,6 +826,14 @@ impl DmlParser {
         } else {
             (None, None)
         };
+
+        // Accept a bare `SET ...` clause following the pattern (e.g.
+        // `MERGE (v:Tag {..}) SET v.prop = ..`). It is parsed for syntax
+        // validation but not stored: the merge plan inserts the pattern when
+        // absent and matches it when present, with no per-branch action.
+        if ctx.match_token(TokenKind::Set) {
+            ClauseParser::new().parse_set_clause(ctx)?;
+        }
 
         Ok(Stmt::Merge(MergeStmt {
             span: start_span,

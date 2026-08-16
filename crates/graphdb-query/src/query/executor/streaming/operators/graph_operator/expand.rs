@@ -131,7 +131,7 @@ pub(super) fn handle_all(
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
 
-            if count_only && use_fast_path {
+            if count_only {
                 let count = common::expand_count_only(
                     chunk,
                     &*reader,

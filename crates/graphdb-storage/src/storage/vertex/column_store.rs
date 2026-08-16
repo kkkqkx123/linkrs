@@ -380,10 +380,7 @@ impl ColumnStorage for VariableWidthColumn {
             crate::core::value::JsonB::parse(&s)
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
-        } else if matches!(
-            self.data_type,
-            DataType::Struct(_) | DataType::Array(_)
-        ) {
+        } else if matches!(self.data_type, DataType::Struct(_) | DataType::Array(_)) {
             // Composite values are stored as postcard-encoded whole `Value`s
             // (the serde single-track format).
             postcard::from_bytes::<Value>(bytes).ok()
@@ -2487,16 +2484,23 @@ mod tests {
     fn test_composite_types_use_variable_width_column() {
         // Struct/Array must never fall into FixedWidthColumn (element_size 0
         // would corrupt offsets).
-        let struct_type = DataType::Struct(std::sync::Arc::new(StructTypeInfo::new(vec![
-            ("city".to_string(), DataType::String),
-        ])));
+        let struct_type = DataType::Struct(std::sync::Arc::new(StructTypeInfo::new(vec![(
+            "city".to_string(),
+            DataType::String,
+        )])));
         let array_type = DataType::Array(std::sync::Arc::new(ArrayTypeInfo::new(
             DataType::Double,
             Some(3),
         )));
         for (data_type, value) in [
-            (struct_type, Value::struct_(vec![("city".to_string(), Value::string("x"))])),
-            (array_type, Value::array(vec![Value::Double(1.0), Value::Double(2.0)])),
+            (
+                struct_type,
+                Value::struct_(vec![("city".to_string(), Value::string("x"))]),
+            ),
+            (
+                array_type,
+                Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
+            ),
         ] {
             let mut col = Column::new("c".to_string(), 0, data_type.clone(), true);
             assert!(is_variable_length_type(&data_type));

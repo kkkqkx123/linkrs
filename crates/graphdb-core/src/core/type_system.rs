@@ -172,11 +172,9 @@ impl TypeUtils {
     /// recursive common supertype; fields present in only one keep their type.
     /// Fields are ordered by the first type's order, then new fields from the
     /// second type.
-    fn combine_struct_types(
-        a: &StructTypeInfo,
-        b: &StructTypeInfo,
-    ) -> DataType {
-        let mut fields: Vec<(String, DataType)> = Vec::with_capacity(a.fields.len() + b.fields.len());
+    fn combine_struct_types(a: &StructTypeInfo, b: &StructTypeInfo) -> DataType {
+        let mut fields: Vec<(String, DataType)> =
+            Vec::with_capacity(a.fields.len() + b.fields.len());
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (name, field_type) in &a.fields {
             seen.insert(name.as_str());
@@ -320,34 +318,35 @@ impl TypeUtils {
             (DataType::DateTime, DataType::String) => true,
             (DataType::DateTime, DataType::Date) => true,
 
-        // Json <-> JsonB
-        (DataType::Json, DataType::JsonB) => true,
-        (DataType::JsonB, DataType::Json) => true,
+            // Json <-> JsonB
+            (DataType::Json, DataType::JsonB) => true,
+            (DataType::JsonB, DataType::Json) => true,
 
-        // Struct <-> Map: isomorphic (same field name set; the Map value type
-        // is the common supertype of the field types, which always exists).
-        (DataType::Struct(s), DataType::Map) => Self::struct_isomorphic_to_map(s),
-        (DataType::Map, DataType::Struct(s)) => Self::struct_isomorphic_to_map(s),
+            // Struct <-> Map: isomorphic (same field name set; the Map value type
+            // is the common supertype of the field types, which always exists).
+            (DataType::Struct(s), DataType::Map) => Self::struct_isomorphic_to_map(s),
+            (DataType::Map, DataType::Struct(s)) => Self::struct_isomorphic_to_map(s),
 
-        // Array <-> List: List is untyped, so every Array converts to List and
-        // vice versa; the element check happens at cast time.
-        (DataType::Array(_), DataType::List) => true,
-        (DataType::List, DataType::Array(_)) => true,
-        // Array <-> Array: element types must inter-cast.
-        (DataType::Array(a), DataType::Array(b)) => {
-            if a.element.as_ref() == &DataType::Empty || b.element.as_ref() == &DataType::Empty {
-                true
-            } else {
-                Self::can_cast(a.element.as_ref(), b.element.as_ref())
+            // Array <-> List: List is untyped, so every Array converts to List and
+            // vice versa; the element check happens at cast time.
+            (DataType::Array(_), DataType::List) => true,
+            (DataType::List, DataType::Array(_)) => true,
+            // Array <-> Array: element types must inter-cast.
+            (DataType::Array(a), DataType::Array(b)) => {
+                if a.element.as_ref() == &DataType::Empty || b.element.as_ref() == &DataType::Empty
+                {
+                    true
+                } else {
+                    Self::can_cast(a.element.as_ref(), b.element.as_ref())
+                }
             }
-        }
 
-        // Struct/Array -> String: readable serialization.
-        (DataType::Struct(_), DataType::String) => true,
-        (DataType::Array(_), DataType::String) => true,
+            // Struct/Array -> String: readable serialization.
+            (DataType::Struct(_), DataType::String) => true,
+            (DataType::Array(_), DataType::String) => true,
 
-        // Uuid -> String
-        (DataType::Uuid, DataType::String) => true,
+            // Uuid -> String
+            (DataType::Uuid, DataType::String) => true,
 
             // FixedString can be converted to various types
             (DataType::FixedString(_), DataType::String) => true,
@@ -651,10 +650,7 @@ mod tests {
     fn test_get_common_type_struct_union() {
         // Field intersection takes the common supertype; disjoint fields are
         // kept as-is (union semantics, Ladybug `combineTypes`).
-        let a = struct_type(vec![
-            ("city", DataType::String),
-            ("age", DataType::Int),
-        ]);
+        let a = struct_type(vec![("city", DataType::String), ("age", DataType::Int)]);
         let b = struct_type(vec![
             ("city", DataType::String),
             ("age", DataType::BigInt),
@@ -671,21 +667,12 @@ mod tests {
         );
 
         // Nested Struct fields recurse.
-        let nested_a = struct_type(vec![(
-            "geo",
-            struct_type(vec![("lat", DataType::Float)]),
-        )]);
-        let nested_b = struct_type(vec![(
-            "geo",
-            struct_type(vec![("lat", DataType::Double)]),
-        )]);
+        let nested_a = struct_type(vec![("geo", struct_type(vec![("lat", DataType::Float)]))]);
+        let nested_b = struct_type(vec![("geo", struct_type(vec![("lat", DataType::Double)]))]);
         let common_nested = TypeUtils::get_common_type(&nested_a, &nested_b);
         assert_eq!(
             common_nested,
-            struct_type(vec![(
-                "geo",
-                struct_type(vec![("lat", DataType::Double)]),
-            )])
+            struct_type(vec![("geo", struct_type(vec![("lat", DataType::Double)]),)])
         );
 
         // Heterogeneous Struct types with no common fields still unify.
@@ -724,10 +711,7 @@ mod tests {
     fn test_can_cast_struct_array_rules() {
         use std::sync::Arc;
 
-        let person = struct_type(vec![
-            ("name", DataType::String),
-            ("age", DataType::Int),
-        ]);
+        let person = struct_type(vec![("name", DataType::String), ("age", DataType::Int)]);
         let doubles = array_type(DataType::Double);
 
         // Struct <-> Map (isomorphic).

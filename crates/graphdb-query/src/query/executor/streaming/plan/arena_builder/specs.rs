@@ -138,6 +138,7 @@ pub(super) fn build_source_spec(
                 space_name: get_node.space_name().to_string(),
                 vertex_ids,
                 projected_properties: get_node.projected_properties().to_vec(),
+                col_names: get_node.col_names().to_vec(),
             })
         }
         PlanNodeEnum::GetEdges(get_node) => Ok(SourceSpec::GetEdges {

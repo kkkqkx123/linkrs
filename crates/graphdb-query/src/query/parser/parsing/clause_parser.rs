@@ -69,7 +69,7 @@ impl ClauseParser {
         }
 
         // Explanation of `ORDER BY`
-        let order_by = if ctx.match_token(TokenKind::Order) {
+        let mut order_by = if ctx.match_token(TokenKind::Order) {
             ctx.recover_clause(
                 |_| Ok(None),
                 |c| {
@@ -104,6 +104,17 @@ impl ClauseParser {
         // Supports ROLLUP, CUBE, and GROUPING SETS syntax
         if ctx.match_token(TokenKind::Group) {
             ctx.recover_clause(|_| Ok(()), |c| self.parse_return_group_by(c))?;
+        }
+
+        // Accept an ORDER BY clause after GROUP BY (`GROUP BY ... ORDER BY ...`).
+        if order_by.is_none() && ctx.match_token(TokenKind::Order) {
+            order_by = ctx.recover_clause(
+                |_| Ok(None),
+                |c| {
+                    c.expect_token(TokenKind::By)?;
+                    self.parse_order_by_clause(c).map(Some)
+                },
+            )?;
         }
 
         // Parse optional SAMPLE clause

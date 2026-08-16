@@ -19,13 +19,7 @@ use super::ops::{
 fn schema_properties(properties: &[PropertyDef]) -> Vec<(String, String, bool)> {
     properties
         .iter()
-        .map(|prop| {
-            (
-                prop.name.clone(),
-                prop.data_type.to_string(),
-                prop.serial,
-            )
-        })
+        .map(|prop| (prop.name.clone(), prop.data_type.to_string(), prop.serial))
         .collect()
 }
 
@@ -392,7 +386,10 @@ pub(crate) fn drop_tag(
 
     ctx.schema_manager().drop_tag(space, tag_name)?;
     ctx.serial_allocator()
-        .remove(&super::serial::SerialKey::new(space_id, tag_name.to_string()));
+        .remove(&super::serial::SerialKey::new(
+            space_id,
+            tag_name.to_string(),
+        ));
     Ok(true)
 }
 
@@ -555,10 +552,12 @@ pub(crate) fn drop_edge_type(
     let storage_name = edge_type_storage_name(space_id, edge_type_name);
     ctx.drop_edge_type(&storage_name)?;
 
-    ctx.schema_manager()
-        .drop_edge_type(space, edge_type_name)?;
+    ctx.schema_manager().drop_edge_type(space, edge_type_name)?;
     ctx.serial_allocator()
-        .remove(&super::serial::SerialKey::new(space_id, edge_type_name.to_string()));
+        .remove(&super::serial::SerialKey::new(
+            space_id,
+            edge_type_name.to_string(),
+        ));
     Ok(true)
 }
 

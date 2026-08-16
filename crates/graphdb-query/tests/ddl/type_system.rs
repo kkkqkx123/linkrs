@@ -160,9 +160,7 @@ fn test_create_tag_int_width_aliases() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
-        .exec_ddl(
-            r#"CREATE TAG IntWidth(a INT16, b INT32, c INT64, d INT2, e INT4)"#,
-        )
+        .exec_ddl(r#"CREATE TAG IntWidth(a INT16, b INT32, c INT64, d INT2, e INT4)"#)
         .assert_success()
         .query("DESC TAG IntWidth")
         .assert_result_contains(vec![Value::string("SMALLINT")])

@@ -437,17 +437,11 @@ impl DataChunk {
                 .any(|row| row.get(slot).is_some_and(Value::is_null))
         };
         match expr {
-            Expression::Variable(name) => self
-                .layout
-                .slot_id(name)
-                .is_some_and(&slot_has_null),
+            Expression::Variable(name) => self.layout.slot_id(name).is_some_and(&slot_has_null),
             Expression::Property { object, property } => {
                 if let Expression::Variable(var) = object.as_ref() {
                     let compound = format!("{}.{}", var, property);
-                    return self
-                        .layout
-                        .slot_id(&compound)
-                        .is_some_and(slot_has_null);
+                    return self.layout.slot_id(&compound).is_some_and(slot_has_null);
                 }
                 false
             }

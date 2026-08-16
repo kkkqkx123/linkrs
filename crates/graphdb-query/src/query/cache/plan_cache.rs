@@ -1044,23 +1044,12 @@ impl Default for QueryPlanCache {
 /// Parameterized query processor
 ///
 /// Handling the parsing and binding of parameterized queries
-pub struct ParameterizedQueryHandler {
-    /// Parameter placeholder pattern
-    placeholder_pattern: regex::Regex,
-}
+pub struct ParameterizedQueryHandler;
 
 impl ParameterizedQueryHandler {
     /// Create a new parametric query processor.
     pub fn new() -> Self {
-        Self {
-            // Query parameters use `@name` (session variables use `$name`
-            // and are never treated as parameters here). Numeric `$N`
-            // placeholders are kept for prepared-statement compatibility;
-            // RANK suffixes (`@2`) are excluded because only identifiers
-            // count as parameters.
-            placeholder_pattern: regex::Regex::new(r"@([a-zA-Z_][a-zA-Z0-9_]*)|\$(\d+)")
-                .expect("Placeholder regex compilation failed"),
-        }
+        Self
     }
 
     /// Extract the parameter positions from the query.
@@ -1078,43 +1067,97 @@ impl ParameterizedQueryHandler {
     }
 
     /// Extract the parameter matches from the query together with their end
-    /// offsets. Assignment left-hand sides (`$var = ...`) are excluded.
+    /// offsets. Assignment left-hand sides (`$var = ...`) are excluded, and
+    /// `@name` / `$N` occurrences inside string literals (`'...'` / `"..."`,
+    /// backslash escapes respected) are ignored so that literal content such
+    /// as an e-mail address does not look like a parameter.
     fn extract_param_matches(&self, query: &str) -> Vec<(ParamPosition, usize)> {
         let mut positions = Vec::new();
+        let chars: Vec<char> = query.chars().collect();
+        let mut i = 0usize;
+        let mut idx = 0usize;
+        let mut in_string: Option<char> = None;
 
-        for (idx, cap) in self.placeholder_pattern.captures_iter(query).enumerate() {
-            let full_match = cap.get(0).expect("Full match should exist");
-            // Group 1 captures `@name` parameters, group 2 captures `$N`
-            // numeric placeholders.
-            let param_str = cap
-                .get(1)
-                .or_else(|| cap.get(2))
-                .expect("Parameter group should exist")
-                .as_str();
+        while i < chars.len() {
+            let c = chars[i];
 
-            // Skip the left-hand side of a variable assignment, e.g.
-            // `$result = GO ...` defines a session variable instead of
-            // declaring a named query parameter.
-            let after_match = &query[full_match.end()..];
-            if after_match.trim_start().starts_with('=') {
+            if let Some(quote) = in_string {
+                if c == '\\' {
+                    i = (i + 2).min(chars.len());
+                    continue;
+                }
+                if c == quote {
+                    in_string = None;
+                }
+                i += 1;
                 continue;
             }
 
-            let (index, name) = if param_str.chars().all(|c| c.is_ascii_digit()) {
-                (param_str.parse::<usize>().unwrap_or(idx), None)
-            } else {
-                (idx, Some(param_str.to_string()))
-            };
-
-            positions.push((
-                ParamPosition {
-                    index,
-                    name,
-                    position: full_match.start(),
-                    expected_type: None,
-                },
-                full_match.end(),
-            ));
+            match c {
+                '\'' | '"' => {
+                    in_string = Some(c);
+                    i += 1;
+                }
+                '@' => {
+                    let mut j = i + 1;
+                    if j < chars.len() && (chars[j].is_ascii_alphabetic() || chars[j] == '_') {
+                        j += 1;
+                        while j < chars.len()
+                            && (chars[j].is_ascii_alphanumeric() || chars[j] == '_')
+                        {
+                            j += 1;
+                        }
+                        let name: String = chars[i + 1..j].iter().collect();
+                        // Skip the left-hand side of a variable assignment,
+                        // e.g. `$result = GO ...` defines a session variable
+                        // instead of declaring a named query parameter.
+                        let after_match = &query[j..];
+                        if !after_match.trim_start().starts_with('=') {
+                            positions.push((
+                                ParamPosition {
+                                    index: idx,
+                                    name: Some(name),
+                                    position: i,
+                                    expected_type: None,
+                                },
+                                j,
+                            ));
+                            idx += 1;
+                        }
+                        i = j;
+                    } else {
+                        i += 1;
+                    }
+                }
+                '$' => {
+                    let mut j = i + 1;
+                    let start = j;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j > start {
+                        let digits: String = chars[start..j].iter().collect();
+                        let after_match = &query[j..];
+                        if !after_match.trim_start().starts_with('=') {
+                            let parsed = digits.parse::<usize>().unwrap_or(idx);
+                            positions.push((
+                                ParamPosition {
+                                    index: parsed,
+                                    name: None,
+                                    position: i,
+                                    expected_type: None,
+                                },
+                                j,
+                            ));
+                            idx += 1;
+                        }
+                        i = j;
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
         }
 
         positions

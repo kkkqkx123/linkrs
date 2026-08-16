@@ -90,10 +90,7 @@ mod tests {
     /// `TIMESTAMP` value.
     #[test]
     fn test_timestamp_is_not_a_distinct_type() {
-        assert_eq!(
-            DataType::from_str("TIMESTAMP").unwrap(),
-            DataType::DateTime
-        );
+        assert_eq!(DataType::from_str("TIMESTAMP").unwrap(), DataType::DateTime);
         assert_eq!(DataType::DateTime.to_string(), "DATETIME");
     }
 }

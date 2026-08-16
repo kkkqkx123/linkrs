@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 pub mod type_info;
 
-pub use type_info::{data_type_from_info, type_info_of, ArrayTypeInfo, StructTypeInfo, TypeInfo};
 pub use parse::ParseDataTypeError;
+pub use type_info::{data_type_from_info, type_info_of, ArrayTypeInfo, StructTypeInfo, TypeInfo};
 
 /// Error decoding a `DataType` from its compact byte code.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -289,9 +289,10 @@ mod tests {
             DataType::JsonB,
             DataType::Uuid,
             DataType::Interval,
-            DataType::Struct(Arc::new(StructTypeInfo::new(vec![
-                ("city".to_string(), DataType::String),
-            ]))),
+            DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
+                "city".to_string(),
+                DataType::String,
+            )]))),
             DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3)))),
         ]
     }

@@ -641,12 +641,10 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
             ..
         } => SlotLayout::from_names(&flat_scan_col_names(col_names, projected_properties)),
         SourceSpec::GetVertices {
+            col_names,
             projected_properties,
             ..
-        } => SlotLayout::from_names(&flat_scan_col_names(
-            &["vertex".to_string()],
-            projected_properties,
-        )),
+        } => SlotLayout::from_names(&flat_scan_col_names(col_names, projected_properties)),
         SourceSpec::GetEdges {
             projected_properties,
             ..

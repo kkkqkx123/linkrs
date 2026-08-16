@@ -14,11 +14,9 @@ fn setup_person_space(db: &mut crate::common::TestDb, space_name: &str) {
     setup_test_space(
         db,
         space_name,
-        &[
-            "CREATE TAG Person (id INT, \
+        &["CREATE TAG Person (id INT, \
              addr STRUCT<city STRING, street STRING, geo STRUCT<lat DOUBLE, lon DOUBLE>>, \
-             coords ARRAY<DOUBLE>(3))",
-        ],
+             coords ARRAY<DOUBLE>(3))"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -48,14 +46,14 @@ fn test_insert_and_read_struct_array() {
     let result = db
         .execute_query("MATCH (p:Person) RETURN p.id, p.addr, p.coords")
         .expect("RETURN of composite properties should succeed");
-    let row = result
-        .rows
-        .first()
-        .expect("one row expected");
+    let row = result.rows.first().expect("one row expected");
     assert_eq!(row.get("p.id"), Some(&graphdb::core::Value::BigInt(1)));
     match row.get("p.addr") {
         Some(graphdb::core::Value::Struct(s)) => {
-            assert_eq!(s.fields[0], ("city".to_string(), graphdb::core::Value::string("shanghai")));
+            assert_eq!(
+                s.fields[0],
+                ("city".to_string(), graphdb::core::Value::string("shanghai"))
+            );
             assert!(matches!(s.fields[2].1, graphdb::core::Value::Struct(_)));
         }
         other => panic!("expected STRUCT value, got {:?}", other),
@@ -88,10 +86,9 @@ fn test_struct_field_access() {
     );
     assert_query_ok(result, "INSERT should succeed");
 
-    let result = db.execute_query(
-        "MATCH (p:Person) RETURN p.addr.city, p.addr.geo.lat, p.addr.geo.lon",
-    )
-    .expect("STRUCT field access should succeed");
+    let result = db
+        .execute_query("MATCH (p:Person) RETURN p.addr.city, p.addr.geo.lat, p.addr.geo.lon")
+        .expect("STRUCT field access should succeed");
     let row = result.rows.first().expect("one row expected");
     assert_eq!(
         row.get("p.addr.city"),

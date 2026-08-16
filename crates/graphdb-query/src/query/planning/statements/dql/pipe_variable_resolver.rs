@@ -212,7 +212,10 @@ impl PipeVariableResolver {
 
     fn extract_single_vid(&self, value: &Value) -> Option<Value> {
         match value {
-            Value::Map(map) => map.get(&Value::string("vid")).or_else(|| map.get(&Value::string("id"))).cloned(),
+            Value::Map(map) => map
+                .get(&Value::string("vid"))
+                .or_else(|| map.get(&Value::string("id")))
+                .cloned(),
             Value::SmallInt(i) => Some(Value::SmallInt(*i)),
             Value::Int(i) => Some(Value::Int(*i)),
             Value::BigInt(i) => Some(Value::BigInt(*i)),

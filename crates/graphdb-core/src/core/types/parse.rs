@@ -116,9 +116,8 @@ fn parse_parameterized(
     full: &str,
 ) -> Result<DataType, ParseDataTypeError> {
     if upper.starts_with("STRUCT<") {
-        let (content, rest) = take_angle_brackets(input).ok_or_else(|| {
-            ParseDataTypeError::new(full, "unterminated STRUCT: missing '>'")
-        })?;
+        let (content, rest) = take_angle_brackets(input)
+            .ok_or_else(|| ParseDataTypeError::new(full, "unterminated STRUCT: missing '>'"))?;
         if !rest.trim().is_empty() {
             return Err(ParseDataTypeError::new(
                 full,
@@ -251,9 +250,7 @@ fn parse_optional_length(rest: &str, full: &str) -> Result<Option<usize>, ParseD
         if inner.is_empty() || !inner.chars().all(|c| c.is_ascii_digit()) {
             return Err(ParseDataTypeError::new(
                 full,
-                format!(
-                    "invalid ARRAY length '{inner}': expected a non-negative integer"
-                ),
+                format!("invalid ARRAY length '{inner}': expected a non-negative integer"),
             ));
         }
         let len = inner.parse::<usize>().map_err(|_| {
@@ -281,9 +278,7 @@ fn parse_size_param(rest: &str, full: &str) -> Result<usize, ParseDataTypeError>
     if inner.is_empty() || !inner.chars().all(|c| c.is_ascii_digit()) {
         return Err(ParseDataTypeError::new(
             full,
-            format!(
-                "invalid size parameter '{inner}': expected a non-negative integer"
-            ),
+            format!("invalid size parameter '{inner}': expected a non-negative integer"),
         ));
     }
     inner.parse::<usize>().map_err(|_| {
@@ -391,8 +386,8 @@ mod tests {
     fn test_display_roundtrip_for_all_variants() {
         for data_type in all_data_types() {
             let s = data_type.to_string();
-            let parsed = DataType::from_str(&s)
-                .unwrap_or_else(|e| panic!("cannot parse '{}': {e}", s));
+            let parsed =
+                DataType::from_str(&s).unwrap_or_else(|e| panic!("cannot parse '{}': {e}", s));
             assert_eq!(parsed, data_type, "roundtrip mismatch for '{s}'");
         }
     }
@@ -413,7 +408,10 @@ mod tests {
         assert_eq!("FLOAT8".parse::<DataType>(), Ok(DataType::Double));
         assert_eq!("DOUBLE PRECISION".parse::<DataType>(), Ok(DataType::Double));
         // Whitespace between the words is normalized before matching.
-        assert_eq!("DOUBLE  PRECISION".parse::<DataType>(), Ok(DataType::Double));
+        assert_eq!(
+            "DOUBLE  PRECISION".parse::<DataType>(),
+            Ok(DataType::Double)
+        );
     }
 
     #[test]
@@ -438,20 +436,42 @@ mod tests {
     #[test]
     fn test_case_insensitive_and_whitespace() {
         assert_eq!("  int  ".parse::<DataType>(), Ok(DataType::Int));
-        assert_eq!("fIxEdStRiNg(8)".parse::<DataType>(), Ok(DataType::FixedString(8)));
+        assert_eq!(
+            "fIxEdStRiNg(8)".parse::<DataType>(),
+            Ok(DataType::FixedString(8))
+        );
         assert_eq!("double precision".parse::<DataType>(), Ok(DataType::Double));
-        assert_eq!("struct<a int>".parse::<DataType>(), Ok(DataType::Struct(
-            Arc::new(StructTypeInfo::new(vec![("a".to_string(), DataType::Int)]))
-        )));
+        assert_eq!(
+            "struct<a int>".parse::<DataType>(),
+            Ok(DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
+                "a".to_string(),
+                DataType::Int
+            )]))))
+        );
     }
 
     #[test]
     fn test_parameterized_forms() {
-        assert_eq!("FIXEDSTRING(8)".parse::<DataType>(), Ok(DataType::FixedString(8)));
-        assert_eq!("FIXED_STRING(8)".parse::<DataType>(), Ok(DataType::FixedString(8)));
-        assert_eq!("VECTOR(3)".parse::<DataType>(), Ok(DataType::VectorDense(3)));
-        assert_eq!("VECTOR_DENSE(3)".parse::<DataType>(), Ok(DataType::VectorDense(3)));
-        assert_eq!("VECTOR_SPARSE(3)".parse::<DataType>(), Ok(DataType::VectorSparse(3)));
+        assert_eq!(
+            "FIXEDSTRING(8)".parse::<DataType>(),
+            Ok(DataType::FixedString(8))
+        );
+        assert_eq!(
+            "FIXED_STRING(8)".parse::<DataType>(),
+            Ok(DataType::FixedString(8))
+        );
+        assert_eq!(
+            "VECTOR(3)".parse::<DataType>(),
+            Ok(DataType::VectorDense(3))
+        );
+        assert_eq!(
+            "VECTOR_DENSE(3)".parse::<DataType>(),
+            Ok(DataType::VectorDense(3))
+        );
+        assert_eq!(
+            "VECTOR_SPARSE(3)".parse::<DataType>(),
+            Ok(DataType::VectorSparse(3))
+        );
         // VECTOR(3) normalizes to VECTOR_DENSE(3): Display roundtrip holds.
         assert_eq!(
             "VECTOR(3)".parse::<DataType>().unwrap().to_string(),

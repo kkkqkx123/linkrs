@@ -198,6 +198,7 @@ impl<'a> Lexer<'a> {
                             '\\' => result.push('\\'),
                             '"' => result.push('"'),
                             '\'' => result.push('\''),
+                            '`' => result.push('`'),
                             '0' => result.push('\0'),
                             '\n' => {
                                 while let Some(&c) = self.peek_char() {

@@ -151,6 +151,7 @@ pub struct YieldItem {
 pub struct FetchStmt {
     pub span: Span,
     pub target: FetchTarget,
+    pub yield_clause: Option<YieldClause>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

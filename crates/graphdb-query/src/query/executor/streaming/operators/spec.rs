@@ -113,6 +113,8 @@ pub enum SourceSpec {
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
         projected_properties: Vec<String>,
+        /// Entity variable name for the fetched vertex (e.g. the tag name).
+        col_names: Vec<String>,
     },
     GetEdges {
         space_name: String,

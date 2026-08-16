@@ -1355,8 +1355,8 @@ impl PropertyTable {
                 Err(TypeCodecError::ParameterizedTypeCode(code)) => {
                     // Known parameterized type: read the postcard TypeInfo
                     // block that follows the code byte.
-                    let (info, rest) = postcard::take_from_bytes(&data[offset + 1..])
-                        .map_err(|e| {
+                    let (info, rest) =
+                        postcard::take_from_bytes(&data[offset + 1..]).map_err(|e| {
                             StorageError::deserialize_error(format!(
                                 "failed to decode TypeInfo for code {code}: {e}"
                             ))

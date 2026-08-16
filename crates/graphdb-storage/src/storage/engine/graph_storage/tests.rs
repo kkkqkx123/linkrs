@@ -3499,12 +3499,12 @@ mod tests {
             .create_tag("test_space", &city)
             .expect("Failed to create City tag");
 
-        let mut second_space = SpaceInfo::new("second_space".to_string())
-            .with_vid_type(DataType::BigInt);
+        let mut second_space =
+            SpaceInfo::new("second_space".to_string()).with_vid_type(DataType::BigInt);
         storage.create_space(&mut second_space).unwrap();
 
-        let second_person = crate::core::types::TagInfo::new("Person".to_string())
-            .with_properties(vec![
+        let second_person =
+            crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
                 PropertyDef::new("id".to_string(), DataType::BigInt).with_serial(true),
                 PropertyDef::new("name".to_string(), DataType::String),
             ]);
@@ -3603,11 +3603,9 @@ mod tests {
         setup_space(&mut storage);
 
         let with_default = crate::core::types::TagInfo::new("BadDefault".to_string())
-            .with_properties(vec![
-                PropertyDef::new("id".to_string(), DataType::BigInt)
-                    .with_serial(true)
-                    .with_default(Some(Value::BigInt(1))),
-            ]);
+            .with_properties(vec![PropertyDef::new("id".to_string(), DataType::BigInt)
+                .with_serial(true)
+                .with_default(Some(Value::BigInt(1)))]);
         let error = storage
             .create_tag("test_space", &with_default)
             .expect_err("SERIAL with DEFAULT must be rejected");
@@ -3630,8 +3628,8 @@ mod tests {
         let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
             .expect("Failed to create persistent storage");
         {
-            let mut space = SpaceInfo::new("test_space".to_string())
-                .with_vid_type(DataType::BigInt);
+            let mut space =
+                SpaceInfo::new("test_space".to_string()).with_vid_type(DataType::BigInt);
             storage.create_space(&mut space).unwrap();
             setup_serial_person_tag(&mut storage);
             insert_serial_vertex(&mut storage, 101, "Alice");

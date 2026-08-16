@@ -93,7 +93,7 @@ fn test_username_with_hyphens() {
 
 #[test]
 fn test_password_all_special_chars() {
-    let special_pwd = "!@#$%^&*()_+-=[]{}|;:',.<>?/~`";
+    let special_pwd = "!@#$%^&*()_+-=[]{}|;\\':,.<>?/~\\`";
     let query = format!("CREATE USER special_pwd WITH PASSWORD '{}'", special_pwd);
 
     new_scenario()

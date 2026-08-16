@@ -113,7 +113,7 @@ impl UtilStmtParser {
     }
 
     /// Analysis of the internal methods of the SHOW ROLES command
-    fn parse_show_roles_internal(
+    pub fn parse_show_roles_internal(
         &mut self,
         ctx: &mut ParseContext,
         start_span: crate::query::parser::ast::types::Span,
@@ -230,9 +230,16 @@ impl UtilStmtParser {
             }
         })?;
 
+        let yield_clause = if ctx.match_token(TokenKind::Yield) {
+            Some(ClauseParser::new().parse_yield_clause(ctx)?)
+        } else {
+            None
+        };
+
         Ok(Stmt::Fetch(FetchStmt {
             span: start_span,
             target,
+            yield_clause,
         }))
     }
 

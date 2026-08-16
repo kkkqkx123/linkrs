@@ -157,12 +157,14 @@ impl CollectionOperationEvaluator {
             }
             Value::Map(map) => {
                 if let Value::String(key) = index {
-                    map.get(&Value::string(key.clone())).cloned().ok_or_else(|| {
-                        ExpressionError::runtime_error(format!(
-                            "Mapping key does not exist: {}",
-                            key
-                        ))
-                    })
+                    map.get(&Value::string(key.clone()))
+                        .cloned()
+                        .ok_or_else(|| {
+                            ExpressionError::runtime_error(format!(
+                                "Mapping key does not exist: {}",
+                                key
+                            ))
+                        })
                 } else {
                     map.get(index).cloned().ok_or_else(|| {
                         ExpressionError::runtime_error(format!(
@@ -390,10 +392,9 @@ impl CollectionOperationEvaluator {
     /// STRUCT field access (e.g. `addr.city`).
     ///
     /// Resolves a named field of a STRUCT value; missing fields yield NULL.
-    pub fn eval_struct_field_access(
-        object: &Value,
-        field: &str,
-    ) -> Result<Value, ExpressionError> {
+    /// Vertex/Edge/Map bases fall back to property-access semantics so
+    /// tag-qualified paths such as `$$.Person.name` resolve correctly.
+    pub fn eval_struct_field_access(object: &Value, field: &str) -> Result<Value, ExpressionError> {
         if object.is_null() {
             return Ok(Value::Null(crate::core::value::NullType::Null));
         }
@@ -404,10 +405,7 @@ impl CollectionOperationEvaluator {
                 .find(|(name, _)| name == field)
                 .map(|(_, value)| value.clone())
                 .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
-            _ => Err(ExpressionError::type_error(format!(
-                "Field access '{}' is only supported on STRUCT values",
-                field
-            ))),
+            _ => Self::eval_property_access(object, field),
         }
     }
 }

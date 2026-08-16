@@ -193,6 +193,7 @@ fn test_social_network_data_flow() {
         .assert_success()
         .assert_edge_count("KNOWS", 4)
         .query("GO FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_name")
+        .assert_success()
         .assert_result_count(2)
         .exec_dml("UPDATE 1 -> 2 OF KNOWS SET strength = 1.0")
         .assert_success()

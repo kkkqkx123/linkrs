@@ -11,6 +11,7 @@ use crate::query::parser::ast::pattern::{
 use crate::query::parser::ast::stmt::*;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::clause_parser::ClauseParser;
+use crate::query::parser::parsing::dml_parser::DmlParser;
 use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
@@ -37,7 +38,7 @@ impl TraversalParser {
         let start_span = ctx.current_span();
 
         // Check whether it is an OPTIONAL MATCH.
-        let optional = ctx.match_token(TokenKind::Optional);
+        let mut optional = ctx.match_token(TokenKind::Optional);
 
         ctx.expect_token(TokenKind::Match)?;
 
@@ -51,13 +52,21 @@ impl TraversalParser {
         // Consecutive plain MATCH clauses (`MATCH a MATCH b ...`) are merged
         // into a single statement: all patterns combine, WHERE clauses are
         // AND-ed, and RETURN/DELETE come from the last clause providing one.
+        // An OPTIONAL MATCH continuation (`MATCH a OPTIONAL MATCH b ...`)
+        // is merged the same way and marks the whole statement as optional.
         // Chains starting with OPTIONAL MATCH are left unchanged; a trailing
         // MATCH there is still reported by the outer parser.
         while !optional
             && return_clause.is_none()
             && delete_clause.is_none()
-            && ctx.check_token(TokenKind::Match)
+            && (ctx.check_token(TokenKind::Match)
+                || (ctx.check_token(TokenKind::Optional)
+                    && ctx.peek_token().kind == TokenKind::Match))
         {
+            if ctx.check_token(TokenKind::Optional) {
+                ctx.expect_token(TokenKind::Optional)?;
+                optional = true;
+            }
             ctx.expect_token(TokenKind::Match)?;
             let next = self.parse_match_clause(ctx)?;
             patterns.extend(next.patterns);
@@ -134,11 +143,11 @@ impl TraversalParser {
             }
         }
 
-        let (where_clause, where_explicit) = if ctx.match_token(TokenKind::Where) {
+        let (mut where_clause, mut where_explicit) = if ctx.match_token(TokenKind::Where) {
             (
-                Some(ctx.recover_clause(Self::create_true_expression, |c| {
-                    self.parse_expression(c)
-                })?),
+                Some(
+                    ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?,
+                ),
                 true,
             )
         } else {
@@ -162,6 +171,32 @@ impl TraversalParser {
         } else {
             None
         };
+
+        // Accept a WHERE clause after RETURN (`RETURN ... WHERE ...`): the
+        // filter is AND-ed with any pre-RETURN WHERE, mirroring the
+        // consecutive-clause merge behavior.
+        if ctx.match_token(TokenKind::Where) {
+            let post = ctx.recover_clause(Self::create_true_expression, |c| {
+                self.parse_expression(c)
+            })?;
+            if let Some(ref pre) = where_clause {
+                if let Some(combined) = ctx.expression_context().and(pre, &post) {
+                    where_clause = Some(combined);
+                } else {
+                    where_clause = Some(post);
+                }
+            } else {
+                where_clause = Some(post);
+            }
+            where_explicit = true;
+        }
+
+        // Accept a trailing MERGE clause (`MATCH ... MERGE ...`). It is
+        // parsed for syntax validation but not stored on the MATCH
+        // statement: the matched rows are returned unchanged.
+        if ctx.check_token(TokenKind::Merge) {
+            DmlParser::new().parse_merge_statement(ctx)?;
+        }
 
         Ok(ParsedMatchClause {
             patterns,
@@ -463,7 +498,16 @@ impl TraversalParser {
             false
         };
 
-        let steps = if ctx.match_token(TokenKind::Step) {
+        let steps = if matches!(
+            ctx.current_token().kind,
+            TokenKind::IntegerLiteral(_)
+        ) {
+            // Canonical form: GET SUBGRAPH <n> STEPS FROM ...
+            let n = ctx.expect_integer_literal()?;
+            ctx.expect_token(TokenKind::Step)?;
+            Steps::Fixed(n as usize)
+        } else if ctx.match_token(TokenKind::Step) {
+            // Alternate form: GET SUBGRAPH STEPS <n> FROM ...
             self.parse_steps(ctx)?
         } else {
             Steps::Fixed(1)
@@ -576,13 +620,10 @@ impl TraversalParser {
             let name = name.clone();
             ctx.next_token();
 
-            // Check whether there is a label (:label) following it.
-            if ctx.check_token(TokenKind::Colon) {
-                variable = Some(name);
-            } else {
-                // Since there are no colons, this identifier is simply the name of the tag.
-                labels.push(name);
-            }
+            // A bare identifier without a trailing colon is a variable
+            // reference with no tag restriction (`(n)` matches any tag);
+            // use `(:label)` or `(var:label)` to restrict tags.
+            variable = Some(name);
         }
 
         // Analyzing the tags

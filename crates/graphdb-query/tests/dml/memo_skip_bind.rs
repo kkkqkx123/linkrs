@@ -126,7 +126,7 @@ fn test_ddl_invalidation_restores_bind_path() {
     assert_eq!(fx.pipeline.dml_bind_skipped_count(), 1);
 
     fx.pipeline
-        .execute_query_with_space("ALTER TAG person ADD note STRING", Some(space.clone()))
+        .execute_query_with_space("ALTER TAG person ADD (note STRING)", Some(space.clone()))
         .expect("alter tag");
 
     fx.insert(

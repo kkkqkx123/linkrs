@@ -309,6 +309,30 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 },
                 span,
             };
+        } else if ctx.match_token(TokenKind::IsNull) {
+            let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            expression = ParseResult {
+                expr: Expression::unary(UnaryOperator::IsNull, expression.expr),
+                span,
+            };
+        } else if ctx.match_token(TokenKind::IsNotNull) {
+            let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            expression = ParseResult {
+                expr: Expression::unary(UnaryOperator::IsNotNull, expression.expr),
+                span,
+            };
+        } else if ctx.match_token(TokenKind::IsEmpty) {
+            let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            expression = ParseResult {
+                expr: Expression::unary(UnaryOperator::IsEmpty, expression.expr),
+                span,
+            };
+        } else if ctx.match_token(TokenKind::IsNotEmpty) {
+            let span = ctx.merge_span(expression.span.start, ctx.current_position());
+            expression = ParseResult {
+                expr: Expression::unary(UnaryOperator::IsNotEmpty, expression.expr),
+                span,
+            };
         } else if ctx.match_token(TokenKind::DoubleColon) {
             let type_name = expect_cast_type_name(ctx)?;
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
@@ -361,13 +385,31 @@ fn parse_postfix_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 };
             }
         } else if (ctx.check_token(TokenKind::In) || ctx.check_token(TokenKind::NotIn))
-            && ctx.peek_token().kind == TokenKind::LBrace
+            && (ctx.peek_token().kind == TokenKind::LBrace
+                || ctx.peek_token().kind == TokenKind::LParen)
         {
             let negated = ctx.match_token(TokenKind::NotIn);
             ctx.match_token(TokenKind::In);
-            ctx.expect_token(TokenKind::LBrace)?;
-            let subquery = parse_subquery_body(ctx)?;
-            ctx.expect_token(TokenKind::RBrace)?;
+            let subquery = if ctx.match_token(TokenKind::LBrace) {
+                let body = parse_subquery_body(ctx)?;
+                ctx.expect_token(TokenKind::RBrace)?;
+                body
+            } else {
+                ctx.expect_token(TokenKind::LParen)?;
+                if !matches!(
+                    ctx.current_token().kind,
+                    TokenKind::Identifier(ref s) if s.eq_ignore_ascii_case("SELECT")
+                ) {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "Expected SELECT after IN (".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                let body = parse_sql_subquery_body(ctx)?;
+                ctx.expect_token(TokenKind::RParen)?;
+                body
+            };
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
             expression = ParseResult {
                 expr: Expression::in_subquery(expression.expr, subquery, negated),
@@ -618,9 +660,9 @@ fn parse_primary_expression(ctx: &mut ParseContext<'_>) -> Result<ParseResult, P
                 values.push(value);
             }
             Ok(ParseResult {
-                expr: Expression::literal(Value::Array(Box::new(
-                    crate::core::ArrayValue::new(values),
-                ))),
+                expr: Expression::literal(Value::Array(Box::new(crate::core::ArrayValue::new(
+                    values,
+                )))),
                 span,
             })
         }
@@ -974,10 +1016,7 @@ fn parse_property_list(
 ///
 /// Used by STRUCT/ARRAY literal folding; variable references are rejected
 /// because composite literals carry concrete values, not expressions.
-fn eval_literal_expression(
-    expr: &Expression,
-    position: Position,
-) -> Result<Value, ParseError> {
+fn eval_literal_expression(expr: &Expression, position: Position) -> Result<Value, ParseError> {
     use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;
     use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 
@@ -1101,6 +1140,144 @@ fn parse_list_comprehension(
         expr: Expression::list_comprehension(variable, source, filter, map),
         span,
     })
+}
+
+fn parse_sql_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, ParseError> {
+    ctx.next_token(); // SELECT (lexed as an identifier, not a keyword)
+
+    // SELECT items: the first expression is the subquery return expression,
+    // additional comma-separated items are consumed for syntax validation.
+    let first_item = parse_expression(ctx)?;
+    while ctx.match_token(TokenKind::Comma) {
+        parse_expression(ctx)?;
+    }
+
+    ctx.expect_token(TokenKind::From)?;
+    let tag = ctx.expect_identifier()?;
+
+    // `SELECT col FROM tag` maps to a MATCH-style subquery over the tag:
+    // pattern `(tag)`, and bare identifiers in SELECT / WHERE are rewritten
+    // into property accesses on the tag variable (`col` -> `tag.col`).
+    let pattern_str = format!("({})", tag);
+    let return_expr = Some(Box::new(rewrite_sql_identifiers(first_item.expr, &tag)));
+
+    let where_clause = if ctx.match_token(TokenKind::Where) {
+        let expr = parse_expression(ctx)?;
+        Some(Box::new(rewrite_sql_identifiers(expr.expr, &tag)))
+    } else {
+        None
+    };
+
+    Ok(SubqueryBody {
+        id: 0,
+        patterns: vec![pattern_str],
+        where_clause,
+        return_expr,
+    })
+}
+
+/// Rewrite bare variable references inside a SQL-style subquery SELECT /
+/// WHERE expression into property accesses on the FROM tag variable.
+///
+/// `SELECT age FROM person WHERE name = 'Alice'` becomes
+/// `RETURN person.age WHERE person.name = 'Alice'`.
+fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression {
+    fn walk(e: Expression, tag: &str) -> Expression {
+        match e {
+            Expression::Variable(name) => {
+                Expression::property(Expression::variable(tag), name)
+            }
+            Expression::Property { object, property } => Expression::Property {
+                object: Box::new(walk(*object, tag)),
+                property,
+            },
+            Expression::StructField { base, field } => Expression::StructField {
+                base: Box::new(walk(*base, tag)),
+                field,
+            },
+            Expression::Subscript {
+                collection,
+                index,
+            } => Expression::Subscript {
+                collection: Box::new(walk(*collection, tag)),
+                index: Box::new(walk(*index, tag)),
+            },
+            Expression::Range {
+                collection,
+                start,
+                end,
+            } => Expression::Range {
+                collection: Box::new(walk(*collection, tag)),
+                start: start.map(|s| Box::new(walk(*s, tag))),
+                end: end.map(|e| Box::new(walk(*e, tag))),
+            },
+            Expression::ListComprehension {
+                variable,
+                source,
+                filter,
+                map,
+            } => Expression::ListComprehension {
+                variable,
+                source: Box::new(walk(*source, tag)),
+                filter: filter.map(|f| Box::new(walk(*f, tag))),
+                map: map.map(|m| Box::new(walk(*m, tag))),
+            },
+            Expression::Unary { op, operand } => Expression::Unary {
+                op,
+                operand: Box::new(walk(*operand, tag)),
+            },
+            Expression::Binary { left, op, right } => Expression::Binary {
+                left: Box::new(walk(*left, tag)),
+                op,
+                right: Box::new(walk(*right, tag)),
+            },
+            Expression::Function { name, args } => Expression::Function {
+                name,
+                args: args.into_iter().map(|a| walk(a, tag)).collect(),
+            },
+            Expression::Aggregate {
+                func,
+                args,
+                distinct,
+                filter,
+            } => Expression::Aggregate {
+                func,
+                args: args.into_iter().map(|a| walk(a, tag)).collect(),
+                distinct,
+                filter: filter.map(|f| Box::new(walk(*f, tag))),
+            },
+            Expression::List(items) => {
+                Expression::List(items.into_iter().map(|i| walk(i, tag)).collect())
+            }
+            Expression::Map(pairs) => Expression::Map(
+                pairs
+                    .into_iter()
+                    .map(|(k, v)| (k, walk(v, tag)))
+                    .collect(),
+            ),
+            Expression::Case {
+                test_expr,
+                conditions,
+                default,
+            } => Expression::Case {
+                test_expr: test_expr.map(|t| Box::new(walk(*t, tag))),
+                conditions: conditions
+                    .into_iter()
+                    .map(|(c, r)| (walk(c, tag), walk(r, tag)))
+                    .collect(),
+                default: default.map(|d| Box::new(walk(*d, tag))),
+            },
+            Expression::TypeCast {
+                expression,
+                target_type,
+            } => Expression::TypeCast {
+                expression: Box::new(walk(*expression, tag)),
+                target_type,
+            },
+            other => other,
+        }
+    }
+    walk(expr, tag)
 }
 
 fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, ParseError> {
@@ -1262,10 +1439,10 @@ mod tests {
             Expression::Literal(Value::Struct(s)) => {
                 assert_eq!(s.fields.len(), 2);
                 assert_eq!(s.fields[0].0, "name");
-                assert!(matches!(
-                    s.fields[1].1,
-                    Value::Struct(_)
-                ), "nested STRUCT must fold");
+                assert!(
+                    matches!(s.fields[1].1, Value::Struct(_)),
+                    "nested STRUCT must fold"
+                );
             }
             other => panic!("expected STRUCT literal, got {:?}", other),
         }
@@ -1309,7 +1486,10 @@ mod tests {
         let result = parse_expression(ctx).expect("ARRAY literal must parse");
         match result.expr {
             Expression::Literal(Value::Array(a)) => {
-                assert_eq!(a.values, vec![Value::BigInt(1), Value::BigInt(2), Value::BigInt(3)]);
+                assert_eq!(
+                    a.values,
+                    vec![Value::BigInt(1), Value::BigInt(2), Value::BigInt(3)]
+                );
             }
             other => panic!("expected ARRAY literal, got {:?}", other),
         }

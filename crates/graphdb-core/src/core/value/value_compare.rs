@@ -602,16 +602,16 @@ impl Value {
         b: &crate::core::value::StructValue,
     ) -> CmpOrdering {
         a.fields.len().cmp(&b.fields.len()).then_with(|| {
-            a.fields
-                .iter()
-                .zip(b.fields.iter())
-                .fold(CmpOrdering::Equal, |acc, ((a_k, a_v), (b_k, b_v))| {
+            a.fields.iter().zip(b.fields.iter()).fold(
+                CmpOrdering::Equal,
+                |acc, ((a_k, a_v), (b_k, b_v))| {
                     if acc == CmpOrdering::Equal {
                         a_k.cmp(b_k).then_with(|| a_v.cmp(b_v))
                     } else {
                         acc
                     }
-                })
+                },
+            )
         })
     }
 

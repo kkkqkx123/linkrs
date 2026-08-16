@@ -274,7 +274,8 @@ impl Binder {
                 // Binding bug guard: a resolved Struct base must not yield
                 // Empty; schema-resolved field types must flow downstream.
                 debug_assert!(
-                    !matches!(&obj.return_type(), DataType::Struct(_)) || field_type != DataType::Empty,
+                    !matches!(&obj.return_type(), DataType::Struct(_))
+                        || field_type != DataType::Empty,
                     "StructField '{}' could not be resolved against its Struct base",
                     field
                 );

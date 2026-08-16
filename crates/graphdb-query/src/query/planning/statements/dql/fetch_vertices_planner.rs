@@ -40,10 +40,13 @@ impl Planner for FetchVerticesPlanner {
         };
 
         // Check whether it is a FETCH VERTICES operation.
-        let (ids, properties) = match &fetch_stmt.target {
+        let (tag_name, ids, properties) = match &fetch_stmt.target {
             FetchTarget::Vertices {
-                ids, properties, ..
-            } => (ids, properties),
+                tag_name,
+                ids,
+                properties,
+                ..
+            } => (tag_name, ids, properties),
             _ => {
                 return Err(PlannerError::InvalidOperation(
                     "FetchVerticesPlanner requires the FETCH VERTICES statement.".to_string(),
@@ -81,6 +84,7 @@ impl Planner for FetchVerticesPlanner {
             .join(",");
 
         let var_name = "v";
+        let entity_var = tag_name.clone().unwrap_or_else(|| "vertex".to_string());
 
         // 1. Create a parameter node to provide the vertex IDs.
         let mut arg_node = ArgumentNode::new(next_node_id(), var_name);
@@ -94,6 +98,7 @@ impl Planner for FetchVerticesPlanner {
         let mut get_vertices_node = GetVerticesNode::new(space_id, &space_name, &ids_str);
         get_vertices_node.add_dependency(arg_node_enum.clone());
         get_vertices_node.set_output_var("fetched_vertices".to_string());
+        get_vertices_node.set_col_names(vec![entity_var.clone()]);
 
         // Set the tag attributes (obtained from the properties field)
         let tag_props = if let Some(props) = properties {
@@ -105,13 +110,24 @@ impl Planner for FetchVerticesPlanner {
 
         let get_vertices_node_enum = PlanNodeEnum::GetVertices(get_vertices_node);
 
-        // 3. Create a projection node.
-        let project_node = ProjectNode::new(get_vertices_node_enum.clone(), vec![])?;
-
-        let project_node_enum = PlanNodeEnum::Project(project_node);
+        // 3. Apply the YIELD clause as a projection when present; without one
+        // the fetched vertices are returned directly.
+        let root = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
+            let mut columns = Vec::new();
+            for item in &yield_clause.items {
+                columns.push(crate::core::YieldColumn {
+                    expression: item.expression.clone(),
+                    alias: item.alias.clone().unwrap_or_default(),
+                    is_matched: false,
+                });
+            }
+            PlanNodeEnum::Project(ProjectNode::new(get_vertices_node_enum.clone(), columns)?)
+        } else {
+            get_vertices_node_enum.clone()
+        };
 
         // 4. Create a SubPlan
-        let sub_plan = SubPlan::new(Some(project_node_enum), Some(arg_node_enum));
+        let sub_plan = SubPlan::new(Some(root), Some(arg_node_enum));
 
         Ok(sub_plan)
     }

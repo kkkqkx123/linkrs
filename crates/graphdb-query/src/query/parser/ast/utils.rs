@@ -415,7 +415,11 @@ impl StmtFactory {
 
     /// Create a FETCH statement
     pub fn fetch(target: FetchTarget, span: Span) -> Stmt {
-        Stmt::Fetch(FetchStmt { span, target })
+        Stmt::Fetch(FetchStmt {
+            span,
+            target,
+            yield_clause: None,
+        })
     }
 
     /// Create a USE statement

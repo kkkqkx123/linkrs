@@ -116,10 +116,16 @@ fn test_parameterized_schema_survives_dump_load() {
         ),
     ])));
     let array_type = DataType::Array(Arc::new(ArrayTypeInfo::new(DataType::Double, Some(3))));
-    table.add_property("addr".to_string(), struct_type.clone(), true).unwrap();
-    table.add_property("coords".to_string(), array_type.clone(), true).unwrap();
+    table
+        .add_property("addr".to_string(), struct_type.clone(), true)
+        .unwrap();
+    table
+        .add_property("coords".to_string(), array_type.clone(), true)
+        .unwrap();
     // Plain (code <= 31) column alongside parameterized ones.
-    table.add_property("weight".to_string(), DataType::Double, true).unwrap();
+    table
+        .add_property("weight".to_string(), DataType::Double, true)
+        .unwrap();
 
     let data = table.dump();
 

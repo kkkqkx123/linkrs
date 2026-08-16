@@ -174,10 +174,10 @@ fn sample_values() -> Vec<Value> {
         Value::Null(NullType::Null),
         Value::struct_(vec![
             ("city".to_string(), Value::string("shanghai")),
-            ("geo".to_string(), Value::struct_(vec![(
-                "lat".to_string(),
-                Value::Double(31.2),
-            )])),
+            (
+                "geo".to_string(),
+                Value::struct_(vec![("lat".to_string(), Value::Double(31.2))]),
+            ),
         ]),
         Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
     ]

@@ -158,7 +158,10 @@ fn test_properties_vertex_function() {
     if let Value::Map(map) = result.expect("properties函数应该成功") {
         assert!(map.contains_key(&Value::string("name")));
         assert!(map.contains_key(&Value::string("age")));
-        assert_eq!(map.get(&Value::string("name")), Some(&Value::string("Alice")));
+        assert_eq!(
+            map.get(&Value::string("name")),
+            Some(&Value::string("Alice"))
+        );
         assert_eq!(map.get(&Value::string("age")), Some(&Value::Int(30)));
     } else {
         panic!("The expected return type is a map.");

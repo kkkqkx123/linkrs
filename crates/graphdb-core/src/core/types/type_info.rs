@@ -88,10 +88,13 @@ mod tests {
     fn test_struct_type_info_roundtrip() {
         let info = TypeInfo::struct_(vec![
             ("city".to_string(), DataType::String),
-            ("geo".to_string(), DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
-                "lat".to_string(),
-                DataType::Double,
-            )])))),
+            (
+                "geo".to_string(),
+                DataType::Struct(Arc::new(StructTypeInfo::new(vec![(
+                    "lat".to_string(),
+                    DataType::Double,
+                )]))),
+            ),
         ]);
         let encoded = postcard::to_allocvec(&info).expect("encode type info");
         let decoded: TypeInfo = postcard::from_bytes(&encoded).expect("decode type info");

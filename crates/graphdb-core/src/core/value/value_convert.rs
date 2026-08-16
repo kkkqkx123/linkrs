@@ -160,9 +160,7 @@ impl Value {
             Value::Map(map) => {
                 let items: Result<Vec<String>, _> = map
                     .iter()
-                    .map(|(k, v)| {
-                        v.to_string().map(|v_str| format!("{}: {}", k, v_str))
-                    })
+                    .map(|(k, v)| v.to_string().map(|v_str| format!("{}: {}", k, v_str)))
                     .collect();
                 items.map(|items_str| format!("{{{}}}", items_str.join(", ")))
             }
@@ -755,9 +753,9 @@ impl Value {
                             let key = Value::string(name.clone());
                             (
                                 name.clone(),
-                                map.get(&key).cloned().unwrap_or(Value::Null(
-                                    NullType::Null,
-                                )),
+                                map.get(&key)
+                                    .cloned()
+                                    .unwrap_or(Value::Null(NullType::Null)),
                             )
                         })
                         .collect();

@@ -249,6 +249,7 @@ impl SourceOperator {
                 space_name,
                 vertex_ids,
                 projected_properties,
+                col_names: _,
             } => SourceOperatorKind::GetVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),

@@ -425,8 +425,10 @@ fn validate_explicit_serial_value(
                 )));
             }
         }
-        ctx.serial_allocator()
-            .advance_to(&super::serial::SerialKey::new(space_id, table_name), integer as u64);
+        ctx.serial_allocator().advance_to(
+            &super::serial::SerialKey::new(space_id, table_name),
+            integer as u64,
+        );
     }
     Ok(())
 }
