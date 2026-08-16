@@ -1,17 +1,29 @@
 //! HTTP client for connecting to GraphDB server
+//!
+//! All request/response bodies use the shared `graphdb-wire` DTOs, so the
+//! CLI never maintains a second copy of the HTTP contract.
 
 use std::time::Duration;
 
-use crate::client::batch::{BatchError, BatchItem, BatchResult, BatchStatus, BatchType};
+use graphdb_wire::batch::{
+    AddBatchItemsRequest, AddBatchItemsResponse, BatchItem, BatchStatusResponse, BatchType,
+    CreateBatchRequest, CreateBatchResponse, ExecuteBatchResponse,
+};
+use graphdb_wire::meta::{
+    BeginTransactionRequest, ColdSnapshotInfo, DatabaseStatistics, ExportSnapshotRequest,
+    LoadSnapshotRequest, LoginRequest, LoginResponse, LogoutRequest, MergeSnapshotsRequest,
+    QueryStatistics, ServerConfig, SessionStatistics, TransactionActionRequest,
+    TransactionResponse, UpdateConfigRequest,
+};
+use graphdb_wire::query::{BatchQueryRequest, BatchQueryResponse, QueryRequest, QueryResponse};
+use graphdb_wire::schema::{
+    CreateEdgeTypeRequest, CreateSpaceRequest, CreateTagRequest, EdgeTypeInfo, PropertyDef,
+    SpaceInfo, TagInfo,
+};
+
 use crate::client::config::{ClientConfig, SessionInfo};
-use crate::client::config_types::ServerConfigResponse;
-use crate::client::request_types::*;
-use crate::client::response_types::*;
-use crate::client::schema::PropertyDef;
-use crate::client::stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
-use crate::client::transaction::{TransactionInfo, TransactionOptions};
-use crate::client::types::{EdgeTypeInfo, QueryResult, SpaceInfo, TagInfo};
-use crate::client::vector::{VectorMatch, VectorSearchResult};
+use crate::client::transaction::TransactionOptions;
+use crate::client::types::QueryResult;
 use crate::utils::error::{CliError, Result};
 
 /// HTTP client for connecting to remote GraphDB server
@@ -134,8 +146,8 @@ impl HttpClient {
             )));
         }
 
-        let result: QueryResult = response.json().await?;
-        Ok(result)
+        let wire: QueryResponse = response.json().await?;
+        Ok(QueryResult::from(wire))
     }
 
     /// Execute multiple auto-commit DML statements inside a single shared
@@ -168,7 +180,7 @@ impl HttpClient {
         }
 
         let batch_resp: BatchQueryResponse = response.json().await?;
-        Ok(batch_resp.results)
+        Ok(batch_resp.results.into_iter().map(QueryResult::from).collect())
     }
 
     /// Execute a query without variable substitution
@@ -275,9 +287,7 @@ impl HttpClient {
     // ── Cold snapshot management ──
 
     /// List all registered cold snapshots.
-    pub async fn list_cold_snapshots(
-        &self,
-    ) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+    pub async fn list_cold_snapshots(&self) -> Result<Vec<ColdSnapshotInfo>> {
         let url = format!("{}/snapshots/cold", self.base_url);
         let response = self.inner.get(&url).send().await?;
         if !response.status().is_success() {
@@ -297,17 +307,12 @@ impl HttpClient {
     }
 
     /// Register a cold snapshot from a server-side `.lkcs` file.
-    pub async fn load_cold_snapshot(
-        &self,
-        path: &str,
-    ) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
+    pub async fn load_cold_snapshot(&self, path: &str) -> Result<ColdSnapshotInfo> {
         let url = format!("{}/snapshots/cold/load", self.base_url);
-        let response = self
-            .inner
-            .post(&url)
-            .json(&serde_json::json!({ "path": path }))
-            .send()
-            .await?;
+        let request = LoadSnapshotRequest {
+            path: path.to_string(),
+        };
+        let response = self.inner.post(&url).json(&request).send().await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -335,18 +340,13 @@ impl HttpClient {
     }
 
     /// Re-export the most recent cold snapshot of a label to a path.
-    pub async fn export_cold_snapshot(
-        &self,
-        label: u32,
-        path: &str,
-    ) -> Result<crate::client::snapshot::ColdSnapshotInfo> {
+    pub async fn export_cold_snapshot(&self, label: u32, path: &str) -> Result<ColdSnapshotInfo> {
         let url = format!("{}/snapshots/cold/export", self.base_url);
-        let response = self
-            .inner
-            .post(&url)
-            .json(&serde_json::json!({ "label": label, "path": path }))
-            .send()
-            .await?;
+        let request = ExportSnapshotRequest {
+            label,
+            path: path.to_string(),
+        };
+        let response = self.inner.post(&url).json(&request).send().await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -359,17 +359,12 @@ impl HttpClient {
     }
 
     /// Consolidate every registered version of the given labels.
-    pub async fn merge_cold_snapshots(
-        &self,
-        labels: &[u32],
-    ) -> Result<Vec<crate::client::snapshot::ColdSnapshotInfo>> {
+    pub async fn merge_cold_snapshots(&self, labels: &[u32]) -> Result<Vec<ColdSnapshotInfo>> {
         let url = format!("{}/snapshots/cold/merge", self.base_url);
-        let response = self
-            .inner
-            .post(&url)
-            .json(&serde_json::json!({ "labels": labels }))
-            .send()
-            .await?;
+        let request = MergeSnapshotsRequest {
+            labels: labels.to_vec(),
+        };
+        let response = self.inner.post(&url).json(&request).send().await?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -386,20 +381,118 @@ impl HttpClient {
         Ok(merged)
     }
 
+    // ── Schema DDL (admin commands) ──
+
+    /// Create a new graph space
+    pub async fn create_space(
+        &self,
+        name: &str,
+        vid_type: Option<&str>,
+        comment: Option<&str>,
+    ) -> Result<()> {
+        let url = format!("{}/schema/spaces", self.base_url);
+        let request = CreateSpaceRequest {
+            name: name.to_string(),
+            vid_type: vid_type.map(|s| s.to_string()),
+            comment: comment.map(|s| s.to_string()),
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to create space ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Drop a graph space
+    pub async fn drop_space(&self, name: &str) -> Result<()> {
+        let url = format!("{}/schema/spaces/{}", self.base_url, name);
+
+        let response = self.inner.delete(&url).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to drop space ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Create a tag in a space
+    pub async fn create_tag(&self, space: &str, name: &str, properties: Vec<PropertyDef>) -> Result<()> {
+        let url = format!("{}/schema/spaces/{}/tags", self.base_url, space);
+
+        let request = CreateTagRequest {
+            name: name.to_string(),
+            properties,
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to create tag ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Create an edge type in a space
+    pub async fn create_edge_type(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<PropertyDef>,
+    ) -> Result<()> {
+        let url = format!("{}/schema/spaces/{}/edge-types", self.base_url, space);
+
+        let request = CreateEdgeTypeRequest {
+            name: name.to_string(),
+            properties,
+        };
+
+        let response = self.inner.post(&url).json(&request).send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::query(format!(
+                "Failed to create edge type ({}): {}",
+                status, body
+            )));
+        }
+
+        Ok(())
+    }
+
+    // ── Transactions ──
+
     /// Begin a new transaction
-    pub async fn begin_transaction(&self, options: TransactionOptions) -> Result<TransactionInfo> {
+    pub async fn begin_transaction(&self, options: TransactionOptions) -> Result<TransactionResponse> {
         let url = format!("{}/transactions", self.base_url);
 
-        let session_id = self
-            .session_info
-            .as_ref()
-            .map(|s| s.session_id)
-            .ok_or_else(|| CliError::session("Not connected".to_string()))?;
-
         let request = BeginTransactionRequest {
-            session_id,
             read_only: options.read_only,
             timeout_seconds: options.timeout_seconds,
+            query_timeout_seconds: None,
+            statement_timeout_seconds: None,
+            idle_timeout_seconds: None,
+            isolation_level: None,
         };
 
         let response = self.inner.post(&url).json(&request).send().await?;
@@ -413,11 +506,7 @@ impl HttpClient {
             )));
         }
 
-        let txn_resp: TransactionResponse = response.json().await?;
-        Ok(TransactionInfo {
-            transaction_id: txn_resp.transaction_id,
-            status: txn_resp.status,
-        })
+        Ok(response.json().await?)
     }
 
     /// Commit a transaction
@@ -472,125 +561,7 @@ impl HttpClient {
         Ok(())
     }
 
-    /// Create a new graph space
-    pub async fn create_space(
-        &self,
-        name: &str,
-        vid_type: Option<&str>,
-        comment: Option<&str>,
-    ) -> Result<()> {
-        let url = format!("{}/schema/spaces", self.base_url);
-        let request = CreateSpaceRequest {
-            name: name.to_string(),
-            vid_type: vid_type.map(|s| s.to_string()),
-            comment: comment.map(|s| s.to_string()),
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create space ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Drop a graph space
-    pub async fn drop_space(&self, name: &str) -> Result<()> {
-        let url = format!("{}/schema/spaces/{}", self.base_url, name);
-
-        let response = self.inner.delete(&url).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to drop space ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Create a tag in a space
-    pub async fn create_tag(
-        &self,
-        space: &str,
-        name: &str,
-        properties: Vec<PropertyDef>,
-    ) -> Result<()> {
-        let url = format!("{}/schema/spaces/{}/tags", self.base_url, space);
-
-        let props: Vec<PropertyDefInput> = properties
-            .into_iter()
-            .map(|p| PropertyDefInput {
-                name: p.name,
-                data_type: p.data_type.to_string(),
-                nullable: p.nullable,
-            })
-            .collect();
-
-        let request = CreateTagRequest {
-            name: name.to_string(),
-            properties: props,
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create tag ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Create an edge type in a space
-    pub async fn create_edge_type(
-        &self,
-        space: &str,
-        name: &str,
-        properties: Vec<PropertyDef>,
-    ) -> Result<()> {
-        let url = format!("{}/schema/spaces/{}/edge-types", self.base_url, space);
-
-        let props: Vec<PropertyDefInput> = properties
-            .into_iter()
-            .map(|p| PropertyDefInput {
-                name: p.name,
-                data_type: p.data_type.to_string(),
-                nullable: p.nullable,
-            })
-            .collect();
-
-        let request = CreateEdgeTypeRequest {
-            name: name.to_string(),
-            properties: props,
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create edge type ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
+    // ── Batch import (admin commands) ──
 
     /// Create a batch task
     pub async fn create_batch(
@@ -601,15 +572,9 @@ impl HttpClient {
     ) -> Result<String> {
         let url = format!("{}/batch", self.base_url);
 
-        let batch_type_str = match batch_type {
-            BatchType::Vertex => "vertex",
-            BatchType::Edge => "edge",
-            BatchType::Mixed => "mixed",
-        };
-
         let request = CreateBatchRequest {
             space_id,
-            batch_type: batch_type_str.to_string(),
+            batch_type,
             batch_size,
         };
 
@@ -632,26 +597,7 @@ impl HttpClient {
     pub async fn add_batch_items(&self, batch_id: &str, items: Vec<BatchItem>) -> Result<usize> {
         let url = format!("{}/batch/{}/items", self.base_url, batch_id);
 
-        let batch_items: Vec<crate::client::request_types::BatchItem> = items
-            .into_iter()
-            .map(|item| match item {
-                BatchItem::Vertex(v) => {
-                    crate::client::request_types::BatchItem::Vertex(VertexData {
-                        vid: v.vid,
-                        tags: v.tags,
-                        properties: v.properties,
-                    })
-                }
-                BatchItem::Edge(e) => crate::client::request_types::BatchItem::Edge(EdgeData {
-                    edge_type: e.edge_type,
-                    src_vid: e.src_vid,
-                    dst_vid: e.dst_vid,
-                    properties: e.properties,
-                }),
-            })
-            .collect();
-
-        let request = AddBatchItemsRequest { items: batch_items };
+        let request = AddBatchItemsRequest { items };
 
         let response = self.inner.post(&url).json(&request).send().await?;
 
@@ -669,7 +615,7 @@ impl HttpClient {
     }
 
     /// Execute a batch task
-    pub async fn execute_batch(&self, batch_id: &str) -> Result<BatchResult> {
+    pub async fn execute_batch(&self, batch_id: &str) -> Result<ExecuteBatchResponse> {
         let url = format!("{}/batch/{}/execute", self.base_url, batch_id);
 
         let response = self.inner.post(&url).send().await?;
@@ -683,27 +629,11 @@ impl HttpClient {
             )));
         }
 
-        let exec_resp: ExecuteBatchResponse = response.json().await?;
-        Ok(BatchResult {
-            batch_id: exec_resp.batch_id,
-            status: format!("{:?}", exec_resp.status),
-            vertices_inserted: exec_resp.result.vertices_inserted,
-            edges_inserted: exec_resp.result.edges_inserted,
-            errors: exec_resp
-                .result
-                .errors
-                .into_iter()
-                .map(|e| BatchError {
-                    index: e.index,
-                    item_type: format!("{:?}", e.item_type),
-                    error: e.error,
-                })
-                .collect(),
-        })
+        Ok(response.json().await?)
     }
 
     /// Get batch status
-    pub async fn get_batch_status(&self, batch_id: &str) -> Result<BatchStatus> {
+    pub async fn get_batch_status(&self, batch_id: &str) -> Result<BatchStatusResponse> {
         let url = format!("{}/batch/{}", self.base_url, batch_id);
 
         let response = self.inner.get(&url).send().await?;
@@ -717,15 +647,7 @@ impl HttpClient {
             )));
         }
 
-        let status_resp: BatchStatusResponse = response.json().await?;
-        Ok(BatchStatus {
-            batch_id: status_resp.batch_id,
-            status: format!("{:?}", status_resp.status),
-            total: status_resp.progress.total,
-            processed: status_resp.progress.processed,
-            succeeded: status_resp.progress.succeeded,
-            failed: status_resp.progress.failed,
-        })
+        Ok(response.json().await?)
     }
 
     /// Cancel a batch task
@@ -746,6 +668,8 @@ impl HttpClient {
         Ok(())
     }
 
+    // ── Statistics ──
+
     /// Get session statistics
     pub async fn get_session_statistics(&self, session_id: i64) -> Result<SessionStatistics> {
         let url = format!("{}/statistics/sessions/{}", self.base_url, session_id);
@@ -761,8 +685,7 @@ impl HttpClient {
             )));
         }
 
-        let stats: SessionStatistics = response.json().await?;
-        Ok(stats)
+        Ok(response.json().await?)
     }
 
     /// Get query statistics
@@ -780,8 +703,7 @@ impl HttpClient {
             )));
         }
 
-        let stats: QueryStatistics = response.json().await?;
-        Ok(stats)
+        Ok(response.json().await?)
     }
 
     /// Get database statistics
@@ -799,12 +721,13 @@ impl HttpClient {
             )));
         }
 
-        let stats: DatabaseStatistics = response.json().await?;
-        Ok(stats)
+        Ok(response.json().await?)
     }
 
+    // ── Server configuration ──
+
     /// Get server configuration
-    pub async fn get_config(&self) -> Result<crate::client::config_types::ServerConfig> {
+    pub async fn get_config(&self) -> Result<ServerConfig> {
         let url = format!("{}/config", self.base_url);
 
         let response = self.inner.get(&url).send().await?;
@@ -818,29 +741,7 @@ impl HttpClient {
             )));
         }
 
-        let config_resp: ServerConfigResponse = response.json().await?;
-        Ok(crate::client::config_types::ServerConfig {
-            version: config_resp.version,
-            sections: config_resp
-                .sections
-                .into_iter()
-                .map(|s| crate::client::config_types::ConfigSection {
-                    name: s.name,
-                    description: s.description,
-                    items: s
-                        .items
-                        .into_iter()
-                        .map(|i| crate::client::config_types::ConfigItem {
-                            key: i.key,
-                            value: i.value,
-                            default_value: i.default_value,
-                            description: i.description,
-                            mutable: i.mutable,
-                        })
-                        .collect(),
-                })
-                .collect(),
-        })
+        Ok(response.json().await?)
     }
 
     /// Update server configuration
@@ -872,104 +773,7 @@ impl HttpClient {
         Ok(())
     }
 
-    /// Create a vector index
-    pub async fn create_vector_index(
-        &self,
-        space: &str,
-        name: &str,
-        tag: &str,
-        field: &str,
-        dimension: usize,
-        metric: &str,
-    ) -> Result<()> {
-        let url = format!("{}/schema/spaces/{}/vector-indexes", self.base_url, space);
-
-        let request = CreateVectorIndexRequest {
-            name: name.to_string(),
-            tag: tag.to_string(),
-            field: field.to_string(),
-            dimension,
-            metric: metric.to_string(),
-        };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create vector index ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Drop a vector index
-    pub async fn drop_vector_index(&self, space: &str, name: &str) -> Result<()> {
-        let url = format!(
-            "{}/schema/spaces/{}/vector-indexes/{}",
-            self.base_url, space, name
-        );
-
-        let response = self.inner.delete(&url).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to drop vector index ({}): {}",
-                status, body
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Search similar vectors
-    pub async fn vector_search(
-        &self,
-        space: &str,
-        index_name: &str,
-        vector: Vec<f32>,
-        top_k: usize,
-    ) -> Result<VectorSearchResult> {
-        let url = format!(
-            "{}/schema/spaces/{}/vector-indexes/{}/search",
-            self.base_url, space, index_name
-        );
-
-        let request = VectorSearchRequest { vector, top_k };
-
-        let response = self.inner.post(&url).json(&request).send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to search vectors ({}): {}",
-                status, body
-            )));
-        }
-
-        let search_resp: VectorSearchResponse = response.json().await?;
-
-        let results = search_resp
-            .results
-            .into_iter()
-            .map(|r| VectorMatch {
-                vid: r.vid,
-                score: r.score,
-                properties: r.properties,
-            })
-            .collect();
-
-        Ok(VectorSearchResult {
-            total: search_resp.total,
-            results,
-        })
-    }
+    // ── Auth ──
 
     /// Login and authenticate (low-level API)
     async fn login(&self, username: &str, password: &str) -> Result<(i64, String)> {

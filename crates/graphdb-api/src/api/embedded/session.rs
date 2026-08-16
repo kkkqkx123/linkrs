@@ -11,6 +11,7 @@ use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use crate::query::parser::ast::Stmt;
 use crate::query::parser::{Parser, ParserResult};
+#[cfg(feature = "fulltext-search")]
 use crate::search::FulltextIndexManager;
 use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
@@ -73,6 +74,7 @@ pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
     pub(crate) schema_api: SchemaApi<S>,
     pub(crate) txn_manager: Arc<TransactionManager>,
     pub(crate) storage: Arc<RwLock<S>>,
+    #[cfg(feature = "fulltext-search")]
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) stats_manager: Arc<StatsManager>,
@@ -166,20 +168,37 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// "space_name", "space_id", "vid_type" columns. This method detects
     /// that pattern and updates the session's space state accordingly.
     fn update_space_from_result(&self, result: &crate::api::core::QueryResult) {
-        if !result.columns.iter().any(|c| c == "space_name") {
+        let columns = result.columns();
+        if !columns.iter().any(|c| c == "space_name") {
             return;
         }
-        let row = match result.rows.first() {
+        let row = match result.rows().first() {
             Some(r) => r,
             None => return,
         };
-        let name = match row.values.get("space_name") {
-            Some(Value::String(s)) => s.to_string(),
-            _ => return,
+        let name = columns
+            .iter()
+            .position(|c| c == "space_name")
+            .and_then(|idx| row.get(idx))
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            });
+        let name = match name {
+            Some(n) => n,
+            None => return,
         };
-        let id = match row.values.get("space_id") {
-            Some(Value::BigInt(i)) => *i as u64,
-            _ => return,
+        let id = columns
+            .iter()
+            .position(|c| c == "space_id")
+            .and_then(|idx| row.get(idx))
+            .and_then(|v| match v {
+                Value::BigInt(i) => Some(*i as u64),
+                _ => None,
+            });
+        let id = match id {
+            Some(i) => i,
+            None => return,
         };
         *self.space_id.write() = Some(id);
         *self.space_name.write() = Some(name);
@@ -608,32 +627,33 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         // Contract: the LET plan evaluates to exactly one row with one value
         // column. Guard instead of silently taking the first value if a
         // planner regression changes the shape.
-        if result.rows.len() != 1 {
+        if result.rows().len() != 1 {
             return Err(CoreError::InvalidParameter(format!(
                 "LET expression must evaluate to a single row, got {} rows",
-                result.rows.len()
+                result.rows().len()
             )));
         }
-        if result.columns.len() != 1 {
+        if result.columns().len() != 1 {
             return Err(CoreError::InvalidParameter(format!(
                 "LET expression must evaluate to a single value, got {} columns",
-                result.columns.len()
+                result.columns().len()
             )));
         }
-        let columns = result.columns.clone();
-        let rows = result.rows;
+        let columns = result.columns().to_vec();
+        let rows = result.rows().to_vec();
         let row = rows.first().ok_or_else(|| {
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
-        let value = row.get(&columns[0]).cloned().ok_or_else(|| {
+        let value = row.get(0).cloned().ok_or_else(|| {
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
         self.set_variable(assign.name.clone(), value);
-        Ok(QueryResult::from_core(crate::api::core::QueryResult {
-            columns,
-            rows,
-            metadata: result.metadata,
-        }))
+        Ok(QueryResult::from_core(crate::api::core::QueryResult::new(
+            crate::query::executor::base::ExecutionResult::from_data_set(
+                crate::core::types::DataSet::from_rows(rows, columns),
+            ),
+            result.metadata,
+        )))
     }
 
     /// Execute a parameterized query

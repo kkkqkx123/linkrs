@@ -3,7 +3,7 @@
 //! Provides transport layer independent query execution
 
 use crate::api::core::error::{CoreError, CoreResult};
-use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult, Row};
+use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult};
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
 use crate::query::executor::streaming::pool::SharedScheduler;
@@ -320,8 +320,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             }
         }
 
-        // Conversion to structured results
-        let mut result = Self::convert_to_query_result(execution_result)?;
+        // Wrap the engine execution result with API-layer metadata.
+        let mut result = Self::attach_metadata(execution_result)?;
         result.metadata.execution_time_ms = start_time.elapsed().as_millis() as u64;
 
         Ok(result)
@@ -472,84 +472,29 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.execute(query, new_ctx)
     }
 
-    /// Convert execution results to structured query results
-    fn convert_to_query_result(
-        execution: crate::query::executor::base::ExecutionResult,
-    ) -> CoreResult<QueryResult> {
+    /// Attach API-layer metadata to an engine execution result.
+    ///
+    /// The engine result is carried through unchanged (no row conversion):
+    /// the API core layer adds only timing / count metadata. `ExecutionResult::Error`
+    /// is surfaced as an internal error, all other variants pass through.
+    fn attach_metadata(execution: crate::query::executor::base::ExecutionResult) -> CoreResult<QueryResult> {
+        let rows_returned = match &execution {
+            crate::query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
+            _ => 0,
+        };
         match execution {
-            crate::query::executor::base::ExecutionResult::DataSet { data, .. } => {
-                // Processing the results of a dataset: The DataSet uses `col_names` instead of `columns`.
-                let columns = data.col_names.clone();
-                let mut rows = Vec::new();
-
-                for row_data in &data.rows {
-                    let mut row = Row::with_capacity(columns.len());
-                    for (i, col) in columns.iter().enumerate() {
-                        if let Some(value) = row_data.get(i) {
-                            row.insert(col.clone(), value.clone());
-                        }
-                    }
-                    rows.push(row);
-                }
-
-                let metadata = ExecutionMetadata {
-                    execution_time_ms: 0,
-                    rows_scanned: data.row_count() as u64,
-                    rows_returned: data.row_count() as u64,
-                    cache_hit: false,
-                };
-
-                Ok(QueryResult {
-                    columns,
-                    rows,
-                    metadata,
-                })
-            }
-            crate::query::executor::base::ExecutionResult::Success => {
-                // Successful execution with no data
-                Ok(QueryResult {
-                    columns: vec![],
-                    rows: vec![],
-                    metadata: ExecutionMetadata::default(),
-                })
-            }
-            crate::query::executor::base::ExecutionResult::Empty => {
-                // Empty result
-                Ok(QueryResult {
-                    columns: vec![],
-                    rows: vec![],
-                    metadata: ExecutionMetadata::default(),
-                })
-            }
-            crate::query::executor::base::ExecutionResult::SpaceSwitched(summary) => {
-                // Space switched successfully
-                let mut row = crate::api::core::types::Row::new();
-                row.values.insert(
-                    "space_name".to_string(),
-                    crate::core::Value::string(summary.name.clone()),
-                );
-                row.values.insert(
-                    "space_id".to_string(),
-                    crate::core::Value::BigInt(summary.id as i64),
-                );
-                row.values.insert(
-                    "vid_type".to_string(),
-                    crate::core::Value::string(summary.vid_type.to_string()),
-                );
-                Ok(QueryResult {
-                    columns: vec![
-                        "space_name".to_string(),
-                        "space_id".to_string(),
-                        "vid_type".to_string(),
-                    ],
-                    rows: vec![row],
-                    metadata: ExecutionMetadata::default(),
-                })
-            }
             crate::query::executor::base::ExecutionResult::Error(msg) => {
-                // Error case - should be handled before this function
                 Err(CoreError::Internal(msg))
             }
+            other => Ok(QueryResult::new(
+                other,
+                ExecutionMetadata {
+                    execution_time_ms: 0,
+                    rows_scanned: rows_returned as u64,
+                    rows_returned: rows_returned as u64,
+                    cache_hit: false,
+                },
+            )),
         }
     }
 }

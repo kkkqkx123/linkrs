@@ -1,9 +1,9 @@
 #[cfg(feature = "server")]
 mod server_main {
     use clap::Parser;
-    use graphdb::api;
     use graphdb::config::logging;
     use graphdb::config::Config;
+    use graphdb_server::{execute_query, start_service_with_config};
 
     #[derive(Parser)]
     #[clap(version = "0.1.0", author = "GraphDB Contributors")]
@@ -65,7 +65,7 @@ mod server_main {
                         return;
                     }
                 };
-                let result = rt.block_on(async { api::start_service_with_config(cfg).await });
+                let result = rt.block_on(async { start_service_with_config(cfg).await });
 
                 // Ensure logging is flushed before exiting
                 logging::shutdown();
@@ -89,7 +89,7 @@ mod server_main {
                         return;
                     }
                 };
-                let result = rt.block_on(api::execute_query(&query));
+                let result = rt.block_on(execute_query(&query));
 
                 // Ensure logging is flushed before exiting
                 logging::shutdown();

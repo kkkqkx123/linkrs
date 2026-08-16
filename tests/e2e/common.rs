@@ -495,14 +495,20 @@ impl TestDb {
 
     /// Apply space-switch state from a USE result.
     fn track_space_from_result(&mut self, result: &QueryResult) {
-        if result.columns.iter().any(|c| c == "space_name") {
-            if let Some(row) = result.rows.first() {
-                if let Some(Value::String(name)) = row.values.get("space_name") {
-                    self.current_space_name = Some(name.to_string());
-                }
-                if let Some(Value::BigInt(id)) = row.values.get("space_id") {
-                    self.current_space_id = Some(*id as u64);
-                }
+        let columns = result.columns();
+        if !columns.iter().any(|c| c == "space_name") {
+            return;
+        }
+        if let Some(row) = result.rows().first() {
+            if let Some(Value::String(name)) =
+                columns.iter().position(|c| c == "space_name").and_then(|i| row.get(i))
+            {
+                self.current_space_name = Some(name.to_string());
+            }
+            if let Some(Value::BigInt(id)) =
+                columns.iter().position(|c| c == "space_id").and_then(|i| row.get(i))
+            {
+                self.current_space_id = Some(*id as u64);
             }
         }
     }
@@ -534,11 +540,7 @@ fn parse_begin_access_mode(stmt: &str) -> CoreResult<Option<bool>> {
 }
 
 fn empty_query_result() -> QueryResult {
-    QueryResult {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        metadata: Default::default(),
-    }
+    QueryResult::empty()
 }
 
 /// Create a test database
@@ -705,12 +707,12 @@ pub fn load_gql_file_grouped(db: &mut TestDb, path: &str, group_size: usize) -> 
 pub fn assert_row_count(result: CoreResult<QueryResult>, expected: usize, context: &str) {
     match result {
         Ok(ref qr) => assert_eq!(
-            qr.rows.len(),
+            qr.rows().len(),
             expected,
             "{}: expected {} rows, got {}",
             context,
             expected,
-            qr.rows.len()
+            qr.rows().len()
         ),
         Err(e) => panic!("{}: query failed: {:?}", context, e),
     }
@@ -723,13 +725,11 @@ pub fn assert_count_eq(db: &mut TestDb, query: &str, expected: i64, context: &st
     match db.execute_query(query) {
         Ok(qr) => {
             let first = qr
-                .rows
+                .rows()
                 .first()
                 .unwrap_or_else(|| panic!("{}: result set is empty", context));
             let val = first
-                .values
-                .values()
-                .next()
+                .first()
                 .unwrap_or_else(|| panic!("{}: no column", context));
             let actual = match val {
                 Value::BigInt(v) => *v,
@@ -751,7 +751,7 @@ pub fn assert_count_eq(db: &mut TestDb, query: &str, expected: i64, context: &st
 pub fn assert_query_row_count(db: &mut TestDb, query: &str, expected: usize, context: &str) {
     match db.execute_query(query) {
         Ok(qr) => {
-            let actual = qr.rows.len();
+            let actual = qr.rows().len();
             assert_eq!(
                 actual, expected,
                 "{}: expected {} rows, got {}",
@@ -767,13 +767,11 @@ pub fn assert_float_eq(db: &mut TestDb, query: &str, expected: f64, context: &st
     match db.execute_query(query) {
         Ok(qr) => {
             let first = qr
-                .rows
+                .rows()
                 .first()
                 .unwrap_or_else(|| panic!("{}: result set is empty", context));
             let val = first
-                .values
-                .values()
-                .next()
+                .first()
                 .unwrap_or_else(|| panic!("{}: no column", context));
             let actual = match val {
                 Value::Double(v) => *v,

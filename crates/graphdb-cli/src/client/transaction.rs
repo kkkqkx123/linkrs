@@ -1,4 +1,4 @@
-//! Transaction management types
+//! Transaction options builder (wire request construction helper).
 
 /// Transaction options for beginning a transaction
 #[derive(Debug, Clone, Default)]
@@ -21,11 +21,4 @@ impl TransactionOptions {
         self.timeout_seconds = Some(seconds);
         self
     }
-}
-
-/// Transaction information returned after beginning a transaction
-#[derive(Debug, Clone)]
-pub struct TransactionInfo {
-    pub transaction_id: u64,
-    pub status: String,
 }

@@ -13,7 +13,7 @@ use crate::common::{assert_query_err, assert_query_ok, create_test_db, setup_tes
 fn count_persons(db: &mut crate::common::TestDb, tag_filter: &str) -> usize {
     let result = db.execute_query(&format!("MATCH (p:{}) RETURN p.name", tag_filter));
     let result = result.expect("MATCH should succeed");
-    result.rows.len()
+    result.rows().len()
 }
 
 /// `BEGIN READ ONLY` session-level end-to-end.

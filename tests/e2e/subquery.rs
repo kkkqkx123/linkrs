@@ -43,7 +43,7 @@ fn test_exists_correlated_equality() {
         "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.name == t.name } RETURN t.name",
     );
     let result = result.expect("correlated EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "every person matches itself");
+    assert_eq!(result.rows().len(), 4, "every person matches itself");
 }
 
 /// Uncorrelated EXISTS (no key): PatternApply with empty keys behaves as
@@ -57,7 +57,7 @@ fn test_exists_uncorrelated() {
         "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age == 30 } RETURN t.name",
     );
     let result = result.expect("uncorrelated EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "someone has age 30, so all match");
+    assert_eq!(result.rows().len(), 4, "someone has age 30, so all match");
 }
 
 /// NOT EXISTS with a subquery-local filter: nobody has age 100, so the anti
@@ -71,7 +71,7 @@ fn test_not_exists() {
         "MATCH (t:person) WHERE NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
     )
     .expect("NOT EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "nobody has age 100, so all match");
+    assert_eq!(result.rows().len(), 4, "nobody has age 100, so all match");
 }
 
 /// Correlated NOT EXISTS with a key: only Carol satisfies `p.name == t.name
@@ -85,7 +85,7 @@ fn test_not_exists_correlated_key() {
         "MATCH (t:person) WHERE NOT EXISTS { MATCH (p:person) WHERE p.name == t.name AND p.age == 35 } RETURN t.name",
     )
     .expect("correlated NOT EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 3, "Carol is excluded");
+    assert_eq!(result.rows().len(), 3, "Carol is excluded");
 }
 
 /// IN subquery: the synthesized equality `t.name == p.name` forms the key.
@@ -98,7 +98,7 @@ fn test_in_subquery() {
         "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } RETURN t.name",
     );
     let result = result.expect("IN subquery should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "every name appears in the result set");
+    assert_eq!(result.rows().len(), 4, "every name appears in the result set");
 }
 
 /// NOT IN subquery: anti join against the projected names.
@@ -111,7 +111,7 @@ fn test_not_in_subquery() {
         "MATCH (t:person) WHERE t.name NOT IN { MATCH (p:person) WHERE p.age == 35 RETURN p.name } RETURN t.name",
     );
     let result = result.expect("NOT IN subquery should execute and succeed");
-    assert_eq!(result.rows.len(), 3, "Carol is excluded");
+    assert_eq!(result.rows().len(), 3, "Carol is excluded");
 }
 
 /// EXISTS with a graph path subquery: only vertices with an outgoing friend
@@ -126,7 +126,7 @@ fn test_exists_with_path_subquery() {
     );
     let result = result.expect("path EXISTS should execute and succeed");
     assert_eq!(
-        result.rows.len(),
+        result.rows().len(),
         2,
         "Alice and Bob have outgoing friend edges"
     );
@@ -142,7 +142,7 @@ fn test_exists_with_residual_condition() {
         "MATCH (t:person) WHERE t.age > 20 AND EXISTS { MATCH (p:person) WHERE p.age == 30 } RETURN t.name",
     );
     let result = result.expect("EXISTS with residual condition should execute and succeed");
-    assert_eq!(result.rows.len(), 3, "Alice, Bob, Carol (Dave is 20)");
+    assert_eq!(result.rows().len(), 3, "Alice, Bob, Carol (Dave is 20)");
 }
 
 /// EXPLAIN surfaces the subquery operator: PatternApply (pre-decorrelation)
@@ -158,9 +158,9 @@ fn test_explain_shows_subquery_operator() {
     let result = result.expect("EXPLAIN should execute and succeed");
 
     let joined: String = result
-        .rows
+        .rows()
         .iter()
-        .flat_map(|row| row.values.values())
+        .flat_map(|row| row.iter())
         .filter_map(|v| match v {
             Value::String(s) => Some(s.to_string()),
             _ => None,
@@ -188,7 +188,7 @@ fn test_correlated_non_equi_exists() {
         .expect("correlated non-equi EXISTS should execute and succeed");
     // Alice(30), Bob(25), Dave(20) each have a person with a strictly higher
     // age; Carol(35) does not.
-    assert_eq!(result.rows.len(), 3, "Alice, Bob, Dave match");
+    assert_eq!(result.rows().len(), 3, "Alice, Bob, Dave match");
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn test_correlated_non_equi_not_exists() {
         )
         .expect("correlated non-equi NOT EXISTS should execute and succeed");
     assert_eq!(
-        result.rows.len(),
+        result.rows().len(),
         1,
         "only Carol has no strictly older person"
     );
@@ -221,7 +221,7 @@ fn test_correlated_non_equi_in() {
         )
         .expect("correlated non-equi IN should execute and succeed");
     assert_eq!(
-        result.rows.len(),
+        result.rows().len(),
         0,
         "no age is strictly greater than itself"
     );
@@ -240,7 +240,7 @@ fn test_correlated_non_equi_not_in() {
         )
         .expect("correlated non-equi NOT IN should execute and succeed");
     assert_eq!(
-        result.rows.len(),
+        result.rows().len(),
         4,
         "no age is strictly greater than itself, so NOT IN keeps everyone"
     );
@@ -264,7 +264,7 @@ fn test_correlated_multi_variable_condition() {
     // Dave(20): 55 > 50 is true                     -> match
     // Alice(30): 55 > 60 and 60 > 60 are both false -> no match
     // Carol(35): threshold 65, neither pair reaches -> no match
-    assert_eq!(result.rows.len(), 2, "Bob and Dave match");
+    assert_eq!(result.rows().len(), 2, "Bob and Dave match");
 }
 
 /// Nested correlation: a correlated EXISTS whose subquery contains another
@@ -283,7 +283,7 @@ fn test_nested_correlated_exists() {
     // Dave(20): p=Alice(30) then EXISTS q.age>30 (Carol)   -> match
     // Alice(30): only p=Carol(35), EXISTS q.age>35 is empty -> no match
     // Carol(35): no p with age>35                           -> no match
-    assert_eq!(result.rows.len(), 2, "Bob and Dave match");
+    assert_eq!(result.rows().len(), 2, "Bob and Dave match");
 }
 
 /// EXPLAIN surfaces the CorrelatedApply operator for a non-equi correlated
@@ -296,9 +296,9 @@ fn test_explain_shows_correlated_apply() {
     let mut joined = |query: &str| {
         let result = db.execute_query(query).expect("EXPLAIN should succeed");
         result
-            .rows
+            .rows()
             .iter()
-            .flat_map(|row| row.values.values())
+            .flat_map(|row| row.iter())
             .filter_map(|v| match v {
                 Value::String(s) => Some(s.to_string()),
                 _ => None,
@@ -368,21 +368,21 @@ fn test_where_or_exists_executes() {
             "MATCH (t:person) WHERE t.age = 30 OR EXISTS { MATCH (p:person) } RETURN t.name",
         )
         .expect("OR-side EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "EXISTS is true, so every row matches");
+    assert_eq!(result.rows().len(), 4, "EXISTS is true, so every row matches");
 
     let result = db
         .execute_query(
             "MATCH (t:person) WHERE t.age = 30 OR NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
         )
         .expect("OR-side NOT EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.rows().len(), 4);
 
     let result = db
         .execute_query(
             "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } OR t.age > 20 RETURN t.name",
         )
         .expect("OR-side IN should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "every name appears in the result set");
+    assert_eq!(result.rows().len(), 4, "every name appears in the result set");
 
     // A conjunctive EXISTS plus a residual OR-side subquery also executes.
     let result = db
@@ -390,7 +390,7 @@ fn test_where_or_exists_executes() {
             "MATCH (t:person) WHERE EXISTS { MATCH (p:person) } AND (t.age = 30 OR t.name IN { MATCH (p2:person) RETURN p2.name }) RETURN t.name",
         )
         .expect("conjunctive + residual subqueries should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.rows().len(), 4);
 }
 
 /// OR-side subqueries honor the OR semantics: a false left side keeps the
@@ -407,7 +407,7 @@ fn test_where_or_exists_false_left() {
             "MATCH (t:person) WHERE t.age = 100 OR EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
         )
         .expect("OR-side EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 0, "neither side matches");
+    assert_eq!(result.rows().len(), 0, "neither side matches");
 
     // NOT EXISTS of the same empty subquery is true for every row.
     let result = db
@@ -415,7 +415,7 @@ fn test_where_or_exists_false_left() {
             "MATCH (t:person) WHERE t.age = 100 OR NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } RETURN t.name",
         )
         .expect("OR-side NOT EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "NOT EXISTS holds for everyone");
+    assert_eq!(result.rows().len(), 4, "NOT EXISTS holds for everyone");
 }
 
 /// RETURN positions: plain, container-nested, CASE-branched EXISTS / IN.
@@ -427,9 +427,9 @@ fn test_return_exists_executes() {
     let result = db
         .execute_query("MATCH (t:person) RETURN EXISTS { MATCH (p:person) } AS x")
         .expect("RETURN EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(
             value,
             &Value::Bool(true),
@@ -442,34 +442,34 @@ fn test_return_exists_executes() {
             "MATCH (t:person) RETURN NOT EXISTS { MATCH (p:person) WHERE p.age == 100 } AS x",
         )
         .expect("RETURN NOT EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(value, &Value::Bool(true));
     }
 
     let result = db
         .execute_query("MATCH (t:person) RETURN t.age IN { MATCH (p:person) RETURN p.age } AS x")
         .expect("RETURN IN should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(value, &Value::Bool(true), "every age appears in the set");
     }
 
     let result = db
         .execute_query("MATCH (t:person) RETURN [EXISTS { MATCH (p:person) }] AS x")
         .expect("container-nested EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.rows().len(), 4);
 
     let result = db
         .execute_query(
             "MATCH (t:person) RETURN CASE WHEN EXISTS { MATCH (p:person) } THEN 1 ELSE 0 END AS x",
         )
         .expect("CASE-branched EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(value, &Value::Int(1));
     }
 }
@@ -486,26 +486,29 @@ fn test_return_in_null_semantics() {
             "MATCH (t:person) RETURN t.name AS name, t.name NOT IN { MATCH (p:person) WHERE p.age == 35 RETURN p.name } AS x",
         )
         .expect("RETURN NOT IN should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.rows().len(), 4);
+    let columns = result.columns();
+    let name_idx = columns.iter().position(|c| c == "name").expect("name column");
+    let x_idx = columns.iter().position(|c| c == "x").expect("x column");
     let carol = result
-        .rows
+        .rows()
         .iter()
-        .find(|row| row.values.get("name") == Some(&Value::string("Carol")))
+        .find(|row| row.get(name_idx) == Some(&Value::string("Carol")))
         .expect("Carol row present");
     assert_eq!(
-        carol.values.get("x"),
+        carol.get(x_idx),
         Some(&Value::Bool(false)),
         "Carol IS in the result set"
     );
 
     // A name absent from the result set yields NOT IN = true.
     let dave = result
-        .rows
+        .rows()
         .iter()
-        .find(|row| row.values.get("name") == Some(&Value::string("Dave")))
+        .find(|row| row.get(name_idx) == Some(&Value::string("Dave")))
         .expect("Dave row present");
     assert_eq!(
-        dave.values.get("x"),
+        dave.get(x_idx),
         Some(&Value::Bool(true)),
         "Dave is not in the result set"
     );
@@ -523,9 +526,9 @@ fn test_return_correlated_in_executes() {
             "MATCH (t:person) RETURN t.age IN { MATCH (p:person) WHERE p.age > t.age RETURN p.age } AS x",
         )
         .expect("correlated RETURN IN should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().last().expect("boolean column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.last().expect("boolean column");
         assert_eq!(
             value,
             &Value::Bool(false),
@@ -541,7 +544,7 @@ fn test_return_correlated_in_executes() {
         .expect("OR-side correlated EXISTS should execute and succeed");
     // Dave matches via the OR side (age == 20); Alice, Bob and Dave have a
     // strictly older person; Carol has neither.
-    assert_eq!(result.rows.len(), 3);
+    assert_eq!(result.rows().len(), 3);
 }
 
 /// WITH assignments carry expression-level subqueries through the Project
@@ -554,9 +557,9 @@ fn test_with_assign_exists_executes() {
     let result = db
         .execute_query("MATCH (t:person) WITH EXISTS { MATCH (p:person) } AS x RETURN x")
         .expect("WITH assignment EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(value, &Value::Bool(true));
     }
 
@@ -565,9 +568,9 @@ fn test_with_assign_exists_executes() {
             "MATCH (t:person) WITH t.age IN { MATCH (p:person) RETURN p.age } AS x RETURN x",
         )
         .expect("WITH assignment IN should execute and succeed");
-    assert_eq!(result.rows.len(), 4);
-    for row in &result.rows {
-        let value = row.values.values().next().expect("one column");
+    assert_eq!(result.rows().len(), 4);
+    for row in result.rows() {
+        let value = row.first().expect("one column");
         assert_eq!(value, &Value::Bool(true));
     }
 }
@@ -584,7 +587,7 @@ fn test_having_exists_executes() {
             "MATCH (t:person) RETURN t.age, count(*) AS c GROUP BY t.age HAVING EXISTS { MATCH (p:person) }",
         )
         .expect("HAVING EXISTS should execute and succeed");
-    assert_eq!(result.rows.len(), 4, "every age group is retained");
+    assert_eq!(result.rows().len(), 4, "every age group is retained");
 }
 
 /// ORDER BY expressions carry expression-level subqueries too — the Sort
@@ -647,9 +650,9 @@ fn test_explain_shows_expression_subqueries() {
     let mut joined = |query: &str| {
         let result = db.execute_query(query).expect("EXPLAIN should succeed");
         result
-            .rows
+            .rows()
             .iter()
-            .flat_map(|row| row.values.values())
+            .flat_map(|row| row.iter())
             .filter_map(|v| match v {
                 Value::String(s) => Some(s.to_string()),
                 _ => None,
@@ -693,5 +696,5 @@ fn test_conjunctive_where_still_executes() {
             "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age == 30 } RETURN t.name",
         )
         .expect("conjunctive EXISTS must still execute");
-    assert_eq!(result.rows.len(), 4);
+    assert_eq!(result.rows().len(), 4);
 }

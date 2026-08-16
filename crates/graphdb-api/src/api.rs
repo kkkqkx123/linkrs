@@ -1,14 +1,13 @@
 //! The GraphDB API module
 //!
-//! Provide multiple access methods:
-//! - "core" — core API independent of the transport layer
-//! - "server" — network service API (HTTP/gRPC)
-//! - "embedded" — standalone embedded API
+//! Provides the transport-independent core API consumed by the network
+//! service layer (`graphdb-server`) and library users.
 
 pub mod core;
 
-#[cfg(feature = "server")]
-pub mod server;
+// Transaction-aware session variable store shared by the server and
+// embedded session implementations.
+pub mod session_variables;
 
 #[cfg(feature = "embedded")]
 pub mod embedded;
@@ -19,31 +18,5 @@ pub use core::{CoreError, CoreResult, QueryApi, SchemaApi, SyncApi};
 #[cfg(feature = "qdrant")]
 pub use core::{VectorApi, VectorSearchResult};
 
-// ── Server re-exports ────────────────────────────────────────────
-#[cfg(feature = "server")]
-pub use server::{session, HttpServer};
-
 #[cfg(feature = "embedded")]
 pub use embedded::GraphDatabase;
-
-// ── Private implementation modules ───────────────────────────────
-mod session_variables;
-#[cfg(feature = "server")]
-mod startup;
-
-#[cfg(feature = "server")]
-mod http_server;
-
-mod shutdown;
-
-// ── Public API re-exports ────────────────────────────────────────
-#[cfg(feature = "server")]
-pub use startup::{execute_query, start_service, start_service_with_config};
-
-#[cfg(feature = "server")]
-pub use http_server::start_http_server;
-
-#[cfg(all(feature = "server", feature = "grpc"))]
-pub use http_server::start_http_and_grpc_servers;
-
-pub use shutdown::shutdown_signal;

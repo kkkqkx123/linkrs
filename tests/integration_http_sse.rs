@@ -17,10 +17,10 @@ use axum::{
     routing::post,
     Router,
 };
-use graphdb::api::server::http::handlers::execute_stream;
-use graphdb::api::server::http::server::HttpServer;
-use graphdb::api::server::http::state::AppState;
-use graphdb::api::server::GraphService;
+use graphdb_server::server::http::handlers::execute_stream;
+use graphdb_server::server::http::server::HttpServer;
+use graphdb_server::server::http::state::AppState;
+use graphdb_server::server::GraphService;
 use graphdb::config::Config;
 use graphdb::core::types::{SpaceInfo, SpaceSummary, VertexId};
 use graphdb::core::vertex_edge_path::{Tag, Vertex};

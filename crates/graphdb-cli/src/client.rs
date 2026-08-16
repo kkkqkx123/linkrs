@@ -1,27 +1,22 @@
 //! Client module for GraphDB CLI
 //!
-//! Provides HTTP client for connecting to GraphDB server.
+//! Provides HTTP client for connecting to GraphDB server. Wire DTOs are
+//! re-exported from `graphdb-wire` (the single contract source shared with
+//! the server) so the CLI never mirrors HTTP types by hand.
 
-mod batch;
 mod config;
-mod config_types;
 mod http_client;
-mod request_types;
-mod response_types;
 mod schema;
-mod snapshot;
-mod stats;
 mod transaction;
 mod types;
-mod vector;
 
-pub use batch::{BatchError, BatchItem, BatchResult, BatchStatus, BatchType, EdgeData, VertexData};
 pub use config::{ClientConfig, SessionInfo};
-pub use config_types::{ConfigItem, ConfigSection, ServerConfig};
+pub use graphdb_wire::batch::BatchItem;
+pub use graphdb_wire::meta::{
+    ColdSnapshotInfo, ConfigItem, ConfigSection, DatabaseStatistics, QueryStatistics,
+    ServerConfig, SessionStatistics, TransactionResponse as TransactionInfo,
+};
+pub use graphdb_wire::schema::{EdgeTypeInfo, FieldInfo, PropertyDef, SpaceInfo, TagInfo};
 pub use http_client::HttpClient;
-pub use schema::PropertyDef;
-pub use snapshot::ColdSnapshotInfo;
-pub use stats::{DatabaseStatistics, QueryStatistics, SessionStatistics};
-pub use transaction::{TransactionInfo, TransactionOptions};
-pub use types::{EdgeTypeInfo, FieldInfo, QueryResult, SpaceInfo, TagInfo};
-pub use vector::{VectorMatch, VectorSearchResult};
+pub use transaction::TransactionOptions;
+pub use types::{QueryErrorInfo, QueryResult};

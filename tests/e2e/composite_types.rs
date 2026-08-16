@@ -46,9 +46,13 @@ fn test_insert_and_read_struct_array() {
     let result = db
         .execute_query("MATCH (p:Person) RETURN p.id, p.addr, p.coords")
         .expect("RETURN of composite properties should succeed");
-    let row = result.rows.first().expect("one row expected");
-    assert_eq!(row.get("p.id"), Some(&graphdb::core::Value::BigInt(1)));
-    match row.get("p.addr") {
+    let row = result.rows().first().expect("one row expected");
+    let columns = result.columns();
+    let id_idx = columns.iter().position(|c| c == "p.id").expect("p.id column");
+    let addr_idx = columns.iter().position(|c| c == "p.addr").expect("p.addr column");
+    let coords_idx = columns.iter().position(|c| c == "p.coords").expect("p.coords column");
+    assert_eq!(row.get(id_idx), Some(&graphdb::core::Value::BigInt(1)));
+    match row.get(addr_idx) {
         Some(graphdb::core::Value::Struct(s)) => {
             assert_eq!(
                 s.fields[0],
@@ -58,7 +62,7 @@ fn test_insert_and_read_struct_array() {
         }
         other => panic!("expected STRUCT value, got {:?}", other),
     }
-    match row.get("p.coords") {
+    match row.get(coords_idx) {
         Some(graphdb::core::Value::Array(a)) => {
             assert_eq!(
                 a.values,
@@ -89,17 +93,21 @@ fn test_struct_field_access() {
     let result = db
         .execute_query("MATCH (p:Person) RETURN p.addr.city, p.addr.geo.lat, p.addr.geo.lon")
         .expect("STRUCT field access should succeed");
-    let row = result.rows.first().expect("one row expected");
+    let row = result.rows().first().expect("one row expected");
+    let columns = result.columns();
+    let city_idx = columns.iter().position(|c| c == "p.addr.city").expect("city column");
+    let lat_idx = columns.iter().position(|c| c == "p.addr.geo.lat").expect("lat column");
+    let lon_idx = columns.iter().position(|c| c == "p.addr.geo.lon").expect("lon column");
     assert_eq!(
-        row.get("p.addr.city"),
+        row.get(city_idx),
         Some(&graphdb::core::Value::string("shanghai"))
     );
     assert_eq!(
-        row.get("p.addr.geo.lat"),
+        row.get(lat_idx),
         Some(&graphdb::core::Value::Double(31.2))
     );
     assert_eq!(
-        row.get("p.addr.geo.lon"),
+        row.get(lon_idx),
         Some(&graphdb::core::Value::Double(121.5))
     );
 

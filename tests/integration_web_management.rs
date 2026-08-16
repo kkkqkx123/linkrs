@@ -17,13 +17,13 @@ use tower::ServiceExt;
 /// Test helper to create a test web state with temporary storage
 /// Returns the web state and a valid session ID for testing
 async fn create_test_web_state() -> (
-    graphdb::api::server::web::WebState<graphdb::storage::GraphStorage>,
+    graphdb_server::server::web::WebState<graphdb::storage::GraphStorage>,
     i64,
 ) {
-    use graphdb::api::server::graph_service::GraphService;
-    use graphdb::api::server::http::AppState;
-    use graphdb::api::server::http::HttpServer;
-    use graphdb::api::server::web::{storage::SqliteStorage, WebState};
+    use graphdb_server::server::graph_service::GraphService;
+    use graphdb_server::server::http::AppState;
+    use graphdb_server::server::http::HttpServer;
+    use graphdb_server::server::web::{storage::SqliteStorage, WebState};
     use graphdb::config::Config;
     use graphdb::storage::GraphStorage;
     use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
@@ -82,7 +82,7 @@ async fn create_test_web_state() -> (
 #[tokio::test]
 async fn test_query_history_lifecycle() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     // Create a query history entry
     let create_request = Request::builder()
@@ -120,7 +120,7 @@ async fn test_query_history_lifecycle() {
 #[tokio::test]
 async fn test_favorites_crud() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     // Create a favorite
     let create_request = Request::builder()
@@ -157,7 +157,7 @@ async fn test_favorites_crud() {
 #[tokio::test]
 async fn test_list_spaces() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -178,7 +178,7 @@ async fn test_list_spaces() {
 #[tokio::test]
 async fn test_list_tags() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -196,7 +196,7 @@ async fn test_list_tags() {
 #[tokio::test]
 async fn test_list_edge_types() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -214,7 +214,7 @@ async fn test_list_edge_types() {
 #[tokio::test]
 async fn test_list_indexes() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -232,7 +232,7 @@ async fn test_list_indexes() {
 #[tokio::test]
 async fn test_list_vertices() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -250,7 +250,7 @@ async fn test_list_vertices() {
 #[tokio::test]
 async fn test_list_edges() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -268,7 +268,7 @@ async fn test_list_edges() {
 #[tokio::test]
 async fn test_execute_query() {
     let (web_state, session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("POST")
@@ -293,7 +293,7 @@ async fn test_execute_query() {
 #[tokio::test]
 async fn test_auth_middleware_missing_session() {
     let (web_state, _session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
@@ -309,7 +309,7 @@ async fn test_auth_middleware_missing_session() {
 #[tokio::test]
 async fn test_auth_middleware_invalid_session() {
     let (web_state, _session_id) = create_test_web_state().await;
-    let app = graphdb::api::server::web::create_router(web_state);
+    let app = graphdb_server::server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")

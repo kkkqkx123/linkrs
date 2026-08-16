@@ -4,7 +4,7 @@
 //! variables into subsequent statements, and the transaction overlay
 //! (ROLLBACK / ROLLBACK TO SAVEPOINT restore previous values).
 
-use graphdb::api::server::graph_service::GraphService;
+use graphdb_server::server::graph_service::GraphService;
 use graphdb::config::Config;
 use graphdb::query::DataSet;
 use graphdb::storage::{GraphStorage, SyncWrapper};
@@ -53,21 +53,11 @@ async fn exec(
 ) -> DataSet {
     match service.execute(sid, stmt).await {
         Ok(result) => {
-            if result.rows.is_empty() {
+            if result.rows().is_empty() {
                 DataSet::from_rows(vec![], vec![])
             } else {
-                let rows: Vec<Vec<graphdb::core::Value>> = result
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        result
-                            .columns
-                            .iter()
-                            .filter_map(|col| row.get(col).cloned())
-                            .collect()
-                    })
-                    .collect();
-                DataSet::from_rows(rows, result.columns)
+                // Rows are already in column order (engine representation).
+                DataSet::from_rows(result.rows().to_vec(), result.columns().to_vec())
             }
         }
         Err(e) => panic!("statement `{}` failed: {}", stmt, e),

@@ -115,7 +115,7 @@ fn test_social_network_go_traversal() {
         .execute_query("GO 1 STEP FROM 'p1' OVER friend REVERSELY YIELD friend.name")
         .expect("GO from p1");
     assert!(
-        !result.rows.is_empty(),
+        !result.rows().is_empty(),
         "p1 should have at least one reverse friend"
     );
 }
@@ -216,12 +216,8 @@ fn test_optimizer_aggregate() {
     let result = db
         .execute_query("MATCH (p:person) RETURN sum(p.salary) AS total_salary")
         .expect("sum salary");
-    let first_row = result.rows.first().expect("sum result should have a row");
-    let total = first_row
-        .values
-        .values()
-        .next()
-        .expect("total_salary value");
+    let first_row = result.rows().first().expect("sum result should have a row");
+    let total = first_row.first().expect("total_salary value");
     match total {
         Value::BigInt(v) => assert!(*v > 0, "total salary should be > 0"),
         Value::Int(v) => assert!(*v > 0, "total salary should be > 0"),
@@ -349,18 +345,20 @@ fn test_dml_shape_cache_roundtrip() {
                 vid
             ))
             .expect("lookup should succeed");
-        let row = result.rows.first().expect("row should exist");
-        let key = |name: &str| -> String {
+        let row = result.rows().first().expect("row should exist");
+        let key = |name: &str| -> usize {
             result
-                .columns
+                .columns()
                 .iter()
-                .find(|c| **c == name || **c == format!("p.{name}"))
-                .cloned()
-                .unwrap_or_else(|| panic!("no column for {name}, columns={:?}", result.columns))
+                .position(|c| c == name || c == &format!("p.{name}"))
+                .unwrap_or_else(|| panic!("no column for {name}, columns={:?}", result.columns()))
         };
-        let name_val = row.values.get(&key("name")).expect("name col");
-        let age_val = row.values.get(&key("age")).expect("age col");
-        let city_val = row.values.get(&key("city")).expect("city col");
+        let name_idx = key("name");
+        let age_idx = key("age");
+        let city_idx = key("city");
+        let name_val = row.get(name_idx).expect("name col");
+        let age_val = row.get(age_idx).expect("age col");
+        let city_val = row.get(city_idx).expect("city col");
         assert_eq!(*name_val, Value::from(name), "name for {vid}");
         assert_eq!(*age_val, Value::from(age), "age for {vid}");
         assert_eq!(*city_val, Value::from(city), "city for {vid}");
@@ -428,7 +426,7 @@ fn test_dml_shape_cache_edge_roundtrip() {
     let result = db
         .execute_query("MATCH (a:person)-[w:works_at]->(b:company) RETURN w.position, w.salary")
         .expect("edge query");
-    assert_eq!(result.rows.len(), 3, "all three edges loaded");
+    assert_eq!(result.rows().len(), 3, "all three edges loaded");
 }
 
 #[test]

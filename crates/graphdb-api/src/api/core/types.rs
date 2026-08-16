@@ -2,8 +2,9 @@
 //!
 //! Business types that are independent of the transport layer
 
-use crate::core::types::TransactionId;
+use crate::core::types::{SpaceSummary, TransactionId};
 use crate::core::Value;
+use crate::query::executor::base::ExecutionResult;
 use crate::query::parser::ast::stmt::Ast;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,63 +47,100 @@ impl Default for QueryRequest {
 }
 
 /// Query results
+///
+/// Wraps the engine-level [`ExecutionResult`] (the single source of truth for
+/// result rows) together with API-layer execution metadata. No row-level
+/// copy or re-shaping happens at this boundary.
 #[derive(Debug, Clone)]
 pub struct QueryResult {
-    pub columns: Vec<String>,
-    pub rows: Vec<Row>,
+    /// Engine execution result (DataSet / Empty / Success / SpaceSwitched).
+    pub execution: ExecutionResult,
+    /// API-layer execution metadata (timing, scanned/returned counts).
     pub metadata: ExecutionMetadata,
 }
 
 impl QueryResult {
+    /// Create a query result from an engine execution result.
+    pub fn new(execution: ExecutionResult, metadata: ExecutionMetadata) -> Self {
+        Self { execution, metadata }
+    }
+
+    /// Create an empty successful query result.
+    pub fn empty() -> Self {
+        Self::new(ExecutionResult::Empty, ExecutionMetadata::default())
+    }
+
+    /// Column names of the dataset, empty for non-dataset results.
+    pub fn columns(&self) -> &[String] {
+        self.execution
+            .to_data_set()
+            .map(|data| data.col_names.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Row values in column order, empty for non-dataset results.
+    pub fn rows(&self) -> &[Vec<Value>] {
+        self.execution
+            .to_data_set()
+            .map(|data| data.rows.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Value of the first column of the first row, if any.
     ///
     /// Convenience accessor for single-value projection results (e.g.
-    /// `RETURN COUNT(...) as total`), independent of map iteration order.
+    /// `RETURN COUNT(...) as total`).
     pub fn first_value(&self) -> Option<&Value> {
-        let col = self.columns.first()?;
-        self.rows.first()?.values.get(col)
+        self.rows().first().and_then(|row| row.first())
     }
 
     /// Values of the first column across all rows, in row order.
     pub fn first_column_values(&self) -> impl Iterator<Item = &Value> {
-        let col = self.columns.first().cloned();
-        self.rows
-            .iter()
-            .filter_map(move |row| col.as_ref().and_then(|c| row.get(c)))
+        self.rows().iter().filter_map(|row| row.first())
     }
-}
 
-/// Result row
-#[derive(Debug, Clone)]
-pub struct Row {
-    pub values: HashMap<String, Value>,
-}
-
-impl Default for Row {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Row {
-    pub fn new() -> Self {
-        Self {
-            values: HashMap::new(),
+    /// Space summary of a USE-statement result, if any.
+    ///
+    /// The engine executes `USE` as a DataSet with `space_name` / `space_id` /
+    /// `vid_type` columns (the `SpaceSwitched` variant is never produced), so
+    /// both representations are recognized here.
+    pub fn space_summary(&self) -> Option<SpaceSummary> {
+        match &self.execution {
+            ExecutionResult::SpaceSwitched(summary) => Some(summary.clone()),
+            ExecutionResult::DataSet { data } => {
+                let row = data.rows.first()?;
+                let name = match data
+                    .col_names
+                    .iter()
+                    .position(|c| c == "space_name")
+                    .and_then(|idx| row.get(idx))?
+                {
+                    Value::String(s) => s.to_string(),
+                    _ => return None,
+                };
+                let id = match data
+                    .col_names
+                    .iter()
+                    .position(|c| c == "space_id")
+                    .and_then(|idx| row.get(idx))?
+                {
+                    Value::BigInt(id) => *id as u64,
+                    _ => return None,
+                };
+                let vid_type = data
+                    .col_names
+                    .iter()
+                    .position(|c| c == "vid_type")
+                    .and_then(|idx| row.get(idx))
+                    .and_then(|v| match v {
+                        Value::String(s) => s.parse().ok(),
+                        _ => None,
+                    })
+                    .unwrap_or(crate::core::DataType::String);
+                Some(SpaceSummary::new(id, name, vid_type))
+            }
+            _ => None,
         }
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            values: HashMap::with_capacity(capacity),
-        }
-    }
-
-    pub fn insert(&mut self, key: String, value: Value) {
-        self.values.insert(key, value);
-    }
-
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.values.get(key)
     }
 }
 

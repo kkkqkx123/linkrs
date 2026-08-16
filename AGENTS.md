@@ -14,7 +14,7 @@ A lightweight single-node graph database reimplemented in Rust, focusing on loca
 
 ## Architecture
 
-Workspace with 8 sub-crates under `crates/`:
+Workspace with 11 sub-crates under `crates/`:
 
 - `graphdb-core` - core data structures, types, errors
 - `graphdb-config` - configuration management
@@ -23,17 +23,20 @@ Workspace with 8 sub-crates under `crates/`:
 - `graphdb-transaction` - transaction management
 - `graphdb-storage` - storage engine (CSR, memory-mapped containers)
 - `graphdb-query` - query engine, parser, executor
-- `graphdb-api` - API layer (HTTP, gRPC, embedded/C-API)
+- `graphdb-api` - transport-independent core API + embedded/C-API
+- `graphdb-server` - network service layer (HTTP/gRPC/web management)
+- `graphdb-wire` - wire DTOs shared between server and CLI
+- `graphdb-migration` - schema/data migration
 
 Root `src/` has `lib.rs`, `main.rs`, `c_api.rs` with `pub use dep_crate::api as api` re-exports.
 
-Dependency DAG: core → config → search → sync → transaction → storage → query → api
+Dependency DAG: core → config → search → sync → transaction → storage → query → api → server
 
-Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`
+Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`, `crates/tantivy`
 
 ## Key Directories
 
-- `crates/*` - 8 sub-crates + third-party (bm25, vector-client)
+- `crates/*` - sub-crates + third-party (bm25, vector-client, tantivy)
 - `src/` - root crate (server binary, re-exports, C API)
 - `tests/` - integration tests
 - `proto/` - gRPC protobuf definitions
@@ -64,4 +67,4 @@ Test organization: unit tests in same file (`#[cfg(test)]`), separate `test.rs` 
 
 - **Security**: Never use unwrap (use expect in tests). No unsafe except low-level ops, documented in `docs/archive/unsafe.md`.
 - **Types**: Minimize `dyn`, prefer concrete types. All dynamic dispatch documented in `docs/archive/dynamic.md`.
-- **Dependencies**: 8 sub-crates form a strict DAG (no circular deps).
+- **Dependencies**: sub-crates form a strict DAG (no circular deps).

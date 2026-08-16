@@ -42,7 +42,7 @@ impl BatchConfig {
 
     /// Set batch size
     pub fn with_batch_size(mut self, size: usize) -> Self {
-        self.batch_size = size;
+        self.batch_size = size.max(1);
         self
     }
 

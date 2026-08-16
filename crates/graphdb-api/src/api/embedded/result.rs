@@ -2,7 +2,7 @@
 //!
 //! Provides comprehensive query result processing capabilities, extending the core layer of QueryResult and Row
 
-use crate::api::core::{CoreError, CoreResult, QueryResult as CoreQueryResult, Row as CoreRow};
+use crate::api::core::{CoreError, CoreResult, QueryResult as CoreQueryResult};
 use crate::core::{Edge, Path, Value, Vertex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -41,8 +41,12 @@ pub struct ResultMetadata {
 impl QueryResult {
     /// Created from core level query results
     pub fn from_core(result: CoreQueryResult) -> Self {
-        let columns = result.columns.clone();
-        let rows: Vec<Row> = result.rows.into_iter().map(Row::from_core).collect();
+        let columns = result.columns().to_vec();
+        let rows: Vec<Row> = result
+            .rows()
+            .iter()
+            .map(|values| Row::from_columns(&columns, values))
+            .collect();
         let rows_returned = rows.len();
 
         Self {
@@ -139,17 +143,20 @@ impl<'a> IntoIterator for &'a QueryResult {
 }
 
 impl Row {
-    /// Created from core layer row data
-    pub fn from_core(row: CoreRow) -> Self {
+    /// Created from core layer row data (column names + positional values).
+    pub fn from_columns(columns: &[String], values: &[Value]) -> Self {
         let mut column_index = HashMap::new();
-        let values = row.values;
+        let mut row_values = HashMap::new();
 
-        for (idx, (key, _)) in values.iter().enumerate() {
-            column_index.insert(key.clone(), idx);
+        for (idx, col) in columns.iter().enumerate() {
+            column_index.insert(col.clone(), idx);
+            if let Some(v) = values.get(idx) {
+                row_values.insert(col.clone(), v.clone());
+            }
         }
 
         Self {
-            values,
+            values: row_values,
             column_index,
         }
     }
@@ -253,7 +260,7 @@ impl Row {
     }
 
     /// Getting the mapping
-    pub fn get_map(&self, column: &str) -> Option<&HashMap<String, Value>> {
+    pub fn get_map(&self, column: &str) -> Option<&HashMap<Value, Value>> {
         self.get(column).and_then(|v| match v {
             Value::Map(map) => Some(map.as_ref()),
             _ => None,

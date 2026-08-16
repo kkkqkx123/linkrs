@@ -7,7 +7,7 @@
 //! - Error handling when schema_manager is not available
 
 use graphdb::api::core::QueryApi;
-use graphdb::api::server::graph_service::GraphService;
+use graphdb_server::server::graph_service::GraphService;
 use graphdb::config::Config;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;

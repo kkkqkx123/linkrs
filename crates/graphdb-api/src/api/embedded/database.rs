@@ -9,9 +9,13 @@ use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
 #[cfg(feature = "fulltext-search")]
 use crate::search::FulltextIndexManager;
-use crate::search::{FulltextConfig, SyncFailurePolicy};
+use crate::search::FulltextConfig;
+#[cfg(feature = "fulltext-search")]
+use crate::search::SyncFailurePolicy;
 use crate::storage::{GraphStorage, StorageClient};
-use crate::sync::{SyncConfig, SyncManager};
+use crate::sync::SyncManager;
+#[cfg(feature = "fulltext-search")]
+use crate::sync::SyncConfig;
 use crate::transaction::wal::SyncPolicy;
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 use parking_lot::RwLock;
@@ -62,7 +66,10 @@ fn attach_vector_coordinator(
     Ok(sync)
 }
 
+#[cfg(feature = "fulltext-search")]
 type InitManagers = (Option<Arc<FulltextIndexManager>>, Option<Arc<SyncManager>>);
+#[cfg(not(feature = "fulltext-search"))]
+type InitManagers = (Option<Arc<()>>, Option<Arc<SyncManager>>);
 
 /// Full init path when qdrant is enabled but fulltext is not: create a sync manager
 /// that only hosts the vector coordinator.
@@ -116,6 +123,7 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
 
 /// Stub: no qdrant, return (None, None)
 #[cfg(not(feature = "qdrant"))]
+#[allow(dead_code)]
 fn setup_sync_with_vector_only(_runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
     Ok((None, None))
 }
@@ -221,7 +229,8 @@ impl GraphDatabase<GraphStorage> {
 
         let fulltext_config = FulltextConfig::default();
 
-        let (fulltext_manager, mut sync_manager) = if fulltext_config.enabled {
+        #[cfg_attr(not(feature = "fulltext-search"), allow(unused_variables))]
+        let (fulltext_manager, mut sync_manager): InitManagers = if fulltext_config.enabled {
             #[cfg(feature = "fulltext-search")]
             {
                 let manager: Arc<FulltextIndexManager> = Arc::new(
@@ -272,9 +281,10 @@ impl GraphDatabase<GraphStorage> {
             }
         };
 
-        if let (Some(path), Some(manager)) =
-            (config.path(), sync_manager.as_mut().and_then(Arc::get_mut))
-        {
+        if let (Some(path), Some(manager)) = (
+            config.path(),
+            sync_manager.as_mut().and_then(|m| Arc::<SyncManager>::get_mut(m)),
+        ) {
             manager
                 .configure_outbox(path.join("outbox/outbox.sqlite"))
                 .map_err(|error| CoreError::StorageError(error.to_string()))?;
@@ -318,6 +328,7 @@ impl GraphDatabase<GraphStorage> {
             schema_api,
             txn_manager,
             storage,
+            #[cfg(feature = "fulltext-search")]
             fulltext_manager,
             sync_manager,
             stats_manager,

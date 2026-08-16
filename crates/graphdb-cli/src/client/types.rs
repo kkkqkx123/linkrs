@@ -1,131 +1,65 @@
-//! Core data types for client operations
+//! Display-oriented client result types
+//!
+//! The wire contract lives in `graphdb-wire`; this module keeps only the
+//! flattened display shape used by the output layer, produced from a wire
+//! [`QueryResponse`] via [`From`].
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use graphdb_wire::query::QueryResponse;
 
-/// Space information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpaceInfo {
-    pub id: u64,
-    pub name: String,
-    pub vid_type: String,
-    #[serde(default)]
-    pub comment: Option<String>,
-}
-
-/// Tag information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TagInfo {
-    pub name: String,
-    pub fields: Vec<FieldInfo>,
-}
-
-/// Edge type information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EdgeTypeInfo {
-    pub name: String,
-    pub fields: Vec<FieldInfo>,
-}
-
-/// Field information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FieldInfo {
-    pub name: String,
-    pub data_type: String,
-    pub nullable: bool,
-    #[serde(default)]
-    pub default_value: Option<String>,
-}
-
-/// Query execution result
-///
-/// Deserializes directly from the server's query response envelope. The
-/// envelope groups the payload into `data`, `metadata` and `error` subobjects;
-/// the wire groups are collapsed into these flat fields.
+/// Query execution result (flattened wire response for display).
 #[derive(Debug, Clone)]
 pub struct QueryResult {
     pub columns: Vec<String>,
-    pub rows: Vec<HashMap<String, serde_json::Value>>,
+    pub rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
     pub row_count: usize,
     pub execution_time_ms: u64,
     pub rows_scanned: u64,
     pub error: Option<QueryErrorInfo>,
 }
 
-impl<'de> Deserialize<'de> for QueryResult {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct Wire {
-            #[serde(default)]
-            data: Option<WireData>,
-            #[serde(default)]
-            metadata: Option<WireMetadata>,
-            #[serde(default)]
-            error: Option<QueryErrorInfo>,
-        }
-
-        #[derive(Deserialize)]
-        struct WireData {
-            #[serde(default)]
-            columns: Vec<String>,
-            #[serde(default)]
-            rows: Vec<HashMap<String, serde_json::Value>>,
-            #[serde(default)]
-            row_count: usize,
-        }
-
-        #[derive(Deserialize)]
-        struct WireMetadata {
-            #[serde(default)]
-            execution_time_ms: u64,
-            #[serde(default)]
-            rows_scanned: u64,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        let data = wire.data.unwrap_or(WireData {
-            columns: Vec::new(),
-            rows: Vec::new(),
-            row_count: 0,
-        });
-        let metadata = wire.metadata.unwrap_or(WireMetadata {
-            execution_time_ms: 0,
-            rows_scanned: 0,
-        });
-        Ok(Self {
-            columns: data.columns,
-            rows: data.rows,
-            row_count: data.row_count,
-            execution_time_ms: metadata.execution_time_ms,
-            rows_scanned: metadata.rows_scanned,
-            error: wire.error,
-        })
-    }
-}
-
 /// Query error information
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct QueryErrorInfo {
     pub code: String,
     pub message: String,
-    #[serde(default)]
     pub details: Option<String>,
+}
+
+impl From<QueryResponse> for QueryResult {
+    fn from(response: QueryResponse) -> Self {
+        let data = response.data.unwrap_or_else(|| graphdb_wire::query::QueryData::empty());
+        Self {
+            columns: data.columns,
+            rows: data.rows,
+            row_count: data.row_count,
+            execution_time_ms: response.metadata.execution_time_ms,
+            rows_scanned: response.metadata.rows_scanned,
+            error: response.error.map(|e| QueryErrorInfo {
+                code: e.code,
+                message: e.message,
+                details: e.details,
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphdb_wire::query::{QueryData, QueryError, QueryMetadata, QueryResponse};
 
-    fn parse(json: &str) -> serde_json::Result<QueryResult> {
+    fn parse(json: &str) -> serde_json::Result<QueryResponse> {
         serde_json::from_str(json)
+    }
+
+    fn to_result(json: &str) -> QueryResult {
+        let response = parse(json).expect("envelope should parse");
+        QueryResult::from(response)
     }
 
     #[test]
     fn deserialize_success_envelope() {
-        let result = parse(
+        let result = to_result(
             r#"{
                 "success": true,
                 "data": {
@@ -141,8 +75,7 @@ mod tests {
                     "space_id": null
                 }
             }"#,
-        )
-        .expect("success envelope should parse");
+        );
 
         assert_eq!(result.columns, vec!["name", "age"]);
         assert_eq!(result.row_count, 1);
@@ -154,7 +87,7 @@ mod tests {
 
     #[test]
     fn deserialize_error_envelope() {
-        let result = parse(
+        let result = to_result(
             r#"{
                 "success": false,
                 "data": null,
@@ -170,8 +103,7 @@ mod tests {
                     "space_id": null
                 }
             }"#,
-        )
-        .expect("error envelope should parse");
+        );
 
         assert!(result.rows.is_empty());
         let error = result.error.expect("error should be present");
@@ -181,8 +113,7 @@ mod tests {
 
     #[test]
     fn deserialize_use_statement_space_id() {
-        // USE results carry a space_id in the metadata group.
-        let result = parse(
+        let result = to_result(
             r#"{
                 "success": true,
                 "data": {
@@ -204,13 +135,51 @@ mod tests {
                     "space_id": 1
                 }
             }"#,
-        )
-        .expect("USE envelope should parse");
+        );
 
         assert_eq!(result.row_count, 1);
         assert_eq!(
             result.rows[0].get("space_id"),
             Some(&serde_json::Value::from(1))
         );
+    }
+
+    #[test]
+    fn from_wire_response_direct() {
+        let response = QueryResponse::success(
+            QueryData::new(
+                vec!["n".to_string()],
+                vec![std::collections::HashMap::from([(
+                    "n".to_string(),
+                    serde_json::json!("a"),
+                )])],
+            ),
+            QueryMetadata {
+                execution_time_ms: 3,
+                rows_scanned: 5,
+                rows_returned: 1,
+                space_id: None,
+            },
+        );
+        let result = QueryResult::from(response);
+        assert_eq!(result.execution_time_ms, 3);
+        assert_eq!(result.rows_scanned, 5);
+    }
+
+    #[test]
+    fn error_response_from_wire() {
+        let response = QueryResponse {
+            success: false,
+            data: None,
+            error: Some(QueryError {
+                code: "QUERY_ERROR".to_string(),
+                message: "boom".to_string(),
+                details: None,
+            }),
+            metadata: QueryMetadata::default(),
+        };
+        let result = QueryResult::from(response);
+        assert!(result.error.is_some());
+        assert!(result.rows.is_empty());
     }
 }

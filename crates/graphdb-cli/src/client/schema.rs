@@ -1,45 +1,20 @@
-//! Schema DDL types
-
-use graphdb_core::core::types::DataType;
-
-/// Property definition for schema creation
-///
-/// Wire DTO: the type name is serialized via the core `DataType` `Display`
-/// output (`BOOL`/`INT`/`FIXEDSTRING(8)`/`VECTOR_DENSE(3)` ...), which the
-/// server parses back through the same `FromStr` source of truth.
-#[derive(Debug, Clone)]
-pub struct PropertyDef {
-    pub name: String,
-    pub data_type: DataType,
-    pub nullable: bool,
-}
-
-impl PropertyDef {
-    pub fn new(name: impl Into<String>, data_type: DataType) -> Self {
-        Self {
-            name: name.into(),
-            data_type,
-            nullable: true,
-        }
-    }
-
-    pub fn not_null(mut self) -> Self {
-        self.nullable = false;
-        self
-    }
-}
+//! Schema DDL type roundtrip tests
+//!
+//! The `PropertyDef` DTO itself lives in `graphdb-wire` (single contract
+//! source); this module keeps the core `DataType` wire-name roundtrip tests.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use graphdb_core::core::types::{ArrayTypeInfo, StructTypeInfo};
+    use graphdb_core::core::types::DataType;
     use std::str::FromStr;
-    use std::sync::Arc;
 
-    /// Every core `DataType` a `PropertyDef` can carry roundtrips through the
+    /// Every core `DataType` a property can carry roundtrips through the
     /// wire format (Display output) and back via the core `FromStr` parser.
     #[test]
     fn test_wire_format_roundtrip() {
+        use graphdb_core::core::types::{ArrayTypeInfo, StructTypeInfo};
+        use std::sync::Arc;
+
         let types = vec![
             DataType::Empty,
             DataType::Null,

@@ -22,6 +22,7 @@ chrono.workspace = true
 uuid.workspace = true
 
 graphdb-core = { path = "../graphdb-core" }
+graphdb-wire = { path = "../graphdb-wire" }
 async-trait.workspace = true
 futures.workspace = true
 

@@ -13,7 +13,6 @@ fn create_benchmark_group<'a>(
     group
 }
 
-#[cfg(feature = "embedded")]
 fn bench_json_serialization(c: &mut Criterion) {
     use graphdb_storage::core::types::VertexId;
     use graphdb_storage::core::vertex_edge_path::Tag;
@@ -67,14 +66,6 @@ fn bench_json_serialization(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "embedded"))]
-fn bench_json_serialization(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "json_serialization");
-    group.bench_function("placeholder", |b| b.iter(|| black_box("{}")));
-    group.finish();
-}
-
-#[cfg(feature = "embedded")]
 fn bench_json_deserialization(c: &mut Criterion) {
     use graphdb_storage::core::types::VertexId;
     use graphdb_storage::core::vertex_edge_path::Tag;
@@ -106,95 +97,9 @@ fn bench_json_deserialization(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "embedded"))]
-fn bench_json_deserialization(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "json_deserialization");
-    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
-    group.finish();
-}
-
-#[cfg(feature = "embedded")]
-fn bench_database_operations(c: &mut Criterion) {
-    use graphdb_api::api::embedded::database::GraphDatabase;
-
-    let db = GraphDatabase::open_in_memory().expect("open in memory");
-    let mut session = db.session().expect("create session");
-
-    session
-        .execute("CREATE SPACE bench (vid_type=INT64)")
-        .expect("create space");
-    session.use_space("bench").expect("use space");
-    session
-        .execute("CREATE TAG Node(name STRING, value INT64)")
-        .expect("create tag");
-
-    let mut group = create_benchmark_group(c, "database_ops");
-    group.sample_size(50);
-
-    group.bench_function("insert_vertex", |b| {
-        b.iter(|| {
-            let result = session
-                .execute("INSERT VERTEX Node(name, value) VALUES (1)(\"node_1\", 100)")
-                .expect("insert");
-            black_box(result.len());
-        });
-    });
-
-    group.finish();
-}
-
-#[cfg(not(feature = "embedded"))]
-fn bench_database_operations(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "database_ops");
-    group.sample_size(50);
-    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
-    group.finish();
-}
-
-#[cfg(feature = "embedded")]
-fn bench_transaction_api(c: &mut Criterion) {
-    use graphdb_api::api::embedded::database::GraphDatabase;
-
-    let db = GraphDatabase::open_in_memory().expect("open in memory");
-    let mut session = db.session().expect("create session");
-
-    session
-        .execute("CREATE SPACE bench_txn (vid_type=INT64)")
-        .expect("create space");
-    session.use_space("bench_txn").expect("use space");
-    session
-        .execute("CREATE TAG T(name STRING)")
-        .expect("create tag");
-
-    let mut group = create_benchmark_group(c, "transaction_api");
-    group.sample_size(50);
-
-    group.bench_function("begin_commit", |b| {
-        b.iter(|| {
-            let txn = session.begin_transaction().expect("begin");
-            txn.execute("INSERT VERTEX T(name) VALUES (99)(\"txn_test\")")
-                .expect("insert");
-            txn.commit().expect("commit");
-            black_box(())
-        });
-    });
-
-    group.finish();
-}
-
-#[cfg(not(feature = "embedded"))]
-fn bench_transaction_api(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "transaction_api");
-    group.sample_size(50);
-    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_json_serialization,
     bench_json_deserialization,
-    bench_database_operations,
-    bench_transaction_api,
 );
 criterion_main!(benches);

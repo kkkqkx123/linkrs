@@ -9,7 +9,9 @@ members = [
     "crates/graphdb-transaction",
     "crates/graphdb-storage",
     "crates/graphdb-query",
+    "crates/graphdb-wire",
     "crates/graphdb-api",
+    "crates/graphdb-server",
     "crates/graphdb-migration",
     "crates/vector-client",
     "crates/graphdb-cli",
@@ -128,7 +130,6 @@ rpassword = "7.3"
 csv = "1.3"
 
 # build-time
-cbindgen = "0.29"
 
 # dev-deps shared across sub-crates
 tempfile = "3.23.0"
@@ -147,7 +148,7 @@ autobenches = false
 
 [lib]
 name = "graphdb"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "graphdb-server"
@@ -163,6 +164,7 @@ graphdb-transaction = { path = "crates/graphdb-transaction" }
 graphdb-storage = { path = "crates/graphdb-storage" }
 graphdb-query = { path = "crates/graphdb-query" }
 graphdb-api = { path = "crates/graphdb-api" }
+graphdb-server = { path = "crates/graphdb-server" }
 clap.workspace = true
 flexi_logger.workspace = true
 tracing.workspace = true
@@ -172,8 +174,6 @@ tempfile.workspace = true
 rand.workspace = true
 vector-client = { path = "crates/vector-client" }
 
-cbindgen.workspace = true
-
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
@@ -182,12 +182,12 @@ winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoap
 
 [features]
 default = ["server"]
-server = ["graphdb-api/server", "graphdb-config/server"]
-fulltext-search = ["graphdb-api/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+server = ["graphdb-config/server"]
+fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
 jieba = ["graphdb-search/jieba"]
-qdrant = ["graphdb-api/qdrant", "graphdb-config/qdrant", "graphdb-sync/qdrant", "graphdb-query/qdrant"]
+qdrant = ["graphdb-api/qdrant", "graphdb-server/qdrant", "graphdb-config/qdrant", "graphdb-sync/qdrant", "graphdb-query/qdrant"]
+grpc = ["graphdb-server/grpc"]
 embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
-grpc = ["graphdb-api/grpc"]
 c_api = ["graphdb-api/c_api"]
 
 [profile.dev]
