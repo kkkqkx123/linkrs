@@ -880,3 +880,146 @@ impl PlanNodeEnum {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Documented node-name list, mirrored from
+    /// `__analysis__/plan_node_category_analysis.md`. The doc itself cannot be
+    /// compile-checked, so this mirror is the only hand-maintained part; the
+    /// registry side comes from the macro-generated `ALL_VARIANT_NAMES` above.
+    ///
+    /// When adding/removing a plan node you MUST update:
+    /// 1. the enum variant + the six macro tables in this file (compiler-enforced),
+    /// 2. this mirror list (test-enforced against the macro table),
+    /// 3. the two docs in `__analysis__/`.
+    #[cfg(not(feature = "qdrant"))]
+    const DOCUMENTED_NAMES: &[&str] = &[
+        // Access (7)
+        "Start", "GetVertices", "GetEdges", "GetNeighbors", "ScanVertices", "ScanEdges",
+        "IndexScan",
+        // Operation (9)
+        "Project", "Filter", "Sort", "Limit", "TopN", "Sample", "Dedup", "Aggregate", "Window",
+        // Join (6)
+        "InnerJoin", "LeftJoin", "RightJoin", "CrossJoin", "FullOuterJoin", "SemiJoin",
+        // Traversal (6)
+        "Expand", "ExpandAll", "Traverse", "AppendVertices", "BiExpand", "BiTraverse",
+        // ControlFlow (9)
+        "Argument", "Loop", "PassThrough", "Select", "BeginTransaction", "Commit", "Rollback",
+        "Savepoint", "ReleaseSavepoint",
+        // DataProcessing (12)
+        "DataCollect", "Remove", "PatternApply", "RollUpApply", "CorrelatedApply", "Union",
+        "Minus", "Intersect", "Unwind", "Materialize", "Assign", "Apply",
+        // Algorithm (4)
+        "MultiShortestPath", "BFSShortest", "AllPaths", "ShortestPath",
+        // Management/DDL (22)
+        "SpaceManage", "TagManage", "EdgeManage", "IndexManage", "UserManage", "FulltextManage",
+        "VectorManage", "InsertVertices", "InsertEdges", "DeleteVertices", "DeleteEdges",
+        "DeleteTags", "DeleteIndex", "PipeDeleteVertices", "PipeDeleteEdges", "Update",
+        "UpdateVertices", "UpdateEdges", "ShowStats", "ShowConfigs", "ShowQueries", "ShowSessions",
+        // DataAccess (3)
+        "FulltextSearch", "FulltextLookup", "MatchFulltext",
+    ];
+
+    /// Same as above plus the three qdrant-gated vector nodes.
+    #[cfg(feature = "qdrant")]
+    const DOCUMENTED_NAMES: &[&str] = &[
+        "Start", "GetVertices", "GetEdges", "GetNeighbors", "ScanVertices", "ScanEdges",
+        "IndexScan", "Project", "Filter", "Sort", "Limit", "TopN", "Sample", "Dedup", "Aggregate",
+        "Window", "InnerJoin", "LeftJoin", "RightJoin", "CrossJoin", "FullOuterJoin", "SemiJoin",
+        "Expand", "ExpandAll", "Traverse", "AppendVertices", "BiExpand", "BiTraverse", "Argument",
+        "Loop", "PassThrough", "Select", "BeginTransaction", "Commit", "Rollback", "Savepoint",
+        "ReleaseSavepoint", "DataCollect", "Remove", "PatternApply", "RollUpApply",
+        "CorrelatedApply", "Union", "Minus", "Intersect", "Unwind", "Materialize", "Assign",
+        "Apply", "MultiShortestPath", "BFSShortest", "AllPaths", "ShortestPath", "SpaceManage",
+        "TagManage", "EdgeManage", "IndexManage", "UserManage", "FulltextManage", "VectorManage",
+        "InsertVertices", "InsertEdges", "DeleteVertices", "DeleteEdges", "DeleteTags",
+        "DeleteIndex", "PipeDeleteVertices", "PipeDeleteEdges", "Update", "UpdateVertices",
+        "UpdateEdges", "ShowStats", "ShowConfigs", "ShowQueries", "ShowSessions", "FulltextSearch",
+        "FulltextLookup", "MatchFulltext", "VectorSearch", "VectorLookup", "VectorMatch",
+    ];
+
+    /// Default build: 78 variants. With `qdrant`: 81 variants.
+    #[cfg(not(feature = "qdrant"))]
+    const EXPECTED_VARIANT_COUNT: usize = 78;
+    #[cfg(feature = "qdrant")]
+    const EXPECTED_VARIANT_COUNT: usize = 81;
+
+    #[test]
+    fn variant_count_matches_documented_number() {
+        assert_eq!(
+            PlanNodeEnum::ALL_VARIANT_NAMES.len(),
+            EXPECTED_VARIANT_COUNT,
+            "PlanNodeEnum variant count drifted from the documented {EXPECTED_VARIANT_COUNT}. \
+             Update the macro tables / enum in this file and the __analysis__ docs."
+        );
+    }
+
+    #[test]
+    fn variant_names_are_unique() {
+        let mut seen = HashSet::new();
+        for name in PlanNodeEnum::ALL_VARIANT_NAMES {
+            assert!(seen.insert(*name), "duplicate variant name: {name}");
+        }
+    }
+
+    #[test]
+    fn macro_registry_matches_documented_names() {
+        let from_macro: HashSet<&str> = PlanNodeEnum::ALL_VARIANT_NAMES.iter().copied().collect();
+        let documented: HashSet<&str> = DOCUMENTED_NAMES.iter().copied().collect();
+        assert_eq!(
+            from_macro, documented,
+            "macro registry and __analysis__ documented list drifted. \
+             Missing in macro table: {:?}. Extraneous in macro table: {:?}.",
+            documented.difference(&from_macro).collect::<Vec<_>>(),
+            from_macro.difference(&documented).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn removed_legacy_variants_are_absent() {
+        for legacy in ["HashInnerJoin", "HashLeftJoin", "FulltextIndexScan"] {
+            assert!(
+                !PlanNodeEnum::ALL_VARIANT_NAMES.contains(&legacy),
+                "removed legacy variant {legacy} is still registered"
+            );
+        }
+    }
+
+    #[test]
+    fn vector_search_nodes_are_feature_gated() {
+        let names = PlanNodeEnum::ALL_VARIANT_NAMES;
+        // VectorManage is an always-present management node; the three vector
+        // SEARCH nodes are the qdrant-gated ones.
+        let vector_search: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| matches!(*n, "VectorSearch" | "VectorLookup" | "VectorMatch"))
+            .collect();
+        #[cfg(feature = "qdrant")]
+        {
+            assert_eq!(vector_search.len(), 3, "expected 3 vector search nodes under qdrant");
+            for n in ["VectorSearch", "VectorLookup", "VectorMatch"] {
+                assert!(vector_search.contains(&n), "missing {n} under qdrant");
+            }
+        }
+        #[cfg(not(feature = "qdrant"))]
+        {
+            assert!(
+                vector_search.is_empty(),
+                "vector search nodes leaked into the default build: {vector_search:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn type_name_consistent_with_registry() {
+        // `type_name()` is generated from the same macro table as
+        // `ALL_VARIANT_NAMES`; spot-check the default instance to keep the
+        // wiring honest.
+        let node = PlanNodeEnum::default();
+        assert!(PlanNodeEnum::ALL_VARIANT_NAMES.contains(&node.type_name()));
+    }
+}

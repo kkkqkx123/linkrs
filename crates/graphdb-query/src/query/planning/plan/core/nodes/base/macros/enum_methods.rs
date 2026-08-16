@@ -89,6 +89,12 @@ macro_rules! define_enum_as_mut_methods {
 
 /// Generate a macro for the `type_name` method for `PlanNodeEnum`
 ///
+/// Besides `type_name()`, this macro also emits `ALL_VARIANT_NAMES`, a const
+/// slice of every variant name in declaration order (honoring per-item
+/// `#[cfg(...)]` gates). `ALL_VARIANT_NAMES` is the single source of truth for
+/// "how many plan nodes exist" — it is generated from the same exhaustive table
+/// the compiler already enforces, so it can never drift from the enum.
+///
 /// # Examples
 /// ```
 /// define_enum_type_name! {
@@ -106,6 +112,15 @@ macro_rules! define_enum_type_name {
                     $($(#[$meta])* $enum_type::$variant(_) => $name,)*
                 }
             }
+
+            /// All variant names, in declaration order, honoring feature gates.
+            ///
+            /// Generated from the same exhaustive macro table as `type_name()`,
+            /// so it always matches the enum exactly (the compiler enforces the
+            /// match exhaustiveness; this slice cannot drift).
+            pub const ALL_VARIANT_NAMES: &'static [&'static str] = &[
+                $($(#[$meta])* $name,)*
+            ];
         }
     };
 }

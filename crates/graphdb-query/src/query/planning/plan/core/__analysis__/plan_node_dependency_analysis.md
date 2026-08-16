@@ -1,226 +1,210 @@
 # PlanNode 依赖关系分析文档
 
+> 本文档与 2026-08-16 代码现状对齐（`plan_node_traits.rs` / `plan_node_enum.rs`，78/81 变体）。
+> 依赖分类按当前 trait 体系（`ZeroInputNode` / `SingleInputNode` / `BinaryInputNode` /
+> `MultipleInputNode`）+ 控制流特殊依赖 + 参数化管理节点 组织。
+> 枚举 ↔ 本文档的一致性由 `plan_node_registry.rs` 中的一致性测试保证。
+
 ## 概述
 
 本文档描述 GraphDB 查询计划节点（PlanNode）之间的依赖关系体系，帮助理解执行计划的拓扑结构和数据流。
 
 ## 依赖关系类型
 
-根据节点的输入特性，PlanNode 分为以下几类：
+根据节点的输入特性，PlanNode 分为以下 **4 类输入 trait + 1 类特殊控制流节点**。
 
-### 1. 零输入节点（ZeroInputNode）- 4 个
+### 1. 零输入节点（ZeroInputNode）- 35 个（qdrant 下 38 个）
 
-**定义**：没有输入依赖的节点，作为执行计划的起始点。
+**定义**：没有输入依赖的节点，作为执行计划的起始点/终止点。全部管理（DDL/DCL）节点与
+全文/向量检索节点也归入此类——它们直接操作元数据或检索数据，不需要上游数据流。
 
-**节点列表**：
-| 节点类型 | 说明 | 依赖 | 文件位置 |
-|---------|------|-----|---------|
-| StartNode | 执行计划入口 | 无 | start_node.rs |
-| ScanVerticesNode | 全表扫描顶点 | 无 | graph_scan_node.rs |
-| ScanEdgesNode | 全表扫描边 | 无 | graph_scan_node.rs |
+**实现方式**：`define_plan_node!` 宏指定 `input: ZeroInputNode`，或显式 `impl ZeroInputNode for X {}`。
 
-**特点**：
-- 作为叶子节点出现在执行计划中
-- 直接从存储层读取数据
-- 可被优化器并行化
+#### 1.1 访问层（无数据依赖）
 
-**实现方式**：
-```rust
-// 使用宏定义零输入节点
-define_plan_node! {
-    pub struct StartNode {}
-    enum: Start
-    input: ZeroInputNode
-}
-```
+| 节点类型 | 说明 | 文件位置 |
+|---------|------|---------|
+| StartNode | 执行计划入口 | `control_flow/start_node.rs` |
+| GetEdgesNode | 按 ID 获取边 | `access/graph_scan_node.rs` |
+| ScanVerticesNode | 全表扫描顶点 | `access/graph_scan_node.rs` |
+| ScanEdgesNode | 全表扫描边 | `access/graph_scan_node.rs` |
+| IndexScanNode | 索引扫描 | `access/index_scan.rs` |
 
-### 2. 单输入节点（SingleInputNode）- 19 个
+> `GetVerticesNode` / `GetNeighborsNode` 为**多输入**节点（见第 4 节）：它们按上游提供的 ID 集合
+> 获取顶点/邻居，属于访问层中的管道化节点。
 
-**定义**：只有一个上游输入节点的节点。
+#### 1.2 控制流与事务控制
 
-**节点列表**：
-| 节点类型 | 说明 | 输入依赖 | 文件位置 |
+| 节点类型 | 说明 | 文件位置 |
+|---------|------|---------|
+| ArgumentNode | 参数传递 | `control_flow/control_flow_node.rs` |
+| PassThroughNode | 直通传递 | `control_flow/control_flow_node.rs` |
+| BeginTransactionNode | 开启事务 | `control_flow/control_flow_node.rs` |
+| CommitNode | 提交事务 | `control_flow/control_flow_node.rs` |
+| RollbackNode | 回滚事务 | `control_flow/control_flow_node.rs` |
+| SavepointNode | 建立保存点 | `control_flow/control_flow_node.rs` |
+| ReleaseSavepointNode | 释放保存点 | `control_flow/control_flow_node.rs` |
+
+> `SelectNode` / `LoopNode` 为**特殊控制流节点**（见第 5 节），不实现标准输入 trait。
+
+#### 1.3 参数化管理节点（7 个子枚举）
+
+`SpaceManage` / `TagManage` / `EdgeManage` / `IndexManage` / `UserManage` /
+`FulltextManage` / `VectorManage`——由 `define_manage_node_enum!` 宏生成，
+全部 `impl ZeroInputNode`，直接操作元数据。每个子枚举再包裹若干具体节点
+（Space 8 / Tag 6 / Edge 6 / Index 12 / User 9 / Fulltext 5 / Vector 2，合计 48）。
+
+#### 1.4 数据修改（DDL 数据）与统计/系统节点
+
+| 节点类型 | 说明 | 输入 |
+|---------|------|------|
+| InsertVerticesNode | 插入顶点 | 零输入 |
+| InsertEdgesNode | 插入边 | 零输入 |
+| DeleteVerticesNode | 删除顶点 | 零输入 |
+| DeleteEdgesNode | 删除边 | 零输入 |
+| DeleteTagsNode | 删除标签属性 | 零输入 |
+| DeleteIndexNode | 删除索引 | 零输入 |
+| UpdateNode | 更新 | 零输入 |
+| UpdateVerticesNode | 更新顶点 | 零输入 |
+| UpdateEdgesNode | 更新边 | 零输入 |
+| ShowStatsNode | 统计信息 | 零输入 |
+| ShowConfigsNode / ShowQueriesNode / ShowSessionsNode | 系统信息 | 零输入 |
+
+> `PipeDeleteVerticesNode` / `PipeDeleteEdgesNode` 为**单输入**（第 2 节）——它们消费上游查询结果按 ID 删除。
+
+#### 1.5 全文 / 向量检索（DataAccess）
+
+| 节点类型 | 输入 | feature 门控 |
+|---------|------|-------------|
+| FulltextSearchNode / FulltextLookupNode / MatchFulltextNode | 零输入 | 始终存在 |
+| VectorSearchNode / VectorLookupNode / VectorMatchNode | 零输入 | **仅 `qdrant`** |
+
+### 2. 单输入节点（SingleInputNode）- 23 个
+
+**定义**：只有一个上游输入节点的节点。**特点**：
+- 构成执行计划的主体，数据流从叶子节点流向根节点；
+- 支持管道化执行。
+
+**实现方式**：`define_plan_node_with_deps!` 宏（`input: SingleInputNode`，内部为
+`input: Option<Box>` + `deps: Vec<Box>` 结构，支持 `deps[1..]` 附加输入），或显式实现 trait。
+
+| 节点类型 | 说明 | 文件位置 |
+|---------|------|---------|
+| ProjectNode | 投影/列选择 | `operation/project_node.rs` |
+| FilterNode | 条件过滤 | `operation/filter_node.rs` |
+| SortNode / LimitNode / TopNNode | 排序/限制/TopN | `operation/sort_node.rs` |
+| SampleNode | 采样 | `operation/sample_node.rs` |
+| AggregateNode | 聚合运算 | `graph_operations/aggregate_node.rs` |
+| WindowNode | 窗口函数 | `graph_operations/window_node.rs` |
+| DedupNode | 去重 | `graph_operations/graph_operations_node.rs` |
+| TraverseNode | 图遍历 | `traversal/traversal_node.rs` |
+| UnionNode | 并集（`deps[1]` = union_input） | `graph_operations/graph_operations_node.rs` |
+| UnwindNode | 展开数组 | `graph_operations/graph_operations_node.rs` |
+| MinusNode | 差集（`deps[1]` = minus_input） | `graph_operations/set_operations_node.rs` |
+| IntersectNode | 交集（`deps[1]` = intersect_input） | `graph_operations/set_operations_node.rs` |
+| DataCollectNode | 数据收集 | `graph_operations/graph_operations_node.rs` |
+| AssignNode | 变量赋值 | `graph_operations/graph_operations_node.rs` |
+| MaterializeNode | 物化 | `graph_operations/graph_operations_node.rs` |
+| PatternApplyNode | 模式应用子计划 | `graph_operations/graph_operations_node.rs` |
+| RollUpApplyNode | 上卷应用 | `graph_operations/graph_operations_node.rs` |
+| CorrelatedApplyNode | 相关子查询逐行重执行 | `graph_operations/graph_operations_node.rs` |
+| RemoveNode | 移除属性 | `graph_operations/graph_operations_node.rs` |
+| PipeDeleteVerticesNode / PipeDeleteEdgesNode | 管道删除 | `data_modification/delete_nodes.rs` |
+
+> **集合操作（Union/Minus/Intersect）使用 `SingleInputNode` + `deps` 附加输入模型**：
+> 主输入经 `input` 字段、附加输入经 `deps[1]`（`union_input()` / `minus_input()` /
+> `intersect_input()`）。物理上为双流合并，逻辑建模统一为单输入 + 依赖列表，
+> 与多输入 trait（第 4 节）不同。
+
+### 3. 双输入节点（BinaryInputNode）- 13 个
+
+**定义**：有两个上游输入节点的节点，用于连接操作、双向遍历与图算法。
+
+**实现方式**：`define_join_node!` / `define_binary_input_node!` 宏
+（内部 `left: Box` + `right: Box` + `deps: Vec`，并生成 `BinaryInputNode` 实现），
+或显式实现 trait。
+
+| 节点类型 | 说明 | 文件位置 |
+|---------|------|---------|
+| InnerJoinNode | 内连接 | `join/join_node.rs` |
+| LeftJoinNode | 左连接 | `join/join_node.rs` |
+| RightJoinNode | 右连接 | `join/join_node.rs` |
+| CrossJoinNode | 交叉连接 | `join/join_node.rs` |
+| FullOuterJoinNode | 全外连接 | `join/join_node.rs` |
+| SemiJoinNode | 半连接 | `join/join_node.rs` |
+| BiExpandNode | 双向扩展 | `traversal/traversal_node.rs` |
+| BiTraverseNode | 双向遍历 | `traversal/traversal_node.rs` |
+| MultiShortestPathNode | 多源最短路径 | `traversal/path_algorithms.rs` |
+| BFSShortestNode | BFS 最短路径 | `traversal/path_algorithms.rs` |
+| AllPathsNode | 所有路径 | `traversal/path_algorithms.rs` |
+| ShortestPathNode | 最短路径 | `traversal/path_algorithms.rs` |
+| ApplyNode | 应用子计划 | `graph_operations/graph_operations_node.rs` |
+
+> 6 个 Join 节点额外实现 `JoinNode` trait（`hash_keys` / `probe_keys`）——
+> 从 `define_join_node!` 宏生成，物理层统一映射为 `JoinSpec::HashJoin` 等。
+
+### 4. 多输入节点（MultipleInputNode）- 4 个
+
+**定义**：输入数量不固定（≥1）的节点。
+
+| 节点类型 | 说明 | 文件位置 |
+|---------|------|---------|
+| GetVerticesNode | 按上游 ID 列表获取顶点 | `access/graph_scan_node.rs` |
+| GetNeighborsNode | 按上游顶点取邻居 | `access/graph_scan_node.rs` |
+| ExpandNode | 边扩展 | `traversal/traversal_node.rs` |
+| AppendVerticesNode | 追加顶点 | `traversal/traversal_node.rs` |
+
+### 5. 特殊控制流节点 - 3 个
+
+**定义**：具有复杂依赖关系、**不实现标准输入 trait** 的手写控制流节点。
+
+| 节点类型 | 说明 | 依赖结构 | 文件位置 |
 |---------|------|---------|---------|
-| FilterNode | 条件过滤 | 任意单输入节点 | filter_node.rs |
-| ProjectNode | 投影/列选择 | 任意单输入节点 | project_node.rs |
-| AggregateNode | 聚合运算 | 任意单输入节点 | aggregate_node.rs |
-| SortNode | 排序 | 任意单输入节点 | sort_node.rs |
-| LimitNode | 限制返回行数 | 任意单输入节点 | sort_node.rs |
-| TopNNode | Top N 排序 | 任意单输入节点 | sort_node.rs |
-| SampleNode | 采样 | 任意单输入节点 | sample_node.rs |
-| DedupNode | 去重 | 任意单输入节点 | data_processing_node.rs |
-| ExpandNode | 边扩展 | 顶点相关节点 | traversal_node.rs |
-| ExpandAllNode | 全扩展 | 顶点相关节点 | traversal_node.rs |
-| TraverseNode | 遍历 | 顶点/边节点 | traversal_node.rs |
-| AppendVerticesNode | 追加顶点 | 遍历结果 | traversal_node.rs |
-| ArgumentNode | 参数传递 | 特定依赖 | control_flow_node.rs |
-| PassThroughNode | 直通传递 | 任意单输入节点 | control_flow_node.rs |
-| UnwindNode | 展开数组 | 输入数据流 | data_processing_node.rs |
-| AssignNode | 变量赋值 | 输入数据流 | data_processing_node.rs |
-| RollUpApplyNode | 上卷应用 | 聚合模式 | data_processing_node.rs |
-| GetVerticesNode | 按ID获取顶点 | 需要输入提供ID | graph_scan_node.rs |
-| GetEdgesNode | 按ID获取边 | 需要输入提供ID | graph_scan_node.rs |
-| GetNeighborsNode | 获取邻居 | 需要输入提供顶点 | graph_scan_node.rs |
+| SelectNode | 运行时选择 if/else 分支 | `condition` + `if_branch: Option<Box>` + `else_branch: Option<Box>` | `control_flow/control_flow_node.rs` |
+| LoopNode | 循环执行 | `input` + `loop_body: Box`（循环体）+ `max_iterations` | `control_flow/control_flow_node.rs` |
+| ExpandAllNode | 全扩展（多源/批次输入） | `deps: Vec` + `src_vids` + `input_var` + `join_input` | `traversal/traversal_node.rs` |
 
-**特点**：
-- 构成执行计划的主体
-- 数据流从叶子节点流向根节点
-- 支持管道化执行
+> `LoopNode` 保留为**通用控制流**；变量长度遍历（`[:TYPE*min..max]`）、最短/所有路径已由原生
+> `RecursiveFragmentSpec`（SP/MultiSP/BFS/AllPaths 四变体）+ `variable_length_path_planner.rs`
+> 实现，不再需要 Loop 模拟。早期文档中"变量长度遍历依赖 Loop 控制流模拟"的结论**已过时**。
 
-**实现方式**：
-```rust
-// 使用宏定义单输入节点
-define_plan_node_with_deps! {
-    pub struct FilterNode {
-        condition: Expression,
-    }
-    enum: Filter
-    input: SingleInputNode
-}
-```
+---
 
-### 3. 双输入节点（BinaryInputNode）- 7 个
+## 依赖分布统计（按枚举变体，2026-08-16 核实）
 
-**定义**：有两个上游输入节点的节点，通常用于连接操作和集合操作。
+| 输入类别 | 变体数（默认） | 变体数（qdrant） | 说明 |
+|---------|--------------|-----------------|------|
+| ZeroInputNode | 35 | 38 | 访问入口 + 控制/事务 + 管理 + 全文/向量检索 |
+| SingleInputNode | 23 | 23 | 操作 + 集合 + 管道删除等 |
+| BinaryInputNode | 13 | 13 | 连接 + 双向遍历 + 路径算法 + Apply |
+| MultipleInputNode | 4 | 4 | GetVertices/GetNeighbors/Expand/AppendVertices |
+| 特殊控制流（Select/Loop/ExpandAll） | 3 | 3 | 不实现标准输入 trait |
+| **合计** | **78** | **81** | 与 `plan_node_enum.rs` 变体数一致 |
 
-**节点列表**：
-| 节点类型 | 说明 | 输入依赖 | 文件位置 |
-|---------|------|---------|---------|
-| InnerJoinNode | 内连接 | 两个输入流 | join_node.rs |
-| LeftJoinNode | 左连接 | 两个输入流 | join_node.rs |
-| CrossJoinNode | 交叉连接 | 两个输入流 | join_node.rs |
-| HashInnerJoinNode | 哈希内连接 | 两个输入流 | join_node.rs |
-| HashLeftJoinNode | 哈希左连接 | 两个输入流 | join_node.rs |
-| MinusNode | 差集操作 | 两个输入流 | set_operations_node.rs |
-| IntersectNode | 交集操作 | 两个输入流 | set_operations_node.rs |
-
-**特点**：
-- 需要协调两个输入流
-- 可能导致数据倾斜
-- 优化器需要考虑连接顺序
-
-**实现方式**：
-```rust
-// 使用宏定义双输入节点
-define_binary_plan_node! {
-    pub struct InnerJoinNode {
-        join_keys: Vec<Expression>,
-    }
-    enum: InnerJoin
-}
-```
-
-**MinusNode 特殊依赖**：
-```rust
-pub struct MinusNode {
-    id: i64,
-    input: Option<Box<PlanNodeEnum>>,      // 主输入
-    deps: Vec<Box<PlanNodeEnum>>,          // 依赖列表 [主输入, 减输入]
-    // ...
-}
-
-impl MinusNode {
-    pub fn minus_input(&self) -> &PlanNodeEnum {
-        &self.deps[1]  // 第二个输入是要减去的集合
-    }
-}
-```
-
-**IntersectNode 特殊依赖**：
-```rust
-pub struct IntersectNode {
-    id: i64,
-    input: Option<Box<PlanNodeEnum>>,      // 主输入
-    deps: Vec<Box<PlanNodeEnum>>,          // 依赖列表 [主输入, 交输入]
-    // ...
-}
-
-impl IntersectNode {
-    pub fn intersect_input(&self) -> &PlanNodeEnum {
-        &self.deps[1]  // 第二个输入是求交的集合
-    }
-}
-```
-
-### 4. 多输入节点（MultipleInputNode）- 2 个
-
-**定义**：有多个上游输入节点的节点。
-
-**节点列表**：
-| 节点类型 | 说明 | 输入依赖 | 文件位置 |
-|---------|------|---------|---------|
-| UnionNode | 并集操作 | 多输入流 | data_processing_node.rs |
-| DataCollectNode | 数据收集 | 多输入流 | data_processing_node.rs |
-
-**特点**：
-- 输入数量不固定
-- 需要处理不同输入的模式兼容
-- 支持并行收集
-
-**实现方式**：
-```rust
-// 使用宏定义多输入节点
-define_plan_node_with_deps! {
-    pub struct UnionNode {
-        distinct: bool,
-    }
-    enum: Union
-    input: MultipleInputNode
-}
-```
-
-### 5. 特殊节点 - 6 个
-
-**定义**：具有复杂依赖关系的特殊节点。
-
-| 节点类型 | 说明 | 依赖特点 | 文件位置 |
-|---------|------|---------|---------|
-| LoopNode | 循环执行 | 包含循环体依赖 | control_flow_node.rs |
-| SelectNode | 条件选择 | 包含多分支依赖 | control_flow_node.rs |
-| PatternApplyNode | 模式应用 | 模式匹配依赖 | data_processing_node.rs |
-| IndexScanNode | 索引扫描 | 依赖索引 | graph_scan_node.rs |
-| FulltextIndexScanNode | 全文索引扫描 | 依赖索引 | graph_scan_node.rs |
-
-**LoopNode 特殊依赖**：
-```rust
-pub struct LoopNode {
-    id: i64,
-    input: Option<Box<PlanNodeEnum>>,      // 循环输入
-    loop_body: Box<PlanNodeEnum>,          // 循环体
-    max_iterations: usize,                  // 最大迭代次数
-    // ...
-}
-```
-
-**SelectNode 特殊依赖**：
-```rust
-pub struct SelectNode {
-    id: i64,
-    branches: Vec<Box<PlanNodeEnum>>,      // 多分支
-    condition: Expression,                  // 选择条件
-    // ...
-}
-```
+---
 
 ## 管理节点依赖关系
 
-管理节点（DDL 节点）大多数是零输入节点，因为它们直接操作元数据而不需要数据流输入。
+管理节点（DDL/DCL）绝大多数是**零输入**节点：它们直接操作元数据而不需要数据流输入。
+两类例外是**单输入**的管道删除节点（`PipeDeleteVertices`/`PipeDeleteEdges`，消费上游查询结果）。
 
-### 零输入管理节点 - 27 个
+### 参数化管理子枚举（全部零输入）
 
-| 类别 | 节点 | 说明 |
-|-----|------|-----|
-| 图空间 | CreateSpaceNode, DropSpaceNode, DescSpaceNode, ShowSpacesNode | 图空间管理 |
-| 标签 | CreateTagNode, AlterTagNode, DescTagNode, DropTagNode, ShowTagsNode | 标签管理 |
-| 边类型 | CreateEdgeNode, AlterEdgeNode, DescEdgeNode, DropEdgeNode, ShowEdgesNode | 边类型管理 |
-| 索引 | CreateTagIndexNode, DropTagIndexNode, DescTagIndexNode, ShowTagIndexesNode | 标签索引 |
-| 索引 | CreateEdgeIndexNode, DropEdgeIndexNode, DescEdgeIndexNode, ShowEdgeIndexesNode | 边索引 |
-| 索引 | RebuildTagIndexNode, RebuildEdgeIndexNode | 索引重建 |
-| 用户 | CreateUserNode, AlterUserNode, DropUserNode, ChangePasswordNode | 用户管理 |
+| 子枚举 | 包裹的具体节点 | 数量 |
+|-------|--------------|------|
+| `SpaceManageNode` | Create/Drop/Desc/Show/ShowCreate/Switch/Alter/Clear SpaceNode | 8 |
+| `TagManageNode` | Create/Alter/Desc/Drop/Show/ShowCreate TagNode | 6 |
+| `EdgeManageNode` | Create/Alter/Desc/Drop/Show/ShowCreate EdgeNode | 6 |
+| `IndexManageNode` | Tag/Edge 索引 Create/Drop/Desc/Show/Rebuild/ShowCreate IndexNode | 12 |
+| `UserManageNode` | Create/Alter/Drop/ChangePassword/GrantRole/RevokeRole/Describe/ShowRoles/ShowUsersNode | 9 |
+| `FulltextManageNode` | Create/Drop/Alter/Show/Describe FulltextIndexNode | 5 |
+| `VectorManageNode` | Create/Drop VectorIndexNode | 2 |
+
+---
 
 ## 依赖关系图示
 
-### 典型查询计划结构
+### 典型查询计划结构（单输入管道）
 
 ```
 MATCH (n) WHERE n.age > 20 RETURN n.name
@@ -242,25 +226,19 @@ MATCH (n) WHERE n.age > 20 RETURN n.name
 ```
 MATCH (n)-[e]->(m) WHERE n.age > 20 RETURN n.name, m.name
 │
-├── ScanVerticesNode (n) [ZeroInputNode]
+├── GetNeighborsNode (n → e → m) [MultipleInputNode]
 │       │
 │       ▼
-├── ExpandNode (n → e) [SingleInputNode]
+├── TraverseNode (e → m 遍历) [SingleInputNode]
 │       │
 │       ▼
-├── GetNeighborsNode (e → m) [SingleInputNode]
-│       │
-│       ▼
-├── HashInnerJoinNode (合并结果) [BinaryInputNode]
-│       │
-│       ▼
-├── FilterNode [SingleInputNode]
+├── InnerJoinNode (合并结果) [BinaryInputNode]
 │       │
 │       ▼
 └── ProjectNode [SingleInputNode]
 ```
 
-### Union 查询结构
+### Union 查询结构（单输入 + deps 模型）
 
 ```
 MATCH (n) RETURN n UNION MATCH (m) RETURN m
@@ -271,221 +249,40 @@ MATCH (n) RETURN n UNION MATCH (m) RETURN m
 ├── ProjectNode [SingleInputNode]
 │       │
 │       ▼
-├── UnionNode [MultipleInputNode] ◄──┐
-│       │                            │
-│       ▼                            │
-└── ProjectNode [SingleInputNode]    │
-                                     │
-    ScanVerticesNode (m) [ZeroInputNode]
-            │
-            ▼
-    ProjectNode [SingleInputNode] ───┘
+├── UnionNode [SingleInputNode + deps[1]=union_input] ◄──────┐
+│       │                                                  │
+│       ▼                                                  │
+└── ProjectNode [SingleInputNode]                          │
+                                                            │
+    ScanVerticesNode (m) [ZeroInputNode]                   │
+            │                                               │
+            ▼                                               │
+    ProjectNode [SingleInputNode] ─────────────────────────┘
+                        (union_input, 经 deps[1])
 ```
 
-### Minus 查询结构
+### 循环查询结构（已由原生递归算子取代）
 
-```
-MATCH (n) RETURN n MINUS MATCH (m) RETURN m
-│
-├── ScanVerticesNode (n) [ZeroInputNode]
-│       │
-│       ▼
-├── ProjectNode [SingleInputNode]
-│       │
-│       ▼
-├── MinusNode [BinaryInputNode] ◄────┐
-│       │                            │
-│       └── 主输入                    │
-│                                     │
-│   ScanVerticesNode (m) [ZeroInputNode]
-│           │
-│           ▼
-│   ProjectNode [SingleInputNode] ───┘
-│       (减输入)
-```
-
-### Intersect 查询结构
-
-```
-MATCH (n) RETURN n INTERSECT MATCH (m) RETURN m
-│
-├── ScanVerticesNode (n) [ZeroInputNode]
-│       │
-│       ▼
-├── ProjectNode [SingleInputNode]
-│       │
-│       ▼
-├── IntersectNode [BinaryInputNode] ◄──┐
-│       │                              │
-│       └── 主输入                      │
-│                                       │
-│   ScanVerticesNode (m) [ZeroInputNode]
-│           │
-│           ▼
-│   ProjectNode [SingleInputNode] ─────┘
-│       (交输入)
-```
-
-### 循环查询结构
-
+早期文档用 `LoopNode` 包裹 `ExpandNode` 模拟变量长度遍历，图形如下（示意）：
 ```
 MATCH (n)-[*1..3]->(m) RETURN m
 │
 ├── ScanVerticesNode (n) [ZeroInputNode]
 │       │
 │       ▼
-├── LoopNode [特殊节点]
+├── LoopNode [特殊控制流]   ← 通用控制流，非路径查询专用
 │       │
-│       ├──► ExpandNode (循环体) [SingleInputNode]
-│       │           │
-│       │           ▼
-│       └──► AppendVerticesNode [SingleInputNode]
-│
+│       ├──► ExpandNode (循环体) [MultipleInputNode]
+│       │
 └── ProjectNode [SingleInputNode]
 ```
 
-## 依赖关系验证
+> **已过时说明**：当前 `[:TYPE*1..3]` 由 `variable_length_path_planner.rs` 规划为
+> `VariableLengthPathPlan` IQM（`RecursiveFragmentSpec::*` 四变体），由原生
+> `recursive_fragment_operator.rs` 执行（frontier/visited-set/路径前驱），
+> **不再生成 Loop 结构**。见 `docs/analysis/计划节点类型对比分析.md` 修订。
 
-### 规则1：类型兼容性
-
-连接节点的两个输入必须有兼容的模式（schema）：
-
-```rust
-impl HashInnerJoinNode {
-    pub fn new(
-        left_input: PlanNodeEnum,
-        right_input: PlanNodeEnum,
-        join_keys: Vec<Expression>,
-    ) -> Result<Self, PlannerError> {
-        // 验证输入模式兼容性
-        let left_schema = left_input.output_schema()?;
-        let right_schema = right_input.output_schema()?;
-        
-        if !schemas_compatible(&left_schema, &right_schema) {
-            return Err(PlannerError::SchemaMismatch(
-                "Join inputs have incompatible schemas".to_string()
-            ));
-        }
-        
-        Ok(Self {
-            id: -1,
-            left_input: Box::new(left_input),
-            right_input: Box::new(right_input),
-            join_keys,
-            output_var: None,
-            col_names: vec![],
-            cost: 0.0,
-        })
-    }
-}
-```
-
-### 规则2：循环依赖检测
-
-计划节点不能形成循环依赖：
-
-```rust
-pub fn detect_cycle(node: &PlanNodeEnum) -> bool {
-    let mut visited = HashSet::new();
-    let mut stack = HashSet::new();
-    
-    fn dfs(
-        node: &PlanNodeEnum,
-        visited: &mut HashSet<i64>,
-        stack: &mut HashSet<i64>,
-    ) -> bool {
-        if stack.contains(&node.id()) {
-            return true; // 检测到循环
-        }
-        
-        if visited.contains(&node.id()) {
-            return false;
-        }
-        
-        visited.insert(node.id());
-        stack.insert(node.id());
-        
-        for child in node.dependencies() {
-            if dfs(child, visited, stack) {
-                return true;
-            }
-        }
-        
-        stack.remove(&node.id());
-        false
-    }
-    
-    dfs(node, &mut visited, &mut stack)
-}
-```
-
-### 规则3：输入数量验证
-
-```rust
-impl UnionNode {
-    pub fn new(
-        inputs: Vec<PlanNodeEnum>,
-        distinct: bool,
-    ) -> Result<Self, PlannerError> {
-        if inputs.len() < 2 {
-            return Err(PlannerError::InvalidInput(
-                "Union requires at least 2 inputs".to_string()
-            ));
-        }
-        
-        // 验证所有输入模式兼容
-        let first_schema = inputs[0].output_schema()?;
-        for input in &inputs[1..] {
-            if !schemas_compatible(&first_schema, &input.output_schema()?) {
-                return Err(PlannerError::SchemaMismatch(
-                    "Union inputs have incompatible schemas".to_string()
-                ));
-            }
-        }
-        
-        Ok(Self {
-            id: -1,
-            deps: inputs.into_iter().map(Box::new).collect(),
-            distinct,
-            output_var: None,
-            col_names: vec![],
-            cost: 0.0,
-        })
-    }
-}
-```
-
-### 规则4：集合操作模式兼容
-
-```rust
-impl MinusNode {
-    pub fn new(
-        input: PlanNodeEnum,
-        minus_input: PlanNodeEnum,
-    ) -> Result<Self, PlannerError> {
-        // 验证两个输入的模式兼容
-        let input_schema = input.output_schema()?;
-        let minus_schema = minus_input.output_schema()?;
-        
-        if !schemas_compatible(&input_schema, &minus_schema) {
-            return Err(PlannerError::SchemaMismatch(
-                "Minus inputs must have compatible schemas".to_string()
-            ));
-        }
-        
-        let col_names = input.col_names().to_vec();
-        
-        Ok(Self {
-            id: -1,
-            input: Some(Box::new(input.clone())),
-            deps: vec![Box::new(input), Box::new(minus_input)],
-            output_var: None,
-            col_names,
-            cost: 0.0,
-        })
-    }
-}
-```
+---
 
 ## 与 nebula-graph 的依赖关系对比
 
@@ -493,28 +290,24 @@ impl MinusNode {
 
 | 依赖类型 | GraphDB | nebula-graph | 说明 |
 |---------|---------|-------------|------|
-| 零输入 | 支持 | 支持 | 两者都支持 |
-| 单输入 | 支持 | 支持 | 两者都支持 |
-| 双输入 | 支持 | 支持 | 两者都支持 |
-| 多输入 | 支持 | 支持 | 两者都支持 |
-| 循环依赖 | 支持 | 支持 | LoopNode 实现类似 |
-| 条件分支 | 支持 | 支持 | SelectNode 实现类似 |
+| 零输入 | 支持（35/38 变体） | 支持 | DDL 与管理节点归零输入 |
+| 单输入 | 支持（23 变体，含 deps 附加输入） | 支持 | 集合操作走 Single+deps 模型 |
+| 双输入 | 支持（13 变体） | 支持 | + `JoinNode`（hash_keys/probe_keys） |
+| 多输入 | 支持（4 变体） | 支持 | 输入数量不固定 |
+| 循环/条件分支 | 支持（Loop/Select 特殊节点） | 支持 | 与 Nebula 同类设计 |
 
-### 依赖验证机制对比
+### trait 建模差异
 
-**nebula-graph**:
-- 在 C++ 中使用虚函数和继承体系
-- 依赖检查分散在各个节点的构造函数中
-- 运行时检查为主
+**nebula-graph**: 基类 `dependencies_` 向量 + `SingleDependencyNode`/`SingleInputNode`/
+`BinaryInputNode`/`VariableDependencyNode` 派生（运行时 `dynamic_cast`/`DCHECK` 校验，非穷尽）。
 
-**GraphDB**:
-- 使用 Rust 的类型系统和宏
-- 在编译期通过类型系统保证部分依赖安全
-- 运行时检查通过 Result 类型显式处理错误
+**GraphDB**: Rust trait 体系 `ZeroInputNode`/`SingleInputNode`/`BinaryInputNode`/`MultipleInputNode`
+（编译期受穷尽性保证）。`define_plan_node_with_deps!` 为单输入节点叠加 `deps: Vec<Box>`，
+统一表达"主输入 + 附加输入"。
 
 ```rust
-// GraphDB 的方式：类型安全 + 显式错误处理
-pub trait ZeroInputNode: PlanNode {}
+// GraphDB 的方式：类型安全 + 穷尽 match
+pub trait ZeroInputNode: PlanNode { fn input_count(&self) -> usize { 0 } }
 pub trait SingleInputNode: PlanNode {
     fn input(&self) -> &PlanNodeEnum;
     fn input_mut(&mut self) -> &mut PlanNodeEnum;
@@ -523,228 +316,32 @@ pub trait BinaryInputNode: PlanNode {
     fn left_input(&self) -> &PlanNodeEnum;
     fn right_input(&self) -> &PlanNodeEnum;
 }
-```
-
-## 优化器依赖处理
-
-### 1. 下推过滤
-
-尽可能将 FilterNode 下推到访问层：
-
-```rust
-pub fn push_down_filter(plan: &mut ExecutionPlan) {
-    if let Some(filter) = plan.root_mut().as_filter_mut() {
-        if let Some(scan) = filter.input_mut().as_scan_vertices_mut() {
-            // 将过滤条件下推到扫描节点
-            scan.add_filter(filter.condition().clone());
-            // 用扫描节点替换过滤节点
-            *plan.root_mut() = filter.input_mut().clone();
-        }
-    }
+pub trait MultipleInputNode: PlanNode {
+    fn inputs(&self) -> &[PlanNodeEnum];
 }
 ```
 
-### 2. 连接重排
+---
 
-根据代价模型重排连接顺序：
+## 依赖关系验证（编译器保证 + 运行时检查边界）
 
-```rust
-pub fn reorder_joins(plan: &mut ExecutionPlan) {
-    if let Some(join) = plan.root_mut().as_hash_inner_join_mut() {
-        let left_cost = estimate_cost(join.left_input());
-        let right_cost = estimate_cost(join.right_input());
-        
-        // 代价小的表作为构建表（哈希表）
-        if left_cost > right_cost {
-            std::mem::swap(&mut join.left_input, &mut join.right_input);
-        }
-    }
-}
-```
+- **编译期**：穷尽 match（`is_*`/`as_*`/`category`/`type_name`/`describe`）保证新增变体不会漏分支；
+- **运行时**：仅系统边界校验（如连接输入 schema 兼容性由规划器 `PlannerError` 显式处理），
+  内部通过类型系统保证依赖安全；
+- **一致性**：枚举变体 ↔ 本文档 ↔ `plan_node_registry.rs` 由一致性测试门禁，
+  防止 docs 漂移后再现早期"69 节点/8 类/HashInnerJoin 旧模型"的失联问题。
 
-### 3. 子计划合并
+---
 
-合并连续的同类操作：
+## 总结
 
-```rust
-pub fn merge_consecutive_projects(plan: &mut ExecutionPlan) {
-    if let (Some(outer), Some(inner)) = (
-        plan.root().as_project(),
-        plan.root().input().as_project()
-    ) {
-        // 如果两个 Project 相邻，合并列表达式
-        let merged_columns = merge_columns(
-            outer.columns(),
-            inner.columns()
-        );
-        // 用合并后的 Project 替换
-    }
-}
-```
+GraphDB 的 PlanNode 依赖体系设计遵循以下原则：
 
-### 4. 管道化执行优化
+1. **类型安全**：Rust trait 体系 + 穷尽 match，编译期保证；
+2. **单一模型**：单输入节点用 `SingleInputNode + deps` 统一表达"主输入 + 附加输入"；
+3. **管理归零**：DDL/DCL 全部零输入，参数化子枚举压缩变体数（90+ → 7）；
+4. **控制流独立**：Loop/Select/ExpandAll 为特殊节点，不强行套输入 trait；
+5. **文档同步**：与 `plan_node_enum.rs`（78/81 变体）、`plan_node_registry.rs` 三方一致。
 
-单输入节点支持管道化执行：
-
-```rust
-pub fn can_pipeline(node: &PlanNodeEnum) -> bool {
-    matches!(
-        node,
-        PlanNodeEnum::Filter(_)
-            | PlanNodeEnum::Project(_)
-            | PlanNodeEnum::Limit(_)
-            | PlanNodeEnum::Sort(_)
-    )
-}
-```
-
-### 5. 集合操作优化
-
-```rust
-pub fn optimize_set_operations(plan: &mut ExecutionPlan) {
-    match plan.root() {
-        PlanNodeEnum::Minus(minus) => {
-            // 如果减输入为空，直接返回主输入
-            if is_empty_input(minus.minus_input()) {
-                *plan.root_mut() = minus.input().clone();
-            }
-        }
-        PlanNodeEnum::Intersect(intersect) => {
-            // 选择较小的输入作为构建表
-            let input_size = estimate_size(intersect.input());
-            let intersect_size = estimate_size(intersect.intersect_input());
-            
-            if intersect_size < input_size {
-                // 交换输入顺序以优化性能
-            }
-        }
-        _ => {}
-    }
-}
-```
-
-## 依赖关系文件组织
-
-当前节点文件按依赖类型和功能组织：
-
-```
-src/query/planner/plan/core/nodes/
-├── mod.rs                    # 模块导出
-├── macros.rs                 # 节点定义宏
-├── plan_node_traits.rs       # 依赖 trait 定义
-├── plan_node_enum.rs         # 节点枚举
-│
-├── start_node.rs             # ZeroInputNode: Start
-├── graph_scan_node.rs        # ZeroInputNode: ScanVertices, ScanEdges
-│                              # SingleInputNode: GetVertices, GetEdges, GetNeighbors
-│                              # Special: IndexScan, FulltextIndexScan
-├── space_nodes.rs            # ZeroInputNode: 4 个空间管理节点
-├── tag_nodes.rs              # ZeroInputNode: 5 个标签管理节点
-├── edge_nodes.rs             # ZeroInputNode: 5 个边类型管理节点
-├── index_nodes.rs            # ZeroInputNode: 10 个索引管理节点
-├── user_nodes.rs             # ZeroInputNode: 4 个用户管理节点
-│
-├── filter_node.rs            # SingleInputNode: Filter
-├── project_node.rs           # SingleInputNode: Project
-├── aggregate_node.rs         # SingleInputNode: Aggregate
-├── sort_node.rs              # SingleInputNode: Sort, Limit, TopN
-├── sample_node.rs            # SingleInputNode: Sample
-├── traversal_node.rs         # SingleInputNode: Expand, ExpandAll, Traverse, AppendVertices
-├── control_flow_node.rs      # SingleInputNode: Argument, PassThrough
-│                              # 特殊: Loop, Select
-├── data_processing_node.rs   # SingleInputNode: Dedup, Unwind, Assign, RollUpApply
-│                              # MultipleInputNode: Union, DataCollect
-│                              # 特殊: PatternApply
-├── join_node.rs              # BinaryInputNode: 5 个连接节点
-├── set_operations_node.rs    # BinaryInputNode: Minus, Intersect
-│
-└── algorithms/               # 算法节点
-    ├── mod.rs
-    └── path_algorithms.rs    # ShortestPath, AllPaths, MultiShortestPath, BFSShortest
-```
-
-## 依赖关系统计
-
-| 依赖类型 | 节点数量 | 占比 | 主要用途 |
-|---------|---------|-----|---------|
-| ZeroInputNode | 31 | 44.9% | 数据访问起点、DDL操作 |
-| SingleInputNode | 19 | 27.5% | 数据转换、过滤、排序 |
-| BinaryInputNode | 7 | 10.1% | 连接操作、集合操作 |
-| MultipleInputNode | 2 | 2.9% | 并集、数据收集 |
-| 特殊节点 | 10 | 14.5% | 控制流、索引扫描、算法 |
-| **总计** | **69** | **100%** | - |
-
-## 未来优化建议
-
-### 1. 依赖图可视化
-
-建议实现执行计划的可视化工具，展示节点间的依赖关系：
-
-```rust
-pub fn to_dot_format(plan: &ExecutionPlan) -> String {
-    let mut dot = String::from("digraph Plan {\n");
-    // 遍历节点并生成 Graphviz DOT 格式
-    dot.push_str("}\n");
-    dot
-}
-```
-
-### 2. 依赖缓存
-
-对于复杂的查询计划，可以缓存依赖关系避免重复计算：
-
-```rust
-pub struct DependencyCache {
-    cache: HashMap<i64, Vec<i64>>, // 节点 ID -> 依赖节点 IDs
-}
-```
-
-### 3. 并行依赖分析
-
-对于多输入节点，可以并行分析各输入分支：
-
-```rust
-pub fn analyze_dependencies_parallel(node: &PlanNodeEnum) -> DependencyGraph {
-    match node {
-        PlanNodeEnum::Union(union) => {
-            // 并行分析所有输入分支
-            union.deps().par_iter().map(analyze).collect()
-        }
-        // ...
-    }
-}
-```
-
-### 4. 集合操作优化
-
-针对 Minus 和 Intersect 节点，可以实现更多优化策略：
-
-```rust
-pub fn optimize_minus(node: &MinusNode) -> PlanNodeEnum {
-    // 如果减输入是空集，直接返回主输入
-    if is_empty(node.minus_input()) {
-        return node.input().clone();
-    }
-    
-    // 如果两个输入相同，返回空集
-    if node.input() == node.minus_input() {
-        return PlanNodeEnum::Start(StartNode::new());
-    }
-    
-    PlanNodeEnum::Minus(node.clone())
-}
-
-pub fn optimize_intersect(node: &IntersectNode) -> PlanNodeEnum {
-    // 如果交输入是空集，返回空集
-    if is_empty(node.intersect_input()) {
-        return PlanNodeEnum::Start(StartNode::new());
-    }
-    
-    // 如果两个输入相同，返回任意一个
-    if node.input() == node.intersect_input() {
-        return node.input().clone();
-    }
-    
-    PlanNodeEnum::Intersect(node.clone())
-}
-```
+当前 78（81 qdrant）个节点按 4 类输入 trait + 3 特殊控制流组织，覆盖查询执行、数据处理、
+事务控制、全文/向量检索和元数据管理的全部流向。
