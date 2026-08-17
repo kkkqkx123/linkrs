@@ -13,17 +13,14 @@
 //! # Usage Examples
 //!
 //! ```rust
-//! use crate::query::optimizer::heuristic::rule_enum::{RewriteRule, RuleRegistry};
+//! use graphdb_query::query::optimizer::heuristic::rule_enum::RuleRegistry;
 //!
-// Create the rule registry
+//! // Create the rule registry
 //! let registry = RuleRegistry::default();
 //!
-// Application rules
-//! for rule in registry.iter() {
-//!     if let Some(result) = rule.apply(ctx, node)? {
-// Processing the results
-//!     }
-//! }
+//! // Iterate over the registered rules
+//! let rule_count = registry.iter().count();
+//! assert!(rule_count > 0);
 //! ```
 
 use crate::query::optimizer::heuristic::aggregate;

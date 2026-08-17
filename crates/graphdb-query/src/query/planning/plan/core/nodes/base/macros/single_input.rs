@@ -1,7 +1,11 @@
 /// Macro for defining plan nodes (ZeroInputNode and MultipleInputNode variants)
 ///
 /// # Example
-/// ```
+/// ```ignore
+/// use graphdb_query::define_plan_node;
+///
+/// struct TagProp;
+///
 /// define_plan_node! {
 ///     pub struct GetVerticesNode {
 ///         space_id: i32,

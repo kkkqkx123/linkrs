@@ -18,11 +18,12 @@
 //! ## How to use it
 //!
 //! ```rust
-// Created during the initialization of the database instance
-//! let optimizer_engine = Arc::new(OptimizerEngine::new(CostModelConfig::default()));
+//! use std::sync::Arc;
+//! use graphdb_query::query::optimizer::cost::CostModelConfig;
+//! use graphdb_query::query::optimizer::engine::OptimizerEngine;
 //!
-// Used in the query pipeline through dependency injection
-//! let pipeline = QueryPipelineManager::with_optimizer(storage, stats_manager, optimizer_engine);
+//! // Created during the initialization of the database instance
+//! let optimizer_engine = Arc::new(OptimizerEngine::new(CostModelConfig::default()));
 //! ```
 //!
 //! ## Thread Safety

@@ -6,15 +6,15 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::MemoryBudgetAllocator;
-//! use graphdb::query::optimizer::cost::CostModelConfig;
+//! use graphdb_query::query::optimizer::cost::CostModelConfig;
+//! use graphdb_query::query::optimizer::cost_based::MemoryBudgetAllocator;
 //!
 //! let allocator = MemoryBudgetAllocator::with_config(
 //!     100 * 1024 * 1024, // 100MB total budget
 //!     CostModelConfig::default(),
 //! );
 //!
-//! let budgets = allocator.allocate_budget(&plan_root);
+//! // let budgets = allocator.allocate_budget(&plan_root);
 //! ```
 
 use std::collections::HashMap;

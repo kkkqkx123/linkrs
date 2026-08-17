@@ -13,16 +13,16 @@ use std::collections::HashMap;
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::selectivity::FeedbackDrivenSelectivity;
+/// use graphdb_query::query::optimizer::stats::feedback::selectivity::FeedbackDrivenSelectivity;
 ///
 /// let mut feedback = FeedbackDrivenSelectivity::new(0.1);
 /// assert_eq!(feedback.estimated_selectivity(), 0.1);
 ///
-// Update the feedback
+/// // Update the feedback
 /// feedback.update_with_feedback(0.15);
 /// feedback.update_with_feedback(0.12);
 ///
-// Obtain the corrected selective information
+/// // Obtain the corrected selective information
 /// let corrected = feedback.corrected_selectivity();
 /// assert!(corrected > 0.0 && corrected <= 0.99);
 /// ```
@@ -246,7 +246,7 @@ impl Default for FeedbackDrivenSelectivity {
 ///
 /// # Examples
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
+/// use graphdb_query::query::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
 ///
 /// let manager = SelectivityFeedbackManager::new();
 /// manager.register_condition("age > 25".to_string(), 0.3);

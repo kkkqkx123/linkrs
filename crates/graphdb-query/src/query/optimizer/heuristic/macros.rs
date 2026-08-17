@@ -10,11 +10,13 @@
 ///
 /// # Example
 /// ```rust
+/// use graphdb_query::define_rewrite_rule;
+/// use graphdb_query::query::optimizer::heuristic::pattern::Pattern;
+///
 /// define_rewrite_rule! {
 ///     name: MyCustomRule,
 ///     pattern: Pattern::new_with_name("Filter"),
-///     apply: |ctx, node| {
-// Rule logic
+///     apply: |_ctx, _node| {
 ///         Ok(None)
 ///     }
 /// }
@@ -71,12 +73,15 @@ macro_rules! define_rewrite_rule {
 ///
 /// # Examples
 /// ```rust
+/// use graphdb_query::define_typed_rewrite_rule;
+/// use graphdb_query::query::optimizer::heuristic::pattern::Pattern;
+///
 /// define_typed_rewrite_rule! {
 ///     name: EliminateFilterRule,
 ///     pattern: Pattern::new_with_name("Filter"),
 ///     node_type: Filter,
-///     apply: |ctx, filter_node| {
-// The `filter_node` variable already has the type of the `FilterNode` class after unpacking.
+///     apply: |_ctx, _filter_node| {
+///         // `_filter_node` is already unpacked to `&FilterNode` by the macro.
 ///         Ok(None)
 ///     }
 /// }
@@ -144,12 +149,14 @@ macro_rules! define_typed_rewrite_rule {
 ///
 /// # Examples
 /// ```rust
+/// use graphdb_query::define_rewrite_pushdown_rule;
+/// use graphdb_query::query::optimizer::heuristic::pattern::Pattern;
+///
 /// define_rewrite_pushdown_rule! {
 ///     name: PushFilterDownGetNbrsRule,
 ///     parent_node: Filter,
 ///     child_node: GetNeighbors,
-///     apply: |ctx, filter_node, get_neighbors_node| {
-// Push-down logic
+///     apply: |_ctx, _filter_node, _get_neighbors_node| {
 ///         Ok(None)
 ///     }
 /// }
@@ -248,13 +255,17 @@ macro_rules! define_rewrite_pushdown_rule {
 ///
 /// # Examples
 /// ```rust
+/// use graphdb_query::define_rewrite_elimination_rule;
+/// use graphdb_query::query::optimizer::heuristic::result::TransformResult;
+/// use graphdb_query::query::optimizer::heuristic::rule::RewriteRule;
+/// use graphdb_query::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+/// use graphdb_query::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+///
 /// define_rewrite_elimination_rule! {
 ///     name: EliminateFilterRule,
 ///     node_type: Filter,
-///     can_eliminate: |filter_node| {
-///         is_expression_tautology(filter_node.condition())
-///     },
-///     eliminate: |ctx, filter_node| {
+///     can_eliminate: |filter_node: &FilterNode| filter_node.condition().is_constant(),
+///     eliminate: |_ctx, filter_node: &FilterNode| {
 ///         let mut result = TransformResult::new();
 ///         result.erase_curr = true;
 ///         result.add_new_node(filter_node.input().clone());
@@ -347,10 +358,13 @@ macro_rules! define_rewrite_elimination_rule {
 ///
 /// # Examples
 /// ```rust
+/// use graphdb_query::define_simple_rewrite_elimination_rule;
+/// use graphdb_query::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
+///
 /// define_simple_rewrite_elimination_rule! {
 ///     name: EliminateTrueFilterRule,
 ///     node_type: Filter,
-///     condition: |filter_node: &FilterNode| is_expression_tautology(filter_node.condition())
+///     condition: |filter_node: &FilterNode| filter_node.condition().is_constant()
 /// }
 /// ```
 #[macro_export]
@@ -445,13 +459,15 @@ macro_rules! define_simple_rewrite_elimination_rule {
 ///
 /// # Examples
 /// ```rust
+/// use graphdb_query::define_rewrite_merge_rule;
+/// use graphdb_query::query::optimizer::heuristic::pattern::Pattern;
+///
 /// define_rewrite_merge_rule! {
 ///     name: CombineFilterRule,
 ///     parent_node: Filter,
 ///     child_node: Filter,
-///     can_merge: |parent, child| true,
-///     merge: |ctx, parent, child| {
-// Merge the logic
+///     can_merge: |_parent, _child| true,
+///     merge: |_ctx, _parent, _child| {
 ///         Ok(None)
 ///     }
 /// }
@@ -576,7 +592,10 @@ macro_rules! define_rewrite_merge_rule {
 /// Automatically generate the default implementation of RuleRegistry, which includes the registration of all rules.
 ///
 /// # Examples
-/// ```rust
+/// ```ignore
+/// // The generated code references the crate-internal `RewriteRule` enum,
+/// // the `paste` macro and the rule structs, so it can only be expanded
+/// // inside the crate itself.
 /// define_rewrite_rule_registry! {
 ///     elimination: [
 ///         EliminateFilter,

@@ -12,14 +12,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::JoinOrderOptimizer;
-//! use graphdb::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::join_order::JoinOrderOptimizer;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let optimizer = JoinOrderOptimizer::new(cost_calculator);
-//! let tables = vec![table1, table2, table3];
-//! let conditions = vec![join_condition];
-//! let decision = optimizer.optimize_join_order(&tables, &conditions);
+//!
+//! // let decision = optimizer.optimize_join_order(&tables, &conditions);
 //! ```
 
 use std::collections::{HashMap, HashSet};

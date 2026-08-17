@@ -11,12 +11,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::TraversalDirectionOptimizer;
-//! use graphdb::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::TraversalDirectionOptimizer;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let optimizer = TraversalDirectionOptimizer::new(cost_calculator);
-//! let decision = optimizer.optimize_direction("KNOWS", None);
+//!
+//! // let decision = optimizer.optimize_direction("KNOWS", None);
 //! ```
 
 use std::sync::Arc;

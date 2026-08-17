@@ -5,16 +5,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::cost::{CostCalculator, CostModelConfig};
-//! use graphdb::query::optimizer::stats::StatisticsManager;
+//! use graphdb_query::query::optimizer::cost::{CostCalculator, CostModelConfig};
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
 //! let stats_manager = Arc::new(StatisticsManager::new());
 //! let config = CostModelConfig::default();
 //! let calculator = CostCalculator::with_config(stats_manager, config);
 //!
-// Calculate the scanning cost
-//! let scan_cost = calculator.calculate_scan_vertices_cost("Person");
+//! // Calculate the scanning cost
+//! let scan_cost = calculator.calculate_scan_vertices_cost("my_space", "Person");
 //! ```
 
 use std::sync::Arc;

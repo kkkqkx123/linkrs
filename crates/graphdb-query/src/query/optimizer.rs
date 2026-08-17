@@ -32,13 +32,13 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::OptimizerEngine;
+//! use graphdb_query::query::optimizer::OptimizerEngine;
 //!
 //! // Create the optimizer engine (global instance)
 //! let optimizer = OptimizerEngine::default();
 //!
-//! // Optimize an execution plan through all enabled phases
-//! let optimized_plan = optimizer.optimize(plan)?;
+//! // Optimize an execution plan through all enabled phases:
+//! // let optimized_plan = optimizer.optimize(plan, None)?;
 //! ```
 
 // Core modules

@@ -20,7 +20,7 @@ struct InternalCounters {
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::collector::ExecutionFeedbackCollector;
+/// use graphdb_query::query::optimizer::stats::feedback::collector::ExecutionFeedbackCollector;
 ///
 /// let collector = ExecutionFeedbackCollector::new();
 /// collector.start();

@@ -12,7 +12,7 @@ use std::time::Instant;
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::trigger::AutoFeedbackConfig;
+/// use graphdb_query::query::optimizer::stats::feedback::trigger::AutoFeedbackConfig;
 ///
 /// let config = AutoFeedbackConfig::new();
 /// assert!(config.enabled);
@@ -123,17 +123,17 @@ impl Default for AutoFeedbackConfig {
 ///
 /// # Examples
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::trigger::{AutoFeedbackTrigger, AutoFeedbackConfig};
+/// use graphdb_query::query::optimizer::stats::feedback::trigger::{AutoFeedbackTrigger, AutoFeedbackConfig};
 ///
 /// let config = AutoFeedbackConfig::with_params(5, 0.5, 1000, 50);
 /// let trigger = AutoFeedbackTrigger::new(config);
 ///
-// Record feedback
+/// // Record feedback
 /// for _ in 0..5 {
 ///     trigger.record_feedback();
 /// }
 ///
-// Check whether an action should be triggered (if the error exceeds the threshold)
+/// // Check whether an action should be triggered (if the error exceeds the threshold)
 /// assert!(trigger.should_trigger(0.6));
 /// ```
 #[derive(Debug)]

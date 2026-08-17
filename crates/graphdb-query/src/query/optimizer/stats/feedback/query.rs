@@ -20,7 +20,7 @@ use std::time::Instant;
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::query::OperatorFeedback;
+/// use graphdb_query::query::optimizer::stats::feedback::query::OperatorFeedback;
 ///
 /// let feedback = OperatorFeedback {
 ///     operator_id: "scan_1".to_string(),
@@ -30,6 +30,8 @@ use std::time::Instant;
 ///     estimated_time_us: 1000,
 ///     actual_time_us: 1200,
 ///     execution_loops: 1,
+///     condition_key: None,
+///     shape_key: None,
 /// };
 ///
 /// assert_eq!(feedback.row_estimation_error(), 0.5); // (150-100)/100
@@ -137,7 +139,7 @@ impl OperatorFeedback {
 ///
 /// # Examples
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::query::QueryExecutionFeedback;
+/// use graphdb_query::query::optimizer::stats::feedback::query::QueryExecutionFeedback;
 ///
 /// let mut feedback = QueryExecutionFeedback::new("query_fp_123".to_string());
 /// feedback.estimated_rows = 1000;

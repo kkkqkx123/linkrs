@@ -20,10 +20,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use crate::query::optimizer::cost_based::strategies::JoinOrderOptimizer;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::join_order::JoinOrderOptimizer;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
+//! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let optimizer = JoinOrderOptimizer::new(cost_calculator);
-//! let decision = optimizer.optimize_join_order(&tables, &conditions);
+//!
+//! // let decision = optimizer.optimize_join_order(&tables, &conditions);
 //! ```
 //!
 //! The CTE (Common Table Expression) result cache manager has been moved to the `crate::query::cache` module.

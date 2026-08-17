@@ -13,8 +13,8 @@ use std::time::Instant;
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
-/// use graphdb::query::optimizer::stats::feedback::query::QueryExecutionFeedback;
+/// use graphdb_query::query::optimizer::stats::feedback::history::QueryFeedbackHistory;
+/// use graphdb_query::query::optimizer::stats::feedback::query::QueryExecutionFeedback;
 ///
 /// let history = QueryFeedbackHistory::new(100);
 /// let feedback = QueryExecutionFeedback::new("fp_123".to_string());

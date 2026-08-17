@@ -5,16 +5,15 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::cost::CostAssigner;
-//! use graphdb::query::optimizer::stats::{StatisticsManager, StatsView};
-//! use graphdb::query::planner::plan::ExecutionPlan;
+//! use graphdb_query::query::optimizer::cost::CostAssigner;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
 //! let stats_manager = Arc::new(StatisticsManager::new());
 //! let assigner = CostAssigner::new(stats_manager);
 //! let stats = assigner.cost_calculator().stats_view(Some("my_space"));
 //!
-// Calculate the cost of the execution plan (only for optimization decisions)
+//! // Calculate the cost of the execution plan (only for optimization decisions)
 //! // let total_cost = assigner.assign_costs(&stats, &mut plan)?;
 //! ```
 //!

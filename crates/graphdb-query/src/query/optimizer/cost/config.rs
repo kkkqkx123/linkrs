@@ -5,15 +5,15 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::cost::CostModelConfig;
+//! use graphdb_query::query::optimizer::cost::CostModelConfig;
 //!
-// Use the default configuration
+//! // Use the default configuration
 //! let config = CostModelConfig::default();
 //!
-// Optimizations for SSDs
+//! // Optimizations for SSDs
 //! let ssd_config = CostModelConfig::for_ssd();
 //!
-// Custom configuration
+//! // Custom configuration
 //! let custom_config = CostModelConfig {
 //!     seq_page_cost: 0.5,
 //!     random_page_cost: 1.0,

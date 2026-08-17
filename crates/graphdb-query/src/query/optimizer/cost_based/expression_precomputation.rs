@@ -6,12 +6,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::ExpressionPrecomputationOptimizer;
-//! use graphdb::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::ExpressionPrecomputationOptimizer;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let optimizer = ExpressionPrecomputationOptimizer::new(cost_calculator);
-//! let decision = optimizer.should_precompute(&expression, reference_count);
+//!
+//! // let decision = optimizer.should_precompute(&expression, reference_count);
 //! ```
 
 use std::collections::HashMap;

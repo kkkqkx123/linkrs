@@ -18,12 +18,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::SortEliminationOptimizer;
-//! use graphdb::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::SortEliminationOptimizer;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let optimizer = SortEliminationOptimizer::new(cost_calculator);
-//! let decision = optimizer.optimize(&sort_context);
+//!
+//! // let decision = optimizer.optimize(&sort_context);
 //! ```
 
 use std::sync::Arc;

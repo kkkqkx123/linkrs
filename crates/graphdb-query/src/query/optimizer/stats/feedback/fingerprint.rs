@@ -17,7 +17,7 @@
 ///
 /// # Example
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::fingerprint::normalize_query;
+/// use graphdb_query::query::optimizer::stats::feedback::fingerprint::normalize_query;
 ///
 /// let query = "SELECT * FROM users WHERE id = 123";
 /// let normalized = normalize_query(query);
@@ -89,13 +89,14 @@ pub fn normalize_query(query: &str) -> String {
 ///
 /// # Examples
 /// ```
-/// use graphdb::query::optimizer::stats::feedback::fingerprint::generate_query_fingerprint;
+/// use graphdb_query::query::optimizer::stats::feedback::fingerprint::generate_query_fingerprint;
 ///
 /// let query1 = "SELECT * FROM users WHERE id = 1";
 /// let query2 = "SELECT * FROM users WHERE id = 2";
 /// let fp1 = generate_query_fingerprint(query1);
 /// let fp2 = generate_query_fingerprint(query2);
-/// Different queries with the same structure should have the same “fingerprint” (i.e., the same result when analyzed using a specific algorithm or method).
+/// // Different queries with the same structure should have the same "fingerprint"
+/// // (i.e., the same result when analyzed using a specific algorithm or method).
 /// assert_eq!(fp1, fp2);
 /// ```
 pub fn generate_query_fingerprint(query: &str) -> String {

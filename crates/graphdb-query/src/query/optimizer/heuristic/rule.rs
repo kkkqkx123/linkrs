@@ -17,20 +17,23 @@ use crate::query::planning::plan::PlanNodeEnum;
 ///
 /// # Example
 /// ```rust
-/// use crate::query::optimizer::heuristic::rule::RewriteRule;
+/// use graphdb_query::query::optimizer::heuristic::context::RewriteContext;
+/// use graphdb_query::query::optimizer::heuristic::pattern::Pattern;
+/// use graphdb_query::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
+/// use graphdb_query::query::optimizer::heuristic::rule::RewriteRule;
+/// use graphdb_query::query::planning::plan::PlanNodeEnum;
 ///
 /// #[derive(Debug)]
 /// struct MyRule;
 ///
 /// impl RewriteRule for MyRule {
-///     fn name(&self) -> &str { "MyRule" }
-///     
+///     fn name(&self) -> &'static str { "MyRule" }
+///
 ///     fn pattern(&self) -> Pattern {
 ///         Pattern::new_with_name("Filter")
 ///     }
-///     
-///     fn apply(&self, ctx: &mut RewriteContext, node: &PlanNodeEnum) -> RewriteResult<Option<TransformResult>> {
-// Implement the rule logic
+///
+///     fn apply(&self, _ctx: &mut RewriteContext, _node: &PlanNodeEnum) -> RewriteResult<Option<TransformResult>> {
 ///         Ok(None)
 ///     }
 /// }

@@ -5,12 +5,16 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::AggregateStrategySelector;
-//! use graphdb::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost::CostCalculator;
+//! use graphdb_query::query::optimizer::cost_based::AggregateStrategySelector;
+//! use graphdb_query::query::optimizer::stats::StatisticsManager;
 //! use std::sync::Arc;
 //!
+//! let stats_manager = Arc::new(StatisticsManager::new());
+//! let cost_calculator = Arc::new(CostCalculator::new(stats_manager));
 //! let selector = AggregateStrategySelector::new(cost_calculator);
-//! let decision = selector.select_strategy("test", &context);
+//!
+//! // let decision = selector.select_strategy("test", &context);
 //! ```
 
 use std::sync::Arc;

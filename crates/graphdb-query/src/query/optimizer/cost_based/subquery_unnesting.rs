@@ -26,11 +26,11 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use graphdb::query::optimizer::strategy::SubqueryUnnestingOptimizer;
-//! use graphdb::query::optimizer::OptimizerEngine;
+//! use graphdb_query::query::optimizer::cost_based::SubqueryUnnestingOptimizer;
 //!
 //! let optimizer = SubqueryUnnestingOptimizer::new();
-//! let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view, &selectivity);
+//!
+//! // let decision = optimizer.should_unnest(&pattern_apply, &analysis, &stats_view, &selectivity);
 //! ```
 
 use crate::core::types::operators::BinaryOperator;

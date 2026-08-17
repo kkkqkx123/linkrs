@@ -4,7 +4,7 @@
 //! Reduce the generation of unnecessary intermediate results.
 //!
 //! Example:
-//! ```
+//! ```text
 //! Project(a, b) -> Project(c, d)  =>  Project(c, d)
 //! ```
 //!

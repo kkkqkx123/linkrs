@@ -16,18 +16,18 @@
 //! # Usage Examples
 //!
 //! ```rust
-//! use crate::query::optimizer::analysis::{
-//!     ReferenceCountAnalyzer,
+//! use graphdb_query::query::optimizer::analysis::{
 //!     ExpressionAnalyzer,
+//!     ReferenceCountAnalyzer,
 //! };
 //!
-// Analysis of reference count statistics
 //! let ref_analyzer = ReferenceCountAnalyzer::new();
-//! let ref_analysis = ref_analyzer.analyze(plan.root());
-//!
-// Expression analysis
 //! let expr_analyzer = ExpressionAnalyzer::new();
-//! let expr_analysis = expr_analyzer.analyze(condition);
+//!
+//! // Count how many times sub-plans are referenced (needs a full plan):
+//! // let ref_analysis = ref_analyzer.analyze(plan.root());
+//! // Analyze an expression's characteristics (determinism, complexity, etc.):
+//! // let expr_analysis = expr_analyzer.analyze(condition);
 //! ```
 
 pub mod batch;

@@ -11,10 +11,12 @@
 //! ## How to use it
 //!
 //! ```rust
-//! use crate::query::executor::expression::functions::BuiltinFunction;
+//! use graphdb_query::core::value::Value;
+//! use graphdb_query::query::executor::expression::functions::{BuiltinFunction, MathFunction};
 //!
 //! let func = BuiltinFunction::Math(MathFunction::Abs);
-//! let result = func.execute(&[Value::Int(-5)]);
+//! let result = func.execute(&[Value::Int(-5)]).expect("abs should succeed");
+//! assert_eq!(result, Value::Int(5));
 //! ```
 
 pub mod builtin;
