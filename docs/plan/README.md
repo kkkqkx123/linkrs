@@ -15,6 +15,7 @@
 | [type_system_integrity_plan.md](type_system_integrity_plan.md) | 类型系统完整性整改（PropertyValue 统一、孤儿类型、序列化单轨、类型矩阵、索引对齐） | **已完成（2026-08-15）**：P0-A/B、P1-C/D/E/F、P2-G/H 全部落地；补充测试：`from_u8` 码位单测、`vid_type=VID` 拒绝与 `TIMESTAMP` 归一 DDL 用例（`tests/ddl/type_system.rs`） |
 | [type_system_serial_plan.md](type_system_serial_plan.md) | SERIAL 自增列（P2-I 正式设计） | **设计方案（待实施）** |
 | [type_system_composite_types_plan.md](type_system_composite_types_plan.md) | STRUCT/ARRAY 复合类型与 TypeInfo 元数据机制（P2-J 正式设计） | **设计方案（待实施）** |
+| [vector_local_engine_plan.md](vector_local_engine_plan.md) | 内置向量引擎（自研 pgvector 风格，绕过 vector-client） | **设计方案（待实施）** |
 
 > 原 `query_verification_backlog.md` 已删除，其遗留验证项与低优先小项并入
 > 本文档第 4 节。原 `query_exists_in_subquery*.md` 系列方案文档（P0-P3
