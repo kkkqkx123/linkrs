@@ -45,7 +45,7 @@ pub struct IndexCreateRequest {
     pub properties: Vec<String>,
 }
 #[cfg(feature = "qdrant")]
-pub use vector_client::{CollectionConfig, SearchResult};
+pub use vector_search::{CollectionConfig, SearchResult};
 
 pub struct SyncManager {
     #[cfg(feature = "fulltext-search")]

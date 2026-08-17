@@ -9,7 +9,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use crate::sync::vector_sync::SearchOptions;
-use vector_client::{DistanceMetric, VectorFilter};
+use vector_search::{DistanceMetric, VectorFilter};
 
 /// Vector index creation request
 #[derive(Debug, Deserialize)]

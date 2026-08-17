@@ -1,0 +1,1662 @@
+//! Shared vector types.
+//!
+//! Migrated from `vector-client` so that the local engine and the qdrant
+//! client share the exact same type surface. Kept as a single module for now.
+
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+pub type Payload = HashMap<String, serde_json::Value>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PointId {
+    Num(u64),
+    Uuid(String),
+}
+
+impl std::fmt::Display for PointId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PointId::Num(n) => write!(f, "{}", n),
+            PointId::Uuid(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl From<u64> for PointId {
+    fn from(n: u64) -> Self {
+        PointId::Num(n)
+    }
+}
+
+impl From<String> for PointId {
+    fn from(s: String) -> Self {
+        if let Ok(n) = s.parse::<u64>() {
+            PointId::Num(n)
+        } else {
+            PointId::Uuid(s)
+        }
+    }
+}
+
+impl From<&str> for PointId {
+    fn from(s: &str) -> Self {
+        PointId::from(s.to_string())
+    }
+}
+
+pub type CollectionName = String;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DistanceMetric {
+    #[default]
+    Cosine,
+    Euclid,
+    Dot,
+    Manhattan,
+}
+
+impl DistanceMetric {
+    pub fn is_supported_by_qdrant(&self) -> bool {
+        matches!(self, Self::Cosine | Self::Euclid | Self::Dot)
+    }
+
+    pub fn requires_custom_implementation(&self) -> bool {
+        matches!(self, Self::Manhattan)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HnswConfig {
+    pub m: usize,
+    pub ef_construct: usize,
+    pub full_scan_threshold: Option<usize>,
+    pub max_indexing_threads: Option<usize>,
+    pub on_disk: Option<bool>,
+    pub payload_m: Option<usize>,
+}
+
+impl Default for HnswConfig {
+    fn default() -> Self {
+        Self {
+            m: 16,
+            ef_construct: 100,
+            full_scan_threshold: None,
+            max_indexing_threads: None,
+            on_disk: None,
+            payload_m: None,
+        }
+    }
+}
+
+impl HnswConfig {
+    pub fn new(m: usize, ef_construct: usize) -> Self {
+        Self {
+            m,
+            ef_construct,
+            full_scan_threshold: None,
+            max_indexing_threads: None,
+            on_disk: None,
+            payload_m: None,
+        }
+    }
+
+    pub fn with_full_scan_threshold(mut self, threshold: usize) -> Self {
+        self.full_scan_threshold = Some(threshold);
+        self
+    }
+
+    pub fn with_max_indexing_threads(mut self, threads: usize) -> Self {
+        self.max_indexing_threads = Some(threads);
+        self
+    }
+
+    pub fn with_on_disk(mut self, on_disk: bool) -> Self {
+        self.on_disk = Some(on_disk);
+        self
+    }
+
+    pub fn with_payload_m(mut self, payload_m: usize) -> Self {
+        self.payload_m = Some(payload_m);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum IndexType {
+    #[default]
+    HNSW,
+    FLAT,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompressionRatio {
+    X4,
+    X8,
+    X16,
+    X32,
+    X64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum QuantizationType {
+    Scalar {
+        quantile: Option<f32>,
+        always_ram: Option<bool>,
+    },
+    Product {
+        compression: CompressionRatio,
+        always_ram: Option<bool>,
+    },
+    Binary {
+        always_ram: Option<bool>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QuantizationConfig {
+    pub enabled: bool,
+    pub quant_type: Option<QuantizationType>,
+}
+
+impl QuantizationConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            quant_type: None,
+        }
+    }
+
+    pub fn scalar(quantile: f32) -> Self {
+        Self {
+            enabled: true,
+            quant_type: Some(QuantizationType::Scalar {
+                quantile: Some(quantile),
+                always_ram: Some(true),
+            }),
+        }
+    }
+
+    pub fn product(compression: CompressionRatio) -> Self {
+        Self {
+            enabled: true,
+            quant_type: Some(QuantizationType::Product {
+                compression,
+                always_ram: Some(true),
+            }),
+        }
+    }
+
+    pub fn binary() -> Self {
+        Self {
+            enabled: true,
+            quant_type: Some(QuantizationType::Binary {
+                always_ram: Some(true),
+            }),
+        }
+    }
+
+    pub fn with_always_ram(mut self, always_ram: bool) -> Self {
+        if let Some(ref mut qt) = self.quant_type {
+            match qt {
+                QuantizationType::Scalar { always_ram: ar, .. } => *ar = Some(always_ram),
+                QuantizationType::Product { always_ram: ar, .. } => *ar = Some(always_ram),
+                QuantizationType::Binary { always_ram: ar } => *ar = Some(always_ram),
+            }
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionConfig {
+    pub vector_size: usize,
+    pub distance: DistanceMetric,
+    pub index_type: Option<IndexType>,
+    pub hnsw_config: Option<HnswConfig>,
+    pub quantization_config: Option<QuantizationConfig>,
+    pub replication_factor: Option<usize>,
+    pub write_consistency_factor: Option<usize>,
+    pub on_disk_payload: Option<bool>,
+    pub shard_number: Option<usize>,
+}
+
+impl CollectionConfig {
+    pub fn new(vector_size: usize, distance: DistanceMetric) -> Self {
+        Self {
+            vector_size,
+            distance,
+            index_type: None,
+            hnsw_config: None,
+            quantization_config: None,
+            replication_factor: None,
+            write_consistency_factor: None,
+            on_disk_payload: None,
+            shard_number: None,
+        }
+    }
+
+    pub fn with_index_type(mut self, index_type: IndexType) -> Self {
+        self.index_type = Some(index_type);
+        self
+    }
+
+    pub fn with_hnsw(mut self, hnsw_config: HnswConfig) -> Self {
+        self.index_type = Some(IndexType::HNSW);
+        self.hnsw_config = Some(hnsw_config);
+        self
+    }
+
+    pub fn with_quantization(mut self, quantization_config: QuantizationConfig) -> Self {
+        self.quantization_config = Some(quantization_config);
+        self
+    }
+
+    pub fn with_shard_number(mut self, shard_number: usize) -> Self {
+        self.shard_number = Some(shard_number);
+        self
+    }
+
+    pub fn with_on_disk_payload(mut self, on_disk_payload: bool) -> Self {
+        self.on_disk_payload = Some(on_disk_payload);
+        self
+    }
+}
+
+impl Default for CollectionConfig {
+    fn default() -> Self {
+        Self::new(1536, DistanceMetric::Cosine)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionInfo {
+    pub name: String,
+    pub vector_count: u64,
+    pub indexed_vector_count: u64,
+    pub points_count: u64,
+    pub segments_count: u64,
+    pub config: CollectionConfig,
+    pub status: CollectionStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CollectionStatus {
+    Green,
+    Yellow,
+    Red,
+    Grey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PayloadSchemaType {
+    Keyword,
+    Integer,
+    Float,
+    Text,
+    Bool,
+    Geo,
+    Datetime,
+}
+
+impl PayloadSchemaType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PayloadSchemaType::Keyword => "keyword",
+            PayloadSchemaType::Integer => "integer",
+            PayloadSchemaType::Float => "float",
+            PayloadSchemaType::Text => "text",
+            PayloadSchemaType::Bool => "bool",
+            PayloadSchemaType::Geo => "geo",
+            PayloadSchemaType::Datetime => "datetime",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthStatus {
+    pub is_healthy: bool,
+    pub engine_name: String,
+    pub engine_version: String,
+    pub message: Option<String>,
+}
+
+impl HealthStatus {
+    pub fn healthy(engine_name: impl Into<String>, engine_version: impl Into<String>) -> Self {
+        Self {
+            is_healthy: true,
+            engine_name: engine_name.into(),
+            engine_version: engine_version.into(),
+            message: None,
+        }
+    }
+
+    pub fn unhealthy(
+        engine_name: impl Into<String>,
+        engine_version: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            is_healthy: false,
+            engine_name: engine_name.into(),
+            engine_version: engine_version.into(),
+            message: Some(message.into()),
+        }
+    }
+}
+
+pub type PayloadValue = serde_json::Value;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GeoPoint {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl GeoPoint {
+    pub fn new(lat: f64, lon: f64) -> Self {
+        Self { lat, lon }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeoRadius {
+    pub center: GeoPoint,
+    pub radius: f64,
+}
+
+impl GeoRadius {
+    pub fn new(center: GeoPoint, radius: f64) -> Self {
+        Self { center, radius }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeoBoundingBox {
+    pub top_left: GeoPoint,
+    pub bottom_right: GeoPoint,
+}
+
+impl GeoBoundingBox {
+    pub fn new(top_left: GeoPoint, bottom_right: GeoPoint) -> Self {
+        Self {
+            top_left,
+            bottom_right,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValuesCountCondition {
+    pub gt: Option<u64>,
+    pub gte: Option<u64>,
+    pub lt: Option<u64>,
+    pub lte: Option<u64>,
+}
+
+impl ValuesCountCondition {
+    pub fn new() -> Self {
+        Self {
+            gt: None,
+            gte: None,
+            lt: None,
+            lte: None,
+        }
+    }
+
+    pub fn gt(mut self, value: u64) -> Self {
+        self.gt = Some(value);
+        self
+    }
+
+    pub fn gte(mut self, value: u64) -> Self {
+        self.gte = Some(value);
+        self
+    }
+
+    pub fn lt(mut self, value: u64) -> Self {
+        self.lt = Some(value);
+        self
+    }
+
+    pub fn lte(mut self, value: u64) -> Self {
+        self.lte = Some(value);
+        self
+    }
+}
+
+impl Default for ValuesCountCondition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorFilter {
+    pub must: Option<Vec<FilterCondition>>,
+    pub must_not: Option<Vec<FilterCondition>>,
+    pub should: Option<Vec<FilterCondition>>,
+    pub min_should: Option<MinShouldCondition>,
+}
+
+impl VectorFilter {
+    pub fn new() -> Self {
+        Self {
+            must: None,
+            must_not: None,
+            should: None,
+            min_should: None,
+        }
+    }
+
+    pub fn must(mut self, condition: FilterCondition) -> Self {
+        self.must.get_or_insert_with(Vec::new).push(condition);
+        self
+    }
+
+    pub fn must_not(mut self, condition: FilterCondition) -> Self {
+        self.must_not.get_or_insert_with(Vec::new).push(condition);
+        self
+    }
+
+    pub fn should(mut self, condition: FilterCondition) -> Self {
+        self.should.get_or_insert_with(Vec::new).push(condition);
+        self
+    }
+}
+
+impl Default for VectorFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinShouldCondition {
+    pub conditions: Vec<FilterCondition>,
+    pub min_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterCondition {
+    pub field: String,
+    pub condition: ConditionType,
+}
+
+impl FilterCondition {
+    pub fn new(field: impl Into<String>, condition: ConditionType) -> Self {
+        Self {
+            field: field.into(),
+            condition,
+        }
+    }
+
+    pub fn match_value(field: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::new(
+            field,
+            ConditionType::Match {
+                value: value.into(),
+            },
+        )
+    }
+
+    pub fn match_any(field: impl Into<String>, values: Vec<serde_json::Value>) -> Self {
+        Self::new(field, ConditionType::MatchAny { values })
+    }
+
+    pub fn range(field: impl Into<String>, range: RangeCondition) -> Self {
+        Self::new(field, ConditionType::Range(range))
+    }
+
+    pub fn is_empty(field: impl Into<String>) -> Self {
+        Self::new(field, ConditionType::IsEmpty)
+    }
+
+    pub fn is_null(field: impl Into<String>) -> Self {
+        Self::new(field, ConditionType::IsNull)
+    }
+
+    pub fn has_id(ids: Vec<String>) -> Self {
+        Self::new("_id", ConditionType::HasId { ids })
+    }
+
+    pub fn geo_radius(field: impl Into<String>, radius: GeoRadius) -> Self {
+        Self::new(field, ConditionType::GeoRadius(radius))
+    }
+
+    pub fn geo_bounding_box(field: impl Into<String>, bbox: GeoBoundingBox) -> Self {
+        Self::new(field, ConditionType::GeoBoundingBox(bbox))
+    }
+
+    pub fn values_count(field: impl Into<String>, count: ValuesCountCondition) -> Self {
+        Self::new(field, ConditionType::ValuesCount(count))
+    }
+
+    pub fn contains(field: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::new(
+            field,
+            ConditionType::Contains {
+                value: value.into(),
+            },
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConditionType {
+    Match { value: String },
+    MatchAny { values: Vec<PayloadValue> },
+    Range(RangeCondition),
+    IsEmpty,
+    IsNull,
+    HasId { ids: Vec<String> },
+    Nested { filter: Box<VectorFilter> },
+    GeoRadius(GeoRadius),
+    GeoBoundingBox(GeoBoundingBox),
+    ValuesCount(ValuesCountCondition),
+    Contains { value: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RangeCondition {
+    pub gt: Option<f64>,
+    pub gte: Option<f64>,
+    pub lt: Option<f64>,
+    pub lte: Option<f64>,
+}
+
+impl RangeCondition {
+    pub fn new() -> Self {
+        Self {
+            gt: None,
+            gte: None,
+            lt: None,
+            lte: None,
+        }
+    }
+
+    pub fn gt(mut self, value: f64) -> Self {
+        self.gt = Some(value);
+        self
+    }
+
+    pub fn gte(mut self, value: f64) -> Self {
+        self.gte = Some(value);
+        self
+    }
+
+    pub fn lt(mut self, value: f64) -> Self {
+        self.lt = Some(value);
+        self
+    }
+
+    pub fn lte(mut self, value: f64) -> Self {
+        self.lte = Some(value);
+        self
+    }
+}
+
+impl Default for RangeCondition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayloadSelector {
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+}
+
+impl PayloadSelector {
+    pub fn include(fields: Vec<String>) -> Self {
+        Self {
+            include: Some(fields),
+            exclude: None,
+        }
+    }
+
+    pub fn exclude(fields: Vec<String>) -> Self {
+        Self {
+            include: None,
+            exclude: Some(fields),
+        }
+    }
+
+    pub fn all() -> Self {
+        Self {
+            include: None,
+            exclude: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorPoint {
+    pub id: PointId,
+    pub vector: Vec<f32>,
+    pub payload: Option<Payload>,
+}
+
+impl VectorPoint {
+    pub fn new(id: impl Into<PointId>, vector: Vec<f32>) -> Self {
+        Self {
+            id: id.into(),
+            vector,
+            payload: None,
+        }
+    }
+
+    pub fn with_payload(mut self, payload: Payload) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+
+    pub fn with_payload_kv(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        let payload = self.payload.get_or_insert_with(HashMap::new);
+        payload.insert(key.into(), value);
+        self
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.vector.len()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorPoints {
+    pub points: Vec<VectorPoint>,
+}
+
+impl VectorPoints {
+    pub fn new(points: Vec<VectorPoint>) -> Self {
+        Self { points }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+}
+
+impl From<Vec<VectorPoint>> for VectorPoints {
+    fn from(points: Vec<VectorPoint>) -> Self {
+        Self::new(points)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertResult {
+    pub operation_id: Option<u64>,
+    pub status: UpsertStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpsertStatus {
+    Completed,
+    Acknowledged,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteResult {
+    pub operation_id: Option<u64>,
+    pub deleted_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SearchMode {
+    TopK(usize),
+    KNN {
+        k: usize,
+        ef_search: Option<usize>,
+    },
+    Range {
+        radius: f32,
+        max_results: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchQuery {
+    pub vector: Vec<f32>,
+    pub limit: usize,
+    pub offset: Option<usize>,
+    pub score_threshold: Option<f32>,
+    pub filter: Option<VectorFilter>,
+    pub with_payload: Option<bool>,
+    pub with_vector: Option<bool>,
+    pub nprobe: Option<usize>,
+    pub search_mode: Option<SearchMode>,
+}
+
+impl SearchQuery {
+    pub fn new(vector: Vec<f32>, limit: usize) -> Self {
+        Self {
+            vector,
+            limit,
+            offset: None,
+            score_threshold: None,
+            filter: None,
+            with_payload: Some(true),
+            with_vector: None,
+            nprobe: None,
+            search_mode: None,
+        }
+    }
+
+    pub fn with_offset(mut self, offset: usize) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    pub fn with_score_threshold(mut self, threshold: f32) -> Self {
+        self.score_threshold = Some(threshold);
+        self
+    }
+
+    pub fn with_filter(mut self, filter: VectorFilter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_payload(mut self, with_payload: bool) -> Self {
+        self.with_payload = Some(with_payload);
+        self
+    }
+
+    pub fn with_vector(mut self, with_vector: bool) -> Self {
+        self.with_vector = Some(with_vector);
+        self
+    }
+
+    pub fn with_nprobe(mut self, nprobe: usize) -> Self {
+        self.nprobe = Some(nprobe);
+        self
+    }
+
+    pub fn effective_limit(&self) -> usize {
+        match &self.search_mode {
+            Some(SearchMode::Range {
+                max_results: Some(max),
+                ..
+            }) => *max,
+            Some(SearchMode::TopK(k)) => *k,
+            Some(SearchMode::KNN { k, .. }) => *k,
+            _ => self.limit,
+        }
+    }
+
+    pub fn hnsw_ef(&self) -> Option<usize> {
+        match &self.search_mode {
+            Some(SearchMode::KNN { ef_search, .. }) => *ef_search,
+            _ => None,
+        }
+    }
+
+    pub fn score_threshold(&self) -> Option<f32> {
+        match &self.search_mode {
+            Some(SearchMode::Range { radius, .. }) => Some(*radius),
+            _ => None,
+        }
+    }
+
+    pub fn with_search_mode(mut self, mode: SearchMode) -> Self {
+        self.search_mode = Some(mode);
+        self
+    }
+
+    pub fn with_knn(mut self, k: usize, ef_search: Option<usize>) -> Self {
+        self.search_mode = Some(SearchMode::KNN { k, ef_search });
+        self.limit = k;
+        self
+    }
+
+    pub fn with_range(mut self, radius: f32, max_results: Option<usize>) -> Self {
+        self.search_mode = Some(SearchMode::Range {
+            radius,
+            max_results,
+        });
+        self.score_threshold = Some(radius);
+        if let Some(max) = max_results {
+            self.limit = max;
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub id: PointId,
+    pub score: f32,
+    pub payload: Option<Payload>,
+    pub vector: Option<Vec<f32>>,
+}
+
+impl SearchResult {
+    pub fn new(id: impl Into<PointId>, score: f32) -> Self {
+        Self {
+            id: id.into(),
+            score,
+            payload: None,
+            vector: None,
+        }
+    }
+
+    pub fn with_payload(mut self, payload: Payload) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+
+    pub fn with_vector(mut self, vector: Vec<f32>) -> Self {
+        self.vector = Some(vector);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResults {
+    pub results: Vec<SearchResult>,
+    pub total: Option<u64>,
+}
+
+impl SearchResults {
+    pub fn new(results: Vec<SearchResult>) -> Self {
+        let total = Some(results.len() as u64);
+        Self { results, total }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.results.len()
+    }
+}
+
+impl From<Vec<SearchResult>> for SearchResults {
+    fn from(results: Vec<SearchResult>) -> Self {
+        Self::new(results)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchSearchQuery {
+    pub queries: Vec<SearchQuery>,
+}
+
+impl BatchSearchQuery {
+    pub fn new(queries: Vec<SearchQuery>) -> Self {
+        Self { queries }
+    }
+}
+
+impl From<Vec<SearchQuery>> for BatchSearchQuery {
+    fn from(queries: Vec<SearchQuery>) -> Self {
+        Self::new(queries)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point_id_from_u64() {
+        let id: PointId = 42u64.into();
+        assert_eq!(id, PointId::Num(42));
+    }
+
+    #[test]
+    fn test_point_id_from_string_numeric() {
+        let id = PointId::from("123");
+        assert_eq!(id, PointId::Num(123));
+    }
+
+    #[test]
+    fn test_point_id_from_string_uuid() {
+        let id = PointId::from("uuid-abc");
+        assert_eq!(id, PointId::Uuid("uuid-abc".into()));
+    }
+
+    #[test]
+    fn test_point_id_from_str() {
+        let id = PointId::from("456");
+        assert_eq!(id, PointId::Num(456));
+    }
+
+    #[test]
+    fn test_point_id_from_str_uuid() {
+        let id = PointId::from("550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            id,
+            PointId::Uuid("550e8400-e29b-41d4-a716-446655440000".into())
+        );
+    }
+
+    #[test]
+    fn test_point_id_display_num() {
+        let id = PointId::Num(42);
+        assert_eq!(format!("{}", id), "42");
+    }
+
+    #[test]
+    fn test_point_id_display_uuid() {
+        let id = PointId::Uuid("abc".into());
+        assert_eq!(format!("{}", id), "abc");
+    }
+
+    #[test]
+    fn test_point_id_serialize_deserialize() {
+        let id = PointId::Num(42);
+        let json = serde_json::to_string(&id).unwrap();
+        let deserialized: PointId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, deserialized);
+    }
+
+    #[test]
+    fn test_point_id_serialize_deserialize_uuid() {
+        let id = PointId::Uuid("test-uuid".into());
+        let json = serde_json::to_string(&id).unwrap();
+        let deserialized: PointId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, deserialized);
+    }
+
+    #[test]
+    fn test_distance_metric_supported() {
+        assert!(DistanceMetric::Cosine.is_supported_by_qdrant());
+        assert!(DistanceMetric::Euclid.is_supported_by_qdrant());
+        assert!(DistanceMetric::Dot.is_supported_by_qdrant());
+        assert!(!DistanceMetric::Manhattan.is_supported_by_qdrant());
+    }
+
+    #[test]
+    fn test_distance_metric_custom_implementation() {
+        assert!(!DistanceMetric::Cosine.requires_custom_implementation());
+        assert!(!DistanceMetric::Euclid.requires_custom_implementation());
+        assert!(!DistanceMetric::Dot.requires_custom_implementation());
+        assert!(DistanceMetric::Manhattan.requires_custom_implementation());
+    }
+
+    #[test]
+    fn test_hnsw_config_default() {
+        let cfg = HnswConfig::default();
+        assert_eq!(cfg.m, 16);
+        assert_eq!(cfg.ef_construct, 100);
+        assert!(cfg.full_scan_threshold.is_none());
+    }
+
+    #[test]
+    fn test_hnsw_config_new() {
+        let cfg = HnswConfig::new(32, 200);
+        assert_eq!(cfg.m, 32);
+        assert_eq!(cfg.ef_construct, 200);
+    }
+
+    #[test]
+    fn test_hnsw_config_builder() {
+        let cfg = HnswConfig::new(16, 100)
+            .with_full_scan_threshold(10000)
+            .with_max_indexing_threads(4)
+            .with_on_disk(true)
+            .with_payload_m(8);
+        assert_eq!(cfg.full_scan_threshold, Some(10000));
+        assert_eq!(cfg.max_indexing_threads, Some(4));
+        assert_eq!(cfg.on_disk, Some(true));
+        assert_eq!(cfg.payload_m, Some(8));
+    }
+
+    #[test]
+    fn test_quantization_config_disabled() {
+        let cfg = QuantizationConfig::disabled();
+        assert!(!cfg.enabled);
+        assert!(cfg.quant_type.is_none());
+    }
+
+    #[test]
+    fn test_quantization_config_scalar() {
+        let cfg = QuantizationConfig::scalar(0.99);
+        assert!(cfg.enabled);
+        match cfg.quant_type {
+            Some(QuantizationType::Scalar { .. }) => {}
+            _ => panic!("expected Scalar"),
+        }
+    }
+
+    #[test]
+    fn test_quantization_config_product() {
+        let cfg = QuantizationConfig::product(CompressionRatio::X8);
+        assert!(cfg.enabled);
+        match cfg.quant_type {
+            Some(QuantizationType::Product { compression, .. }) => {
+                assert!(matches!(compression, CompressionRatio::X8));
+            }
+            _ => panic!("expected Product"),
+        }
+    }
+
+    #[test]
+    fn test_quantization_config_binary() {
+        let cfg = QuantizationConfig::binary();
+        assert!(cfg.enabled);
+        match cfg.quant_type {
+            Some(QuantizationType::Binary { .. }) => {}
+            _ => panic!("expected Binary"),
+        }
+    }
+
+    #[test]
+    fn test_quantization_config_with_always_ram() {
+        let cfg = QuantizationConfig::scalar(0.5).with_always_ram(false);
+        match cfg.quant_type {
+            Some(QuantizationType::Scalar { always_ram, .. }) => {
+                assert_eq!(always_ram, Some(false));
+            }
+            _ => panic!("expected Scalar"),
+        }
+    }
+
+    #[test]
+    fn test_collection_config_new() {
+        let cfg = CollectionConfig::new(768, DistanceMetric::Cosine);
+        assert_eq!(cfg.vector_size, 768);
+        assert_eq!(cfg.distance, DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_collection_config_with_index_type() {
+        let cfg =
+            CollectionConfig::new(384, DistanceMetric::Euclid).with_index_type(IndexType::FLAT);
+        assert_eq!(cfg.index_type, Some(IndexType::FLAT));
+    }
+
+    #[test]
+    fn test_collection_config_with_hnsw() {
+        let hnsw = HnswConfig::new(32, 200);
+        let cfg = CollectionConfig::new(128, DistanceMetric::Dot).with_hnsw(hnsw);
+        assert_eq!(cfg.index_type, Some(IndexType::HNSW));
+        assert!(cfg.hnsw_config.is_some());
+    }
+
+    #[test]
+    fn test_collection_config_with_quantization() {
+        let q = QuantizationConfig::scalar(0.99);
+        let cfg = CollectionConfig::new(1536, DistanceMetric::Cosine).with_quantization(q);
+        assert!(cfg.quantization_config.is_some());
+    }
+
+    #[test]
+    fn test_collection_config_with_shard_number() {
+        let cfg = CollectionConfig::new(768, DistanceMetric::Cosine).with_shard_number(2);
+        assert_eq!(cfg.shard_number, Some(2));
+    }
+
+    #[test]
+    fn test_collection_config_with_on_disk_payload() {
+        let cfg = CollectionConfig::new(768, DistanceMetric::Cosine).with_on_disk_payload(true);
+        assert_eq!(cfg.on_disk_payload, Some(true));
+    }
+
+    #[test]
+    fn test_collection_config_default() {
+        let cfg = CollectionConfig::default();
+        assert_eq!(cfg.vector_size, 1536);
+        assert_eq!(cfg.distance, DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_payload_schema_type_as_str() {
+        assert_eq!(PayloadSchemaType::Keyword.as_str(), "keyword");
+        assert_eq!(PayloadSchemaType::Integer.as_str(), "integer");
+        assert_eq!(PayloadSchemaType::Float.as_str(), "float");
+        assert_eq!(PayloadSchemaType::Text.as_str(), "text");
+        assert_eq!(PayloadSchemaType::Bool.as_str(), "bool");
+        assert_eq!(PayloadSchemaType::Geo.as_str(), "geo");
+        assert_eq!(PayloadSchemaType::Datetime.as_str(), "datetime");
+    }
+
+    #[test]
+    fn test_health_status_healthy() {
+        let h = HealthStatus::healthy("test-engine", "1.0");
+        assert!(h.is_healthy);
+        assert_eq!(h.engine_name, "test-engine");
+        assert_eq!(h.engine_version, "1.0");
+        assert!(h.message.is_none());
+    }
+
+    #[test]
+    fn test_health_status_unhealthy() {
+        let h = HealthStatus::unhealthy("test-engine", "1.0", "not ready");
+        assert!(!h.is_healthy);
+        assert_eq!(h.message, Some("not ready".to_string()));
+    }
+
+    #[test]
+    fn test_index_type_default() {
+        assert_eq!(IndexType::default(), IndexType::HNSW);
+    }
+
+    #[test]
+    fn test_distance_metric_default() {
+        assert_eq!(DistanceMetric::default(), DistanceMetric::Cosine);
+    }
+
+    #[test]
+    fn test_collection_status_debug() {
+        assert_eq!(format!("{:?}", CollectionStatus::Green), "Green");
+        assert_eq!(format!("{:?}", CollectionStatus::Yellow), "Yellow");
+        assert_eq!(format!("{:?}", CollectionStatus::Red), "Red");
+        assert_eq!(format!("{:?}", CollectionStatus::Grey), "Grey");
+    }
+
+    #[test]
+    fn test_geo_point_new() {
+        let p = GeoPoint::new(1.0, 2.0);
+        assert!((p.lat - 1.0).abs() < f64::EPSILON);
+        assert!((p.lon - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_geo_radius_new() {
+        let center = GeoPoint::new(0.0, 0.0);
+        let r = GeoRadius::new(center, 100.0);
+        assert!((r.radius - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_geo_bounding_box_new() {
+        let tl = GeoPoint::new(1.0, 2.0);
+        let br = GeoPoint::new(3.0, 4.0);
+        let bbox = GeoBoundingBox::new(tl, br);
+        assert!((bbox.top_left.lat - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_values_count_condition_default() {
+        let v = ValuesCountCondition::default();
+        assert!(v.gt.is_none());
+        assert!(v.gte.is_none());
+        assert!(v.lt.is_none());
+        assert!(v.lte.is_none());
+    }
+
+    #[test]
+    fn test_values_count_condition_builder() {
+        let v = ValuesCountCondition::new().gt(5).lt(10);
+        assert_eq!(v.gt, Some(5));
+        assert_eq!(v.lt, Some(10));
+        assert!(v.gte.is_none());
+        assert!(v.lte.is_none());
+    }
+
+    #[test]
+    fn test_range_condition_default() {
+        let r = RangeCondition::default();
+        assert!(r.gt.is_none());
+        assert!(r.gte.is_none());
+        assert!(r.lt.is_none());
+        assert!(r.lte.is_none());
+    }
+
+    #[test]
+    fn test_range_condition_builder() {
+        let r = RangeCondition::new().gte(1.5).lt(10.0);
+        assert_eq!(r.gte, Some(1.5));
+        assert_eq!(r.lt, Some(10.0));
+        assert!(r.gt.is_none());
+        assert!(r.lte.is_none());
+    }
+
+    #[test]
+    fn test_vector_filter_default() {
+        let f = VectorFilter::default();
+        assert!(f.must.is_none());
+        assert!(f.must_not.is_none());
+        assert!(f.should.is_none());
+        assert!(f.min_should.is_none());
+    }
+
+    #[test]
+    fn test_vector_filter_must() {
+        let f = VectorFilter::new()
+            .must(FilterCondition::match_value("color", "red"))
+            .must(FilterCondition::match_value("size", "large"));
+        assert_eq!(f.must.as_ref().map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn test_vector_filter_must_not() {
+        let f = VectorFilter::new().must_not(FilterCondition::is_null("deleted"));
+        assert_eq!(f.must_not.as_ref().map(|v| v.len()), Some(1));
+    }
+
+    #[test]
+    fn test_vector_filter_should() {
+        let f = VectorFilter::new()
+            .should(FilterCondition::match_value("tag", "a"))
+            .should(FilterCondition::match_value("tag", "b"));
+        assert_eq!(f.should.as_ref().map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn test_filter_condition_match_value() {
+        let c = FilterCondition::match_value("color", "blue");
+        assert_eq!(c.field, "color");
+        match c.condition {
+            ConditionType::Match { value } => assert_eq!(value, "blue"),
+            _ => panic!("expected Match"),
+        }
+    }
+
+    #[test]
+    fn test_filter_condition_match_any() {
+        let values = vec![serde_json::json!("a"), serde_json::json!("b")];
+        let c = FilterCondition::match_any("tags", values);
+        assert_eq!(c.field, "tags");
+    }
+
+    #[test]
+    fn test_filter_condition_range() {
+        let range = RangeCondition::new().gt(10.0);
+        let c = FilterCondition::range("price", range);
+        assert_eq!(c.field, "price");
+    }
+
+    #[test]
+    fn test_filter_condition_is_empty() {
+        let c = FilterCondition::is_empty("description");
+        assert_eq!(c.field, "description");
+        assert!(matches!(c.condition, ConditionType::IsEmpty));
+    }
+
+    #[test]
+    fn test_filter_condition_is_null() {
+        let c = FilterCondition::is_null("deleted_at");
+        assert!(matches!(c.condition, ConditionType::IsNull));
+    }
+
+    #[test]
+    fn test_filter_condition_has_id() {
+        let ids = vec!["1".to_string(), "2".to_string()];
+        let c = FilterCondition::has_id(ids);
+        assert_eq!(c.field, "_id");
+    }
+
+    #[test]
+    fn test_filter_condition_geo_radius() {
+        let center = GeoPoint::new(1.0, 2.0);
+        let radius = GeoRadius::new(center, 500.0);
+        let c = FilterCondition::geo_radius("location", radius);
+        assert_eq!(c.field, "location");
+    }
+
+    #[test]
+    fn test_filter_condition_geo_bounding_box() {
+        let tl = GeoPoint::new(1.0, 2.0);
+        let br = GeoPoint::new(3.0, 4.0);
+        let bbox = GeoBoundingBox::new(tl, br);
+        let c = FilterCondition::geo_bounding_box("location", bbox);
+        assert!(matches!(c.condition, ConditionType::GeoBoundingBox(_)));
+    }
+
+    #[test]
+    fn test_filter_condition_values_count() {
+        let count = ValuesCountCondition::new().gt(2);
+        let c = FilterCondition::values_count("tags", count);
+        assert!(matches!(c.condition, ConditionType::ValuesCount(_)));
+    }
+
+    #[test]
+    fn test_filter_condition_contains() {
+        let c = FilterCondition::contains("title", "rust");
+        assert_eq!(c.field, "title");
+        match c.condition {
+            ConditionType::Contains { value } => assert_eq!(value, "rust"),
+            _ => panic!("expected Contains"),
+        }
+    }
+
+    #[test]
+    fn test_payload_selector_include() {
+        let sel = PayloadSelector::include(vec!["a".into(), "b".into()]);
+        assert_eq!(sel.include.as_ref().map(|v| v.len()), Some(2));
+        assert!(sel.exclude.is_none());
+    }
+
+    #[test]
+    fn test_payload_selector_exclude() {
+        let sel = PayloadSelector::exclude(vec!["c".into()]);
+        assert_eq!(sel.exclude.as_ref().map(|v| v.len()), Some(1));
+        assert!(sel.include.is_none());
+    }
+
+    #[test]
+    fn test_payload_selector_all() {
+        let sel = PayloadSelector::all();
+        assert!(sel.include.is_none());
+        assert!(sel.exclude.is_none());
+    }
+
+    #[test]
+    fn test_min_should_condition() {
+        let condition = FilterCondition::match_value("field", "val");
+        let ms = MinShouldCondition {
+            conditions: vec![condition],
+            min_count: 1,
+        };
+        assert_eq!(ms.min_count, 1);
+        assert_eq!(ms.conditions.len(), 1);
+    }
+
+    #[test]
+    fn test_vector_point_new() {
+        let p = VectorPoint::new(42u64, vec![1.0, 2.0, 3.0]);
+        assert_eq!(p.id, PointId::Num(42));
+        assert_eq!(p.vector, vec![1.0, 2.0, 3.0]);
+        assert!(p.payload.is_none());
+    }
+
+    #[test]
+    fn test_vector_point_with_payload() {
+        let mut payload = HashMap::new();
+        payload.insert("key".into(), serde_json::json!("val"));
+        let p = VectorPoint::new("1", vec![1.0]).with_payload(payload);
+        assert!(p.payload.is_some());
+    }
+
+    #[test]
+    fn test_vector_point_with_payload_kv() {
+        let p = VectorPoint::new(1u64, vec![1.0])
+            .with_payload_kv("color", serde_json::json!("red"))
+            .with_payload_kv("size", serde_json::json!(42));
+        let payload = p.payload.expect("payload expected");
+        assert_eq!(payload.get("color").and_then(|v| v.as_str()), Some("red"));
+        assert_eq!(payload.get("size").and_then(|v| v.as_i64()), Some(42));
+    }
+
+    #[test]
+    fn test_vector_point_dimension() {
+        let p = VectorPoint::new(1u64, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(p.dimension(), 4);
+    }
+
+    #[test]
+    fn test_vector_point_dimension_empty() {
+        let p = VectorPoint::new(1u64, vec![]);
+        assert_eq!(p.dimension(), 0);
+    }
+
+    #[test]
+    fn test_vector_points_new() {
+        let points = vec![VectorPoint::new(1u64, vec![1.0])];
+        let vp = VectorPoints::new(points);
+        assert_eq!(vp.len(), 1);
+        assert!(!vp.is_empty());
+    }
+
+    #[test]
+    fn test_vector_points_empty() {
+        let vp = VectorPoints::new(vec![]);
+        assert!(vp.is_empty());
+        assert_eq!(vp.len(), 0);
+    }
+
+    #[test]
+    fn test_vector_points_from() {
+        let points = vec![VectorPoint::new(1u64, vec![1.0])];
+        let vp: VectorPoints = points.into();
+        assert_eq!(vp.len(), 1);
+    }
+
+    #[test]
+    fn test_upsert_result() {
+        let r = UpsertResult {
+            operation_id: Some(123),
+            status: UpsertStatus::Completed,
+        };
+        assert_eq!(r.operation_id, Some(123));
+        assert_eq!(r.status, UpsertStatus::Completed);
+    }
+
+    #[test]
+    fn test_delete_result() {
+        let r = DeleteResult {
+            operation_id: None,
+            deleted_count: 5,
+        };
+        assert!(r.operation_id.is_none());
+        assert_eq!(r.deleted_count, 5);
+    }
+
+    #[test]
+    fn test_upsert_status_debug() {
+        assert_eq!(format!("{:?}", UpsertStatus::Completed), "Completed");
+        assert_eq!(format!("{:?}", UpsertStatus::Acknowledged), "Acknowledged");
+    }
+
+    #[test]
+    fn test_search_query_new() {
+        let q = SearchQuery::new(vec![1.0, 2.0], 10);
+        assert_eq!(q.vector, vec![1.0, 2.0]);
+        assert_eq!(q.limit, 10);
+        assert_eq!(q.with_payload, Some(true));
+        assert!(q.with_vector.is_none());
+    }
+
+    #[test]
+    fn test_search_query_with_offset() {
+        let q = SearchQuery::new(vec![1.0], 10).with_offset(5);
+        assert_eq!(q.offset, Some(5));
+    }
+
+    #[test]
+    fn test_search_query_with_score_threshold() {
+        let q = SearchQuery::new(vec![1.0], 10).with_score_threshold(0.5);
+        assert_eq!(q.score_threshold, Some(0.5));
+    }
+
+    #[test]
+    fn test_search_query_with_payload() {
+        let q = SearchQuery::new(vec![1.0], 10).with_payload(false);
+        assert_eq!(q.with_payload, Some(false));
+    }
+
+    #[test]
+    fn test_search_query_with_vector() {
+        let q = SearchQuery::new(vec![1.0], 10).with_vector(true);
+        assert_eq!(q.with_vector, Some(true));
+    }
+
+    #[test]
+    fn test_search_query_with_nprobe() {
+        let q = SearchQuery::new(vec![1.0], 10).with_nprobe(64);
+        assert_eq!(q.nprobe, Some(64));
+    }
+
+    #[test]
+    fn test_search_query_effective_limit_default() {
+        let q = SearchQuery::new(vec![1.0], 10);
+        assert_eq!(q.effective_limit(), 10);
+    }
+
+    #[test]
+    fn test_search_query_effective_limit_topk() {
+        let q = SearchQuery::new(vec![1.0], 10).with_search_mode(SearchMode::TopK(5));
+        assert_eq!(q.effective_limit(), 5);
+    }
+
+    #[test]
+    fn test_search_query_effective_limit_knn() {
+        let q = SearchQuery::new(vec![1.0], 10).with_search_mode(SearchMode::KNN {
+            k: 20,
+            ef_search: Some(100),
+        });
+        assert_eq!(q.effective_limit(), 20);
+    }
+
+    #[test]
+    fn test_search_query_effective_limit_range() {
+        let q = SearchQuery::new(vec![1.0], 10).with_search_mode(SearchMode::Range {
+            radius: 0.5,
+            max_results: Some(30),
+        });
+        assert_eq!(q.effective_limit(), 30);
+    }
+
+    #[test]
+    fn test_search_query_hnsw_ef_default() {
+        let q = SearchQuery::new(vec![1.0], 10);
+        assert!(q.hnsw_ef().is_none());
+    }
+
+    #[test]
+    fn test_search_query_hnsw_ef_knn() {
+        let q = SearchQuery::new(vec![1.0], 10).with_knn(5, Some(128));
+        assert_eq!(q.hnsw_ef(), Some(128));
+    }
+
+    #[test]
+    fn test_search_query_hnsw_ef_topk() {
+        let q = SearchQuery::new(vec![1.0], 10).with_search_mode(SearchMode::TopK(5));
+        assert!(q.hnsw_ef().is_none());
+    }
+
+    #[test]
+    fn test_search_query_with_knn_sets_limit() {
+        let q = SearchQuery::new(vec![1.0], 10).with_knn(42, None);
+        assert_eq!(q.limit, 42);
+        assert!(matches!(q.search_mode, Some(SearchMode::KNN { k: 42, .. })));
+    }
+
+    #[test]
+    fn test_search_query_with_range_sets_limit() {
+        let q = SearchQuery::new(vec![1.0], 10).with_range(0.3, Some(25));
+        assert_eq!(q.limit, 25);
+        assert_eq!(q.score_threshold, Some(0.3));
+    }
+
+    #[test]
+    fn test_search_query_with_range_no_max_keeps_limit() {
+        let q = SearchQuery::new(vec![1.0], 10).with_range(0.3, None);
+        assert_eq!(q.limit, 10);
+    }
+
+    #[test]
+    fn test_search_result_new() {
+        let r = SearchResult::new(42u64, 0.95);
+        assert_eq!(r.id, PointId::Num(42));
+        assert!((r.score - 0.95).abs() < f32::EPSILON);
+        assert!(r.payload.is_none());
+        assert!(r.vector.is_none());
+    }
+
+    #[test]
+    fn test_search_result_with_payload() {
+        let mut payload = HashMap::new();
+        payload.insert("key".into(), serde_json::json!("val"));
+        let r = SearchResult::new("1", 0.5).with_payload(payload);
+        assert!(r.payload.is_some());
+    }
+
+    #[test]
+    fn test_search_result_with_vector() {
+        let r = SearchResult::new("id", 0.1).with_vector(vec![1.0, 2.0]);
+        assert_eq!(r.vector, Some(vec![1.0, 2.0]));
+    }
+
+    #[test]
+    fn test_search_results_empty() {
+        let r = SearchResults::new(vec![]);
+        assert!(r.is_empty());
+        assert_eq!(r.len(), 0);
+    }
+
+    #[test]
+    fn test_search_results_non_empty() {
+        let results = vec![SearchResult::new(1u64, 0.9), SearchResult::new(2u64, 0.8)];
+        let r = SearchResults::new(results);
+        assert!(!r.is_empty());
+        assert_eq!(r.len(), 2);
+        assert_eq!(r.total, Some(2));
+    }
+
+    #[test]
+    fn test_search_results_from_vec() {
+        let results = vec![SearchResult::new(1u64, 0.9)];
+        let r: SearchResults = results.into();
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn test_batch_search_query_new() {
+        let q = SearchQuery::new(vec![1.0], 5);
+        let batch = BatchSearchQuery::new(vec![q]);
+        assert_eq!(batch.queries.len(), 1);
+    }
+
+    #[test]
+    fn test_batch_search_query_from() {
+        let q = SearchQuery::new(vec![1.0], 5);
+        let batch: BatchSearchQuery = vec![q].into();
+        assert_eq!(batch.queries.len(), 1);
+    }
+
+    #[test]
+    fn test_search_mode_topk() {
+        let mode = SearchMode::TopK(10);
+        match mode {
+            SearchMode::TopK(k) => assert_eq!(k, 10),
+            _ => panic!("expected TopK"),
+        }
+    }
+
+    #[test]
+    fn test_search_mode_knn() {
+        let mode = SearchMode::KNN {
+            k: 20,
+            ef_search: Some(200),
+        };
+        match mode {
+            SearchMode::KNN { k, ef_search } => {
+                assert_eq!(k, 20);
+                assert_eq!(ef_search, Some(200));
+            }
+            _ => panic!("expected KNN"),
+        }
+    }
+
+    #[test]
+    fn test_search_mode_range() {
+        let mode = SearchMode::Range {
+            radius: 0.7,
+            max_results: Some(50),
+        };
+        match mode {
+            SearchMode::Range {
+                radius,
+                max_results,
+            } => {
+                assert!((radius - 0.7).abs() < f32::EPSILON);
+                assert_eq!(max_results, Some(50));
+            }
+            _ => panic!("expected Range"),
+        }
+    }
+
+    #[test]
+    fn test_search_query_score_threshold_range_mode() {
+        let q = SearchQuery::new(vec![1.0], 10).with_range(0.5, None);
+        assert_eq!(q.score_threshold(), Some(0.5));
+    }
+
+    #[test]
+    fn test_search_query_score_threshold_default() {
+        let q = SearchQuery::new(vec![1.0], 10);
+        assert!(q.score_threshold().is_none());
+    }
+}

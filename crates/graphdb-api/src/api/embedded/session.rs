@@ -1247,7 +1247,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         tag_name: &str,
         field_name: &str,
         vector_size: usize,
-        distance: vector_client::DistanceMetric,
+        distance: vector_search::DistanceMetric,
     ) -> CoreResult<String> {
         let space_id = {
             let guard = self.space_id.read();

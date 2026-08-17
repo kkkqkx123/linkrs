@@ -14,6 +14,7 @@ members = [
     "crates/graphdb-server",
     "crates/graphdb-migration",
     "crates/vector-client",
+    "crates/vector-search",
     "crates/graphdb-cli",
 ]
 
@@ -186,6 +187,9 @@ server = ["graphdb-config/server"]
 fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
 jieba = ["graphdb-search/jieba"]
 qdrant = ["graphdb-api/qdrant", "graphdb-server/qdrant", "graphdb-config/qdrant", "graphdb-sync/qdrant", "graphdb-query/qdrant"]
+# Alias kept for the Phase A acceptance; the `vector`/`vector-qdrant` feature
+# rework lands in a later work item.
+vector-qdrant = ["qdrant"]
 grpc = ["graphdb-server/grpc"]
 embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
 c_api = ["graphdb-api/c_api"]

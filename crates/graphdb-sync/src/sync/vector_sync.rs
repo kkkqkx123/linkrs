@@ -13,9 +13,9 @@ use crate::core::types::TransactionId;
 use crate::core::{Value, Vertex};
 use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
 
-use vector_client::{
-    EmbeddingService, FilterCondition, SearchQuery, SearchResult, VectorFilter, VectorManager,
-    VectorPoint,
+use vector_client::{EmbeddingService, VectorManager};
+use vector_search::{
+    FilterCondition, SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 /// Runtime state of the vector engine.
@@ -474,7 +474,7 @@ impl VectorSyncCoordinator {
                 .create_payload_index(
                     &collection_name,
                     "group_id",
-                    vector_client::types::PayloadSchemaType::Keyword,
+                    vector_search::types::PayloadSchemaType::Keyword,
                 )
                 .await
             {
@@ -1123,7 +1123,7 @@ impl VectorSyncCoordinator {
                 .create_payload_index(
                     &collection_name,
                     "group_id",
-                    vector_client::types::PayloadSchemaType::Keyword,
+                    vector_search::types::PayloadSchemaType::Keyword,
                 )
                 .await
             {

@@ -21,6 +21,7 @@ chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
 vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+vector-search = { path = "../vector-search" }
 tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true

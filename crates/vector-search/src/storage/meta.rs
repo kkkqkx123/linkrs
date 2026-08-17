@@ -1,0 +1,112 @@
+//! Collection metadata persisted to `meta.bin`.
+
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{Result, VectorSearchError};
+use crate::types::DistanceMetric;
+
+/// Current on-disk format version.
+pub(crate) const FORMAT_VERSION: u32 = 1;
+
+/// Default number of slots per `vectors.bin` segment.
+pub(crate) const SEGMENT_SLOTS_DEFAULT: u32 = 8192;
+
+/// Per-collection metadata. Written with postcard to `meta.bin`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Meta {
+    pub format_version: u32,
+    pub collection: String,
+    pub vector_size: usize,
+    pub distance: DistanceMetric,
+    pub segment_slots: u32,
+    /// Allocated slots (grows in segment steps).
+    pub slot_capacity: u64,
+    /// High water mark of allocated slots (includes tombstones).
+    pub next_slot: u64,
+    /// Live points.
+    pub live_count: u64,
+    pub tombstone_count: u64,
+    /// WAL water mark; reserved for the WAL work item.
+    pub last_applied_txn: u64,
+    pub created_at: i64,
+}
+
+impl Meta {
+    pub fn new(collection: &str, vector_size: usize, distance: DistanceMetric) -> Self {
+        Self::new_with_segment_slots(collection, vector_size, distance, SEGMENT_SLOTS_DEFAULT)
+    }
+
+    pub fn new_with_segment_slots(
+        collection: &str,
+        vector_size: usize,
+        distance: DistanceMetric,
+        segment_slots: u32,
+    ) -> Self {
+        Self {
+            format_version: FORMAT_VERSION,
+            collection: collection.to_string(),
+            vector_size,
+            distance,
+            segment_slots,
+            slot_capacity: segment_slots as u64,
+            next_slot: 0,
+            live_count: 0,
+            tombstone_count: 0,
+            last_applied_txn: 0,
+            created_at: Utc::now().timestamp(),
+        }
+    }
+
+    pub fn is_initial_capacity(&self) -> bool {
+        self.slot_capacity == self.segment_slots as u64
+    }
+
+    /// Validate invariants on open (aligned with pgvector `CheckDim`).
+    pub fn validate(&self) -> Result<()> {
+        if self.format_version != FORMAT_VERSION {
+            return Err(VectorSearchError::CorruptData(format!(
+                "unsupported format version {}",
+                self.format_version
+            )));
+        }
+        if self.vector_size == 0 {
+            return Err(VectorSearchError::CorruptData(
+                "vector_size must be >= 1".to_string(),
+            ));
+        }
+        if self.segment_slots == 0 {
+            return Err(VectorSearchError::CorruptData(
+                "segment_slots must be >= 1".to_string(),
+            ));
+        }
+        if self.slot_capacity < self.next_slot {
+            return Err(VectorSearchError::CorruptData(format!(
+                "slot_capacity {} < next_slot {}",
+                self.slot_capacity, self.next_slot
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        let bytes = postcard::to_stdvec(self)?;
+        let path = dir.join("meta.bin");
+        let mut file = File::create(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn load(dir: &Path) -> Result<Self> {
+        let path = dir.join("meta.bin");
+        let bytes = std::fs::read(&path)?;
+        let meta: Self = postcard::from_bytes(&bytes)?;
+        meta.validate()?;
+        Ok(meta)
+    }
+}

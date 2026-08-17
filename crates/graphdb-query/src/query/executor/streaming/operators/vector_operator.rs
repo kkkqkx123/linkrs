@@ -224,13 +224,13 @@ impl VectorOperator {
                             if let Some(coordinator) = vector_coordinator {
                                 let distance = match distance {
                                     crate::query::parser::ast::vector::VectorDistance::Cosine => {
-                                        vector_client::DistanceMetric::Cosine
+                                        vector_search::DistanceMetric::Cosine
                                     }
                                     crate::query::parser::ast::vector::VectorDistance::Euclidean => {
-                                        vector_client::DistanceMetric::Euclid
+                                        vector_search::DistanceMetric::Euclid
                                     }
                                     crate::query::parser::ast::vector::VectorDistance::Dot => {
-                                        vector_client::DistanceMetric::Dot
+                                        vector_search::DistanceMetric::Dot
                                     }
                                 };
                                 let res = futures::executor::block_on(

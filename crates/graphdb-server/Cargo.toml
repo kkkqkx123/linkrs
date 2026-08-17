@@ -48,6 +48,7 @@ async-trait.workspace = true
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+vector-search = { path = "../vector-search" }
 
 [features]
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:prost-build"]

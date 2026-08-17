@@ -6,9 +6,9 @@ use crate::api::core::error::{CoreError, CoreResult};
 use crate::sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use std::sync::Arc;
 use vector_client::manager::IndexMetadata;
-use vector_client::types::PointId;
-use vector_client::{
-    CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorManager, VectorPoint,
+use vector_client::VectorManager;
+use vector_search::{
+    types::PointId, CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
 
 /// Vector search result
@@ -76,8 +76,8 @@ impl VectorApi {
             let config = CollectionConfig {
                 vector_size,
                 distance,
-                index_type: Some(vector_client::types::IndexType::HNSW),
-                hnsw_config: Some(vector_client::types::HnswConfig {
+                index_type: Some(vector_search::types::IndexType::HNSW),
+                hnsw_config: Some(vector_search::types::HnswConfig {
                     m: 16,
                     ef_construct: 100,
                     full_scan_threshold: None,
@@ -97,7 +97,7 @@ impl VectorApi {
                 .create_payload_index(
                     &collection_name,
                     "group_id",
-                    vector_client::types::PayloadSchemaType::Keyword,
+                    vector_search::types::PayloadSchemaType::Keyword,
                 )
                 .await;
             Ok(collection_name)

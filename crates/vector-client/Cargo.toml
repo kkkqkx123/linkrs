@@ -28,6 +28,7 @@ url.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
 futures.workspace = true
+vector-search = { path = "../vector-search" }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

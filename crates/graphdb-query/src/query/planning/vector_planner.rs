@@ -21,7 +21,7 @@ use crate::query::planning::plan::core::nodes::search::vector::VectorSearchParam
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
-use vector_client::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter};
+use vector_search::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter};
 
 /// Vector search planner
 #[derive(Debug, Clone, Default)]
