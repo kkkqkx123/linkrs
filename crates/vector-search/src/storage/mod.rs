@@ -264,7 +264,9 @@ impl CollectionStore {
             }
             self.wal.append(txn)?;
             self.apply_records_locked(&mut inner, &txn.ops)?;
-            inner.meta.last_applied_txn = txn.txn_id;
+            // Monotonic water mark: late/duplicated txn ids must not regress
+            // the last applied id (replay is idempotent, so this is safe).
+            inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(txn.txn_id);
             inner.meta.save(&self.dir)?;
             threshold_met(&inner.meta)
         };
@@ -272,6 +274,52 @@ impl CollectionStore {
             self.compact()?;
         }
         Ok(())
+    }
+
+    /// Apply a WAL-backed batch of records with an auto-assigned txn id.
+    ///
+    /// This is the crash-safe path for single-collection operations exposed by
+    /// the engine; unlike [`CollectionStore::apply_txn`] the caller does not
+    /// coordinate a graph transaction id.
+    pub fn apply_ops(&self, ops: &[WalRecord]) -> Result<()> {
+        let txn_id = self.inner.read().meta.last_applied_txn + 1;
+        self.apply_txn(&WalTxn {
+            txn_id,
+            ops: ops.to_vec(),
+        })
+    }
+
+    /// Delete every live point matching `filter`. Returns the number of
+    /// deleted points. Runs as a single WAL-backed batch so recovery replays
+    /// the filter match deterministically.
+    pub fn delete_by_filter(&self, filter: &crate::types::VectorFilter) -> Result<u64> {
+        let point_ids: Vec<String> = {
+            let inner = self.inner.read();
+            let tombstones = self.tombstones.load();
+            let keysnap = self.keys.snapshot();
+            let psnap = self.payloads.snapshot();
+            let mut point_ids = Vec::new();
+            for slot in 0..inner.meta.next_slot as usize {
+                if tombstones[slot] {
+                    continue;
+                }
+                let key = Keys::read_key(&keysnap, slot)?.ok_or_else(|| {
+                    VectorSearchError::CorruptData(format!("slot {slot} has no key"))
+                })?;
+                let id = PointId::from(key);
+                let payload = Payloads::read_payload(&psnap, slot)?;
+                if crate::filter::matches(filter, &id, payload.as_ref())? {
+                    point_ids.push(id.to_string());
+                }
+            }
+            point_ids
+        };
+        if point_ids.is_empty() {
+            return Ok(0);
+        }
+        let deleted = point_ids.len() as u64;
+        self.apply_ops(&[WalRecord::DeleteBatch { point_ids }])?;
+        Ok(deleted)
     }
 
     /// Replay the WAL into memory. Idempotent: upserts overwrite by point id,
@@ -699,7 +747,7 @@ fn threshold_met(meta: &Meta) -> bool {
     meta.next_slot > 0 && meta.tombstone_count as f64 / meta.next_slot as f64 > COMPACTION_THRESHOLD
 }
 
-fn validate_collection_name(name: &str) -> Result<()> {
+pub(crate) fn validate_collection_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(VectorSearchError::InvalidCollectionName(name.to_string()));
     }

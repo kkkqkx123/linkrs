@@ -18,7 +18,7 @@ use crate::query::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPl
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::QueryStorage;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 use crate::sync::SyncManager;
 use parking_lot::RwLock;
@@ -34,7 +34,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) index_manager: Option<Arc<dyn IndexMetadataManager>>,
     #[cfg(feature = "fulltext-search")]
     pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub(crate) vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub(crate) storage: Option<Arc<RwLock<S>>>,
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
@@ -88,7 +88,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_manager: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: Some(storage),
             sync_manager: None,
@@ -223,7 +223,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             index_manager: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: Some(storage),
             sync_manager: None,
@@ -263,7 +263,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn with_vector_coordinator(
         mut self,
         vector_coordinator: Arc<VectorSyncCoordinator>,

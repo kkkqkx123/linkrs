@@ -49,7 +49,7 @@ impl SyncApi {
     }
 
     /// Get vector coordinator
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn vector_coordinator(&self) -> Option<&Arc<crate::sync::VectorSyncCoordinator>> {
         self.sync_manager.vector_coordinator()
     }

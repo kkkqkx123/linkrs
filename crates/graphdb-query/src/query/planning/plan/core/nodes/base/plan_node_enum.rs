@@ -26,7 +26,7 @@ use crate::query::planning::plan::core::nodes::management::system_nodes::{
 use crate::query::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
 };
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::query::planning::plan::core::nodes::search::vector::data_access::{
     VectorLookupNode, VectorMatchNode, VectorSearchNode,
 };
@@ -249,11 +249,11 @@ pub enum PlanNodeEnum {
     MatchFulltext(MatchFulltextNode),
 
     // Vector Search Nodes
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorSearch(VectorSearchNode),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorLookup(VectorLookupNode),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorMatch(VectorMatchNode),
 }
 
@@ -353,7 +353,7 @@ crate::define_enum_is_methods! {
     // Vector Search Nodes
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 crate::define_enum_is_methods! {
     PlanNodeEnum,
     (VectorSearch, is_vector_search),
@@ -452,7 +452,7 @@ crate::define_enum_as_methods! {
     // Vector Search Nodes
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 crate::define_enum_as_methods! {
     PlanNodeEnum,
     (VectorSearch, as_vector_search, VectorSearchNode),
@@ -551,7 +551,7 @@ crate::define_enum_as_mut_methods! {
     // Vector Search Nodes
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 crate::define_enum_as_mut_methods! {
     PlanNodeEnum,
     (VectorSearch, as_vector_search_mut, VectorSearchNode),
@@ -658,11 +658,11 @@ crate::define_all_plan_nodes! {
     (FulltextLookup, FulltextLookupNode, PlanNodeCategory::DataAccess, "FulltextLookup"),
     (MatchFulltext, MatchFulltextNode, PlanNodeCategory::DataAccess, "MatchFulltext"),
     // Vector Search Nodes
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     (VectorSearch, VectorSearchNode, PlanNodeCategory::DataAccess, "VectorSearch"),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     (VectorLookup, VectorLookupNode, PlanNodeCategory::DataAccess, "VectorLookup"),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     (VectorMatch, VectorMatchNode, PlanNodeCategory::DataAccess, "VectorMatch"),
 }
 
@@ -713,7 +713,7 @@ mod tests {
     ///    compiler-enforced),
     /// 2. this mirror list (test-enforced against the macro table),
     /// 3. the two docs in `__analysis__/`.
-    #[cfg(not(feature = "qdrant"))]
+    #[cfg(not(feature = "vector"))]
     const DOCUMENTED_NAMES: &[&str] = &[
         // Access (7)
         "Start",
@@ -805,7 +805,7 @@ mod tests {
     ];
 
     /// Same as above plus the three qdrant-gated vector nodes.
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     const DOCUMENTED_NAMES: &[&str] = &[
         "Start",
         "GetVertices",
@@ -891,9 +891,9 @@ mod tests {
     ];
 
     /// Default build: 78 variants. With `qdrant`: 81 variants.
-    #[cfg(not(feature = "qdrant"))]
+    #[cfg(not(feature = "vector"))]
     const EXPECTED_VARIANT_COUNT: usize = 78;
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     const EXPECTED_VARIANT_COUNT: usize = 81;
 
     #[test]
@@ -948,7 +948,7 @@ mod tests {
             .copied()
             .filter(|n| matches!(*n, "VectorSearch" | "VectorLookup" | "VectorMatch"))
             .collect();
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         {
             assert_eq!(
                 vector_search.len(),
@@ -959,7 +959,7 @@ mod tests {
                 assert!(vector_search.contains(&n), "missing {n} under qdrant");
             }
         }
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         {
             assert!(
                 vector_search.is_empty(),

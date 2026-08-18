@@ -14,7 +14,7 @@ use crate::query::parser::{Parser, ParserResult};
 #[cfg(feature = "fulltext-search")]
 use crate::search::FulltextIndexManager;
 use crate::storage::StorageClient;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::vector_sync::SearchOptions;
 use crate::sync::SyncManager;
 use crate::transaction::TransactionId;
@@ -80,7 +80,7 @@ pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
     pub(crate) stats_manager: Arc<StatsManager>,
     /// Tokio runtime for vector operations in embedded mode.
     /// Stored here to ensure the runtime lives as long as the database.
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub(crate) vector_runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -1142,7 +1142,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Return
     /// - Returns vector search results on success
     /// - Return error on failure
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn vector_search(
         &self,
         tag_name: &str,
@@ -1191,7 +1191,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Return
     /// - Returns vector search results on success
     /// - Return error on failure
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn vector_search_with_threshold(
         &self,
         tag_name: &str,
@@ -1241,7 +1241,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Return
     /// - Returns collection name on success
     /// - Return error on failure
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn create_vector_index(
         &self,
         tag_name: &str,
@@ -1279,7 +1279,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Return
     /// - Returns () on success
     /// - Return error on failure
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn drop_vector_index(&self, tag_name: &str, field_name: &str) -> CoreResult<()> {
         let space_id = {
             let guard = self.space_id.read();

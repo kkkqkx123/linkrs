@@ -70,6 +70,7 @@ rand = "0.8.5"
 crc32fast = "1.5"
 zstd = "0.13"
 postcard = { version = "1.1", features = ["use-std"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
 bitvec = "1.0"
 
 # memory
@@ -173,7 +174,7 @@ tokio.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true
 rand.workspace = true
-vector-client = { path = "crates/vector-client" }
+vector-client = { path = "crates/vector-client", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -182,14 +183,12 @@ libc.workspace = true
 winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoapi", "fileapi", "minwinbase"] }
 
 [features]
-default = ["server"]
+default = ["server", "vector"]
 server = ["graphdb-config/server"]
 fulltext-search = ["graphdb-api/fulltext-search", "graphdb-server/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
 jieba = ["graphdb-search/jieba"]
-qdrant = ["graphdb-api/qdrant", "graphdb-server/qdrant", "graphdb-config/qdrant", "graphdb-sync/qdrant", "graphdb-query/qdrant"]
-# Alias kept for the Phase A acceptance; the `vector`/`vector-qdrant` feature
-# rework lands in a later work item.
-vector-qdrant = ["qdrant"]
+vector = ["graphdb-api/vector", "graphdb-server/vector", "graphdb-config/vector", "graphdb-sync/vector", "graphdb-query/vector"]
+vector-qdrant = ["vector", "dep:vector-client", "graphdb-api/vector-qdrant", "graphdb-server/vector-qdrant", "graphdb-config/vector-qdrant", "graphdb-sync/vector-qdrant", "graphdb-query/vector-qdrant"]
 grpc = ["graphdb-server/grpc"]
 embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
 c_api = ["graphdb-api/c_api"]
@@ -202,7 +201,7 @@ codegen-units = 64
 [dev-dependencies]
 futures.workspace = true
 tokio-test = "0.4.4"
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion.workspace = true
 serial_test = "3.0"
 rayon.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
@@ -210,12 +209,13 @@ serde_json = "1.0.145"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 async-trait = "0.1"
-dashmap = "6.1"
+dashmap.workspace = true
 log = "0.4"
 regex = "1"
 toml = "1.1"
 reqwest = { version = "0.12", features = ["json"] }
 postcard.workspace = true
+graphdb-wire = { path = "crates/graphdb-wire" }
 
 [[bench]]
 name = "storage_bench"

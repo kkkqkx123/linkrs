@@ -176,9 +176,8 @@ impl TraversalParser {
         // filter is AND-ed with any pre-RETURN WHERE, mirroring the
         // consecutive-clause merge behavior.
         if ctx.match_token(TokenKind::Where) {
-            let post = ctx.recover_clause(Self::create_true_expression, |c| {
-                self.parse_expression(c)
-            })?;
+            let post =
+                ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?;
             if let Some(ref pre) = where_clause {
                 if let Some(combined) = ctx.expression_context().and(pre, &post) {
                     where_clause = Some(combined);
@@ -498,10 +497,7 @@ impl TraversalParser {
             false
         };
 
-        let steps = if matches!(
-            ctx.current_token().kind,
-            TokenKind::IntegerLiteral(_)
-        ) {
+        let steps = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
             // Canonical form: GET SUBGRAPH <n> STEPS FROM ...
             let n = ctx.expect_integer_literal()?;
             ctx.expect_token(TokenKind::Step)?;

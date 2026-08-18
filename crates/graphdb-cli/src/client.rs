@@ -13,8 +13,8 @@ mod types;
 pub use config::{ClientConfig, SessionInfo};
 pub use graphdb_wire::batch::BatchItem;
 pub use graphdb_wire::meta::{
-    ColdSnapshotInfo, ConfigItem, ConfigSection, DatabaseStatistics, QueryStatistics,
-    ServerConfig, SessionStatistics, TransactionResponse as TransactionInfo,
+    ColdSnapshotInfo, ConfigItem, ConfigSection, DatabaseStatistics, QueryStatistics, ServerConfig,
+    SessionStatistics, TransactionResponse as TransactionInfo,
 };
 pub use graphdb_wire::schema::{EdgeTypeInfo, FieldInfo, PropertyDef, SpaceInfo, TagInfo};
 pub use http_client::HttpClient;

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use graphdb::sync::{
-    PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorIndexLocation,
+    PendingVectorUpdate, VectorBackend, VectorChangeContext, VectorChangeType, VectorIndexLocation,
     VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer, VectorTransactionBufferConfig,
 };
 use graphdb::transaction::types::TransactionId;
@@ -83,16 +83,16 @@ async fn test_vector_transaction_buffer_cleanup() {
 #[tokio::test]
 async fn test_vector_sync_coordinator_with_buffer() {
     // Create a mock vector manager (using disabled config)
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
 
     let handle = tokio::runtime::Handle::current();
     // Create coordinator with transaction buffer
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        vector_manager,
+        vector_backend,
         None,
         VectorTransactionBufferConfig::default(),
         handle,
@@ -145,16 +145,16 @@ async fn test_vector_sync_coordinator_with_buffer() {
 #[tokio::test]
 async fn test_vector_sync_coordinator_rollback() {
     // Create a mock vector manager
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
 
     let handle = tokio::runtime::Handle::current();
     // Create coordinator with transaction buffer
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        vector_manager,
+        vector_backend,
         None,
         VectorTransactionBufferConfig::default(),
         handle,

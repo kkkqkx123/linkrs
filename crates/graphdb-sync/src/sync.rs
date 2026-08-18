@@ -1,3 +1,5 @@
+#[cfg(feature = "vector")]
+pub mod backend;
 pub mod batch;
 pub mod builder;
 pub mod checkpoint_manifest;
@@ -13,7 +15,7 @@ pub mod retry;
 pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub mod vector_sync;
 
 pub use crate::search::SyncConfig;
@@ -42,7 +44,7 @@ pub use outbox_recovery::{
 };
 #[cfg(feature = "fulltext-search")]
 pub use receiver::FulltextReceiver;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
@@ -52,9 +54,12 @@ pub use sqlite_outbox::{
 };
 pub use types::{IndexOpKey, IndexOperation};
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector_sync::{
     PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorEngineState,
     VectorIndexLocation, VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer,
     VectorTransactionBufferConfig,
 };
+
+#[cfg(feature = "vector")]
+pub use backend::VectorBackend;

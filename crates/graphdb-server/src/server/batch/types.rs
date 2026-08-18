@@ -5,8 +5,8 @@
 
 pub use graphdb_wire::batch::{
     AddBatchItemsRequest, AddBatchItemsResponse, BatchErrorData, BatchId, BatchItem, BatchItemType,
-    BatchProgress, BatchResultData, BatchStatus, BatchStatusResponse, BatchType, CreateBatchRequest,
-    CreateBatchResponse, EdgeData, ExecuteBatchResponse, VertexData,
+    BatchProgress, BatchResultData, BatchStatus, BatchStatusResponse, BatchType,
+    CreateBatchRequest, CreateBatchResponse, EdgeData, ExecuteBatchResponse, VertexData,
 };
 
 /// Batch task information (for internal use)

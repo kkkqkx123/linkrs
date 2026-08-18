@@ -676,7 +676,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
@@ -728,7 +728,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
@@ -784,7 +784,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
@@ -853,7 +853,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));
@@ -914,7 +914,7 @@ mod tests {
             Some(storage.clone()),
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let base = OperatorBase::new(0).with_runtime(Some(runtime));

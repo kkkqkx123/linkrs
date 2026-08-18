@@ -4,10 +4,12 @@
 //! graphdb crate and does not pull in the qdrant networking stack.
 
 pub mod distance;
+pub mod engine;
 pub mod error;
 pub mod filter;
 pub mod storage;
 pub mod types;
 
+pub use engine::{LocalVectorEngine, TxnOp};
 pub use error::{Result, VectorSearchError};
 pub use types::*;

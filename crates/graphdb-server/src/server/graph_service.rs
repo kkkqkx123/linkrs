@@ -1,11 +1,5 @@
 use graphdb_api::api::core::{QueryApi, QueryResult, SyncApi};
 
-#[cfg(feature = "qdrant")]
-use graphdb_api::api::core::VectorApi;
-use crate::server::auth::{Authenticator, AuthenticatorFactory, PasswordAuthenticator};
-use crate::server::permission::PermissionManager;
-use crate::server::session::{ClientSession, GraphSessionManager};
-use crate::server::session::{SessionError, SessionResult};
 use crate::config::Config;
 use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
@@ -19,18 +13,24 @@ use crate::query::optimizer::PartitioningConfig;
 use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::Stmt;
 use crate::query::parser::{Parser, ParserResult};
+use crate::server::auth::{Authenticator, AuthenticatorFactory, PasswordAuthenticator};
+use crate::server::permission::PermissionManager;
+use crate::server::session::{ClientSession, GraphSessionManager};
+use crate::server::session::{SessionError, SessionResult};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+#[cfg(feature = "vector")]
+use crate::sync::backend::VectorBackend;
 use crate::transaction::{TransactionId, TransactionManager};
+#[cfg(feature = "vector")]
+use graphdb_api::api::core::VectorApi;
 use log::{info, warn};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-#[cfg(feature = "qdrant")]
-use vector_client::VectorManager;
 
 pub struct GraphService<S: StorageClient + Clone + 'static> {
     session_manager: Arc<GraphSessionManager>,
@@ -39,7 +39,7 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
     permission_manager: Arc<PermissionManager>,
     pub stats_manager: Arc<StatsManager>,
     storage: Arc<S>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     vector_api: Option<Arc<VectorApi>>,
     sync_api: Option<Arc<SyncApi>>,
 
@@ -66,17 +66,17 @@ impl<
 {
     /// Create a new GraphService (without a transaction manager, for use in a production environment).
     pub async fn new(config: Config, storage: Arc<S>) -> Arc<Self> {
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         return Self::create_service(config, storage, None, true, None, None).await;
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         return Self::create_service(config, storage, None, true, None).await;
     }
 
     /// Create a new GraphService (without a transaction manager and without starting any background tasks, for testing purposes).
     pub async fn new_for_test(config: Config, storage: Arc<S>) -> Arc<Self> {
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         return Self::create_service(config, storage, None, false, None, None).await;
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         return Self::create_service(config, storage, None, false, None).await;
     }
 
@@ -86,10 +86,10 @@ impl<
         storage: Arc<S>,
         transaction_manager: Arc<TransactionManager>,
     ) -> Arc<Self> {
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         return Self::create_service(config, storage, Some(transaction_manager), true, None, None)
             .await;
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         return Self::create_service(config, storage, Some(transaction_manager), true, None).await;
     }
 
@@ -100,7 +100,7 @@ impl<
         transaction_manager: Arc<TransactionManager>,
         stats_manager: Arc<StatsManager>,
     ) -> Arc<Self> {
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         {
             Self::create_service(
                 config,
@@ -112,7 +112,7 @@ impl<
             )
             .await
         }
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         {
             Self::create_service(
                 config,
@@ -125,14 +125,14 @@ impl<
         }
     }
 
-    /// Use the transaction manager, external StatsManager, and shared VectorManager to create a GraphService.
-    #[cfg(feature = "qdrant")]
-    pub async fn with_shared_vector_manager(
+    /// Use the transaction manager, external StatsManager, and shared VectorBackend to create a GraphService.
+    #[cfg(feature = "vector")]
+    pub async fn with_shared_vector_backend(
         config: Config,
         storage: Arc<S>,
         transaction_manager: Arc<TransactionManager>,
         stats_manager: Arc<StatsManager>,
-        vector_manager: Arc<vector_client::VectorManager>,
+        backend: VectorBackend,
     ) -> Arc<Self> {
         Self::create_service(
             config,
@@ -140,7 +140,7 @@ impl<
             Some(transaction_manager),
             true,
             Some(stats_manager),
-            Some(vector_manager),
+            Some(backend),
         )
         .await
     }
@@ -149,14 +149,14 @@ impl<
     ///
     /// # Parameters
     /// `start_cleanup_task` – Whether to initiate the background task for session cleanup
-    /// `shared_vector_manager` – Optional shared VectorManager to avoid duplicate initialization
+    /// `shared_vector_backend` – Optional shared VectorBackend to avoid duplicate initialization
     async fn create_service(
         config: Config,
         storage: Arc<S>,
         transaction_manager: Option<Arc<TransactionManager>>,
         start_cleanup_task: bool,
         external_stats_manager: Option<Arc<StatsManager>>,
-        #[cfg(feature = "qdrant")] shared_vector_manager: Option<Arc<vector_client::VectorManager>>,
+        #[cfg(feature = "vector")] shared_vector_backend: Option<VectorBackend>,
     ) -> Arc<Self> {
         // Columnar fast-path switches are process-level toggles in the query
         // executor; mirror the `[columnar]` config section onto them so the
@@ -211,29 +211,29 @@ impl<
             shared_scheduler.max_workers()
         );
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         let (query_api, vector_api) = if config.is_vector_enabled() {
-            // Use shared VectorManager if available, otherwise create a new one
-            let vm = match shared_vector_manager {
-                Some(vm) => vm,
-                None => Arc::new(
-                    VectorManager::new(config.vector_config().clone())
-                        .await
-                        .unwrap_or_else(|_| panic!("Failed to create vector manager")),
-                ),
+            // Use shared backend if available, otherwise build one from config.
+            let backend = match shared_vector_backend {
+                Some(backend) => backend,
+                None => {
+                    let engine = vector_search::LocalVectorEngine::open(config.vector_data_dir())
+                        .unwrap_or_else(|_| panic!("Failed to open local vector engine"));
+                    crate::sync::backend::VectorBackend::Local(Arc::new(engine))
+                }
             };
 
-            match QueryApi::with_vector_manager(
+            match QueryApi::with_vector_backend(
                 Arc::new(RwLock::new((*storage).clone())),
                 stats_manager.clone(),
-                vm.clone(),
+                backend.clone(),
                 schema_manager.clone(),
             )
             .await
             {
                 Ok(mut api) => {
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
-                    let vector_api = Arc::new(VectorApi::new(vm));
+                    let vector_api = Arc::new(VectorApi::new(backend));
                     (Arc::new(RwLock::new(api)), Some(vector_api))
                 }
                 Err(e) => {
@@ -262,7 +262,7 @@ impl<
             (Arc::new(RwLock::new(api)), None)
         };
 
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         let query_api = {
             let mut api = Self::build_query_api(
                 &storage,
@@ -296,7 +296,7 @@ impl<
             permission_manager,
             stats_manager,
             storage,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_api,
             sync_api,
             transaction_manager,
@@ -533,9 +533,10 @@ impl<
         match Self::parse_command(stmt) {
             Err(parse_error) => return Err(parse_error),
             Ok(Some(_)) => {
-                return self.execute(session_id, stmt).await.map(|result| {
-                    StreamingQueryResult::from_execution_result(result.execution)
-                });
+                return self
+                    .execute(session_id, stmt)
+                    .await
+                    .map(|result| StreamingQueryResult::from_execution_result(result.execution));
             }
             Ok(None) => {}
         }
@@ -1034,9 +1035,10 @@ impl<
                         result.rows().len()
                     ));
                 }
-                result.first_value().cloned().ok_or_else(|| {
-                    "LET expression returned no value".to_string()
-                })?
+                result
+                    .first_value()
+                    .cloned()
+                    .ok_or_else(|| "LET expression returned no value".to_string())?
             }
         };
         session.set_variable(assign.name.clone(), value);
@@ -1278,7 +1280,7 @@ impl<
         &self.stats_manager
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn vector_api(&self) -> Option<&Arc<VectorApi>> {
         self.vector_api.as_ref()
     }

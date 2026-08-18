@@ -329,7 +329,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         {
             context.fulltext_manager = self.fulltext_manager.clone();
         }
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         {
             context.vector_coordinator = self.vector_coordinator.clone();
         }

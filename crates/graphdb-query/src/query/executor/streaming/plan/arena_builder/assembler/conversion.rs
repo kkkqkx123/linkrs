@@ -1363,7 +1363,7 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(vs_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,
@@ -1384,7 +1384,7 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(vl_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,
@@ -1405,7 +1405,7 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorMatch(vm_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,

@@ -205,7 +205,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let released = Arc::new(AtomicBool::new(false));

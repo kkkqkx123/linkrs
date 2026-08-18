@@ -948,7 +948,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             PlanNodeEnum::MatchFulltext(node)
         }
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         LogicalNodeEnum::VectorSearch(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode::new(
                 crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchParams::new(
@@ -972,7 +972,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             PlanNodeEnum::VectorSearch(node)
         }
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         LogicalNodeEnum::VectorLookup(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode::new(
                 n.schema_name,
@@ -988,7 +988,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
             PlanNodeEnum::VectorLookup(node)
         }
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         LogicalNodeEnum::VectorMatch(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode::new(
                 n.pattern,

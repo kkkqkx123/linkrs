@@ -11,14 +11,15 @@ toml.workspace = true
 thiserror.workspace = true
 log.workspace = true
 dirs.workspace = true
-vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+vector-client = { path = "../vector-client", optional = true }
 flexi_logger.workspace = true
 parking_lot.workspace = true
 
 [features]
 server = []
 embedded = []
-qdrant = ["dep:vector-client"]
+vector = []
+vector-qdrant = ["vector", "dep:vector-client"]
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -98,7 +98,11 @@ fn test_in_subquery() {
         "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } RETURN t.name",
     );
     let result = result.expect("IN subquery should execute and succeed");
-    assert_eq!(result.rows().len(), 4, "every name appears in the result set");
+    assert_eq!(
+        result.rows().len(),
+        4,
+        "every name appears in the result set"
+    );
 }
 
 /// NOT IN subquery: anti join against the projected names.
@@ -368,7 +372,11 @@ fn test_where_or_exists_executes() {
             "MATCH (t:person) WHERE t.age = 30 OR EXISTS { MATCH (p:person) } RETURN t.name",
         )
         .expect("OR-side EXISTS should execute and succeed");
-    assert_eq!(result.rows().len(), 4, "EXISTS is true, so every row matches");
+    assert_eq!(
+        result.rows().len(),
+        4,
+        "EXISTS is true, so every row matches"
+    );
 
     let result = db
         .execute_query(
@@ -382,7 +390,11 @@ fn test_where_or_exists_executes() {
             "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } OR t.age > 20 RETURN t.name",
         )
         .expect("OR-side IN should execute and succeed");
-    assert_eq!(result.rows().len(), 4, "every name appears in the result set");
+    assert_eq!(
+        result.rows().len(),
+        4,
+        "every name appears in the result set"
+    );
 
     // A conjunctive EXISTS plus a residual OR-side subquery also executes.
     let result = db
@@ -488,7 +500,10 @@ fn test_return_in_null_semantics() {
         .expect("RETURN NOT IN should execute and succeed");
     assert_eq!(result.rows().len(), 4);
     let columns = result.columns();
-    let name_idx = columns.iter().position(|c| c == "name").expect("name column");
+    let name_idx = columns
+        .iter()
+        .position(|c| c == "name")
+        .expect("name column");
     let x_idx = columns.iter().position(|c| c == "x").expect("x column");
     let carol = result
         .rows()

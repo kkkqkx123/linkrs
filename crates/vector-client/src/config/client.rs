@@ -3,14 +3,16 @@ use std::time::Duration;
 
 use crate::embedding::EmbeddingConfig;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum EngineType {
+    #[default]
     Qdrant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorClientConfig {
     pub enabled: bool,
+    #[serde(default)]
     pub engine: EngineType,
     pub connection: ConnectionConfig,
     pub timeout: TimeoutConfig,

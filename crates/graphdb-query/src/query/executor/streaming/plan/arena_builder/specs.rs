@@ -1838,7 +1838,7 @@ pub(super) fn build_vector_manage_spec(
     })
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub(super) fn build_vector_search_spec(
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
     exec_ctx: &ExecutionContext,
@@ -1854,7 +1854,7 @@ pub(super) fn build_vector_search_spec(
     })
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub(super) fn build_vector_lookup_spec(
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode,
     exec_ctx: &ExecutionContext,
@@ -1866,7 +1866,7 @@ pub(super) fn build_vector_lookup_spec(
     })
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub(super) fn build_vector_match_spec(
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode,
     exec_ctx: &ExecutionContext,
@@ -1883,7 +1883,7 @@ pub(super) fn build_vector_match_spec(
     })
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 fn vector_query_to_vec(expr: &crate::query::parser::ast::vector::VectorQueryExpr) -> Vec<f32> {
     serde_json::from_str(&expr.query_data).unwrap_or_default()
 }

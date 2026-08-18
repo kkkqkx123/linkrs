@@ -24,7 +24,7 @@ use graphdb::search::{FulltextConfig, FulltextIndexManager};
 #[cfg(feature = "fulltext-search")]
 use graphdb::sync::SyncConfig;
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use vector_client::{HealthStatus, VectorClientConfig, VectorManager};
 
 /// Test database wrapper with proper schema manager initialization
@@ -74,7 +74,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
     #[cfg(not(feature = "fulltext-search"))]
     let sync_manager = SyncManager::new_without_fulltext();
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     let sync_manager = {
         let mut sync_manager = sync_manager;
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
@@ -88,7 +88,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
                 if health.is_healthy {
                     let vector_coordinator =
                         Arc::new(graphdb::sync::vector_sync::VectorSyncCoordinator::new(
-                            Arc::new(vector_manager),
+                            graphdb::sync::VectorBackend::Qdrant(Arc::new(vector_manager)),
                             None,
                             rt.handle().clone(),
                         ));
@@ -129,11 +129,11 @@ impl TestDb {
 
         let sync_manager = create_sync_manager();
         let has_vector_coordinator = {
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector-qdrant")]
             {
                 sync_manager.vector_coordinator().is_some()
             }
-            #[cfg(not(feature = "qdrant"))]
+            #[cfg(not(feature = "vector-qdrant"))]
             {
                 false
             }
@@ -177,11 +177,11 @@ impl TestDb {
 
         let sync_manager = create_sync_manager();
         let has_vector_coordinator = {
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector-qdrant")]
             {
                 sync_manager.vector_coordinator().is_some()
             }
-            #[cfg(not(feature = "qdrant"))]
+            #[cfg(not(feature = "vector-qdrant"))]
             {
                 false
             }
@@ -500,13 +500,17 @@ impl TestDb {
             return;
         }
         if let Some(row) = result.rows().first() {
-            if let Some(Value::String(name)) =
-                columns.iter().position(|c| c == "space_name").and_then(|i| row.get(i))
+            if let Some(Value::String(name)) = columns
+                .iter()
+                .position(|c| c == "space_name")
+                .and_then(|i| row.get(i))
             {
                 self.current_space_name = Some(name.to_string());
             }
-            if let Some(Value::BigInt(id)) =
-                columns.iter().position(|c| c == "space_id").and_then(|i| row.get(i))
+            if let Some(Value::BigInt(id)) = columns
+                .iter()
+                .position(|c| c == "space_id")
+                .and_then(|i| row.get(i))
             {
                 self.current_space_id = Some(*id as u64);
             }

@@ -260,7 +260,7 @@ mod tests {
             columnar_policy: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
         };
 

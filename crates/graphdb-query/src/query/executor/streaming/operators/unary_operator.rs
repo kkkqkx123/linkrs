@@ -720,7 +720,7 @@ mod tests {
             Some(storage),
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ))
     }

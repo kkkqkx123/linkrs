@@ -62,7 +62,10 @@ pub struct QueryResult {
 impl QueryResult {
     /// Create a query result from an engine execution result.
     pub fn new(execution: ExecutionResult, metadata: ExecutionMetadata) -> Self {
-        Self { execution, metadata }
+        Self {
+            execution,
+            metadata,
+        }
     }
 
     /// Create an empty successful query result.

@@ -290,6 +290,41 @@ pub enum CollectionStatus {
     Grey,
 }
 
+/// Metadata describing a registered vector index.
+///
+/// Shared between the local engine and the qdrant client so the sync layer can
+/// track logical indexes without depending on the transport-specific crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexMetadata {
+    pub name: String,
+    pub config: CollectionConfig,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub vector_count: u64,
+    pub index_name: Option<String>,
+}
+
+impl IndexMetadata {
+    pub fn new(name: String, config: CollectionConfig) -> Self {
+        Self {
+            name,
+            config,
+            created_at: chrono::Utc::now(),
+            vector_count: 0,
+            index_name: None,
+        }
+    }
+
+    pub fn with_index_name(name: String, config: CollectionConfig, index_name: String) -> Self {
+        Self {
+            name,
+            config,
+            created_at: chrono::Utc::now(),
+            vector_count: 0,
+            index_name: Some(index_name),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PayloadSchemaType {
     Keyword,

@@ -47,7 +47,7 @@ use crate::query::planning::statements::dql::unwind_planner::UnwindPlanner;
 use crate::query::planning::statements::dql::with_planner::WithPlanner;
 use crate::query::planning::statements::dql::yield_planner::YieldPlanner;
 use crate::query::planning::statements::match_statement_planner::MatchStatementPlanner;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::query::planning::vector_planner::VectorSearchPlanner;
 
 ///  Planner Configuration
@@ -184,7 +184,7 @@ pub enum PlannerEnum {
     Pipe(PipePlanner),
     Explain(ExplainPlanner),
     FulltextSearch(FulltextSearchPlanner),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorSearch(VectorSearchPlanner),
 }
 
@@ -239,7 +239,7 @@ impl PlannerEnum {
             | Stmt::MatchFulltext(_) => {
                 Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Stmt::CreateVectorIndex(_)
             | Stmt::DropVectorIndex(_)
             | Stmt::SearchVector(_)
@@ -326,7 +326,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.transform(validated, qctx),
             PlannerEnum::Explain(planner) => planner.transform(validated, qctx),
             PlannerEnum::FulltextSearch(planner) => planner.transform(validated, qctx),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.transform(validated, qctx),
         }
     }
@@ -390,7 +390,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(_) => "PipePlanner",
             PlannerEnum::Explain(_) => "ExplainPlanner",
             PlannerEnum::FulltextSearch(_) => "FulltextSearchPlanner",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(_) => "VectorSearchPlanner",
         }
     }
@@ -428,7 +428,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.match_planner(stmt),
             PlannerEnum::Explain(planner) => planner.match_planner(stmt),
             PlannerEnum::FulltextSearch(planner) => planner.match_planner(stmt),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.match_planner(stmt),
         }
     }
@@ -488,7 +488,7 @@ impl PlannerEnum {
             PlannerEnum::FulltextSearch(planner) => {
                 planner.plan_bound(bound, qctx, metadata, validated)
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => {
                 planner.plan_bound(bound, qctx, metadata, validated)
             }
@@ -593,7 +593,7 @@ impl PlannerEnum {
             PlannerEnum::FulltextSearch(planner) => {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }

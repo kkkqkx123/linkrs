@@ -1,17 +1,17 @@
+use crate::value::from_json as json_to_core;
 use axum::{
     extract::{Json, Path, State},
     response::Json as JsonResponse,
 };
 use graphdb_wire::schema::{CreateEdgeTypeRequest, CreateSpaceRequest, CreateTagRequest};
-use crate::value::from_json as json_to_core;
 use tokio::task;
 
-use graphdb_api::api::core::{PropertyDef as CorePropertyDef, SpaceConfig};
-use crate::server::http::{error::HttpError, state::AppState};
 use crate::core::DataType;
+use crate::server::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use graphdb_api::api::core::{PropertyDef as CorePropertyDef, SpaceConfig};
 
 // ==================== Space related ====================
 
@@ -304,9 +304,7 @@ fn parse_data_type(type_str: &str) -> DataType {
     // The wire `data_type` is the core `DataType` Display output; parse it
     // back through the same `FromStr` source of truth. Unrecognized types
     // fall back to String (previous behavior).
-    type_str
-        .parse::<DataType>()
-        .unwrap_or(DataType::String)
+    type_str.parse::<DataType>().unwrap_or(DataType::String)
 }
 
 // ==================== Schema Versioning ====================

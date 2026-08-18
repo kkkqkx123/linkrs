@@ -180,7 +180,11 @@ impl HttpClient {
         }
 
         let batch_resp: BatchQueryResponse = response.json().await?;
-        Ok(batch_resp.results.into_iter().map(QueryResult::from).collect())
+        Ok(batch_resp
+            .results
+            .into_iter()
+            .map(QueryResult::from)
+            .collect())
     }
 
     /// Execute a query without variable substitution
@@ -430,7 +434,12 @@ impl HttpClient {
     }
 
     /// Create a tag in a space
-    pub async fn create_tag(&self, space: &str, name: &str, properties: Vec<PropertyDef>) -> Result<()> {
+    pub async fn create_tag(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<PropertyDef>,
+    ) -> Result<()> {
         let url = format!("{}/schema/spaces/{}/tags", self.base_url, space);
 
         let request = CreateTagRequest {
@@ -483,7 +492,10 @@ impl HttpClient {
     // ── Transactions ──
 
     /// Begin a new transaction
-    pub async fn begin_transaction(&self, options: TransactionOptions) -> Result<TransactionResponse> {
+    pub async fn begin_transaction(
+        &self,
+        options: TransactionOptions,
+    ) -> Result<TransactionResponse> {
         let url = format!("{}/transactions", self.base_url);
 
         let request = BeginTransactionRequest {

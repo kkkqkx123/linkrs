@@ -15,7 +15,7 @@ pub mod embedded;
 // ── Core re-exports ──────────────────────────────────────────────
 pub use core::{CoreError, CoreResult, QueryApi, SchemaApi, SyncApi};
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use core::{VectorApi, VectorSearchResult};
 
 #[cfg(feature = "embedded")]

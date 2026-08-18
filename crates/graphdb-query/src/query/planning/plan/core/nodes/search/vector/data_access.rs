@@ -8,10 +8,10 @@ use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEs
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector_search::types::VectorFilter;
 
-#[cfg(not(feature = "qdrant"))]
+#[cfg(not(feature = "vector"))]
 #[derive(Debug, Clone)]
 pub struct VectorFilter;
 

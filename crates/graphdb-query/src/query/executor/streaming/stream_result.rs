@@ -387,7 +387,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         engine.set_runtime(runtime.clone());

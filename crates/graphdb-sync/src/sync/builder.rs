@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "fulltext-search")]
 use crate::sync::coordinator::SyncCoordinator;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 use crate::sync::DeadLetterQueue;
 use crate::sync::SyncManager;
@@ -10,7 +10,7 @@ use crate::sync::SyncManager;
 pub struct SyncManagerBuilder {
     #[cfg(feature = "fulltext-search")]
     sync_coordinator: Option<Arc<SyncCoordinator>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     dead_letter_queue: Option<Arc<DeadLetterQueue>>,
     outbox_path: Option<std::path::PathBuf>,
@@ -27,7 +27,7 @@ impl SyncManagerBuilder {
         Self {
             #[cfg(feature = "fulltext-search")]
             sync_coordinator: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             dead_letter_queue: None,
             outbox_path: None,
@@ -40,7 +40,7 @@ impl SyncManagerBuilder {
         self
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn with_vector_coordinator(mut self, coordinator: Arc<VectorSyncCoordinator>) -> Self {
         self.vector_coordinator = Some(coordinator);
         self
@@ -64,7 +64,7 @@ impl SyncManagerBuilder {
             manager = SyncManager::new(coordinator);
         }
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         if let Some(vector_coordinator) = self.vector_coordinator {
             manager = manager.with_vector_coordinator(vector_coordinator);
         }
@@ -142,21 +142,21 @@ impl SyncCoordinatorBuilder {
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 pub struct VectorCoordinatorBuilder {
     vector_manager: Option<Arc<vector_client::VectorManager>>,
     embedding_service: Option<Arc<vector_client::EmbeddingService>>,
     runtime_handle: Option<tokio::runtime::Handle>,
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 impl Default for VectorCoordinatorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 impl VectorCoordinatorBuilder {
     pub fn new() -> Self {
         Self {
@@ -188,9 +188,10 @@ impl VectorCoordinatorBuilder {
         let handle = self.runtime_handle.unwrap_or_else(|| {
             tokio::runtime::Handle::try_current().expect("No tokio runtime available")
         });
+        let backend = crate::sync::backend::VectorBackend::Qdrant(manager);
 
         Ok(Arc::new(VectorSyncCoordinator::new(
-            manager,
+            backend,
             self.embedding_service,
             handle,
         )))

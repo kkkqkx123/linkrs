@@ -13,7 +13,7 @@ pub mod statistics;
 pub mod stream;
 pub mod sync;
 pub mod transaction;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub mod vector;
 
 pub use auth::{login, logout};
@@ -36,7 +36,7 @@ pub use statistics::{database, queries, search as search_stats, session, system}
 pub use stream::execute_stream;
 pub use sync::status;
 pub use transaction::{begin, commit, rollback};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector::{
     count, create_index, drop_index, get_index_info, get_vector, list_indexes, search,
 };

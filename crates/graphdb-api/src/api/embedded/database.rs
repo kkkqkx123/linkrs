@@ -7,22 +7,24 @@ use crate::api::embedded::config::DatabaseConfig;
 use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
+use crate::search::FulltextConfig;
 #[cfg(feature = "fulltext-search")]
 use crate::search::FulltextIndexManager;
-use crate::search::FulltextConfig;
 #[cfg(feature = "fulltext-search")]
 use crate::search::SyncFailurePolicy;
 use crate::storage::{GraphStorage, StorageClient};
-use crate::sync::SyncManager;
+#[cfg(feature = "vector")]
+use crate::sync::backend::VectorBackend;
 #[cfg(feature = "fulltext-search")]
 use crate::sync::SyncConfig;
+use crate::sync::SyncManager;
 use crate::transaction::wal::SyncPolicy;
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use vector_client::{VectorClientConfig, VectorManager};
 
 #[cfg(test)]
@@ -31,7 +33,7 @@ use crate::storage::MockStorage;
 /// Create a VectorManager from the default configuration.
 ///
 /// Uses the provided runtime handle to block on async VectorManager initialization.
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 fn create_vector_manager(
     vector_config: &VectorClientConfig,
     runtime: &tokio::runtime::Handle,
@@ -46,23 +48,44 @@ fn create_vector_manager(
     Ok(vector_manager)
 }
 
+/// Build the vector backend from default configuration (enabled only when a
+/// backend is configured/available).
+#[cfg(feature = "vector")]
+fn create_vector_backend(runtime: &tokio::runtime::Handle) -> CoreResult<Option<VectorBackend>> {
+    #[cfg(feature = "vector-qdrant")]
+    {
+        let vector_config = VectorClientConfig::default();
+        if !vector_config.enabled {
+            return Ok(None);
+        }
+        let vector_manager = create_vector_manager(&vector_config, runtime)?;
+        Ok(Some(VectorBackend::Qdrant(vector_manager)))
+    }
+    #[cfg(not(feature = "vector-qdrant"))]
+    {
+        let engine =
+            vector_search::LocalVectorEngine::open("data/graphdb/vector").map_err(|e| {
+                CoreError::Internal(format!("Failed to initialize local vector engine: {}", e))
+            })?;
+        Ok(Some(VectorBackend::Local(Arc::new(engine))))
+    }
+}
+
 /// Attach a vector sync coordinator to an existing SyncManager (no-op if vector is disabled).
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 fn attach_vector_coordinator(
     mut sync: SyncManager,
     runtime: &tokio::runtime::Handle,
 ) -> CoreResult<SyncManager> {
-    let vector_config = VectorClientConfig::default();
-    if !vector_config.enabled {
-        return Ok(sync);
+    if let Some(backend) = create_vector_backend(runtime)? {
+        let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
+            backend,
+            #[cfg(feature = "vector-qdrant")]
+            None,
+            runtime.clone(),
+        ));
+        sync = sync.with_vector_coordinator(vector_coordinator);
     }
-    let vector_manager = create_vector_manager(&vector_config, runtime)?;
-    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-        vector_manager,
-        None,
-        runtime.clone(),
-    ));
-    sync = sync.with_vector_coordinator(vector_coordinator);
     Ok(sync)
 }
 
@@ -71,17 +94,16 @@ type InitManagers = (Option<Arc<FulltextIndexManager>>, Option<Arc<SyncManager>>
 #[cfg(not(feature = "fulltext-search"))]
 type InitManagers = (Option<Arc<()>>, Option<Arc<SyncManager>>);
 
-/// Full init path when qdrant is enabled but fulltext is not: create a sync manager
+/// Full init path when vector is enabled but fulltext is not: create a sync manager
 /// that only hosts the vector coordinator.
-#[cfg(all(feature = "qdrant", not(feature = "fulltext-search")))]
+#[cfg(all(feature = "vector", not(feature = "fulltext-search")))]
 fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
-    let vector_config = VectorClientConfig::default();
-    if !vector_config.enabled {
+    let Some(backend) = create_vector_backend(runtime)? else {
         return Ok((None, None));
-    }
-    let vector_manager = create_vector_manager(&vector_config, runtime)?;
+    };
     let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-        vector_manager,
+        backend,
+        #[cfg(feature = "vector-qdrant")]
         None,
         runtime.clone(),
     ));
@@ -91,16 +113,15 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
     Ok((None, Some(Arc::new(sync))))
 }
 
-/// Full init path when both qdrant and fulltext are enabled.
-#[cfg(all(feature = "qdrant", feature = "fulltext-search"))]
+/// Full init path when both vector and fulltext are enabled.
+#[cfg(all(feature = "vector", feature = "fulltext-search"))]
 fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
-    let vector_config = VectorClientConfig::default();
-    if !vector_config.enabled {
+    let Some(backend) = create_vector_backend(runtime)? else {
         return Ok((None, None));
-    }
-    let vector_manager = create_vector_manager(&vector_config, runtime)?;
+    };
     let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-        vector_manager,
+        backend,
+        #[cfg(feature = "vector-qdrant")]
         None,
         runtime.clone(),
     ));
@@ -121,8 +142,8 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
     Ok((None, Some(Arc::new(sync))))
 }
 
-/// Stub: no qdrant, return (None, None)
-#[cfg(not(feature = "qdrant"))]
+/// Stub: no vector, return (None, None)
+#[cfg(not(feature = "vector"))]
 #[allow(dead_code)]
 fn setup_sync_with_vector_only(_runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
     Ok((None, None))
@@ -199,7 +220,7 @@ impl GraphDatabase<GraphStorage> {
         // Create a dedicated tokio runtime for vector operations in embedded mode.
         // This runtime lives for the lifetime of the GraphDatabase and is stored
         // to prevent it from being dropped.
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         let vector_runtime =
             Arc::new(tokio::runtime::Runtime::new().map_err(|e| {
                 CoreError::Internal(format!("Failed to create tokio runtime: {}", e))
@@ -253,7 +274,7 @@ impl GraphDatabase<GraphStorage> {
 
                 let sync = SyncManager::with_sync_config(sync_coordinator.clone(), sync_config);
 
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 let sync = attach_vector_coordinator(sync, vector_runtime.handle())?;
 
                 let sync = Arc::new(sync);
@@ -261,21 +282,21 @@ impl GraphDatabase<GraphStorage> {
             }
             #[cfg(not(feature = "fulltext-search"))]
             {
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 {
                     setup_sync_with_vector_only(vector_runtime.handle())?
                 }
-                #[cfg(not(feature = "qdrant"))]
+                #[cfg(not(feature = "vector"))]
                 {
                     (None, None)
                 }
             }
         } else {
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             {
                 setup_sync_with_vector_only(vector_runtime.handle())?
             }
-            #[cfg(not(feature = "qdrant"))]
+            #[cfg(not(feature = "vector"))]
             {
                 (None, None)
             }
@@ -283,7 +304,9 @@ impl GraphDatabase<GraphStorage> {
 
         if let (Some(path), Some(manager)) = (
             config.path(),
-            sync_manager.as_mut().and_then(|m| Arc::<SyncManager>::get_mut(m)),
+            sync_manager
+                .as_mut()
+                .and_then(|m| Arc::<SyncManager>::get_mut(m)),
         ) {
             manager
                 .configure_outbox(path.join("outbox/outbox.sqlite"))
@@ -332,7 +355,7 @@ impl GraphDatabase<GraphStorage> {
             fulltext_manager,
             sync_manager,
             stats_manager,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_runtime,
         });
 
@@ -486,7 +509,7 @@ impl GraphDatabase<MockStorage> {
         )));
         let schema_api = SchemaApi::new(storage.clone());
 
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         let vector_runtime =
             Arc::new(tokio::runtime::Runtime::new().expect("Failed to create tokio runtime"));
 
@@ -498,7 +521,7 @@ impl GraphDatabase<MockStorage> {
             fulltext_manager: None,
             sync_manager: None,
             stats_manager,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_runtime,
         });
 

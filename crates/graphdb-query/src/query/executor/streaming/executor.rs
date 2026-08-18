@@ -1262,7 +1262,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
 
@@ -1346,7 +1346,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         if spill_budget_bytes.is_some() {
@@ -1455,7 +1455,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         if spill_budget_bytes.is_some() {
@@ -1583,7 +1583,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         if spill_budget_bytes.is_some() {
@@ -1695,7 +1695,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         if spill_budget_bytes.is_some() {

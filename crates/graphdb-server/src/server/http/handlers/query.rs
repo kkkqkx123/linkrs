@@ -1,3 +1,4 @@
+use crate::value::{from_json as json_value_to_core, to_json as value_to_json};
 use axum::{
     extract::{Json, State},
     response::Json as JsonResponse,
@@ -6,7 +7,6 @@ use graphdb_wire::query::{
     BatchQueryRequest, BatchQueryResponse, QueryData, QueryMetadata, QueryRequest, QueryResponse,
     ValidateResponse,
 };
-use crate::value::{from_json as json_value_to_core, to_json as value_to_json};
 
 use crate::server::http::{error::HttpError, state::AppState};
 use crate::storage::{
@@ -120,48 +120,50 @@ fn query_result_to_response(result: graphdb_api::api::core::QueryResult) -> Quer
     // USE as a DataSet with a `space_id` column (the `SpaceSwitched` variant
     // is never produced); `QueryResult::space_summary` recognizes both.
     let space_id = result.space_summary().map(|s| s.id);
-    let (columns, rows): (Vec<String>, Vec<std::collections::HashMap<String, serde_json::Value>>) =
-        match result.execution {
-            crate::query::executor::base::ExecutionResult::DataSet { data } => {
-                let rows = data
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        data.col_names
-                            .iter()
-                            .zip(row.iter())
-                            .map(|(col, value)| (col.clone(), value_to_json(value.clone())))
-                            .collect()
-                    })
-                    .collect();
-                (data.col_names, rows)
-            }
-            crate::query::executor::base::ExecutionResult::SpaceSwitched(summary) => {
-                let row = std::collections::HashMap::from([
-                    (
-                        "space_name".to_string(),
-                        serde_json::Value::String(summary.name.clone()),
-                    ),
-                    (
-                        "space_id".to_string(),
-                        serde_json::Value::Number(summary.id.into()),
-                    ),
-                    (
-                        "vid_type".to_string(),
-                        serde_json::Value::String(summary.vid_type.to_string()),
-                    ),
-                ]);
+    let (columns, rows): (
+        Vec<String>,
+        Vec<std::collections::HashMap<String, serde_json::Value>>,
+    ) = match result.execution {
+        crate::query::executor::base::ExecutionResult::DataSet { data } => {
+            let rows = data
+                .rows
+                .iter()
+                .map(|row| {
+                    data.col_names
+                        .iter()
+                        .zip(row.iter())
+                        .map(|(col, value)| (col.clone(), value_to_json(value.clone())))
+                        .collect()
+                })
+                .collect();
+            (data.col_names, rows)
+        }
+        crate::query::executor::base::ExecutionResult::SpaceSwitched(summary) => {
+            let row = std::collections::HashMap::from([
                 (
-                    vec![
-                        "space_name".to_string(),
-                        "space_id".to_string(),
-                        "vid_type".to_string(),
-                    ],
-                    vec![row],
-                )
-            }
-            _ => (vec![], vec![]),
-        };
+                    "space_name".to_string(),
+                    serde_json::Value::String(summary.name.clone()),
+                ),
+                (
+                    "space_id".to_string(),
+                    serde_json::Value::Number(summary.id.into()),
+                ),
+                (
+                    "vid_type".to_string(),
+                    serde_json::Value::String(summary.vid_type.to_string()),
+                ),
+            ]);
+            (
+                vec![
+                    "space_name".to_string(),
+                    "space_id".to_string(),
+                    "vid_type".to_string(),
+                ],
+                vec![row],
+            )
+        }
+        _ => (vec![], vec![]),
+    };
     let row_count = rows.len();
 
     QueryResponse::success(

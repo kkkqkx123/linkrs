@@ -410,7 +410,7 @@ mod tests {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         ));
         let bindings = Arc::new(QueryBindings {
@@ -437,7 +437,7 @@ mod tests {
             columnar_policy: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
         });
         SubqueryExecutor::from_specs(runtime, bindings, &specs)

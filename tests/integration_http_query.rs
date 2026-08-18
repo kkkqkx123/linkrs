@@ -13,16 +13,16 @@ use axum::{
     routing::post,
     Router,
 };
-use graphdb_server::server::http::handlers::execute;
-use graphdb_server::server::http::server::HttpServer;
-use graphdb_server::server::http::state::AppState;
-use graphdb_server::server::GraphService;
 use graphdb::config::Config;
 use graphdb::core::types::{SpaceInfo, SpaceSummary, VertexId};
 use graphdb::core::vertex_edge_path::{Tag, Vertex};
 use graphdb::core::{DataType, Value};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig, StorageSchemaOps, StorageWriter};
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
+use graphdb_server::server::http::handlers::execute;
+use graphdb_server::server::http::server::HttpServer;
+use graphdb_server::server::http::state::AppState;
+use graphdb_server::server::GraphService;
 use parking_lot::RwLock;
 use tower::ServiceExt;
 
@@ -143,7 +143,10 @@ async fn query_response_use_statement_surfaces_space_id() {
 
     assert_eq!(json["success"], true);
     assert_eq!(json["data"]["row_count"], 1);
-    assert_eq!(json["data"]["columns"], serde_json::json!(["space_name", "space_id", "vid_type"]));
+    assert_eq!(
+        json["data"]["columns"],
+        serde_json::json!(["space_name", "space_id", "vid_type"])
+    );
     assert_eq!(json["data"]["rows"][0]["space_name"], "test");
     assert!(json["metadata"]["space_id"].is_number());
 }

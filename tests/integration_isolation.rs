@@ -90,7 +90,7 @@ fn test_fulltext_index_id_format() {
 }
 
 /// Test vector collection name format compliance
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_vector_collection_name_format() {
     use graphdb::sync::vector_sync::VectorIndexLocation;
@@ -113,7 +113,7 @@ fn test_vector_collection_name_format() {
 }
 
 /// Test naming consistency between vector and fulltext
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_naming_consistency_vector_fulltext() {
     use graphdb::search::IndexKey;

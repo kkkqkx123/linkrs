@@ -13,7 +13,7 @@ prost-build = { workspace = true, optional = true }
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
-graphdb-config = { path = "../graphdb-config" }
+graphdb-config = { path = "../graphdb-config", features = ["server"] }
 graphdb-storage = { path = "../graphdb-storage" }
 graphdb-query = { path = "../graphdb-query" }
 graphdb-wire = { path = "../graphdb-wire" }
@@ -47,16 +47,25 @@ async-trait.workspace = true
 
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
-vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
-vector-search = { path = "../vector-search" }
+vector-client = { path = "../vector-client", optional = true }
+vector-search = { path = "../vector-search", optional = true }
 
 [features]
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:prost-build"]
-qdrant = [
+vector = [
+    "dep:vector-search",
+    "graphdb-config/vector",
+    "graphdb-sync/vector",
+    "graphdb-query/vector",
+    "graphdb-api/vector",
+]
+vector-qdrant = [
+    "vector",
     "dep:vector-client",
-    "graphdb-config/qdrant",
-    "graphdb-sync/qdrant",
-    "graphdb-query/qdrant",
+    "graphdb-config/vector-qdrant",
+    "graphdb-sync/vector-qdrant",
+    "graphdb-query/vector-qdrant",
+    "graphdb-api/vector-qdrant",
 ]
 fulltext-search = [
     "graphdb-search/fulltext-search",

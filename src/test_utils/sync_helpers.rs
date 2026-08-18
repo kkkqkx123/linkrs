@@ -144,7 +144,7 @@ impl SyncTestHarness {
     }
 
     /// Create tag with vector index
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     pub fn create_tag_with_vector(
         &mut self,
         space_name: &str,
@@ -383,7 +383,7 @@ impl SyncTestHarness {
     }
 
     /// Search vector
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     pub fn search_vector(
         &self,
         space_name: &str,

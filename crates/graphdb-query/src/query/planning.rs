@@ -19,7 +19,7 @@ pub mod template_extractor;
 
 // Planner modules
 pub mod fulltext_planner;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub mod vector_planner;
 
 // Modules organized by function

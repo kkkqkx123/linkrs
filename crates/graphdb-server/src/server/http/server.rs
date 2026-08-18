@@ -2,17 +2,17 @@
 //!
 //! Provides an HTTP-based interface to GraphDB services
 
-use graphdb_api::api::core::{QueryApi, SchemaApi, TransactionApi};
+use crate::config::Config;
+use crate::query::executor::expression::functions::FunctionRegistry;
 use crate::server::auth::PasswordAuthenticator;
 use crate::server::batch::BatchManager;
 use crate::server::graph_service::GraphService;
 use crate::server::session::GraphSessionManager;
-use crate::config::Config;
-use crate::query::executor::expression::functions::FunctionRegistry;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use crate::transaction::TransactionManager;
+use graphdb_api::api::core::{QueryApi, SchemaApi, TransactionApi};
 use parking_lot::RwLock;
 use std::sync::Arc;
 

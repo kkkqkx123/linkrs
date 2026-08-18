@@ -61,11 +61,8 @@ pub fn to_json(value: Value) -> serde_json::Value {
         Value::VertexId(vid) => serde_json::Value::String(format!("{:?}", vid)),
         Value::EdgeId(eid) => serde_json::Value::String(format!("{:?}", eid)),
         Value::Struct(s) => {
-            let obj: serde_json::Map<String, serde_json::Value> = s
-                .fields
-                .into_iter()
-                .map(|(k, v)| (k, to_json(v)))
-                .collect();
+            let obj: serde_json::Map<String, serde_json::Value> =
+                s.fields.into_iter().map(|(k, v)| (k, to_json(v))).collect();
             serde_json::Value::Object(obj)
         }
         Value::Array(a) => serde_json::Value::Array(a.values.into_iter().map(to_json).collect()),
@@ -111,7 +108,10 @@ mod tests {
         assert_eq!(to_json(Value::BigInt(-9)), serde_json::json!(-9));
         assert_eq!(to_json(Value::Double(1.5)), serde_json::json!(1.5));
         assert_eq!(to_json(Value::string("hi")), serde_json::json!("hi"));
-        assert_eq!(to_json(Value::Null(Default::default())), serde_json::Value::Null);
+        assert_eq!(
+            to_json(Value::Null(Default::default())),
+            serde_json::Value::Null
+        );
         assert_eq!(to_json(Value::Empty), serde_json::Value::Null);
     }
 

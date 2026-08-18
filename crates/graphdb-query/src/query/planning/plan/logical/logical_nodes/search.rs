@@ -50,7 +50,7 @@ define_logical_plan_node! {
     input: ZeroInputNode
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 mod vector {
     use crate::define_logical_plan_node;
     use crate::query::parser::ast::vector::VectorQueryExpr;
@@ -103,5 +103,5 @@ mod vector {
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector::*;

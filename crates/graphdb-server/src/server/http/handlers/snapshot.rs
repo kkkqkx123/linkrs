@@ -4,7 +4,9 @@ use axum::{
     extract::{Path, State},
     response::Json as JsonResponse,
 };
-use graphdb_wire::meta::{ColdSnapshotInfo, ExportSnapshotRequest, LoadSnapshotRequest, MergeSnapshotsRequest};
+use graphdb_wire::meta::{
+    ColdSnapshotInfo, ExportSnapshotRequest, LoadSnapshotRequest, MergeSnapshotsRequest,
+};
 
 use crate::server::http::{error::HttpError, state::AppState};
 use crate::storage::{

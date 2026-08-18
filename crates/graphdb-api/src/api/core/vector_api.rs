@@ -3,12 +3,12 @@
 //! Provides transport layer independent vector index management and search operations.
 
 use crate::api::core::error::{CoreError, CoreResult};
+use crate::sync::backend::VectorBackend;
 use crate::sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use std::sync::Arc;
-use vector_client::manager::IndexMetadata;
-use vector_client::VectorManager;
 use vector_search::{
-    types::PointId, CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
+    types::{IndexMetadata, PointId},
+    CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
 
 /// Vector search result
@@ -22,33 +22,33 @@ pub struct VectorSearchResult {
 
 /// Vector Index API – Core Layer
 pub struct VectorApi {
-    vector_manager: Arc<VectorManager>,
+    backend: VectorBackend,
     coordinator: Option<Arc<VectorSyncCoordinator>>,
 }
 
 impl VectorApi {
     /// Create a new VectorApi instance
-    pub fn new(vector_manager: Arc<VectorManager>) -> Self {
+    pub fn new(backend: VectorBackend) -> Self {
         Self {
-            vector_manager,
+            backend,
             coordinator: None,
         }
     }
 
     /// Create a new VectorApi instance with sync coordinator
     pub fn with_coordinator(
-        vector_manager: Arc<VectorManager>,
+        backend: VectorBackend,
         coordinator: Arc<VectorSyncCoordinator>,
     ) -> Self {
         Self {
-            vector_manager,
+            backend,
             coordinator: Some(coordinator),
         }
     }
 
-    /// Get the vector manager
-    pub fn vector_manager(&self) -> &Arc<VectorManager> {
-        &self.vector_manager
+    /// Get the vector backend
+    pub fn backend(&self) -> &VectorBackend {
+        &self.backend
     }
 
     /// Get the sync coordinator
@@ -87,13 +87,12 @@ impl VectorApi {
                 }),
                 ..Default::default()
             };
-            self.vector_manager
-                .create_index(&collection_name, config)
+            self.backend
+                .create_index(&collection_name, &config)
                 .await
                 .map_err(|e| CoreError::VectorError(e.to_string()))?;
             let _ = self
-                .vector_manager
-                .engine()
+                .backend
                 .create_payload_index(
                     &collection_name,
                     "group_id",
@@ -119,29 +118,35 @@ impl VectorApi {
         } else {
             let collection_name =
                 VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-            self.vector_manager.unregister_index(&collection_name);
-            Ok(())
+            self.backend
+                .delete_collection(&collection_name)
+                .await
+                .map_err(|e| CoreError::VectorError(e.to_string()))
         }
     }
 
-    /// Get vector index info
+    /// Get vector index info (from logical index metadata)
     pub fn get_index_info(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
     ) -> CoreResult<Option<IndexMetadata>> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        Ok(self.vector_manager.get_index_metadata(&collection_name))
+        let Some(coordinator) = &self.coordinator else {
+            return Ok(None);
+        };
+        Ok(coordinator.index_info(space_id, tag_name, field_name))
     }
 
     /// List all vector indexes
     pub fn list_indexes(&self) -> Vec<String> {
-        self.vector_manager
+        let Some(coordinator) = &self.coordinator else {
+            return Vec::new();
+        };
+        coordinator
             .list_indexes()
             .into_iter()
-            .map(|info| info.name)
+            .map(|w| w.collection_name)
             .collect()
     }
 
@@ -155,7 +160,7 @@ impl VectorApi {
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
+        self.backend
             .upsert(&collection_name, point)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))?;
@@ -172,7 +177,7 @@ impl VectorApi {
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
+        self.backend
             .upsert_batch(&collection_name, points)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))?;
@@ -189,7 +194,7 @@ impl VectorApi {
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
+        self.backend
             .delete(&collection_name, point_id)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
@@ -205,8 +210,8 @@ impl VectorApi {
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
-            .delete_batch(&collection_name, point_ids)
+        self.backend
+            .delete_batch(&collection_name, &point_ids)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
     }
@@ -251,7 +256,7 @@ impl VectorApi {
         query = query.with_filter(filter);
 
         let results = self
-            .vector_manager
+            .backend
             .search(&collection_name, query)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))?;
@@ -277,8 +282,8 @@ impl VectorApi {
     ) -> CoreResult<Option<VectorPoint>> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
-            .get(&collection_name, point_id)
+        self.backend
+            .get_vector(&collection_name, point_id)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
     }
@@ -287,7 +292,7 @@ impl VectorApi {
     pub async fn count(&self, space_id: u64, tag_name: &str, field_name: &str) -> CoreResult<u64> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.vector_manager
+        self.backend
             .count(&collection_name)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))

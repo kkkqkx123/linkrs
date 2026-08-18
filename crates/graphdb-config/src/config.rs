@@ -71,7 +71,7 @@ pub use server::http::HttpServerConfig;
 #[cfg(feature = "server")]
 pub use server::security::{AuditConfig, PasswordPolicyConfig, SecurityConfig, SslConfig};
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use vector_client::VectorClientConfig;
 
 /// Global configuration aggregator
@@ -109,13 +109,73 @@ pub struct Config {
     pub embedded: EmbeddedConfig,
 
     /// Vector search configuration
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     #[serde(default)]
-    pub vector: VectorClientConfig,
+    pub vector: VectorConfig,
 
     /// Fulltext search configuration
     #[serde(default)]
     pub fulltext: FulltextConfig,
+}
+
+/// Vector search engine kind
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorEngineKind {
+    /// Built-in local engine (WAL-backed, in-process)
+    #[default]
+    Local,
+    /// External Qdrant server (requires `vector-qdrant` feature)
+    Qdrant,
+}
+
+/// Local vector engine configuration
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LocalVectorConfig {
+    /// Directory for the local vector engine; defaults to
+    /// `<database.storage_path>/vector`.
+    #[serde(default)]
+    pub data_dir: Option<PathBuf>,
+}
+
+impl Default for LocalVectorConfig {
+    fn default() -> Self {
+        Self { data_dir: None }
+    }
+}
+
+/// Vector search configuration
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct VectorConfig {
+    /// Master switch for vector search
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Active engine kind
+    #[serde(default)]
+    pub engine: VectorEngineKind,
+    /// Local engine configuration
+    #[serde(default)]
+    pub local: LocalVectorConfig,
+    /// Qdrant client configuration (only available with `vector-qdrant` feature)
+    #[cfg(feature = "vector-qdrant")]
+    #[serde(default)]
+    pub qdrant: VectorClientConfig,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for VectorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            engine: VectorEngineKind::Local,
+            local: LocalVectorConfig::default(),
+            #[cfg(feature = "vector-qdrant")]
+            qdrant: VectorClientConfig::disabled(),
+        }
+    }
 }
 
 impl Config {
@@ -212,6 +272,13 @@ impl Config {
             Self::resolve_string_path(base_dir, &slow_query_log_file)?;
 
         self.fulltext.index_path = Self::resolve_path_buf(base_dir, &self.fulltext.index_path)?;
+
+        #[cfg(feature = "vector")]
+        {
+            let default_dir = PathBuf::from(&self.common.database.storage_path).join("vector");
+            let data_dir = self.vector.local.data_dir.clone().unwrap_or(default_dir);
+            self.vector.local.data_dir = Some(Self::resolve_path_buf(base_dir, &data_dir)?);
+        }
 
         #[cfg(feature = "server")]
         {
@@ -424,20 +491,60 @@ impl Config {
 
     /// Check if vector search is enabled
     pub fn is_vector_enabled(&self) -> bool {
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         {
-            self.vector.enabled
+            match self.vector.engine {
+                VectorEngineKind::Local => self.vector.enabled,
+                #[cfg(feature = "vector-qdrant")]
+                VectorEngineKind::Qdrant => self.vector.enabled && self.vector.qdrant.enabled,
+                #[cfg(not(feature = "vector-qdrant"))]
+                VectorEngineKind::Qdrant => false,
+            }
         }
-        #[cfg(not(feature = "qdrant"))]
+        #[cfg(not(feature = "vector"))]
         {
             false
         }
     }
 
-    /// Get vector client configuration (only available with `qdrant` feature)
-    #[cfg(feature = "qdrant")]
-    pub fn vector_config(&self) -> &VectorClientConfig {
+    /// Check if the local vector engine is the active backend
+    pub fn is_local_vector(&self) -> bool {
+        #[cfg(feature = "vector")]
+        {
+            self.vector.enabled && self.vector.engine == VectorEngineKind::Local
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            false
+        }
+    }
+
+    /// Get the active vector engine kind
+    pub fn vector_engine(&self) -> Option<VectorEngineKind> {
+        #[cfg(feature = "vector")]
+        {
+            self.vector.enabled.then_some(self.vector.engine)
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            None
+        }
+    }
+
+    /// Get vector search configuration (only available with `vector` feature)
+    #[cfg(feature = "vector")]
+    pub fn vector_config(&self) -> &VectorConfig {
         &self.vector
+    }
+
+    /// Resolved data directory for the local vector engine.
+    #[cfg(feature = "vector")]
+    pub fn vector_data_dir(&self) -> PathBuf {
+        self.vector
+            .local
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(&self.common.database.storage_path).join("vector"))
     }
 }
 
@@ -695,5 +802,68 @@ storage_path = "storage"
         let config = Config::default();
         assert!(config.embedded.runtime.is_memory());
         assert_eq!(config.embedded.runtime.cache_size_mb, 64);
+    }
+
+    #[cfg(feature = "vector-qdrant")]
+    #[test]
+    fn test_vector_section_deserializes_qdrant() {
+        let toml = r#"
+[database]
+host = "127.0.0.1"
+port = 9758
+storage_path = "data/graphdb"
+max_connections = 10
+
+[vector]
+enabled = true
+engine = "qdrant"
+
+[vector.qdrant]
+enabled = true
+
+[vector.qdrant.connection]
+host = "localhost"
+port = 6334
+http_port = 6333
+use_tls = false
+connect_timeout_secs = 5
+
+[vector.qdrant.timeout]
+request_timeout_secs = 30
+search_timeout_secs = 10
+upsert_timeout_secs = 30
+"#;
+        let config: Config = toml::from_str(toml).expect("vector section should deserialize");
+        assert!(config.is_vector_enabled());
+        assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
+        assert_eq!(
+            config.vector_data_dir(),
+            std::path::PathBuf::from("data/graphdb/vector")
+        );
+        assert!(config.vector.qdrant.enabled);
+        assert_eq!(config.vector.qdrant.connection.host, "localhost");
+        assert_eq!(config.vector.qdrant.connection.port, 6334);
+    }
+
+    #[cfg(feature = "vector-qdrant")]
+    #[test]
+    fn parse_vector_client_config_standalone() {
+        let toml = r#"
+enabled = true
+
+[connection]
+host = "localhost"
+port = 6334
+http_port = 6333
+use_tls = false
+connect_timeout_secs = 5
+
+[timeout]
+request_timeout_secs = 30
+search_timeout_secs = 10
+upsert_timeout_secs = 30
+"#;
+        let c: VectorClientConfig = toml::from_str(toml).expect("vc parse");
+        assert_eq!(c.connection.host, "localhost");
     }
 }

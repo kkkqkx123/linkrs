@@ -1,8 +1,8 @@
 use super::PermissionResult;
-use crate::server::permission::{PermissionManager, GOD_SPACE_ID};
-use crate::server::session::ClientSession;
 use crate::config::AuthConfig;
 use crate::core::{Permission, RoleType};
+use crate::server::permission::{PermissionManager, GOD_SPACE_ID};
+use crate::server::session::ClientSession;
 
 /// Operation type – corresponds to different permission checks
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -449,9 +449,9 @@ impl PermissionChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AuthConfig;
     use crate::server::permission::GOD_SPACE_ID;
     use crate::server::session::{ClientSession, Session};
-    use crate::config::AuthConfig;
     use std::sync::Arc;
 
     fn create_test_config() -> AuthConfig {

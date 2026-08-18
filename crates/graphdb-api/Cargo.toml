@@ -17,15 +17,22 @@ thiserror.workspace = true
 log.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
-vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
-vector-search = { path = "../vector-search" }
+vector-client = { path = "../vector-client", optional = true }
+vector-search = { path = "../vector-search", optional = true }
 
 [features]
-qdrant = [
+vector = [
+    "dep:vector-search",
+    "graphdb-config/vector",
+    "graphdb-sync/vector",
+    "graphdb-query/vector",
+]
+vector-qdrant = [
+    "vector",
     "dep:vector-client",
-    "graphdb-config/qdrant",
-    "graphdb-sync/qdrant",
-    "graphdb-query/qdrant",
+    "graphdb-config/vector-qdrant",
+    "graphdb-sync/vector-qdrant",
+    "graphdb-query/vector-qdrant",
 ]
 fulltext-search = [
     "graphdb-search/fulltext-search",

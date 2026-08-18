@@ -245,8 +245,7 @@ mod tests {
 
     #[test]
     fn begin_transaction_request_defaults() {
-        let back: BeginTransactionRequest =
-            serde_json::from_str(r#"{"read_only": true}"#).unwrap();
+        let back: BeginTransactionRequest = serde_json::from_str(r#"{"read_only": true}"#).unwrap();
         assert!(back.read_only);
         assert!(back.timeout_seconds.is_none());
         assert!(back.isolation_level.is_none());
@@ -327,13 +326,11 @@ mod tests {
         let load = LoadSnapshotRequest {
             path: "/tmp/a.lkcs".to_string(),
         };
-        let back: LoadSnapshotRequest = serde_json::from_str(&serde_json::to_string(&load).unwrap())
-            .unwrap();
+        let back: LoadSnapshotRequest =
+            serde_json::from_str(&serde_json::to_string(&load).unwrap()).unwrap();
         assert_eq!(back.path, "/tmp/a.lkcs");
 
-        let merge = MergeSnapshotsRequest {
-            labels: vec![1, 2],
-        };
+        let merge = MergeSnapshotsRequest { labels: vec![1, 2] };
         let back: MergeSnapshotsRequest =
             serde_json::from_str(&serde_json::to_string(&merge).unwrap()).unwrap();
         assert_eq!(back.labels, vec![1, 2]);

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use crate::value::to_json as value_to_json;
 use axum::{
     extract::{Json, State},
     response::{sse::Event, Sse},
 };
 use graphdb_wire::query::StreamQueryRequest;
-use crate::value::to_json as value_to_json;
 use serde::Serialize;
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;

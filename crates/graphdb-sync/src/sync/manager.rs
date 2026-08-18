@@ -14,13 +14,13 @@ use crate::sync::outbox::OutboxPayload;
 use crate::sync::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::sync::types::ChangeType;
 use dashmap::DashMap;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 
 #[cfg(feature = "fulltext-search")]
@@ -44,19 +44,19 @@ pub struct IndexCreateRequest {
     pub fields: Vec<(String, Value)>,
     pub properties: Vec<String>,
 }
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector_search::{CollectionConfig, SearchResult};
 
 pub struct SyncManager {
     #[cfg(feature = "fulltext-search")]
     sync_coordinator: Option<Arc<SyncCoordinator>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pending_intents: DashMap<TransactionId, Vec<crate::core::wal::OutboxIntent>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     dead_letter_queue: Option<Arc<crate::sync::DeadLetterQueue>>,
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     vector_receiver: Option<Arc<crate::sync::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     stats_manager: Option<Arc<StatsManager>>,
@@ -89,13 +89,13 @@ impl Clone for SyncManager {
         Self {
             #[cfg(feature = "fulltext-search")]
             sync_coordinator: self.sync_coordinator.clone(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: self.vector_coordinator.clone(),
             pending_intents: self.pending_intents.clone(),
             running: self.running.clone(),
             dead_letter_queue: self.dead_letter_queue.clone(),
             sqlite_outbox: self.sqlite_outbox.clone(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector-qdrant")]
             vector_receiver: self.vector_receiver.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             stats_manager: self.stats_manager.clone(),
@@ -109,7 +109,7 @@ impl std::fmt::Debug for SyncManager {
         let mut d = f.debug_struct("SyncManager");
         #[cfg(feature = "fulltext-search")]
         d.field("sync_coordinator", &self.sync_coordinator);
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         d.field("vector_coordinator", &self.vector_coordinator);
         d.field("running", &self.running);
         d.finish_non_exhaustive()
@@ -117,7 +117,7 @@ impl std::fmt::Debug for SyncManager {
 }
 
 #[cfg_attr(
-    not(any(feature = "fulltext-search", feature = "qdrant")),
+    not(any(feature = "fulltext-search", feature = "vector-qdrant")),
     allow(unused_variables)
 )]
 impl SyncManager {
@@ -128,7 +128,7 @@ impl SyncManager {
         if self.sync_coordinator.is_some() {
             targets.push("fulltext");
         }
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         if self.vector_coordinator.is_some() {
             targets.push("vector");
         }
@@ -177,13 +177,13 @@ impl SyncManager {
         Self {
             #[cfg(feature = "fulltext-search")]
             sync_coordinator: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             pending_intents: DashMap::new(),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             dead_letter_queue: None,
             sqlite_outbox: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector-qdrant")]
             vector_receiver: None,
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             stats_manager: None,
@@ -203,7 +203,7 @@ impl SyncManager {
         Self::new_common()
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn with_vector_coordinator(
         mut self,
         vector_coordinator: Arc<VectorSyncCoordinator>,
@@ -305,7 +305,7 @@ impl SyncManager {
             Err(error) => return Err(error),
         };
         self.sqlite_outbox = Some(Arc::new(outbox));
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector-qdrant")]
         {
             self.vector_receiver = Some(Arc::new(crate::sync::VectorReceiver::open(
                 work_dir.join("vector_receiver"),
@@ -477,7 +477,7 @@ impl SyncManager {
                 self.apply_fulltext_mutation(mutation, commit_lsn, &payload)
                     .await
             }
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector-qdrant")]
             "vector" => {
                 self.apply_vector_mutation(mutation, commit_lsn, &payload)
                     .await
@@ -680,7 +680,7 @@ impl SyncManager {
         Ok(())
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     async fn apply_vector_mutation(
         &self,
         mutation: &crate::core::wal::IndexMutation,
@@ -788,7 +788,7 @@ impl SyncManager {
                             schema_name,
                             field_name,
                             vector_size,
-                            vector_client::DistanceMetric::default(),
+                            vector_search::DistanceMetric::default(),
                         )
                         .await
                         .map_err(|error| error.to_string())?;
@@ -1196,7 +1196,7 @@ impl SyncManager {
             .expect("SyncCoordinator not available without fulltext-search feature")
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn vector_coordinator(&self) -> Option<&Arc<VectorSyncCoordinator>> {
         self.vector_coordinator.as_ref()
     }
@@ -1265,7 +1265,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn vector_index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
         if let Some(ref vector_coord) = self.vector_coordinator {
             vector_coord.index_exists(space_id, tag_name, field_name)
@@ -1274,14 +1274,14 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn create_vector_index(
         &self,
         space_id: u64,
         tag_name: &str,
         field_name: &str,
         vector_size: usize,
-        distance: vector_client::DistanceMetric,
+        distance: vector_search::DistanceMetric,
     ) -> Result<String, SyncError> {
         if let Some(ref vector_coord) = self.vector_coordinator {
             vector_coord
@@ -1295,7 +1295,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn drop_vector_index(
         &self,
         space_id: u64,
@@ -1314,7 +1314,7 @@ impl SyncManager {
         }
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub async fn search_vector(
         &self,
         space_id: u64,

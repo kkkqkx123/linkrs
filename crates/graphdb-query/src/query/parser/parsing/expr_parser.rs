@@ -1184,9 +1184,7 @@ fn parse_sql_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, P
 fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression {
     fn walk(e: Expression, tag: &str) -> Expression {
         match e {
-            Expression::Variable(name) => {
-                Expression::property(Expression::variable(tag), name)
-            }
+            Expression::Variable(name) => Expression::property(Expression::variable(tag), name),
             Expression::Property { object, property } => Expression::Property {
                 object: Box::new(walk(*object, tag)),
                 property,
@@ -1195,10 +1193,7 @@ fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression {
                 base: Box::new(walk(*base, tag)),
                 field,
             },
-            Expression::Subscript {
-                collection,
-                index,
-            } => Expression::Subscript {
+            Expression::Subscript { collection, index } => Expression::Subscript {
                 collection: Box::new(walk(*collection, tag)),
                 index: Box::new(walk(*index, tag)),
             },
@@ -1249,12 +1244,9 @@ fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression {
             Expression::List(items) => {
                 Expression::List(items.into_iter().map(|i| walk(i, tag)).collect())
             }
-            Expression::Map(pairs) => Expression::Map(
-                pairs
-                    .into_iter()
-                    .map(|(k, v)| (k, walk(v, tag)))
-                    .collect(),
-            ),
+            Expression::Map(pairs) => {
+                Expression::Map(pairs.into_iter().map(|(k, v)| (k, walk(v, tag))).collect())
+            }
             Expression::Case {
                 test_expr,
                 conditions,

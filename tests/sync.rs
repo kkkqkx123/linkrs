@@ -35,9 +35,9 @@ mod transaction_basic;
 #[path = "sync/two_pc_protocol.rs"]
 mod two_pc_protocol;
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[path = "sync/vector_sync.rs"]
 mod vector_sync;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[path = "sync/vector_transaction.rs"]
 mod vector_transaction;

@@ -8,12 +8,12 @@
 //! - index cache
 
 use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use graphdb::core::Edge;
 use graphdb::core::{Value, Vertex};
 use graphdb::query::planning::plan::{IndexLimit, ScanType};
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 use graphdb::test_utils::storage_helpers::knows_edge_type_info;
 use graphdb::test_utils::{
     assertions::{assert_count, assert_none, assert_ok, assert_some},
@@ -265,7 +265,7 @@ fn test_drop_tag_indexes_by_tag() {
 
 // ==================== Edge 索引元数据管理测试 ====================
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_create_edge_index_metadata() {
     let test_storage = TestStorage::new().expect("创建测试存储失败");
@@ -308,7 +308,7 @@ fn test_create_edge_index_metadata() {
     assert_eq!(retrieved_index.index_type, IndexType::EdgeIndex);
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_drop_edge_index_metadata() {
     let test_storage = TestStorage::new().expect("创建测试存储失败");
@@ -348,7 +348,7 @@ fn test_drop_edge_index_metadata() {
     assert_none(&index_opt);
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_list_edge_indexes() {
     let test_storage = TestStorage::new().expect("创建测试存储失败");
@@ -480,7 +480,7 @@ fn test_update_vertex_indexes() {
     );
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_delete_edge_indexes() {
     let test_storage = TestStorage::new().expect("创建测试存储失败");

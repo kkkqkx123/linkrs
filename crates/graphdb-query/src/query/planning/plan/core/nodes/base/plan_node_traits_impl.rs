@@ -85,11 +85,11 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => "fulltext_search",
             PlanNodeEnum::FulltextLookup(_) => "fulltext_lookup",
             PlanNodeEnum::MatchFulltext(_) => "match_fulltext",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => "vector_search",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => "vector_lookup",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorMatch(_) => "vector_match",
         }
     }
@@ -174,11 +174,11 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => "Fulltext Search",
             PlanNodeEnum::FulltextLookup(_) => "Fulltext Lookup",
             PlanNodeEnum::MatchFulltext(_) => "Match Fulltext",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => "Vector Search",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => "Vector Lookup",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorMatch(_) => "Vector Match",
         }
     }
@@ -263,11 +263,11 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => NodeCategory::DataAccess,
             PlanNodeEnum::FulltextLookup(_) => NodeCategory::DataAccess,
             PlanNodeEnum::MatchFulltext(_) => NodeCategory::DataAccess,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => NodeCategory::DataAccess,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => NodeCategory::DataAccess,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorMatch(_) => NodeCategory::DataAccess,
         }
     }
@@ -354,11 +354,11 @@ impl NodeTypeMapping for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => Some("fulltext_search"),
             PlanNodeEnum::FulltextLookup(_) => Some("fulltext_lookup"),
             PlanNodeEnum::MatchFulltext(_) => Some("match_fulltext"),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => Some("vector_search"),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => Some("vector_lookup"),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorMatch(_) => Some("vector_match"),
         }
     }

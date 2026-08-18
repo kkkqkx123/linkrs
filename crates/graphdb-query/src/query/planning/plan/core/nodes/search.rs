@@ -12,7 +12,7 @@ pub use fulltext::{
     ShowFulltextIndexNode,
 };
 pub use vector::{CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use vector::{
     OutputField, VectorLookupNode, VectorMatchNode, VectorSearchNode, VectorSearchParams,
 };

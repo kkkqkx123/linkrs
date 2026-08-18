@@ -1,8 +1,8 @@
-#[cfg(any(feature = "fulltext-search", feature = "qdrant"))]
+#[cfg(any(feature = "fulltext-search", feature = "vector-qdrant"))]
 use std::collections::HashSet;
-#[cfg(any(feature = "fulltext-search", feature = "qdrant"))]
+#[cfg(any(feature = "fulltext-search", feature = "vector-qdrant"))]
 use std::sync::Arc;
-#[cfg(any(feature = "fulltext-search", feature = "qdrant"))]
+#[cfg(any(feature = "fulltext-search", feature = "vector-qdrant"))]
 use tokio::sync::{Mutex, RwLock};
 
 use crate::core::types::CommitLsn;
@@ -193,28 +193,28 @@ impl FulltextReceiver {
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct VectorCommitState {
     applied_lsn: u64,
     receipts: HashSet<String>,
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 pub struct VectorReceiver {
     state: Arc<RwLock<VectorCommitState>>,
     apply_lock: Mutex<()>,
     recovery_path: Arc<std::path::PathBuf>,
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 impl Default for VectorReceiver {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 impl VectorReceiver {
     pub fn new() -> Self {
         Self {
@@ -334,7 +334,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     async fn vector_receiver_rejects_late_arrival() {
         let receiver = VectorReceiver::new();
         receiver
@@ -365,7 +365,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector-qdrant")]
     async fn vector_receiver_restores_persisted_receipts() {
         let directory = tempfile::tempdir().expect("create temporary recovery directory");
         let receiver = VectorReceiver::open(directory.path());

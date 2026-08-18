@@ -56,7 +56,7 @@ pub use search::{
     ShowFulltextIndexNode,
 };
 pub use search::{CreateVectorIndexNode, DropVectorIndexNode};
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 pub use search::{VectorLookupNode, VectorMatchNode, VectorSearchNode};
 pub use traversal::{
     AllPathsNode, AppendVerticesNode, BFSShortestNode, BiExpandNode, BiTraverseNode, ExpandAllNode,

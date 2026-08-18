@@ -142,7 +142,7 @@ fn test_dead_letter_entry() {
 }
 
 /// TC-228: ChangeType conversion
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "fulltext-search")]
 #[test]
 fn test_change_type_conversion() {
     use graphdb::sync::coordinator::ChangeType;
@@ -159,7 +159,7 @@ fn test_change_type_conversion() {
 }
 
 /// TC-229: Vector index location
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_vector_index_location_tc229() {
     use graphdb::sync::VectorIndexLocation;

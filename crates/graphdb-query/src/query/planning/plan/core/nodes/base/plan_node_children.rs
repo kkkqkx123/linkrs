@@ -41,7 +41,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::FulltextLookup(_)
             | PlanNodeEnum::MatchFulltext(_) => vec![],
 
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_)
             | PlanNodeEnum::VectorLookup(_)
             | PlanNodeEnum::VectorMatch(_) => vec![],

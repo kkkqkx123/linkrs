@@ -6,9 +6,9 @@
 //! 3. Schema validation works correctly
 
 use crate::common::{assert_query_ok, create_test_db, setup_test_space};
-use graphdb_server::server::graph_service::GraphService;
 use graphdb::config::Config;
 use graphdb::storage::{GraphStorage, SyncWrapper};
+use graphdb_server::server::graph_service::GraphService;
 use std::sync::Arc;
 
 /// Test schema manager initialization in different configurations

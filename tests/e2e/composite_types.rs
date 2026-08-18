@@ -48,9 +48,18 @@ fn test_insert_and_read_struct_array() {
         .expect("RETURN of composite properties should succeed");
     let row = result.rows().first().expect("one row expected");
     let columns = result.columns();
-    let id_idx = columns.iter().position(|c| c == "p.id").expect("p.id column");
-    let addr_idx = columns.iter().position(|c| c == "p.addr").expect("p.addr column");
-    let coords_idx = columns.iter().position(|c| c == "p.coords").expect("p.coords column");
+    let id_idx = columns
+        .iter()
+        .position(|c| c == "p.id")
+        .expect("p.id column");
+    let addr_idx = columns
+        .iter()
+        .position(|c| c == "p.addr")
+        .expect("p.addr column");
+    let coords_idx = columns
+        .iter()
+        .position(|c| c == "p.coords")
+        .expect("p.coords column");
     assert_eq!(row.get(id_idx), Some(&graphdb::core::Value::BigInt(1)));
     match row.get(addr_idx) {
         Some(graphdb::core::Value::Struct(s)) => {
@@ -95,21 +104,24 @@ fn test_struct_field_access() {
         .expect("STRUCT field access should succeed");
     let row = result.rows().first().expect("one row expected");
     let columns = result.columns();
-    let city_idx = columns.iter().position(|c| c == "p.addr.city").expect("city column");
-    let lat_idx = columns.iter().position(|c| c == "p.addr.geo.lat").expect("lat column");
-    let lon_idx = columns.iter().position(|c| c == "p.addr.geo.lon").expect("lon column");
+    let city_idx = columns
+        .iter()
+        .position(|c| c == "p.addr.city")
+        .expect("city column");
+    let lat_idx = columns
+        .iter()
+        .position(|c| c == "p.addr.geo.lat")
+        .expect("lat column");
+    let lon_idx = columns
+        .iter()
+        .position(|c| c == "p.addr.geo.lon")
+        .expect("lon column");
     assert_eq!(
         row.get(city_idx),
         Some(&graphdb::core::Value::string("shanghai"))
     );
-    assert_eq!(
-        row.get(lat_idx),
-        Some(&graphdb::core::Value::Double(31.2))
-    );
-    assert_eq!(
-        row.get(lon_idx),
-        Some(&graphdb::core::Value::Double(121.5))
-    );
+    assert_eq!(row.get(lat_idx), Some(&graphdb::core::Value::Double(31.2)));
+    assert_eq!(row.get(lon_idx), Some(&graphdb::core::Value::Double(121.5)));
 
     // Missing field yields NULL (not an error).
     let result = db.execute_query("MATCH (p:Person) RETURN p.addr.missing");

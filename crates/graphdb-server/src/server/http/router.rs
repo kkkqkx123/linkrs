@@ -18,7 +18,7 @@ use crate::storage::{
     StorageSyncContextOps,
 };
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use super::handlers::vector;
 
 use super::{
@@ -221,7 +221,7 @@ pub fn create_router<
 }
 
 /// Conditionally add vector search routes
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 fn add_vector_routes<
     S: crate::storage::StorageClient
         + crate::storage::StorageSchemaContextOps
@@ -254,7 +254,7 @@ fn add_vector_routes<
         )
 }
 
-#[cfg(not(feature = "qdrant"))]
+#[cfg(not(feature = "vector"))]
 fn add_vector_routes<
     S: crate::storage::StorageClient
         + crate::storage::StorageSchemaContextOps

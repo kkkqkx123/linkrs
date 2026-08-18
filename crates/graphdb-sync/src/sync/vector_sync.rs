@@ -9,13 +9,17 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::core::types::TransactionId;
+use crate::core::types::{TransactionId, VertexId};
 use crate::core::{Value, Vertex};
+use crate::sync::backend::VectorBackend;
 use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
 
-use vector_client::{EmbeddingService, VectorManager};
+#[cfg(feature = "vector-qdrant")]
+use vector_client::EmbeddingService;
+pub use vector_search::types::{DistanceMetric, PointId, VectorPoint};
 use vector_search::{
-    FilterCondition, SearchQuery, SearchResult, VectorFilter, VectorPoint,
+    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, SearchQuery, SearchResult,
+    TxnOp, VectorFilter,
 };
 
 /// Runtime state of the vector engine.
@@ -327,11 +331,12 @@ pub enum VectorBufferError {
 
 /// Vector synchronization coordinator
 pub struct VectorSyncCoordinator {
-    vector_manager: Arc<VectorManager>,
+    backend: VectorBackend,
+    #[cfg(feature = "vector-qdrant")]
     embedding_service: Option<Arc<EmbeddingService>>,
     transaction_buffer: Option<Arc<VectorTransactionBuffer>>,
     /// Tracks registered logical indexes by key "space_{space_id}_{tag}_{field}" -> metadata
-    logical_indexes: DashMap<String, vector_client::manager::IndexMetadata>,
+    logical_indexes: DashMap<String, IndexMetadata>,
     /// Tokio runtime handle for blocking async operations from sync context.
     /// Using `Handle` instead of `&Runtime` avoids lifetime issues while allowing
     /// the caller (API layer or tests) to control the runtime lifecycle.
@@ -340,17 +345,19 @@ pub struct VectorSyncCoordinator {
 
 impl std::fmt::Debug for VectorSyncCoordinator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VectorSyncCoordinator")
-            .field("vector_manager", &self.vector_manager)
-            .field("embedding_service", &self.embedding_service.is_some())
-            .field("logical_index_count", &self.logical_indexes.len())
-            .finish()
+        let mut debug = f.debug_struct("VectorSyncCoordinator");
+        debug
+            .field("backend", &self.backend)
+            .field("logical_index_count", &self.logical_indexes.len());
+        #[cfg(feature = "vector-qdrant")]
+        debug.field("embedding_service", &self.embedding_service.is_some());
+        debug.finish()
     }
 }
 
 impl VectorSyncCoordinator {
     pub fn is_disabled_engine(&self) -> bool {
-        self.vector_manager.engine().name() == "disabled"
+        self.backend.is_disabled()
     }
 
     /// Returns the runtime state of the underlying vector engine.
@@ -373,12 +380,13 @@ impl VectorSyncCoordinator {
     /// In async contexts, use `Handle::current()` or `Runtime::handle()`.
     /// In sync contexts (e.g. tests), create a runtime and pass its handle.
     pub fn new(
-        vector_manager: Arc<VectorManager>,
-        embedding_service: Option<Arc<EmbeddingService>>,
+        backend: VectorBackend,
+        #[cfg(feature = "vector-qdrant")] embedding_service: Option<Arc<EmbeddingService>>,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
-            vector_manager,
+            backend,
+            #[cfg(feature = "vector-qdrant")]
             embedding_service,
             transaction_buffer: None,
             logical_indexes: DashMap::new(),
@@ -388,13 +396,14 @@ impl VectorSyncCoordinator {
 
     /// Create with transaction buffer support
     pub fn with_transaction_buffer(
-        vector_manager: Arc<VectorManager>,
-        embedding_service: Option<Arc<EmbeddingService>>,
+        backend: VectorBackend,
+        #[cfg(feature = "vector-qdrant")] embedding_service: Option<Arc<EmbeddingService>>,
         config: VectorTransactionBufferConfig,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
-            vector_manager,
+            backend,
+            #[cfg(feature = "vector-qdrant")]
             embedding_service,
             transaction_buffer: Some(Arc::new(VectorTransactionBuffer::new(config))),
             logical_indexes: DashMap::new(),
@@ -411,12 +420,13 @@ impl VectorSyncCoordinator {
         format!("space_idx_{}_{}_{}", space_id, tag_name, field_name)
     }
 
-    /// Get the vector manager
-    pub fn vector_manager(&self) -> &Arc<VectorManager> {
-        &self.vector_manager
+    /// Get the vector backend
+    pub fn backend(&self) -> &VectorBackend {
+        &self.backend
     }
 
     /// Get the embedding service
+    #[cfg(feature = "vector-qdrant")]
     pub fn embedding_service(&self) -> Option<&Arc<EmbeddingService>> {
         self.embedding_service.as_ref()
     }
@@ -433,16 +443,16 @@ impl VectorSyncCoordinator {
         tag_name: &str,
         field_name: &str,
         vector_size: usize,
-        distance: vector_client::DistanceMetric,
+        distance: DistanceMetric,
     ) -> VectorCoordinatorResult<String> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
 
         if self.is_disabled_engine() {
             let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
-            let meta = vector_client::manager::IndexMetadata::new(
+            let meta = IndexMetadata::new(
                 collection_name.clone(),
-                vector_client::CollectionConfig::new(vector_size, distance),
+                CollectionConfig::new(vector_size, distance),
             );
             self.logical_indexes.insert(logical_key, meta);
             info!(
@@ -452,14 +462,13 @@ impl VectorSyncCoordinator {
             return Ok(collection_name);
         }
 
-        let hnsw_config = vector_client::HnswConfig::new(16, 100).with_payload_m(16);
-        let config =
-            vector_client::CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config);
+        let hnsw_config = vector_search::HnswConfig::new(16, 100).with_payload_m(16);
+        let config = CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config);
 
         // Only create the physical collection if it doesn't exist yet
-        if !self.vector_manager.index_exists(&collection_name) {
-            self.vector_manager
-                .create_index(&collection_name, config.clone())
+        if !self.backend.index_exists(&collection_name) {
+            self.backend
+                .create_index(&collection_name, &config)
                 .await
                 .map_err(|e| VectorCoordinatorError::IndexCreationFailed {
                     tag_name: tag_name.to_string(),
@@ -469,13 +478,8 @@ impl VectorSyncCoordinator {
 
             // Create payload index for group_id filtering (best-effort, log on failure)
             if let Err(e) = self
-                .vector_manager
-                .engine()
-                .create_payload_index(
-                    &collection_name,
-                    "group_id",
-                    vector_search::types::PayloadSchemaType::Keyword,
-                )
+                .backend
+                .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
                 .await
             {
                 tracing::warn!(
@@ -485,7 +489,7 @@ impl VectorSyncCoordinator {
                 );
             }
         } else {
-            if let Some(existing_meta) = self.vector_manager.get_index_metadata(&collection_name) {
+            if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
                 if existing_meta.config.vector_size != vector_size
                     || existing_meta.config.distance != distance
                 {
@@ -502,7 +506,7 @@ impl VectorSyncCoordinator {
 
         // Register logical index with the actual config used
         let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
-        let meta = vector_client::manager::IndexMetadata::new(collection_name.clone(), config);
+        let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
 
         info!(
@@ -554,14 +558,16 @@ impl VectorSyncCoordinator {
                 let collection_name =
                     VectorIndexLocation::new(space_id, &tag.name, field_name).to_collection_name();
 
-                if self.vector_manager.index_exists(&collection_name) {
+                if self.backend.index_exists(&collection_name) {
                     if let Some(vector) = value.as_vector() {
-                        let point_id = format!("{}_{}_{}", vertex.vid, tag.name, field_name);
-                        let mut payload = HashMap::new();
-                        payload.insert(
-                            "vertex_id".to_string(),
-                            serde_json::to_value(vertex.vid).unwrap_or(serde_json::Value::Null),
+                        let point_id = format!(
+                            "{}_{}_{}",
+                            vertex_id_repr(&vertex.vid),
+                            tag.name,
+                            field_name
                         );
+                        let mut payload = HashMap::new();
+                        payload.insert("vertex_id".to_string(), vertex_id_payload(&vertex.vid));
                         payload.insert(
                             "group_id".to_string(),
                             serde_json::to_value(
@@ -601,13 +607,11 @@ impl VectorSyncCoordinator {
         for (collection_name, points) in points_by_collection {
             let points_count = points.len();
             if points_count == 1 {
-                self.vector_manager
+                self.backend
                     .upsert(&collection_name, points.into_iter().next().unwrap())
                     .await?;
             } else if !points.is_empty() {
-                self.vector_manager
-                    .upsert_batch(&collection_name, points)
-                    .await?;
+                self.backend.upsert_batch(&collection_name, points).await?;
                 debug!(
                     "Batch upserted {} vectors for vertex {} in collection {}",
                     points_count, vertex.vid, collection_name
@@ -634,15 +638,17 @@ impl VectorSyncCoordinator {
                     let collection_name = VectorIndexLocation::new(space_id, &tag.name, field_name)
                         .to_collection_name();
 
-                    if self.vector_manager.index_exists(&collection_name) {
-                        let point_id = format!("{}_{}_{}", vertex.vid, tag.name, field_name);
+                    if self.backend.index_exists(&collection_name) {
+                        let point_id = format!(
+                            "{}_{}_{}",
+                            vertex_id_repr(&vertex.vid),
+                            tag.name,
+                            field_name
+                        );
 
                         if let Some(vector) = value.as_vector() {
                             let mut payload = HashMap::new();
-                            payload.insert(
-                                "vertex_id".to_string(),
-                                serde_json::to_value(vertex.vid).unwrap_or(serde_json::Value::Null),
-                            );
+                            payload.insert("vertex_id".to_string(), vertex_id_payload(&vertex.vid));
                             payload.insert(
                                 "group_id".to_string(),
                                 serde_json::to_value(
@@ -688,13 +694,11 @@ impl VectorSyncCoordinator {
         for (collection_name, points) in points_to_upsert {
             let points_count = points.len();
             if points_count == 1 {
-                self.vector_manager
+                self.backend
                     .upsert(&collection_name, points.into_iter().next().unwrap())
                     .await?;
             } else if !points.is_empty() {
-                self.vector_manager
-                    .upsert_batch(&collection_name, points)
-                    .await?;
+                self.backend.upsert_batch(&collection_name, points).await?;
                 debug!(
                     "Batch updated {} vectors for vertex {} in collection {}",
                     points_count, vertex.vid, collection_name
@@ -705,14 +709,10 @@ impl VectorSyncCoordinator {
         for (collection_name, point_ids) in points_to_delete {
             let point_ids_count = point_ids.len();
             if point_ids_count == 1 {
-                self.vector_manager
-                    .delete(&collection_name, &point_ids[0])
-                    .await?;
+                self.backend.delete(&collection_name, &point_ids[0]).await?;
             } else if !point_ids.is_empty() {
                 let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
-                self.vector_manager
-                    .delete_batch(&collection_name, refs)
-                    .await?;
+                self.backend.delete_batch(&collection_name, &refs).await?;
                 debug!(
                     "Batch deleted {} vectors for vertex {} from collection {}",
                     point_ids_count, vertex.vid, collection_name
@@ -737,7 +737,7 @@ impl VectorSyncCoordinator {
             format!("{}", vertex_id),
         ));
 
-        self.vector_manager
+        self.backend
             .delete_by_filter(&collection_name, filter)
             .await?;
 
@@ -794,10 +794,21 @@ impl VectorSyncCoordinator {
                     txn_id
                 );
 
-                // Use batch processing for efficiency (groups by collection)
-                let contexts: Vec<VectorChangeContext> =
-                    updates.into_iter().map(|u| u.context).collect();
-                self.on_vector_change_batch(contexts).await?;
+                if self.backend.is_local() {
+                    // Local backend: single WAL-backed commit per txn id
+                    // (commit protocol §4.6). Replay is idempotent, so a
+                    // failed commit may be retried after crash recovery.
+                    let txn_ops: Vec<TxnOp> = updates
+                        .iter()
+                        .map(|update| to_txn_op(&update.context))
+                        .collect();
+                    self.backend.apply_txn(txn_id, txn_ops).await?;
+                } else {
+                    // Qdrant backend: batch delivery through the outbox.
+                    let contexts: Vec<VectorChangeContext> =
+                        updates.into_iter().map(|u| u.context).collect();
+                    self.on_vector_change_batch(contexts).await?;
+                }
 
                 // All operations succeeded — now safely remove from buffer
                 buffer.take_updates(txn_id);
@@ -877,13 +888,11 @@ impl VectorSyncCoordinator {
         for (collection_name, points) in upsert_by_collection {
             let points_count = points.len();
             if points_count == 1 {
-                self.vector_manager
+                self.backend
                     .upsert(&collection_name, points.into_iter().next().unwrap())
                     .await?;
             } else if !points.is_empty() {
-                self.vector_manager
-                    .upsert_batch(&collection_name, points)
-                    .await?;
+                self.backend.upsert_batch(&collection_name, points).await?;
                 debug!(
                     "Batch upserted {} vectors to collection {}",
                     points_count, collection_name
@@ -894,14 +903,10 @@ impl VectorSyncCoordinator {
         for (collection_name, point_ids) in delete_by_collection {
             let point_ids_count = point_ids.len();
             if point_ids_count == 1 {
-                self.vector_manager
-                    .delete(&collection_name, &point_ids[0])
-                    .await?;
+                self.backend.delete(&collection_name, &point_ids[0]).await?;
             } else if !point_ids.is_empty() {
                 let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
-                self.vector_manager
-                    .delete_batch(&collection_name, refs)
-                    .await?;
+                self.backend.delete_batch(&collection_name, &refs).await?;
                 debug!(
                     "Batch deleted {} vectors from collection {}",
                     point_ids_count, collection_name
@@ -921,7 +926,7 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             return Ok(Vec::new());
         }
-        let results = self.vector_manager.search(collection, query).await?;
+        let results = self.backend.search(collection, query).await?;
         Ok(results)
     }
 
@@ -1025,6 +1030,7 @@ impl VectorSyncCoordinator {
     }
 
     /// Embed text to vector
+    #[cfg(feature = "vector-qdrant")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
         if let Some(embedding) = &self.embedding_service {
             let vector = embedding
@@ -1043,6 +1049,17 @@ impl VectorSyncCoordinator {
     pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
         let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
         self.logical_indexes.contains_key(&logical_key)
+    }
+
+    /// Get logical index metadata for a tag/field combination
+    pub fn index_info(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Option<IndexMetadata> {
+        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        self.logical_indexes.get(&logical_key).map(|v| v.clone())
     }
 
     /// List all indexes (logical indexes)
@@ -1079,18 +1096,14 @@ impl VectorSyncCoordinator {
         tag_name: &str,
         field_name: &str,
         collection_name: String,
-        config: vector_client::CollectionConfig,
+        config: CollectionConfig,
         user_index_name: Option<String>,
     ) {
         let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
         let meta = if let Some(idx_name) = user_index_name {
-            vector_client::manager::IndexMetadata::with_index_name(
-                collection_name,
-                config,
-                idx_name,
-            )
+            IndexMetadata::with_index_name(collection_name, config, idx_name)
         } else {
-            vector_client::manager::IndexMetadata::new(collection_name, config)
+            IndexMetadata::new(collection_name, config)
         };
         self.logical_indexes.insert(logical_key, meta);
     }
@@ -1101,14 +1114,14 @@ impl VectorSyncCoordinator {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        config: vector_client::CollectionConfig,
+        config: CollectionConfig,
     ) -> VectorCoordinatorResult<String> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
 
-        if !self.vector_manager.index_exists(&collection_name) {
-            self.vector_manager
-                .create_index(&collection_name, config.clone())
+        if !self.backend.index_exists(&collection_name) {
+            self.backend
+                .create_index(&collection_name, &config)
                 .await
                 .map_err(|e| VectorCoordinatorError::IndexCreationFailed {
                     tag_name: tag_name.to_string(),
@@ -1118,13 +1131,8 @@ impl VectorSyncCoordinator {
 
             // Create payload index for group_id filtering (best-effort, log on failure)
             if let Err(e) = self
-                .vector_manager
-                .engine()
-                .create_payload_index(
-                    &collection_name,
-                    "group_id",
-                    vector_search::types::PayloadSchemaType::Keyword,
-                )
+                .backend
+                .create_payload_index(&collection_name, "group_id", PayloadSchemaType::Keyword)
                 .await
             {
                 tracing::warn!(
@@ -1134,7 +1142,7 @@ impl VectorSyncCoordinator {
                 );
             }
         } else {
-            if let Some(existing_meta) = self.vector_manager.get_index_metadata(&collection_name) {
+            if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
                 if existing_meta.config.vector_size != config.vector_size
                     || existing_meta.config.distance != config.distance
                 {
@@ -1150,7 +1158,7 @@ impl VectorSyncCoordinator {
         }
 
         let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
-        let meta = vector_client::manager::IndexMetadata::new(collection_name.clone(), config);
+        let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
 
         info!(
@@ -1181,4 +1189,63 @@ pub struct IndexMetadataWrapper {
     pub tag_name: String,
     pub field_name: String,
     pub index_name: Option<String>,
+}
+
+/// Convert a buffered change context into a [`TxnOp`] for the local backend's
+/// commit protocol. Payload values are JSON-encoded; the `group_id` marker is
+/// injected so searches scoped by `(tag, field)` work identically to qdrant.
+/// Plain string representation of a vertex id without the quoting used by
+/// `Display` for string ids (which would leak quotes into point ids).
+fn vertex_id_repr(vid: &VertexId) -> String {
+    if let Some(i) = vid.as_int64() {
+        i.to_string()
+    } else if let Some(s) = vid.as_str() {
+        s.to_string()
+    } else {
+        format!("{:?}", vid.as_bytes())
+    }
+}
+
+/// Plain JSON payload value for a vertex id (number for int ids, string
+/// otherwise) so `on_vertex_deleted`'s `format!("{}", value)` filter matches.
+fn vertex_id_payload(vid: &VertexId) -> serde_json::Value {
+    if let Some(i) = vid.as_int64() {
+        serde_json::Value::from(i)
+    } else if let Some(s) = vid.as_str() {
+        serde_json::Value::String(s.to_string())
+    } else {
+        serde_json::Value::Null
+    }
+}
+
+fn to_txn_op(ctx: &VectorChangeContext) -> TxnOp {
+    let collection_name = ctx.location.to_collection_name();
+    let point_id = ctx.data.id.to_string();
+
+    match ctx.change_type {
+        VectorChangeType::Insert => {
+            let mut json_payload: HashMap<String, serde_json::Value> = ctx
+                .data
+                .payload
+                .iter()
+                .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|json| (k.clone(), json)))
+                .collect();
+
+            json_payload.insert(
+                "group_id".to_string(),
+                serde_json::to_value(ctx.location.group_id()).unwrap_or(serde_json::Value::Null),
+            );
+
+            let point =
+                VectorPoint::new(point_id, ctx.data.vector.clone()).with_payload(json_payload);
+            TxnOp::Upsert {
+                collection: collection_name,
+                point,
+            }
+        }
+        VectorChangeType::Delete => TxnOp::Delete {
+            collection: collection_name,
+            point_id,
+        },
+    }
 }

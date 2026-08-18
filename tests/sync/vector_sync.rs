@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use graphdb::core::Value;
 use graphdb::sync::{
-    PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorIndexLocation,
+    PendingVectorUpdate, VectorBackend, VectorChangeContext, VectorChangeType, VectorIndexLocation,
     VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer, VectorTransactionBufferConfig,
 };
 use graphdb::transaction::types::TransactionId;
@@ -16,14 +16,14 @@ use vector_client::{VectorClientConfig, VectorManager};
 /// TC-200: Vector change type variants
 #[tokio::test]
 async fn test_vector_change_type_variants() {
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
     let handle = tokio::runtime::Handle::current();
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        vector_manager,
+        vector_backend,
         None,
         VectorTransactionBufferConfig::default(),
         handle,
@@ -160,14 +160,14 @@ async fn test_point_data_with_payload() {
 /// TC-204: Coordinator commit with disabled engine acts as no-op
 #[tokio::test]
 async fn test_coordinator_commit_disabled_engine() {
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
     let handle = tokio::runtime::Handle::current();
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        vector_manager,
+        vector_backend,
         None,
         VectorTransactionBufferConfig::default(),
         handle,
@@ -201,13 +201,13 @@ async fn test_coordinator_commit_disabled_engine() {
 /// TC-205: Coordinator without transaction buffer
 #[tokio::test]
 async fn test_coordinator_without_buffer() {
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
     let handle = tokio::runtime::Handle::current();
-    let coordinator = VectorSyncCoordinator::new(vector_manager, None, handle);
+    let coordinator = VectorSyncCoordinator::new(vector_backend, None, handle);
 
     assert!(coordinator.transaction_buffer().is_none());
 }
@@ -255,14 +255,14 @@ async fn test_different_dimensions_in_buffer() {
 /// TC-207: Rollback clears buffer
 #[tokio::test]
 async fn test_rollback_clears_buffer() {
-    let vector_manager = Arc::new(
+    let vector_backend = VectorBackend::Qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),
-    );
+    ));
     let handle = tokio::runtime::Handle::current();
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        vector_manager,
+        vector_backend,
         None,
         VectorTransactionBufferConfig::default(),
         handle,
@@ -338,11 +338,11 @@ async fn test_empty_buffer_operations() {
 async fn test_multiple_locations_in_transaction() {
     let handle = tokio::runtime::Handle::current();
     let coordinator = VectorSyncCoordinator::with_transaction_buffer(
-        Arc::new(
+        VectorBackend::Qdrant(Arc::new(
             VectorManager::new(VectorClientConfig::disabled())
                 .await
                 .unwrap(),
-        ),
+        )),
         None,
         VectorTransactionBufferConfig::default(),
         handle,

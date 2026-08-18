@@ -273,7 +273,7 @@ impl PlanNodeVisitor for SubqueryHostFinder {
             .unwrap_or(false)
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     impl_leaf_check!(
         visit_vector_search => crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
         visit_vector_lookup => crate::query::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode,

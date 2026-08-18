@@ -4,11 +4,11 @@
 //! variables into subsequent statements, and the transaction overlay
 //! (ROLLBACK / ROLLBACK TO SAVEPOINT restore previous values).
 
-use graphdb_server::server::graph_service::GraphService;
 use graphdb::config::Config;
 use graphdb::query::DataSet;
 use graphdb::storage::{GraphStorage, SyncWrapper};
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
+use graphdb_server::server::graph_service::GraphService;
 use std::sync::Arc;
 
 async fn setup() -> (Arc<GraphService<SyncWrapper<GraphStorage>>>, i64) {

@@ -167,7 +167,7 @@ mod vector {
 
     /// Cosine similarity search (requires qdrant feature and running qdrant service)
     #[test]
-    #[cfg_attr(not(feature = "qdrant"), ignore)]
+    #[cfg_attr(not(feature = "vector-qdrant"), ignore)]
     fn test_cosine_similarity() {
         let mut db = create_test_db();
         if !require_vector_coordinator(&db) {
@@ -217,7 +217,7 @@ mod vector {
 
     /// Vector search with filter (requires qdrant feature and running qdrant service)
     #[test]
-    #[cfg_attr(not(feature = "qdrant"), ignore)]
+    #[cfg_attr(not(feature = "vector-qdrant"), ignore)]
     fn test_filtered_vector_search() {
         let mut db = create_test_db();
         if !require_vector_coordinator(&db) {
@@ -267,7 +267,7 @@ mod vector {
 
     /// EXPLAIN vector query (requires qdrant feature and running qdrant service)
     #[test]
-    #[cfg_attr(not(feature = "qdrant"), ignore)]
+    #[cfg_attr(not(feature = "vector-qdrant"), ignore)]
     fn test_explain_vector_query() {
         let mut db = create_test_db();
         if !require_vector_coordinator(&db) {

@@ -309,12 +309,12 @@ impl PhysicalPlanMaterializer {
                 OperatorKindSpec::Vector(vector_spec) => {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
-                    #[cfg(feature = "qdrant")]
+                    #[cfg(feature = "vector")]
                     let coord = runtime.vector_coordinator.clone();
                     let op = VectorOperator::from_spec(
                         vector_spec,
                         storage,
-                        #[cfg(feature = "qdrant")]
+                        #[cfg(feature = "vector")]
                         coord,
                         output_layout.clone(),
                     );
@@ -493,7 +493,7 @@ impl PhysicalPlanMaterializer {
             bindings.storage.clone(),
             #[cfg(feature = "fulltext-search")]
             bindings.fulltext_manager.clone(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             bindings.vector_coordinator.clone(),
         );
 
@@ -712,7 +712,7 @@ mod tests {
             columnar_policy: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
         }
     }

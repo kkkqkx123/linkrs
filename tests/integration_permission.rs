@@ -9,6 +9,8 @@
 
 use std::sync::Arc;
 
+use graphdb::config::AuthConfig;
+use graphdb::core::types::SpaceInfo;
 use graphdb_server::server::permission::OperationType;
 use graphdb_server::server::permission::GOD_SPACE_ID;
 use graphdb_server::server::session::ClientSession;
@@ -16,8 +18,6 @@ use graphdb_server::server::{
     Authenticator, PasswordAuthenticator, Permission, PermissionChecker, PermissionManager,
     RoleType, Session,
 };
-use graphdb::config::AuthConfig;
-use graphdb::core::types::SpaceInfo;
 
 // ==================== PermissionManager 核心测试 ====================
 

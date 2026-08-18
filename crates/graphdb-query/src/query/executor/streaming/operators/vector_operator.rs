@@ -12,7 +12,7 @@ use crate::query::executor::streaming::operators::spec::VectorManageCommand;
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::VectorSyncCoordinator;
 
 fn make_manage_result(
@@ -36,7 +36,7 @@ pub enum VectorOperatorKind {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: VectorManageCommand,
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorSearch {
@@ -48,7 +48,7 @@ pub enum VectorOperatorKind {
         top_k: u32,
         tag_name: String,
         field_name: String,
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorLookup {
@@ -56,7 +56,7 @@ pub enum VectorOperatorKind {
         space_name: String,
         index_name: String,
         lookup_key: Expression,
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorMatch {
@@ -69,7 +69,7 @@ pub enum VectorOperatorKind {
         tag_name: String,
         field_name: String,
         space_id: u64,
-        #[cfg(feature = "qdrant")]
+        #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
 }
@@ -92,7 +92,7 @@ impl VectorOperator {
     pub fn from_spec(
         spec: &super::spec::VectorSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        #[cfg(feature = "qdrant")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
+        #[cfg(feature = "vector")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
         let kind = match spec {
@@ -103,7 +103,7 @@ impl VectorOperator {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 command: command.clone(),
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
             super::spec::VectorSpec::VectorSearch {
@@ -123,7 +123,7 @@ impl VectorOperator {
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
             super::spec::VectorSpec::VectorLookup {
@@ -135,7 +135,7 @@ impl VectorOperator {
                 space_name: space_name.clone(),
                 index_name: index_name.clone(),
                 lookup_key: lookup_key.clone(),
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
             super::spec::VectorSpec::VectorMatch {
@@ -157,7 +157,7 @@ impl VectorOperator {
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
                 space_id: *space_id,
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
         };
@@ -204,10 +204,10 @@ impl VectorOperator {
                 storage,
                 space_name,
                 command,
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator,
             } => {
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 let _ = (&storage, &space_name);
 
                 let result = match command {
@@ -219,7 +219,7 @@ impl VectorOperator {
                         distance,
                         space_id,
                     } => {
-                        #[cfg(feature = "qdrant")]
+                        #[cfg(feature = "vector")]
                         {
                             if let Some(coordinator) = vector_coordinator {
                                 let distance = match distance {
@@ -263,7 +263,7 @@ impl VectorOperator {
                                 )))
                             }
                         }
-                        #[cfg(not(feature = "qdrant"))]
+                        #[cfg(not(feature = "vector"))]
                         {
                             let _ = (
                                 storage,
@@ -283,7 +283,7 @@ impl VectorOperator {
                         }
                     }
                     VectorManageCommand::Drop { index_name } => {
-                        #[cfg(feature = "qdrant")]
+                        #[cfg(feature = "vector")]
                         {
                             let _ = vector_coordinator;
                             Err(QueryError::execution(format!(
@@ -291,7 +291,7 @@ impl VectorOperator {
                                 index_name
                             )))
                         }
-                        #[cfg(not(feature = "qdrant"))]
+                        #[cfg(not(feature = "vector"))]
                         {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
@@ -313,14 +313,14 @@ impl VectorOperator {
                 field_name,
                 query_vector,
                 top_k,
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
             } => {
-                #[cfg(not(feature = "qdrant"))]
+                #[cfg(not(feature = "vector"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
 
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
                         let options = crate::sync::vector_sync::SearchOptions::new(
@@ -374,14 +374,14 @@ impl VectorOperator {
                 field_name,
                 query_vector,
                 threshold,
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
             } => {
-                #[cfg(not(feature = "qdrant"))]
+                #[cfg(not(feature = "vector"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold);
 
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
                         let thr = threshold.unwrap_or(0.5);

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use log::info;
 
-use crate::server::HttpServer;
 use crate::config::Config;
 use crate::core::error::DBResult;
+use crate::server::HttpServer;
 use crate::storage::UndoTarget;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
@@ -40,17 +40,16 @@ pub async fn start_http_server<
 
     // Create WebState for web management APIs
     let storage_path = format!("{}/metadata.db", config.storage_path());
-    let web_router =
-        match crate::server::web::WebState::new(&storage_path, state.clone()).await {
-            Ok(web_state) => Some(crate::server::web::create_router(web_state)),
-            Err(e) => {
-                log::warn!(
-                    "Failed to initialize web management: {}, continuing without it",
-                    e
-                );
-                None
-            }
-        };
+    let web_router = match crate::server::web::WebState::new(&storage_path, state.clone()).await {
+        Ok(web_state) => Some(crate::server::web::create_router(web_state)),
+        Err(e) => {
+            log::warn!(
+                "Failed to initialize web management: {}, continuing without it",
+                e
+            );
+            None
+        }
+    };
 
     let app = crate::server::http::router::create_router(state, web_router);
 

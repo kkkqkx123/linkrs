@@ -132,7 +132,49 @@ pub enum VectorCoordinatorError {
 pub type VectorResult<T> = std::result::Result<T, VectorError>;
 pub type VectorCoordinatorResult<T> = std::result::Result<T, VectorCoordinatorError>;
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
+impl From<vector_search::VectorSearchError> for VectorError {
+    fn from(err: vector_search::VectorSearchError) -> Self {
+        match err {
+            vector_search::VectorSearchError::CollectionNotFound(name) => {
+                VectorError::IndexNotFound(name)
+            }
+            vector_search::VectorSearchError::CollectionAlreadyExists(name) => {
+                VectorError::IndexAlreadyExists(name)
+            }
+            vector_search::VectorSearchError::InvalidCollectionName(name) => {
+                VectorError::ConfigError(format!("Invalid collection name: {}", name))
+            }
+            vector_search::VectorSearchError::InvalidVectorDimension { expected, actual } => {
+                VectorError::DimensionMismatch { expected, actual }
+            }
+            vector_search::VectorSearchError::InvalidPointId(id) => VectorError::InvalidPointId(id),
+            vector_search::VectorSearchError::NonFiniteElement(index) => {
+                VectorError::InvalidVector(format!("non-finite element at index {}", index))
+            }
+            vector_search::VectorSearchError::UnsupportedMetric(metric) => {
+                VectorError::ConfigError(format!("metric not supported: {:?}", metric))
+            }
+            vector_search::VectorSearchError::Filter(msg) => VectorError::InvalidVector(msg),
+            vector_search::VectorSearchError::CorruptData(msg) => VectorError::IndexCorrupted(msg),
+            vector_search::VectorSearchError::Io(e) => VectorError::Internal(e.to_string()),
+            vector_search::VectorSearchError::Serialization(e) => {
+                VectorError::Internal(e.to_string())
+            }
+            vector_search::VectorSearchError::Json(e) => VectorError::Internal(e.to_string()),
+            vector_search::VectorSearchError::Internal(msg) => VectorError::Internal(msg),
+        }
+    }
+}
+
+#[cfg(feature = "vector")]
+impl From<vector_search::VectorSearchError> for VectorCoordinatorError {
+    fn from(err: vector_search::VectorSearchError) -> Self {
+        VectorCoordinatorError::Vector(VectorError::from(err))
+    }
+}
+
+#[cfg(feature = "vector-qdrant")]
 impl From<vector_client::VectorClientError> for VectorError {
     fn from(err: vector_client::VectorClientError) -> Self {
         match err {
@@ -190,7 +232,7 @@ impl From<vector_client::VectorClientError> for VectorError {
     }
 }
 
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector-qdrant")]
 impl From<vector_client::VectorClientError> for VectorCoordinatorError {
     fn from(err: vector_client::VectorClientError) -> Self {
         VectorCoordinatorError::Vector(VectorError::from(err))

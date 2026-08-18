@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-qdrant = ["dep:vector-client"]
+# Built-in local vector engine (W6+). Enables the `vector_sync` module and
+# `VectorBackend::Local`.
+vector = ["dep:vector-search"]
+# Remote qdrant client on top of the local engine types.
+vector-qdrant = ["vector", "dep:vector-client"]
+# Backward-compatible alias kept so downstream crates can keep their existing
+# `qdrant` feature names while the built-in vector path lands (phase A).
+qdrant = ["vector-qdrant"]
 fulltext-search = ["graphdb-search/fulltext-search"]
 
 [dependencies]
@@ -21,7 +28,7 @@ chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
 vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
-vector-search = { path = "../vector-search" }
+vector-search = { path = "../vector-search", optional = true }
 tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true

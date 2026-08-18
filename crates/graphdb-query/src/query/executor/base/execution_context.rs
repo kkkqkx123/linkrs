@@ -16,7 +16,7 @@ use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
 use crate::search::tantivy_index::TantivySearchEngine;
 use crate::storage::QueryStorage;
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use crate::sync::VectorSyncCoordinator;
 use crate::utils::Arena;
 
@@ -29,7 +29,7 @@ pub struct ExecutionContext {
     pub search_engine: Option<Arc<TantivySearchEngine>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Snapshot handle pinned by the bound storage, when the storage was
@@ -92,7 +92,7 @@ impl ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: None,
             bound_snapshot: None,
@@ -125,7 +125,7 @@ impl ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: None,
             bound_snapshot: None,
@@ -157,7 +157,7 @@ impl ExecutionContext {
             expression_context,
             search_engine: Some(search_engine),
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: None,
             bound_snapshot: None,
@@ -199,7 +199,7 @@ impl ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: None,
             bound_snapshot: None,
@@ -276,7 +276,7 @@ impl Default for ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator: None,
             storage: None,
             bound_snapshot: None,

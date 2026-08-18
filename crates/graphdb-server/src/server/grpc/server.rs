@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use std::time::Instant;
 use tonic::{transport::Server, Request, Response, Status};
 
-use crate::server::http::AppState;
 use crate::config::Config;
+use crate::server::http::AppState;
 
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,

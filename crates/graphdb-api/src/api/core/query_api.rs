@@ -13,13 +13,13 @@ use crate::query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
 };
+#[cfg(feature = "vector")]
+use crate::sync::backend::VectorBackend;
 use crate::sync::SyncManager;
 use crate::transaction::TransactionExecution;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
-#[cfg(feature = "qdrant")]
-use vector_client::VectorManager;
 
 /// Universal Query API – Core Layer
 pub struct QueryApi<S: StorageClient + 'static> {
@@ -156,20 +156,21 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.pipeline_manager.plan_cache().len()
     }
 
-    /// Create a new QueryApi instance with an existing shared VectorManager
-    #[cfg(feature = "qdrant")]
-    pub async fn with_vector_manager(
+    /// Create a new QueryApi instance with an existing shared VectorBackend
+    #[cfg(feature = "vector")]
+    pub async fn with_vector_backend(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,
-        vector_manager: Arc<VectorManager>,
+        backend: VectorBackend,
         schema_manager: Option<Arc<SchemaManager>>,
     ) -> Result<Self, String> {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
 
-        // Create a VectorSyncCoordinator with the shared VectorManager (no embedding service for query-only use)
+        // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
         let handle = tokio::runtime::Handle::current();
         let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-            vector_manager,
+            backend,
+            #[cfg(feature = "vector-qdrant")]
             None,
             handle,
         ));
@@ -477,7 +478,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// The engine result is carried through unchanged (no row conversion):
     /// the API core layer adds only timing / count metadata. `ExecutionResult::Error`
     /// is surfaced as an internal error, all other variants pass through.
-    fn attach_metadata(execution: crate::query::executor::base::ExecutionResult) -> CoreResult<QueryResult> {
+    fn attach_metadata(
+        execution: crate::query::executor::base::ExecutionResult,
+    ) -> CoreResult<QueryResult> {
         let rows_returned = match &execution {
             crate::query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
             _ => 0,

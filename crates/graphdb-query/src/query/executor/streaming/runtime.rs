@@ -697,7 +697,7 @@ pub struct ExecutionRuntime {
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
     /// Per-partition operator state arenas.
     ///
@@ -748,7 +748,7 @@ impl ExecutionRuntime {
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<
             Arc<crate::search::manager::FulltextIndexManager>,
         >,
-        #[cfg(feature = "qdrant")] vector_coordinator: Option<
+        #[cfg(feature = "vector")] vector_coordinator: Option<
             Arc<crate::sync::VectorSyncCoordinator>,
         >,
     ) -> Self {
@@ -771,7 +771,7 @@ impl ExecutionRuntime {
             storage,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             vector_coordinator,
             state_arenas: vec![Mutex::new(StateArenaSet::new())],
             parameter_values: None,
@@ -791,7 +791,7 @@ impl ExecutionRuntime {
             None,
             #[cfg(feature = "fulltext-search")]
             None,
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             None,
         )
     }
@@ -818,7 +818,7 @@ impl ExecutionRuntime {
         self.fulltext_manager = manager;
     }
 
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     pub fn set_vector_coordinator(
         &mut self,
         coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,

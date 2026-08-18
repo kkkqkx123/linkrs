@@ -36,7 +36,7 @@ use super::logical_nodes::operation::{
 use super::logical_nodes::search::{
     LogicalFulltextLookupNode, LogicalFulltextSearchNode, LogicalMatchFulltextNode,
 };
-#[cfg(feature = "qdrant")]
+#[cfg(feature = "vector")]
 use super::logical_nodes::search::{
     LogicalVectorLookupNode, LogicalVectorMatchNode, LogicalVectorSearchNode,
 };
@@ -117,11 +117,11 @@ pub enum LogicalNodeEnum {
     MatchFulltext(LogicalMatchFulltextNode),
 
     // Vector search nodes
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorSearch(LogicalVectorSearchNode),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorLookup(LogicalVectorLookupNode),
-    #[cfg(feature = "qdrant")]
+    #[cfg(feature = "vector")]
     VectorMatch(LogicalVectorMatchNode),
 }
 
@@ -181,11 +181,11 @@ impl LogicalNodeEnum {
             Self::FulltextSearch(n) => n.id(),
             Self::FulltextLookup(n) => n.id(),
             Self::MatchFulltext(n) => n.id(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorSearch(n) => n.id(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorLookup(n) => n.id(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.id(),
         }
     }
@@ -245,11 +245,11 @@ impl LogicalNodeEnum {
             Self::FulltextSearch(_) => "FulltextSearch",
             Self::FulltextLookup(_) => "FulltextLookup",
             Self::MatchFulltext(_) => "MatchFulltext",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorSearch(_) => "VectorSearch",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorLookup(_) => "VectorLookup",
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorMatch(_) => "VectorMatch",
         }
     }
@@ -309,11 +309,11 @@ impl LogicalNodeEnum {
             Self::FulltextSearch(n) => n.col_names(),
             Self::FulltextLookup(n) => n.col_names(),
             Self::MatchFulltext(n) => n.col_names(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorSearch(n) => n.col_names(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorLookup(n) => n.col_names(),
-            #[cfg(feature = "qdrant")]
+            #[cfg(feature = "vector")]
             Self::VectorMatch(n) => n.col_names(),
         }
     }
