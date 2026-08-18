@@ -58,9 +58,14 @@ Dependency flow: `core → config → search → sync → transaction → storag
 > **SIMD build flags (Phase 0)**: `.cargo/config.toml` compiles with
 > `-C target-cpu=x86-64-v3` (AVX2, Haswell+, 2013) for automatic
 > vectorization (verified ~3.46x on the autovectorization benchmark).
-> On CPUs without AVX2, fall back to the baseline target:
+> **A v3-built binary requires AVX2 hardware at runtime** (the whole binary
+> may emit AVX2 instructions; the runtime kernel checks in the vector
+> engine only guard baseline builds). To run on older CPUs, rebuild with the
+> baseline target:
 > `RUSTFLAGS="-C target-cpu=x86_64" cargo build --release`
 > (or delete the `[target.x86_64-unknown-linux-gnu]` section).
+> `aarch64-*` targets are declared in `.cargo/config.toml` but not yet
+> verified (NEON is ARMv8 baseline, no flags needed).
 
 ```shell
 # Build the server

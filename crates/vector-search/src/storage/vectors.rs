@@ -6,7 +6,7 @@
 //! access the immutable mmaps lock-free.
 
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -16,8 +16,8 @@ use crate::error::{Result, VectorSearchError};
 
 /// Dense vector storage with segment-granular mmap.
 pub struct Vectors {
-    path: std::path::PathBuf,
-    file: File,
+    path: PathBuf,
+    file: parking_lot::Mutex<File>,
     dim: usize,
     segment_slots: u32,
     segments: ArcSwap<Vec<Arc<Mmap>>>,
@@ -26,7 +26,11 @@ pub struct Vectors {
 impl Vectors {
     /// Create a new file with a single initial segment.
     pub fn create(path: &Path, dim: usize, segment_slots: u32) -> Result<Self> {
-        let file = File::options().read(true).write(true).create_new(true).open(path)?;
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)?;
         let segment_bytes = segment_bytes(dim, segment_slots);
         file.set_len(segment_bytes)?;
         file.sync_all()?;
@@ -35,7 +39,7 @@ impl Vectors {
         let segments = Arc::new(vec![Arc::new(segment)]);
         Ok(Self {
             path: path.to_path_buf(),
-            file,
+            file: parking_lot::Mutex::new(file),
             dim,
             segment_slots,
             segments: ArcSwap::from(segments),
@@ -66,11 +70,36 @@ impl Vectors {
 
         Ok(Self {
             path: path.to_path_buf(),
-            file,
+            file: parking_lot::Mutex::new(file),
             dim,
             segment_slots,
             segments: ArcSwap::from(Arc::new(segments)),
         })
+    }
+
+    /// Atomically replace the backing file with `tmp_path` and remap all
+    /// segments. Used by compaction; readers keep their old segment snapshot
+    /// until the swap.
+    pub fn replace_from(&self, tmp_path: &Path) -> Result<()> {
+        let dir = self.path.parent().ok_or_else(|| {
+            VectorSearchError::Internal(format!("no parent dir for {}", self.path.display()))
+        })?;
+        std::fs::rename(tmp_path, &self.path)?;
+        open_dir(dir)?.sync_all()?;
+
+        let file = File::options().read(true).write(true).open(&self.path)?;
+        let len = file.metadata()?.len();
+        let segment_bytes = segment_bytes(self.dim, self.segment_slots);
+        let mut segments = Vec::new();
+        let mut offset = 0u64;
+        while offset < len {
+            let n = segment_bytes.min(len - offset);
+            segments.push(Arc::new(map_segment(&file, n, offset)?));
+            offset += n;
+        }
+        *self.file.lock() = file;
+        self.segments.store(Arc::new(segments));
+        Ok(())
     }
 
     // Consumed by the search pipeline (segment iteration) and the engine.
@@ -97,12 +126,13 @@ impl Vectors {
     /// Append one segment worth of slots.
     pub fn grow(&self) -> Result<()> {
         let segment_bytes = segment_bytes(self.dim, self.segment_slots);
-        let old_len = self.file.metadata()?.len();
+        let file = self.file.lock();
+        let old_len = file.metadata()?.len();
         let new_len = old_len + segment_bytes;
-        self.file.set_len(new_len)?;
-        self.file.sync_all()?;
+        file.set_len(new_len)?;
+        file.sync_all()?;
 
-        let segment = map_segment(&self.file, segment_bytes, old_len)?;
+        let segment = map_segment(&file, segment_bytes, old_len)?;
         let mut segments = (**self.segments.load()).clone();
         segments.push(Arc::new(segment));
         self.segments.store(Arc::new(segments));
@@ -132,10 +162,9 @@ impl Vectors {
             )));
         }
         let offset = slot as usize * self.dim * 4;
-        let bytes = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4)
-        };
-        write_at(&self.file, bytes, offset as u64)?;
+        let bytes =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 4) };
+        write_at(&self.file.lock(), bytes, offset as u64)?;
         Ok(())
     }
 
@@ -163,8 +192,17 @@ fn segment_bytes(dim: usize, segment_slots: u32) -> u64 {
     dim as u64 * segment_slots as u64 * 4
 }
 
+fn open_dir(dir: &Path) -> Result<File> {
+    Ok(File::open(dir)?)
+}
+
 fn map_segment(file: &File, len: u64, offset: u64) -> Result<Mmap> {
-    let mmap = unsafe { MmapOptions::new().offset(offset).len(len as usize).map(file) }?;
+    let mmap = unsafe {
+        MmapOptions::new()
+            .offset(offset)
+            .len(len as usize)
+            .map(file)
+    }?;
     Ok(mmap)
 }
 

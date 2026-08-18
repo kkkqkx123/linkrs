@@ -35,6 +35,11 @@ impl Payloads {
         self.dir.grow_to(target_capacity)
     }
 
+    /// Atomically replace the backing file with a compacted `tmp_path`.
+    pub fn replace_from(&self, tmp_path: &Path) -> Result<()> {
+        self.dir.replace_from(tmp_path)
+    }
+
     /// Store the payload for a slot (appends a new blob, orphans the old one).
     pub fn append_payload(&self, slot: usize, payload: Option<&Payload>) -> Result<()> {
         match payload {
@@ -55,8 +60,9 @@ impl Payloads {
     pub fn read_payload(view: &DirView, slot: usize) -> Result<Option<Payload>> {
         match view.blob(SLOT_REC_SIZE, slot) {
             Some(bytes) if !bytes.is_empty() => {
-                let payload = serde_json::from_slice(bytes)
-                    .map_err(|e| VectorSearchError::CorruptData(format!("bad payload blob: {e}")))?;
+                let payload = serde_json::from_slice(bytes).map_err(|e| {
+                    VectorSearchError::CorruptData(format!("bad payload blob: {e}"))
+                })?;
                 Ok(Some(payload))
             }
             _ => Ok(None),

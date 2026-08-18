@@ -4,12 +4,31 @@
 # compile-level win (verified 3.46x on the autovectorization benchmark) with
 # zero code changes. See AGENTS.md "Building and Running" for the fallback.
 #
-# Fallback to the baseline x86-64 target on older CPUs:
-#   RUSTFLAGS="-C target-cpu=x86_64" cargo build ...
-# or delete this [target] section entirely.
+# IMPORTANT: a binary built with `-C target-cpu=x86-64-v3` REQUIRES AVX2
+# hardware at runtime — the whole binary (including third-party crates) may
+# emit AVX2 instructions, and the runtime kernel checks in
+# `crates/vector-search/src/distance/` are NOT a safety net here. To run on
+# older CPUs, rebuild with the baseline target:
+#   RUSTFLAGS="-C target-cpu=x86_64" cargo build --release
+# (or delete the `[target.*]` rustflags lines entirely).
 
 [env]
 RUST_TEST_THREADS = "1"
 
+# x86-64 targets: x86-64-v3 (AVX2, Haswell+ 2013).
+# aarch64 targets: NEON is mandatory in the ARMv8 baseline, so auto-
+# vectorization works without explicit flags; entries are declared for the
+# intended deployment surface but NOT yet verified (2026-08-18).
+
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+[target.aarch64-unknown-linux-gnu]
+
+[target.aarch64-apple-darwin]

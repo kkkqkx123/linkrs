@@ -106,7 +106,12 @@ pub struct BlobDirectory {
 
 impl BlobDirectory {
     /// Create a new file with `initial_capacity` records.
-    pub fn create(path: &Path, magic: [u8; 4], rec_size: usize, initial_capacity: u64) -> Result<Self> {
+    pub fn create(
+        path: &Path,
+        magic: [u8; 4],
+        rec_size: usize,
+        initial_capacity: u64,
+    ) -> Result<Self> {
         let file = File::options()
             .read(true)
             .write(true)
@@ -208,14 +213,24 @@ impl BlobDirectory {
         let new_blob_len = view.blob_len + blob.len() as u64;
 
         // Blob bytes first, then the record, then the header water mark.
-        write_at(&self.file.lock(), blob, (blob_offset + view.blob_len as usize) as u64)?;
-        let rec_bytes = encode_rec(view.blob_len as u32, blob.len() as u32, flags, self.rec_size);
+        write_at(
+            &self.file.lock(),
+            blob,
+            (blob_offset + view.blob_len as usize) as u64,
+        )?;
+        let rec_bytes = encode_rec(
+            view.blob_len as u32,
+            blob.len() as u32,
+            flags,
+            self.rec_size,
+        );
         let rec_start = HEADER_LEN + slot * self.rec_size;
         write_at(&self.file.lock(), &rec_bytes, rec_start as u64)?;
         write_at(&self.file.lock(), &new_blob_len.to_le_bytes(), 16)?;
         self.file.lock().sync_all()?;
 
-        let file_len = (HEADER_LEN + view.rec_capacity * self.rec_size + new_blob_len as usize) as u64;
+        let file_len =
+            (HEADER_LEN + view.rec_capacity * self.rec_size + new_blob_len as usize) as u64;
         let mmap = map_file(&self.file.lock(), file_len as usize)?;
         self.view.store(Arc::new(DirView {
             mmap: Arc::new(mmap),
@@ -239,6 +254,59 @@ impl BlobDirectory {
         Ok(())
     }
 
+    /// Atomically replace the backing file with `tmp_path` (which must be a
+    /// complete, valid directory file) and refresh the in-memory view.
+    ///
+    /// Used by compaction, which builds a compacted file and renames it over
+    /// the live one. Readers keep their old mmap snapshot until the swap.
+    pub fn replace_from(&self, tmp_path: &Path) -> Result<()> {
+        let dir = self.path.parent().ok_or_else(|| {
+            VectorSearchError::Internal(format!("no parent dir for {}", self.path.display()))
+        })?;
+        std::fs::rename(tmp_path, &self.path)?;
+        open_dir(dir)?.sync_all()?;
+
+        let file = File::options().read(true).write(true).open(&self.path)?;
+        let file_len = file.metadata()?.len() as usize;
+        if file_len < HEADER_LEN {
+            return Err(VectorSearchError::CorruptData(format!(
+                "{} too short: {} bytes",
+                self.path.display(),
+                file_len
+            )));
+        }
+        if read_magic(&file)? != self.magic {
+            return Err(VectorSearchError::CorruptData(format!(
+                "{} bad magic",
+                self.path.display()
+            )));
+        }
+        if read_version(&file)? != FILE_VERSION {
+            return Err(VectorSearchError::CorruptData(format!(
+                "{} unsupported version",
+                self.path.display()
+            )));
+        }
+        let rec_capacity = read_rec_capacity(&file)? as usize;
+        let blob_len = read_blob_len(&file)?;
+        let expected = HEADER_LEN + rec_capacity * self.rec_size + blob_len as usize;
+        if file_len != expected {
+            return Err(VectorSearchError::CorruptData(format!(
+                "{} length {} != expected {expected}",
+                self.path.display(),
+                file_len
+            )));
+        }
+        let mmap = map_file(&file, file_len)?;
+        *self.file.lock() = file;
+        self.view.store(Arc::new(DirView {
+            mmap: Arc::new(mmap),
+            rec_capacity,
+            blob_len,
+        }));
+        Ok(())
+    }
+
     /// Grow the record array to at least `target_capacity` records.
     ///
     /// Relocates the blob area, so the file is rebuilt atomically via a
@@ -257,10 +325,22 @@ impl BlobDirectory {
         // Copy live records then the blob area.
         let old_capacity = view.rec_capacity;
         let old_rec_bytes = old_capacity * self.rec_size;
-        write_region(&mut tmp, &self.file.lock(), HEADER_LEN, HEADER_LEN, old_rec_bytes)?;
+        write_region(
+            &mut tmp,
+            &self.file.lock(),
+            HEADER_LEN,
+            HEADER_LEN,
+            old_rec_bytes,
+        )?;
         let old_blob_start = HEADER_LEN + old_capacity * self.rec_size;
         let new_blob_start = HEADER_LEN + target_capacity as usize * self.rec_size;
-        write_region(&mut tmp, &self.file.lock(), new_blob_start, old_blob_start, view.blob_len as usize)?;
+        write_region(
+            &mut tmp,
+            &self.file.lock(),
+            new_blob_start,
+            old_blob_start,
+            view.blob_len as usize,
+        )?;
         tmp.sync_all()?;
 
         let dir = self.path.parent().ok_or_else(|| {
@@ -355,7 +435,13 @@ fn open_dir(dir: &Path) -> Result<File> {
 }
 
 /// Copy `len` bytes from `src` at `src_off` into `dst` at `dst_off`.
-fn write_region(dst: &mut File, src: &File, dst_off: usize, src_off: usize, len: usize) -> Result<()> {
+fn write_region(
+    dst: &mut File,
+    src: &File,
+    dst_off: usize,
+    src_off: usize,
+    len: usize,
+) -> Result<()> {
     const CHUNK: usize = 64 * 1024;
     let mut remaining = len;
     let mut pos = 0;

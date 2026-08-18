@@ -46,8 +46,13 @@ Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`, `cr
 Prerequisites: rustc 1.88.0, cargo 1.88.0
 
 SIMD note (Phase 0): `.cargo/config.toml` sets `-C target-cpu=x86-64-v3`
-(AVX2, Haswell+ 2013) for auto-vectorization. Fallback on older CPUs:
+(AVX2, Haswell+ 2013) for auto-vectorization. **A v3-built binary requires
+AVX2 hardware at runtime** (the whole binary may emit AVX2 instructions;
+the runtime kernel checks in `vector-search/src/distance/` only guard
+baseline builds). For older CPUs rebuild with the baseline target:
 `RUSTFLAGS="-C target-cpu=x86_64"` (or delete the `[target]` section).
+`aarch64-*` targets are declared but not yet verified (NEON is ARMv8
+baseline, no flags needed).
 
 ## Development Conventions
 
