@@ -371,10 +371,15 @@ fn attach_vector_coordinator(
             }
         }
     };
+    #[cfg(feature = "vector-qdrant")]
     let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
         backend,
-        #[cfg(feature = "vector-qdrant")]
         embedding_service,
+        handle,
+    ));
+    #[cfg(not(feature = "vector-qdrant"))]
+    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+        backend,
         handle,
     ));
     info!("Vector index sync enabled");

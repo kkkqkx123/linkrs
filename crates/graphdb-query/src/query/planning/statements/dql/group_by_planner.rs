@@ -247,8 +247,9 @@ impl Planner for GroupByPlanner {
             None => None,
         };
 
-        // Extract the aggregate functions with distinct flags and filters
+        // Extract the aggregate functions with distinct flags, filters, and args
         let mut aggregation_functions = Vec::new();
+        let mut aggregation_args = Vec::new();
         let mut aggregation_distinct = Vec::new();
         let mut aggregation_filters = Vec::new();
         for item in &group_by_stmt.yield_clause.items {
@@ -258,13 +259,17 @@ impl Planner for GroupByPlanner {
                 aggregation_distinct.push(distinct);
                 aggregation_filters.push(filter);
             }
+            // Also extract the args from the Expression::Aggregate nodes
+            if let Some(expr_meta) = item.expression.expression() {
+                Self::collect_aggregate_args_recursive(expr_meta.inner(), &mut aggregation_args);
+            }
         }
 
         // Build the input plan. A standalone GROUP BY aggregates over every
         // vertex of the current space; when the GROUP BY is the right side of
         // a pipe, PipePlanner replaces this adapter with the piped rows.
         let (input_enum, input_tail) =
-            self.build_standalone_input(validated, &group_keys, &aggregation_functions, qctx)?;
+            self.build_standalone_input(validated, &group_keys, &aggregation_functions, &aggregation_args, qctx)?;
 
         // Generate grouping sets from GroupingType
         let grouping_sets = match &group_by_stmt.grouping_type {
@@ -332,6 +337,7 @@ impl Planner for GroupByPlanner {
         .map_err(|e| {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
+        aggregate_node.set_aggregation_args(aggregation_args);
         aggregate_node.set_aggregation_distinct(aggregation_distinct);
         aggregate_node.set_aggregation_filters(aggregation_filters);
         aggregate_node.set_grouping_sets(grouping_sets);
@@ -374,6 +380,7 @@ impl GroupByPlanner {
         validated: &ValidatedStatement,
         group_keys: &[String],
         aggregation_functions: &[AggregateFunction],
+        aggregation_args: &[Vec<Expression>],
         qctx: Arc<QueryContext>,
     ) -> Result<(PlanNodeEnum, PlanNodeEnum), PlannerError> {
         let space_name = qctx
@@ -384,8 +391,8 @@ impl GroupByPlanner {
         // Collect the property names referenced by the group keys and the
         // aggregate function fields.
         let mut properties: Vec<String> = group_keys.to_vec();
-        for func in aggregation_functions {
-            if let Some(field) = Self::aggregate_field(func) {
+        for (i, func) in aggregation_functions.iter().enumerate() {
+            if let Some(field) = Self::aggregate_field(func, aggregation_args.get(i).map(|a| a.as_slice()).unwrap_or(&[])) {
                 properties.push(field);
             }
         }
@@ -422,34 +429,129 @@ impl GroupByPlanner {
     }
 
     /// Return the input field name referenced by an aggregate function, if any.
-    fn aggregate_field(func: &AggregateFunction) -> Option<String> {
+    /// Extracts from the first argument expression (the field being aggregated).
+    fn aggregate_field(func: &AggregateFunction, args: &[Expression]) -> Option<String> {
         match func {
-            AggregateFunction::Count(None) => None,
-            AggregateFunction::Count(Some(field))
-            | AggregateFunction::Sum(field)
-            | AggregateFunction::Avg(field)
-            | AggregateFunction::Min(field)
-            | AggregateFunction::Max(field)
-            | AggregateFunction::Collect(field)
-            | AggregateFunction::CollectSet(field)
-            | AggregateFunction::Distinct(field)
-            | AggregateFunction::Std(field)
-            | AggregateFunction::StddevPop(field)
-            | AggregateFunction::StddevSamp(field)
-            | AggregateFunction::Variance(field)
-            | AggregateFunction::Product(field)
-            | AggregateFunction::Median(field)
-            | AggregateFunction::Mode(field)
-            | AggregateFunction::BitAnd(field)
-            | AggregateFunction::BitOr(field)
-            | AggregateFunction::BoolAnd(field)
-            | AggregateFunction::BoolOr(field)
-            | AggregateFunction::VecSum(field)
-            | AggregateFunction::VecAvg(field)
-            | AggregateFunction::Percentile(field, _)
-            | AggregateFunction::PercentileCont(field, _)
-            | AggregateFunction::GroupConcat(field, _)
-            | AggregateFunction::GroupConcatWithOrder(field, _, _) => Some(field.clone()),
+            AggregateFunction::Count => None,
+            _ => {
+                if let Some(Expression::Variable(field)) = args.first() {
+                    Some(field.clone())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Recursively collect args from Expression::Aggregate nodes in parallel
+    /// with the `extract_aggregate_functions` traversal.
+    fn collect_aggregate_args_recursive(
+        expr: &Expression,
+        args_out: &mut Vec<Vec<Expression>>,
+    ) {
+        match expr {
+            Expression::Aggregate { args, .. } => {
+                args_out.push(args.clone());
+            }
+            Expression::Binary { left, right, .. } => {
+                Self::collect_aggregate_args_recursive(left, args_out);
+                Self::collect_aggregate_args_recursive(right, args_out);
+            }
+            Expression::Unary { operand, .. } => {
+                Self::collect_aggregate_args_recursive(operand, args_out);
+            }
+            Expression::Function { args, .. } => {
+                for arg in args {
+                    Self::collect_aggregate_args_recursive(arg, args_out);
+                }
+            }
+            Expression::List(items) => {
+                for item in items {
+                    Self::collect_aggregate_args_recursive(item, args_out);
+                }
+            }
+            Expression::Map(pairs) => {
+                for (_, value) in pairs {
+                    Self::collect_aggregate_args_recursive(value, args_out);
+                }
+            }
+            Expression::Case { test_expr, conditions, default } => {
+                if let Some(test) = test_expr {
+                    Self::collect_aggregate_args_recursive(test, args_out);
+                }
+                for (when_expr, then_expr) in conditions {
+                    Self::collect_aggregate_args_recursive(when_expr, args_out);
+                    Self::collect_aggregate_args_recursive(then_expr, args_out);
+                }
+                if let Some(def) = default {
+                    Self::collect_aggregate_args_recursive(def, args_out);
+                }
+            }
+            Expression::Property { object, .. } => {
+                Self::collect_aggregate_args_recursive(object, args_out);
+            }
+            Expression::StructField { base, .. } => {
+                Self::collect_aggregate_args_recursive(base, args_out);
+            }
+            Expression::Subscript { collection, index } => {
+                Self::collect_aggregate_args_recursive(collection, args_out);
+                Self::collect_aggregate_args_recursive(index, args_out);
+            }
+            Expression::Range { collection, start, end } => {
+                Self::collect_aggregate_args_recursive(collection, args_out);
+                if let Some(s) = start {
+                    Self::collect_aggregate_args_recursive(s, args_out);
+                }
+                if let Some(e) = end {
+                    Self::collect_aggregate_args_recursive(e, args_out);
+                }
+            }
+            Expression::Path(items) => {
+                for item in items {
+                    Self::collect_aggregate_args_recursive(item, args_out);
+                }
+            }
+            Expression::TypeCast { expression, .. } => {
+                Self::collect_aggregate_args_recursive(expression, args_out);
+            }
+            Expression::ListComprehension { source, filter, map, .. } => {
+                Self::collect_aggregate_args_recursive(source, args_out);
+                if let Some(f) = filter {
+                    Self::collect_aggregate_args_recursive(f, args_out);
+                }
+                if let Some(m) = map {
+                    Self::collect_aggregate_args_recursive(m, args_out);
+                }
+            }
+            Expression::LabelTagProperty { tag, .. } => {
+                Self::collect_aggregate_args_recursive(tag, args_out);
+            }
+            Expression::Predicate { args, .. } => {
+                for arg in args {
+                    Self::collect_aggregate_args_recursive(arg, args_out);
+                }
+            }
+            Expression::Reduce { initial, source, mapping, .. } => {
+                Self::collect_aggregate_args_recursive(initial, args_out);
+                Self::collect_aggregate_args_recursive(source, args_out);
+                Self::collect_aggregate_args_recursive(mapping, args_out);
+            }
+            Expression::PathBuild(items) => {
+                for item in items {
+                    Self::collect_aggregate_args_recursive(item, args_out);
+                }
+            }
+            Expression::Literal(_)
+            | Expression::Variable(_)
+            | Expression::Label(_)
+            | Expression::TagProperty { .. }
+            | Expression::EdgeProperty { .. }
+            | Expression::Parameter(_)
+            | Expression::SessionVariable(_)
+            | Expression::Vector(_)
+            | Expression::Exists { .. }
+            | Expression::In { .. }
+            | Expression::WindowFunction { .. } => {}
         }
     }
 }

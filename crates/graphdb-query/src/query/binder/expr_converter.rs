@@ -299,45 +299,19 @@ fn convert_bound_to_expression(bound: &BoundExpression) -> Result<Expression, St
 
 fn function_name_to_aggregate(a: &BoundAggregateCall) -> Result<AggregateFunction, String> {
     let name = &a.function_name;
-    let arg_str = a.arguments.first().map(|e| match e {
-        BoundExpression::Variable(v, _) => v.clone(),
-        BoundExpression::ColumnRef(cr) => cr.property.clone(),
-        BoundExpression::Literal(v, _) => format!("{:?}", v),
-        _ => "*".to_string(),
-    });
 
     match name.to_uppercase().as_str() {
-        "COUNT" => Ok(AggregateFunction::Count(arg_str)),
-        "SUM" => Ok(AggregateFunction::Sum(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "AVG" => Ok(AggregateFunction::Avg(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "MIN" => Ok(AggregateFunction::Min(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "MAX" => Ok(AggregateFunction::Max(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "COLLECT" => Ok(AggregateFunction::Collect(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "STD" => Ok(AggregateFunction::Std(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "VARIANCE" => Ok(AggregateFunction::Variance(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "PRODUCT" => Ok(AggregateFunction::Product(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "MEDIAN" => Ok(AggregateFunction::Median(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
-        "MODE" => Ok(AggregateFunction::Mode(
-            arg_str.unwrap_or_else(|| "*".to_string()),
-        )),
+        "COUNT" => Ok(AggregateFunction::Count),
+        "SUM" => Ok(AggregateFunction::Sum),
+        "AVG" => Ok(AggregateFunction::Avg),
+        "MIN" => Ok(AggregateFunction::Min),
+        "MAX" => Ok(AggregateFunction::Max),
+        "COLLECT" => Ok(AggregateFunction::Collect),
+        "STD" => Ok(AggregateFunction::Std),
+        "VARIANCE" => Ok(AggregateFunction::Variance),
+        "PRODUCT" => Ok(AggregateFunction::Product),
+        "MEDIAN" => Ok(AggregateFunction::Median),
+        "MODE" => Ok(AggregateFunction::Mode),
         _ => Err(format!("Unknown aggregate function: {}", name)),
     }
 }

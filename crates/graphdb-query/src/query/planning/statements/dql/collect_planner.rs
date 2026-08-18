@@ -57,6 +57,7 @@ impl Planner for CollectPlanner {
         let start_enum = PlanNodeEnum::Start(start_node);
 
         let mut aggregate_functions = Vec::new();
+        let mut aggregation_args = Vec::new();
         let mut agg_aliases = Vec::new();
         for item in &collect_stmt.items {
             let expression = item
@@ -65,7 +66,8 @@ impl Planner for CollectPlanner {
                 .map(|e| e.inner().clone())
                 .unwrap_or_else(|| Expression::Variable(item.expression.to_expression_string()));
             let field = self.collect_field(&expression);
-            aggregate_functions.push(AggregateFunction::Collect(field));
+            aggregate_functions.push(AggregateFunction::Collect);
+            aggregation_args.push(vec![Expression::Variable(field)]);
             agg_aliases.push(
                 item.alias
                     .clone()
@@ -73,7 +75,7 @@ impl Planner for CollectPlanner {
             );
         }
 
-        let aggregate_node = AggregateNode::with_agg_aliases(
+        let mut aggregate_node = AggregateNode::with_agg_aliases(
             start_enum.clone(),
             Vec::new(),
             aggregate_functions,
@@ -82,6 +84,7 @@ impl Planner for CollectPlanner {
         .map_err(|e| {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
+        aggregate_node.set_aggregation_args(aggregation_args);
 
         let sub_plan = SubPlan::new(
             Some(PlanNodeEnum::Aggregate(aggregate_node)),

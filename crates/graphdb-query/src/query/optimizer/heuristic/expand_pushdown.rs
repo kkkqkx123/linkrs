@@ -259,9 +259,12 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
         PlanNodeEnum::Aggregate(agg) => {
             agg.group_keys().iter().any(|key| key == var)
                 || agg
-                    .aggregation_functions()
+                    .aggregation_args()
                     .iter()
-                    .any(|func| aggregate_field(func).as_deref() == Some(var))
+                    .flatten()
+                    .any(|expr| {
+                        matches!(expr, Expression::Variable(name) if name == var)
+                    })
         }
         PlanNodeEnum::InnerJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
@@ -317,21 +320,6 @@ fn join_references_var(
     })
 }
 
-/// Field name referenced by an aggregate function, if any.
-fn aggregate_field(func: &crate::core::types::operators::AggregateFunction) -> Option<String> {
-    match func {
-        crate::core::types::operators::AggregateFunction::Count(Some(field))
-        | crate::core::types::operators::AggregateFunction::Sum(field)
-        | crate::core::types::operators::AggregateFunction::Avg(field)
-        | crate::core::types::operators::AggregateFunction::Min(field)
-        | crate::core::types::operators::AggregateFunction::Max(field)
-        | crate::core::types::operators::AggregateFunction::Collect(field)
-        | crate::core::types::operators::AggregateFunction::CollectSet(field)
-        | crate::core::types::operators::AggregateFunction::Distinct(field) => Some(field.clone()),
-        _ => None,
-    }
-}
-
 /// Whether the aggregate is count-only: no GROUP BY and only COUNT functions.
 fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
     agg.group_keys().is_empty()
@@ -339,7 +327,7 @@ fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
         && agg.aggregation_functions().iter().all(|f| {
             matches!(
                 f,
-                crate::core::types::operators::AggregateFunction::Count(_)
+                crate::core::types::operators::AggregateFunction::Count
             )
         })
 }
@@ -509,7 +497,7 @@ mod tests {
     }
 
     fn count_agg(input: PlanNodeEnum) -> PlanNodeEnum {
-        let agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count(None)])
+        let agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count])
             .expect("aggregate should build");
         PlanNodeEnum::Aggregate(agg)
     }
@@ -525,12 +513,13 @@ mod tests {
     }
 
     fn count_field_agg(input: PlanNodeEnum, field: &str) -> PlanNodeEnum {
-        let agg = AggregateNode::new(
+        let mut agg = AggregateNode::new(
             input,
             vec![],
-            vec![AggregateFunction::Count(Some(field.to_string()))],
+            vec![AggregateFunction::Count],
         )
         .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Variable(field.to_string())]]);
         PlanNodeEnum::Aggregate(agg)
     }
 

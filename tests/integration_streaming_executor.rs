@@ -400,8 +400,8 @@ fn test_aggregate_in_chain() {
             BlockingOperatorKind::Aggregate {
                 group_by_expressions: vec![Expression::Literal(Value::Int(0))],
                 aggregate_functions: vec![(
-                    AggregateFunction::Count(None),
-                    Expression::Literal(Value::Int(1)),
+                    AggregateFunction::Count,
+                    vec![Expression::Literal(Value::Int(1))],
                 )],
                 output_col_names: vec![],
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),

@@ -232,7 +232,7 @@ mod tests {
 
         let input = PlanNodeEnum::Start(StartNode::new());
         let group_keys = vec!["category".to_string()];
-        let agg_funcs = vec![AggregateFunction::Count(None)];
+        let agg_funcs = vec![AggregateFunction::Count];
         let node =
             AggregateNode::new(input, group_keys, agg_funcs).expect("Node creation should succeed");
         let plan_node = PlanNodeEnum::Aggregate(node);
@@ -362,7 +362,7 @@ mod tests {
 
         let input = PlanNodeEnum::Start(StartNode::new());
         let group_keys = vec![];
-        let agg_funcs = vec![AggregateFunction::Count(None)];
+        let agg_funcs = vec![AggregateFunction::Count];
         let node =
             AggregateNode::new(input, group_keys, agg_funcs).expect("Node creation should succeed");
         let plan_node = PlanNodeEnum::Aggregate(node);
@@ -391,7 +391,7 @@ mod tests {
             "type".to_string(),
             "status".to_string(),
         ];
-        let agg_funcs = vec![AggregateFunction::Count(None)];
+        let agg_funcs = vec![AggregateFunction::Count];
         let node =
             AggregateNode::new(input, group_keys, agg_funcs).expect("Node creation should succeed");
         let plan_node = PlanNodeEnum::Aggregate(node);

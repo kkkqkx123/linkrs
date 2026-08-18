@@ -467,7 +467,7 @@ pub(super) fn is_count_only_aggregate(
         && agg.aggregation_functions().iter().all(|f| {
             matches!(
                 f,
-                crate::core::types::operators::AggregateFunction::Count(_)
+                crate::core::types::operators::AggregateFunction::Count
             )
         })
 }
@@ -619,28 +619,21 @@ pub(super) fn build_aggregate_spec(
     let count_only =
         is_count_only_aggregate(node) && count_only_expand_below(node.input()).is_some();
     let agg_functions = node.aggregation_functions();
-    let aggregate_functions: Vec<(AggregateFunction, Expression)> = agg_functions
+    let agg_args = node.aggregation_args();
+    let aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)> = agg_functions
         .iter()
-        .map(|func| {
+        .enumerate()
+        .map(|(i, func)| {
             if count_only {
                 // The input is a count_only expand emitting one per-chunk edge
                 // count per chunk.  Sum those counts instead of counting rows.
                 return (
-                    AggregateFunction::Sum(COUNT_ONLY_COLUMN.to_string()),
-                    Expression::Variable(COUNT_ONLY_COLUMN.to_string()),
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
                 );
             }
-            let expr = match func {
-                AggregateFunction::Count(Some(field)) => Expression::Variable(field.clone()),
-                AggregateFunction::Sum(field) => Expression::Variable(field.clone()),
-                AggregateFunction::Avg(field) => Expression::Variable(field.clone()),
-                AggregateFunction::Min(field) => Expression::Variable(field.clone()),
-                AggregateFunction::Max(field) => Expression::Variable(field.clone()),
-                AggregateFunction::Collect(field) => Expression::Variable(field.clone()),
-                AggregateFunction::Count(None) => Expression::Literal(crate::core::Value::Int(1)),
-                _ => Expression::Literal(crate::core::Value::Int(1)),
-            };
-            (func.clone(), expr)
+            let args = agg_args.get(i).cloned().unwrap_or_default();
+            (func.clone(), args)
         })
         .collect();
     Ok(BlockingSpec::Aggregate {

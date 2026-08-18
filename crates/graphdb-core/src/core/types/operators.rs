@@ -205,73 +205,75 @@ impl fmt::Display for UnaryOperator {
     }
 }
 
-/// Aggregate function operators
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AggregateFunction {
-    Count(Option<String>),
-    Sum(String),
-    Avg(String),
-    Min(String),
-    Max(String),
-    Collect(String),
-    CollectSet(String),
-    Distinct(String),
-    Percentile(String, f64),
-    Std(String),
-    StddevPop(String),
-    StddevSamp(String),
-    Variance(String),
-    Product(String),
-    PercentileCont(String, f64),
-    Median(String),
-    Mode(String),
-    BitAnd(String),
-    BitOr(String),
-    BoolAnd(String),
-    BoolOr(String),
-    GroupConcat(String, String),
+/// Aggregate function kind (parameterless).
+///
+/// Parameters (field name, separator, percentile, order-by columns) are
+/// carried by `Expression::Aggregate.args` instead of being embedded in
+/// each variant, so the operator enum stays a pure kind descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AggregateFunctionKind {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+    Collect,
+    CollectSet,
+    Percentile,
+    Std,
+    StddevPop,
+    StddevSamp,
+    Variance,
+    Product,
+    PercentileCont,
+    Median,
+    Mode,
+    BitAnd,
+    BitOr,
+    BoolAnd,
+    BoolOr,
+    GroupConcat,
     /// GROUP_CONCAT with ORDER BY support for WITHIN GROUP clause
-    GroupConcatWithOrder(String, String, Vec<String>),
+    GroupConcatWithOrder,
     /// Vector sum - element-wise sum of vectors
-    VecSum(String),
+    VecSum,
     /// Vector average - element-wise average of vectors
-    VecAvg(String),
+    VecAvg,
 }
 
-impl fmt::Display for AggregateFunction {
+impl fmt::Display for AggregateFunctionKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
     }
 }
 
-impl AggregateFunction {
+impl AggregateFunctionKind {
     pub fn name(&self) -> &str {
         match self {
-            AggregateFunction::Count(_) => "COUNT",
-            AggregateFunction::Sum(_) => "SUM",
-            AggregateFunction::Avg(_) => "AVG",
-            AggregateFunction::Min(_) => "MIN",
-            AggregateFunction::Max(_) => "MAX",
-            AggregateFunction::Collect(_) => "COLLECT",
-            AggregateFunction::CollectSet(_) => "COLLECT_SET",
-            AggregateFunction::Distinct(_) => "DISTINCT",
-            AggregateFunction::Percentile(_, _) => "PERCENTILE",
-            AggregateFunction::Std(_) => "STD",
-            AggregateFunction::StddevPop(_) => "STDDEV_POP",
-            AggregateFunction::StddevSamp(_) => "STDDEV_SAMP",
-            AggregateFunction::Variance(_) => "VARIANCE",
-            AggregateFunction::Product(_) => "PRODUCT",
-            AggregateFunction::PercentileCont(_, _) => "PERCENTILE_CONT",
-            AggregateFunction::Median(_) => "MEDIAN",
-            AggregateFunction::Mode(_) => "MODE",
-            AggregateFunction::BitAnd(_) => "BIT_AND",
-            AggregateFunction::BitOr(_) => "BIT_OR",
-            AggregateFunction::BoolAnd(_) => "BOOL_AND",
-            AggregateFunction::BoolOr(_) => "BOOL_OR",
-            AggregateFunction::GroupConcat(_, _) => "GROUP_CONCAT",
-            AggregateFunction::GroupConcatWithOrder(_, _, _) => "GROUP_CONCAT",
-            AggregateFunction::VecSum(_) => "VEC_SUM",
-            AggregateFunction::VecAvg(_) => "VEC_AVG",
+            AggregateFunctionKind::Count => "COUNT",
+            AggregateFunctionKind::Sum => "SUM",
+            AggregateFunctionKind::Avg => "AVG",
+            AggregateFunctionKind::Min => "MIN",
+            AggregateFunctionKind::Max => "MAX",
+            AggregateFunctionKind::Collect => "COLLECT",
+            AggregateFunctionKind::CollectSet => "COLLECT_SET",
+            AggregateFunctionKind::Percentile => "PERCENTILE",
+            AggregateFunctionKind::Std => "STD",
+            AggregateFunctionKind::StddevPop => "STDDEV_POP",
+            AggregateFunctionKind::StddevSamp => "STDDEV_SAMP",
+            AggregateFunctionKind::Variance => "VARIANCE",
+            AggregateFunctionKind::Product => "PRODUCT",
+            AggregateFunctionKind::PercentileCont => "PERCENTILE_CONT",
+            AggregateFunctionKind::Median => "MEDIAN",
+            AggregateFunctionKind::Mode => "MODE",
+            AggregateFunctionKind::BitAnd => "BIT_AND",
+            AggregateFunctionKind::BitOr => "BIT_OR",
+            AggregateFunctionKind::BoolAnd => "BOOL_AND",
+            AggregateFunctionKind::BoolOr => "BOOL_OR",
+            AggregateFunctionKind::GroupConcat => "GROUP_CONCAT",
+            AggregateFunctionKind::GroupConcatWithOrder => "GROUP_CONCAT",
+            AggregateFunctionKind::VecSum => "VEC_SUM",
+            AggregateFunctionKind::VecAvg => "VEC_AVG",
         }
     }
 
@@ -285,114 +287,58 @@ impl AggregateFunction {
 
     pub fn arity(&self) -> usize {
         match self {
-            AggregateFunction::Count(Some(_)) => 1,
-            AggregateFunction::Count(None) => 0,
-            AggregateFunction::Sum(_)
-            | AggregateFunction::Avg(_)
-            | AggregateFunction::Min(_)
-            | AggregateFunction::Max(_)
-            | AggregateFunction::Collect(_)
-            | AggregateFunction::CollectSet(_)
-            | AggregateFunction::Distinct(_)
-            | AggregateFunction::Std(_)
-            | AggregateFunction::StddevPop(_)
-            | AggregateFunction::StddevSamp(_)
-            | AggregateFunction::Product(_)
-            | AggregateFunction::Variance(_)
-            | AggregateFunction::Median(_)
-            | AggregateFunction::Mode(_)
-            | AggregateFunction::BitAnd(_)
-            | AggregateFunction::BitOr(_)
-            | AggregateFunction::BoolAnd(_)
-            | AggregateFunction::BoolOr(_)
-            | AggregateFunction::VecSum(_)
-            | AggregateFunction::VecAvg(_) => 1,
-            AggregateFunction::Percentile(_, _) => 2,
-            AggregateFunction::PercentileCont(_, _) => 2,
-            AggregateFunction::GroupConcat(_, _) => {
-                if self.separator().is_empty() {
-                    1
-                } else {
-                    2
-                }
-            }
-            AggregateFunction::GroupConcatWithOrder(_, _, _) => {
-                if self.separator().is_empty() {
-                    1
-                } else {
-                    2
-                }
-            }
+            AggregateFunctionKind::Count
+            | AggregateFunctionKind::Sum
+            | AggregateFunctionKind::Avg
+            | AggregateFunctionKind::Min
+            | AggregateFunctionKind::Max
+            | AggregateFunctionKind::Collect
+            | AggregateFunctionKind::CollectSet
+            | AggregateFunctionKind::Std
+            | AggregateFunctionKind::StddevPop
+            | AggregateFunctionKind::StddevSamp
+            | AggregateFunctionKind::Product
+            | AggregateFunctionKind::Variance
+            | AggregateFunctionKind::Median
+            | AggregateFunctionKind::Mode
+            | AggregateFunctionKind::BitAnd
+            | AggregateFunctionKind::BitOr
+            | AggregateFunctionKind::BoolAnd
+            | AggregateFunctionKind::BoolOr
+            | AggregateFunctionKind::VecSum
+            | AggregateFunctionKind::VecAvg => 1,
+            AggregateFunctionKind::Percentile | AggregateFunctionKind::PercentileCont => 2,
+            AggregateFunctionKind::GroupConcat | AggregateFunctionKind::GroupConcatWithOrder => 1,
         }
     }
 
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,
-            AggregateFunction::Sum(_)
-                | AggregateFunction::Avg(_)
-                | AggregateFunction::Min(_)
-                | AggregateFunction::Max(_)
-                | AggregateFunction::Percentile(_, _)
-                | AggregateFunction::PercentileCont(_, _)
-                | AggregateFunction::Std(_)
-                | AggregateFunction::StddevPop(_)
-                | AggregateFunction::StddevSamp(_)
-                | AggregateFunction::Product(_)
-                | AggregateFunction::Variance(_)
-                | AggregateFunction::Median(_)
-                | AggregateFunction::VecSum(_)
-                | AggregateFunction::VecAvg(_)
+            AggregateFunctionKind::Sum
+                | AggregateFunctionKind::Avg
+                | AggregateFunctionKind::Min
+                | AggregateFunctionKind::Max
+                | AggregateFunctionKind::Percentile
+                | AggregateFunctionKind::PercentileCont
+                | AggregateFunctionKind::Std
+                | AggregateFunctionKind::StddevPop
+                | AggregateFunctionKind::StddevSamp
+                | AggregateFunctionKind::Product
+                | AggregateFunctionKind::Variance
+                | AggregateFunctionKind::Median
+                | AggregateFunctionKind::VecSum
+                | AggregateFunctionKind::VecAvg
         )
     }
 
     pub fn is_collection(&self) -> bool {
         matches!(
             self,
-            AggregateFunction::Count(_)
-                | AggregateFunction::Collect(_)
-                | AggregateFunction::CollectSet(_)
-                | AggregateFunction::Distinct(_)
+            AggregateFunctionKind::Count
+                | AggregateFunctionKind::Collect
+                | AggregateFunctionKind::CollectSet
         )
-    }
-
-    pub fn separator(&self) -> String {
-        match self {
-            AggregateFunction::GroupConcat(_, sep) => sep.clone(),
-            AggregateFunction::GroupConcatWithOrder(_, sep, _) => sep.clone(),
-            _ => String::new(),
-        }
-    }
-
-    pub fn field_name(&self) -> Option<&str> {
-        match self {
-            AggregateFunction::Count(Some(field)) => Some(field),
-            AggregateFunction::Count(None) => None,
-            AggregateFunction::Sum(field) => Some(field),
-            AggregateFunction::Avg(field) => Some(field),
-            AggregateFunction::Min(field) => Some(field),
-            AggregateFunction::Max(field) => Some(field),
-            AggregateFunction::Collect(field) => Some(field),
-            AggregateFunction::CollectSet(field) => Some(field),
-            AggregateFunction::Distinct(field) => Some(field),
-            AggregateFunction::Percentile(field, _) => Some(field),
-            AggregateFunction::PercentileCont(field, _) => Some(field),
-            AggregateFunction::Std(field) => Some(field),
-            AggregateFunction::StddevPop(field) => Some(field),
-            AggregateFunction::StddevSamp(field) => Some(field),
-            AggregateFunction::Product(field) => Some(field),
-            AggregateFunction::Variance(field) => Some(field),
-            AggregateFunction::Median(field) => Some(field),
-            AggregateFunction::Mode(field) => Some(field),
-            AggregateFunction::BitAnd(field) => Some(field),
-            AggregateFunction::BitOr(field) => Some(field),
-            AggregateFunction::BoolAnd(field) => Some(field),
-            AggregateFunction::BoolOr(field) => Some(field),
-            AggregateFunction::GroupConcat(field, _) => Some(field),
-            AggregateFunction::GroupConcatWithOrder(field, _, _) => Some(field),
-            AggregateFunction::VecSum(field) => Some(field),
-            AggregateFunction::VecAvg(field) => Some(field),
-        }
     }
 
     pub fn is_variadic(&self) -> bool {
@@ -401,43 +347,37 @@ impl AggregateFunction {
 
     pub fn description(&self) -> &str {
         match self {
-            AggregateFunction::Count(_) => "Calculated quantity",
-            AggregateFunction::Sum(_) => "Calculate the sum",
-            AggregateFunction::Avg(_) => "Calculation of average values",
-            AggregateFunction::Min(_) => "Calculate minimum",
-            AggregateFunction::Max(_) => "Calculate the maximum value",
-            AggregateFunction::Collect(_) => "Collect all values",
-            AggregateFunction::CollectSet(_) => "Collection of unique values",
-            AggregateFunction::Distinct(_) => "deduplication",
-            AggregateFunction::Percentile(_, _) => "Calculation of percentile",
-            AggregateFunction::PercentileCont(_, _) => "Continuous percentile (with interpolation)",
-            AggregateFunction::Std(_) => "calculate the standard deviation",
-            AggregateFunction::StddevPop(_) => "Population standard deviation",
-            AggregateFunction::StddevSamp(_) => "Sample standard deviation",
-            AggregateFunction::Product(_) => "Compute the product of values",
-            AggregateFunction::Variance(_) => "Calculate the variance",
-            AggregateFunction::Median(_) => "Calculate the median",
-            AggregateFunction::Mode(_) => "Calculate the mode",
-            AggregateFunction::BitAnd(_) => "compatibility with",
-            AggregateFunction::BitOr(_) => "bitwise OR",
-            AggregateFunction::BoolAnd(_) => "logical AND",
-            AggregateFunction::BoolOr(_) => "logical OR",
-            AggregateFunction::GroupConcat(_, _) => "packet connection",
-            AggregateFunction::GroupConcatWithOrder(_, _, _) => {
+            AggregateFunctionKind::Count => "Calculated quantity",
+            AggregateFunctionKind::Sum => "Calculate the sum",
+            AggregateFunctionKind::Avg => "Calculation of average values",
+            AggregateFunctionKind::Min => "Calculate minimum",
+            AggregateFunctionKind::Max => "Calculate the maximum value",
+            AggregateFunctionKind::Collect => "Collect all values",
+            AggregateFunctionKind::CollectSet => "Collection of unique values",
+            AggregateFunctionKind::Percentile => "Calculation of percentile",
+            AggregateFunctionKind::PercentileCont => "Continuous percentile (with interpolation)",
+            AggregateFunctionKind::Std => "calculate the standard deviation",
+            AggregateFunctionKind::StddevPop => "Population standard deviation",
+            AggregateFunctionKind::StddevSamp => "Sample standard deviation",
+            AggregateFunctionKind::Product => "Compute the product of values",
+            AggregateFunctionKind::Variance => "Calculate the variance",
+            AggregateFunctionKind::Median => "Calculate the median",
+            AggregateFunctionKind::Mode => "Calculate the mode",
+            AggregateFunctionKind::BitAnd => "compatibility with",
+            AggregateFunctionKind::BitOr => "bitwise OR",
+            AggregateFunctionKind::BoolAnd => "logical AND",
+            AggregateFunctionKind::BoolOr => "logical OR",
+            AggregateFunctionKind::GroupConcat => "packet connection",
+            AggregateFunctionKind::GroupConcatWithOrder => {
                 "Group concatenation with ORDER BY (WITHIN GROUP)"
             }
-            AggregateFunction::VecSum(_) => "Calculate the element-by-element sum of vector",
-            AggregateFunction::VecAvg(_) => {
+            AggregateFunctionKind::VecSum => "Calculate the element-by-element sum of vector",
+            AggregateFunctionKind::VecAvg => {
                 "Calculate the element-by-element average of the vector"
             }
         }
     }
-
-    /// Get the order by field names for WITHIN GROUP clause
-    pub fn order_by_fields(&self) -> Option<&[String]> {
-        match self {
-            AggregateFunction::GroupConcatWithOrder(_, _, order_by) => Some(order_by),
-            _ => None,
-        }
-    }
 }
+
+/// Backward-compatible alias for callers that only need the kind.
+pub type AggregateFunction = AggregateFunctionKind;

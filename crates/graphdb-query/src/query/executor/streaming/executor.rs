@@ -1476,24 +1476,24 @@ mod tests {
                     group_by_expressions: vec![Expression::variable("g".to_string())],
                     aggregate_functions: vec![
                         (
-                            AggregateFunction::Count(None),
-                            Expression::Literal(Value::Int(1)),
+                            AggregateFunction::Count,
+                            vec![Expression::Literal(Value::Int(1))],
                         ),
                         (
-                            AggregateFunction::Sum("v".to_string()),
-                            Expression::variable("v".to_string()),
+                            AggregateFunction::Sum,
+                            vec![Expression::variable("v".to_string())],
                         ),
                         (
-                            AggregateFunction::Min("v".to_string()),
-                            Expression::variable("v".to_string()),
+                            AggregateFunction::Min,
+                            vec![Expression::variable("v".to_string())],
                         ),
                         (
-                            AggregateFunction::Max("v".to_string()),
-                            Expression::variable("v".to_string()),
+                            AggregateFunction::Max,
+                            vec![Expression::variable("v".to_string())],
                         ),
                         (
-                            AggregateFunction::Collect("v".to_string()),
-                            Expression::variable("v".to_string()),
+                            AggregateFunction::Collect,
+                            vec![Expression::variable("v".to_string())],
                         ),
                     ],
                     output_col_names: vec![],

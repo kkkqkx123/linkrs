@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
 use crate::query::executor::streaming::helpers::accumulator_states::{
-    decode_partial, AggregateAccumulator,
+    decode_partial_with_args, AggregateAccumulator,
 };
 use crate::query::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
 
@@ -63,7 +64,8 @@ pub struct FinalAggregateState {
 
 pub(crate) fn value_to_partial_accumulator(
     func: &AggregateFunction,
+    args: &[Expression],
     value: &Value,
 ) -> Option<AggregateAccumulator> {
-    decode_partial(func, value)
+    decode_partial_with_args(func, args, value)
 }

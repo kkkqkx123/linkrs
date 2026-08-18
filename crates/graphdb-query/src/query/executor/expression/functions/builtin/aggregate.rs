@@ -11,24 +11,22 @@ use serde::{Deserialize, Serialize};
 /// Create an AggregateFunction from a string name
 pub fn aggregate_from_str(func_name: &str) -> Result<AggregateFunction, ExpressionError> {
     match func_name.to_uppercase().as_str() {
-        "COUNT" => Ok(AggregateFunction::Count(None)),
-        "COUNT_DISTINCT" => Ok(AggregateFunction::Distinct("".to_string())),
-        "SUM" => Ok(AggregateFunction::Sum("".to_string())),
-        "AVG" => Ok(AggregateFunction::Avg("".to_string())),
-        "MIN" => Ok(AggregateFunction::Min("".to_string())),
-        "MAX" => Ok(AggregateFunction::Max("".to_string())),
-        "COLLECT" => Ok(AggregateFunction::Collect("".to_string())),
-        "DISTINCT" => Ok(AggregateFunction::Distinct("".to_string())),
-        "PERCENTILE" => Ok(AggregateFunction::Percentile("".to_string(), 50.0)),
-        "STDDEV_POP" => Ok(AggregateFunction::StddevPop("".to_string())),
-        "STDDEV_SAMP" => Ok(AggregateFunction::StddevSamp("".to_string())),
-        "PRODUCT" => Ok(AggregateFunction::Product("".to_string())),
-        "PERCENTILE_CONT" => Ok(AggregateFunction::PercentileCont("".to_string(), 50.0)),
-        "VARIANCE" => Ok(AggregateFunction::Variance("".to_string())),
-        "MEDIAN" => Ok(AggregateFunction::Median("".to_string())),
-        "MODE" => Ok(AggregateFunction::Mode("".to_string())),
-        "BOOL_AND" => Ok(AggregateFunction::BoolAnd("".to_string())),
-        "BOOL_OR" => Ok(AggregateFunction::BoolOr("".to_string())),
+        "COUNT" | "COUNT_DISTINCT" | "DISTINCT" => Ok(AggregateFunction::Count),
+        "SUM" => Ok(AggregateFunction::Sum),
+        "AVG" => Ok(AggregateFunction::Avg),
+        "MIN" => Ok(AggregateFunction::Min),
+        "MAX" => Ok(AggregateFunction::Max),
+        "COLLECT" => Ok(AggregateFunction::Collect),
+        "PERCENTILE" => Ok(AggregateFunction::Percentile),
+        "STDDEV_POP" => Ok(AggregateFunction::StddevPop),
+        "STDDEV_SAMP" => Ok(AggregateFunction::StddevSamp),
+        "PRODUCT" => Ok(AggregateFunction::Product),
+        "PERCENTILE_CONT" => Ok(AggregateFunction::PercentileCont),
+        "VARIANCE" => Ok(AggregateFunction::Variance),
+        "MEDIAN" => Ok(AggregateFunction::Median),
+        "MODE" => Ok(AggregateFunction::Mode),
+        "BOOL_AND" => Ok(AggregateFunction::BoolAnd),
+        "BOOL_OR" => Ok(AggregateFunction::BoolOr),
         _ => Err(ExpressionError::function_error(format!(
             "Unknown aggregate function: {}",
             func_name
@@ -42,20 +40,14 @@ pub fn aggregate_from_str_with_args(
     args: &[String],
 ) -> Result<AggregateFunction, ExpressionError> {
     match func_name.to_uppercase().as_str() {
-        "COUNT" => {
-            if args.is_empty() {
-                Ok(AggregateFunction::Count(None))
-            } else {
-                Ok(AggregateFunction::Count(Some(args[0].clone())))
-            }
-        }
+        "COUNT" | "COUNT_DISTINCT" | "DISTINCT" => Ok(AggregateFunction::Count),
         "SUM" => {
             if args.is_empty() {
                 return Err(ExpressionError::function_error(
                     "SUM function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Sum(args[0].clone()))
+            Ok(AggregateFunction::Sum)
         }
         "AVG" => {
             if args.is_empty() {
@@ -63,7 +55,7 @@ pub fn aggregate_from_str_with_args(
                     "AVG function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Avg(args[0].clone()))
+            Ok(AggregateFunction::Avg)
         }
         "MIN" => {
             if args.is_empty() {
@@ -71,7 +63,7 @@ pub fn aggregate_from_str_with_args(
                     "MIN function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Min(args[0].clone()))
+            Ok(AggregateFunction::Min)
         }
         "MAX" => {
             if args.is_empty() {
@@ -79,7 +71,7 @@ pub fn aggregate_from_str_with_args(
                     "MAX function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Max(args[0].clone()))
+            Ok(AggregateFunction::Max)
         }
         "COLLECT" => {
             if args.is_empty() {
@@ -87,15 +79,7 @@ pub fn aggregate_from_str_with_args(
                     "COLLECT function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Collect(args[0].clone()))
-        }
-        "DISTINCT" => {
-            if args.is_empty() {
-                return Err(ExpressionError::function_error(
-                    "DISTINCT function requires a field name".to_string(),
-                ));
-            }
-            Ok(AggregateFunction::Distinct(args[0].clone()))
+            Ok(AggregateFunction::Collect)
         }
         "PERCENTILE" => {
             if args.len() < 2 {
@@ -103,10 +87,7 @@ pub fn aggregate_from_str_with_args(
                     "PERCENTILE function requires a field name and percentile value".to_string(),
                 ));
             }
-            let percentile = args[1].parse::<f64>().map_err(|_| {
-                ExpressionError::function_error("Invalid percentile value".to_string())
-            })?;
-            Ok(AggregateFunction::Percentile(args[0].clone(), percentile))
+            Ok(AggregateFunction::Percentile)
         }
         "PERCENTILE_CONT" => {
             if args.len() < 2 {
@@ -115,13 +96,7 @@ pub fn aggregate_from_str_with_args(
                         .to_string(),
                 ));
             }
-            let percentile = args[1].parse::<f64>().map_err(|_| {
-                ExpressionError::function_error("Invalid percentile value".to_string())
-            })?;
-            Ok(AggregateFunction::PercentileCont(
-                args[0].clone(),
-                percentile,
-            ))
+            Ok(AggregateFunction::PercentileCont)
         }
         "VEC_SUM" => {
             if args.is_empty() {
@@ -129,7 +104,7 @@ pub fn aggregate_from_str_with_args(
                     "VEC_SUM function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::VecSum(args[0].clone()))
+            Ok(AggregateFunction::VecSum)
         }
         "VEC_AVG" => {
             if args.is_empty() {
@@ -137,7 +112,7 @@ pub fn aggregate_from_str_with_args(
                     "VEC_AVG function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::VecAvg(args[0].clone()))
+            Ok(AggregateFunction::VecAvg)
         }
         "STDDEV_POP" => {
             if args.is_empty() {
@@ -145,7 +120,7 @@ pub fn aggregate_from_str_with_args(
                     "STDDEV_POP function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::StddevPop(args[0].clone()))
+            Ok(AggregateFunction::StddevPop)
         }
         "STDDEV_SAMP" => {
             if args.is_empty() {
@@ -153,7 +128,7 @@ pub fn aggregate_from_str_with_args(
                     "STDDEV_SAMP function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::StddevSamp(args[0].clone()))
+            Ok(AggregateFunction::StddevSamp)
         }
         "PRODUCT" => {
             if args.is_empty() {
@@ -161,7 +136,7 @@ pub fn aggregate_from_str_with_args(
                     "PRODUCT function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Product(args[0].clone()))
+            Ok(AggregateFunction::Product)
         }
         "VARIANCE" => {
             if args.is_empty() {
@@ -169,7 +144,7 @@ pub fn aggregate_from_str_with_args(
                     "VARIANCE function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Variance(args[0].clone()))
+            Ok(AggregateFunction::Variance)
         }
         "MEDIAN" => {
             if args.is_empty() {
@@ -177,7 +152,7 @@ pub fn aggregate_from_str_with_args(
                     "MEDIAN function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Median(args[0].clone()))
+            Ok(AggregateFunction::Median)
         }
         "MODE" => {
             if args.is_empty() {
@@ -185,7 +160,7 @@ pub fn aggregate_from_str_with_args(
                     "MODE function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::Mode(args[0].clone()))
+            Ok(AggregateFunction::Mode)
         }
         "BOOL_AND" => {
             if args.is_empty() {
@@ -193,7 +168,7 @@ pub fn aggregate_from_str_with_args(
                     "BOOL_AND function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::BoolAnd(args[0].clone()))
+            Ok(AggregateFunction::BoolAnd)
         }
         "BOOL_OR" => {
             if args.is_empty() {
@@ -201,7 +176,7 @@ pub fn aggregate_from_str_with_args(
                     "BOOL_OR function requires a field name".to_string(),
                 ));
             }
-            Ok(AggregateFunction::BoolOr(args[0].clone()))
+            Ok(AggregateFunction::BoolOr)
         }
         _ => Err(ExpressionError::function_error(format!(
             "Unknown aggregate function: {}",
@@ -245,17 +220,17 @@ impl AggregateExpression {
 
         // Return the aggregated results of the current state.
         match &self.function {
-            AggregateFunction::Count(_) => Ok(Value::BigInt(state.count)),
-            AggregateFunction::Sum(_) => Ok(state.sum.clone()),
-            AggregateFunction::Min(_) => Ok(state
+            AggregateFunction::Count => Ok(Value::BigInt(state.count)),
+            AggregateFunction::Sum => Ok(state.sum.clone()),
+            AggregateFunction::Min => Ok(state
                 .min
                 .clone()
                 .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
-            AggregateFunction::Max(_) => Ok(state
+            AggregateFunction::Max => Ok(state
                 .max
                 .clone()
                 .unwrap_or(Value::Null(crate::core::value::NullType::Null))),
-            AggregateFunction::Avg(_) => {
+            AggregateFunction::Avg => {
                 if state.count > 0 {
                     match &state.sum {
                         Value::SmallInt(i) => Ok(Value::Double(*i as f64 / state.count as f64)),
@@ -269,38 +244,32 @@ impl AggregateExpression {
                     Ok(Value::Double(0.0))
                 }
             }
-            AggregateFunction::Collect(_) => Ok(Value::list(List::from(state.values.clone()))),
-            AggregateFunction::CollectSet(_) => Ok(Value::set(
+            AggregateFunction::Collect => Ok(Value::list(List::from(state.values.clone()))),
+            AggregateFunction::CollectSet => Ok(Value::set(
                 state
                     .values
                     .iter()
                     .cloned()
                     .collect::<std::collections::HashSet<_>>(),
             )),
-            AggregateFunction::Distinct(_) => Ok(Value::set(
-                state
-                    .values
-                    .iter()
-                    .cloned()
-                    .collect::<std::collections::HashSet<_>>(),
-            )),
-            AggregateFunction::Percentile(_, _) => state.calculate_percentile(50.0),
-            AggregateFunction::PercentileCont(_, _) => state.calculate_percentile(50.0),
-            AggregateFunction::Std(_) => state.calculate_std(),
-            AggregateFunction::StddevPop(_) => state.calculate_stddev_pop(),
-            AggregateFunction::StddevSamp(_) => state.calculate_stddev_samp(),
-            AggregateFunction::Product(_) => state.calculate_product(),
-            AggregateFunction::Variance(_) => state.calculate_variance(),
-            AggregateFunction::Median(_) => state.calculate_median(),
-            AggregateFunction::Mode(_) => state.calculate_mode(),
-            AggregateFunction::BitAnd(_) => state.calculate_bit_and(),
-            AggregateFunction::BitOr(_) => state.calculate_bit_or(),
-            AggregateFunction::BoolAnd(_) => state.calculate_bool_and(),
-            AggregateFunction::BoolOr(_) => state.calculate_bool_or(),
-            AggregateFunction::GroupConcat(_, _) => state.calculate_group_concat(),
-            AggregateFunction::GroupConcatWithOrder(_, _, _) => state.calculate_group_concat(),
-            AggregateFunction::VecSum(_) => Ok(state.vec_sum.clone()),
-            AggregateFunction::VecAvg(_) => {
+            AggregateFunction::Percentile => state.calculate_percentile(50.0),
+            AggregateFunction::PercentileCont => state.calculate_percentile(50.0),
+            AggregateFunction::Std => state.calculate_std(),
+            AggregateFunction::StddevPop => state.calculate_stddev_pop(),
+            AggregateFunction::StddevSamp => state.calculate_stddev_samp(),
+            AggregateFunction::Product => state.calculate_product(),
+            AggregateFunction::Variance => state.calculate_variance(),
+            AggregateFunction::Median => state.calculate_median(),
+            AggregateFunction::Mode => state.calculate_mode(),
+            AggregateFunction::BitAnd => state.calculate_bit_and(),
+            AggregateFunction::BitOr => state.calculate_bit_or(),
+            AggregateFunction::BoolAnd => state.calculate_bool_and(),
+            AggregateFunction::BoolOr => state.calculate_bool_or(),
+            AggregateFunction::GroupConcat | AggregateFunction::GroupConcatWithOrder => {
+                state.calculate_group_concat()
+            }
+            AggregateFunction::VecSum => Ok(state.vec_sum.clone()),
+            AggregateFunction::VecAvg => {
                 if state.count > 0 {
                     Ok(state.vec_avg.clone())
                 } else {
@@ -406,7 +375,7 @@ impl AggregateState {
 
         // Special processing is performed depending on the type of aggregate function.
         match function {
-            AggregateFunction::Percentile(_, _) | AggregateFunction::PercentileCont(_, _) => {
+            AggregateFunction::Percentile | AggregateFunction::PercentileCont => {
                 // Special handling of the PERCENTILE function: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.percentile_values.push(*v as f64),
@@ -417,10 +386,10 @@ impl AggregateState {
                     _ => {}
                 }
             }
-            AggregateFunction::Std(_)
-            | AggregateFunction::StddevPop(_)
-            | AggregateFunction::StddevSamp(_)
-            | AggregateFunction::Variance(_) => {
+            AggregateFunction::Std
+            | AggregateFunction::StddevPop
+            | AggregateFunction::StddevSamp
+            | AggregateFunction::Variance => {
                 // Special handling of the STD and VARIANCE functions: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.std_values.push(*v as f64),
@@ -431,7 +400,7 @@ impl AggregateState {
                     _ => {}
                 }
             }
-            AggregateFunction::Median(_) => {
+            AggregateFunction::Median => {
                 // Special handling of the MEDIAN function: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.median_values.push(*v as f64),
@@ -442,10 +411,10 @@ impl AggregateState {
                     _ => {}
                 }
             }
-            AggregateFunction::Mode(_) => {
+            AggregateFunction::Mode => {
                 self.mode_values.push(value.clone());
             }
-            AggregateFunction::BitAnd(_) => {
+            AggregateFunction::BitAnd => {
                 // Special handling of the BIT_AND function
                 if let Value::BigInt(v) = value {
                     if let Some(current) = self.bit_and_value {
@@ -455,7 +424,7 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::BitOr(_) => {
+            AggregateFunction::BitOr => {
                 // Special handling of the BIT_OR function
                 if let Value::BigInt(v) = value {
                     if let Some(current) = self.bit_or_value {
@@ -465,7 +434,7 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::BoolAnd(_) => {
+            AggregateFunction::BoolAnd => {
                 if let Value::Bool(b) = value {
                     if let Some(current) = self.bool_and_value {
                         self.bool_and_value = Some(current && *b);
@@ -474,7 +443,7 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::BoolOr(_) => {
+            AggregateFunction::BoolOr => {
                 if let Value::Bool(b) = value {
                     if let Some(current) = self.bool_or_value {
                         self.bool_or_value = Some(current || *b);
@@ -483,11 +452,11 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::GroupConcat(_, _) => {
+            AggregateFunction::GroupConcat | AggregateFunction::GroupConcatWithOrder => {
                 // Special handling of the GROUP_CONCAT function
                 self.group_concat_values.push(value.clone());
             }
-            AggregateFunction::VecSum(_) => {
+            AggregateFunction::VecSum => {
                 // Special handling for VEC_SUM function
                 if matches!(value, Value::Vector(_)) {
                     if self.vec_sum.is_null() {
@@ -509,7 +478,7 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::VecAvg(_) => {
+            AggregateFunction::VecAvg => {
                 // Special handling for VEC_AVG function
                 if matches!(value, Value::Vector(_)) {
                     if self.vec_avg.is_null() {
@@ -532,7 +501,7 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateFunction::Product(_) => {
+            AggregateFunction::Product => {
                 // Product accumulation - multiply values
                 if !value.is_null() && !value.is_empty() {
                     if self.sum == Value::Int(0) {
@@ -822,10 +791,10 @@ mod tests {
     fn test_unified_aggregate_function() {
         // The test involves creating objects from strings.
         let func = aggregate_from_str("COUNT").expect("from_str should succeed");
-        assert!(matches!(func, AggregateFunction::Count(_)));
+        assert!(matches!(func, AggregateFunction::Count));
 
         let func = aggregate_from_str("SUM").expect("from_str should succeed");
-        assert!(matches!(func, AggregateFunction::Sum(_)));
+        assert!(matches!(func, AggregateFunction::Sum));
 
         let sum_func = aggregate_from_str_with_args("SUM", &["field".to_string()])
             .expect("from_str_with_args should succeed");

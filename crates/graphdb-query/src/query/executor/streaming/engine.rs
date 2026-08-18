@@ -1338,14 +1338,12 @@ mod tests {
                     group_by_expressions: Vec::new(),
                     aggregate_functions: vec![
                         (
-                            crate::core::types::operators::AggregateFunction::Count(None),
-                            crate::core::types::expr::Expression::Literal(Value::Int(1)),
+                            crate::core::types::operators::AggregateFunction::Count,
+                            vec![crate::core::types::expr::Expression::Literal(Value::Int(1))],
                         ),
                         (
-                            crate::core::types::operators::AggregateFunction::Sum(
-                                "amount".to_string(),
-                            ),
-                            crate::core::types::expr::Expression::Variable("amount".to_string()),
+                            crate::core::types::operators::AggregateFunction::Sum,
+                            vec![crate::core::types::expr::Expression::Variable("amount".to_string())],
                         ),
                     ],
                     output_col_names: vec!["COUNT".to_string(), "SUM".to_string()],

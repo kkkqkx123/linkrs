@@ -10,6 +10,11 @@ define_plan_node_with_deps! {
     pub struct AggregateNode {
         group_keys: Vec<String>,
         aggregation_functions: Vec<AggregateFunction>,
+        // Parameter expressions per aggregate function, parallel to
+        // `aggregation_functions`. Each entry is the full `args` list of the
+        // `Expression::Aggregate` (field expression at index 0, optional
+        // extra parameters such as the percentile fraction after it).
+        aggregation_args: Vec<Vec<Expression>>,
         aggregation_distinct: Vec<bool>,
         aggregation_filters: Vec<Option<Expression>>,
         grouping_sets: Vec<Vec<String>>,
@@ -39,6 +44,7 @@ impl AggregateNode {
             deps: vec![input],
             group_keys,
             aggregation_functions,
+            aggregation_args: vec![Vec::new(); num_agg],
             aggregation_distinct: vec![false; num_agg],
             aggregation_filters: vec![None; num_agg],
             grouping_sets: Vec::new(),
@@ -68,6 +74,7 @@ impl AggregateNode {
             deps: vec![input],
             group_keys,
             aggregation_functions,
+            aggregation_args: vec![Vec::new(); num_agg],
             aggregation_distinct: vec![false; num_agg],
             aggregation_filters: vec![None; num_agg],
             grouping_sets: Vec::new(),
@@ -86,6 +93,16 @@ impl AggregateNode {
     /// Obtain a list of aggregate functions
     pub fn aggregation_functions(&self) -> &[AggregateFunction] {
         &self.aggregation_functions
+    }
+
+    /// Obtain the parameter expressions per aggregate function.
+    pub fn aggregation_args(&self) -> &[Vec<Expression>] {
+        &self.aggregation_args
+    }
+
+    /// Set the parameter expressions per aggregate function.
+    pub fn set_aggregation_args(&mut self, args: Vec<Vec<Expression>>) {
+        self.aggregation_args = args;
     }
 
     /// Obtain distinct flags for aggregate functions
@@ -147,7 +164,7 @@ mod tests {
             );
 
         let group_keys = vec!["category".to_string()];
-        let aggregation_functions = vec![AggregateFunction::Count(None)];
+        let aggregation_functions = vec![AggregateFunction::Count];
 
         let aggregate_node = AggregateNode::new(start_node, group_keys, aggregation_functions)
             .expect("Aggregate node should be created successfully");
@@ -167,7 +184,7 @@ mod tests {
             );
 
         let group_keys = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        let aggregation_functions = vec![AggregateFunction::Count(None)];
+        let aggregation_functions = vec![AggregateFunction::Count];
 
         let mut aggregate_node = AggregateNode::new(start_node, group_keys, aggregation_functions)
             .expect("Aggregate node should be created successfully");

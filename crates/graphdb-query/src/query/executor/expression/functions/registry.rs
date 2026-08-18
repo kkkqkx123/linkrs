@@ -270,55 +270,23 @@ impl FunctionRegistry {
 
         // Register aggregate functions
         use crate::core::types::operators::AggregateFunction;
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Count(None)));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Sum(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Avg(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Min(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Max(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Collect(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Distinct(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Variance(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Median(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Mode(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolAnd(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolOr(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevPop(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevSamp(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Product(
-            String::new(),
-        )));
-        self.register_builtin(BuiltinFunction::Aggregate(
-            AggregateFunction::PercentileCont(String::new(), 50.0),
-        ));
-        self.register_builtin(BuiltinFunction::Aggregate(
-            AggregateFunction::GroupConcatWithOrder(String::new(), String::new(), Vec::new()),
-        ));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Count));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Sum));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Avg));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Min));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Max));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Collect));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::CollectSet));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Variance));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Median));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Mode));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolAnd));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolOr));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevPop));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevSamp));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Product));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::PercentileCont));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::GroupConcatWithOrder));
 
         // Register window functions
         // Window functions are only meaningful inside an OVER() clause and are

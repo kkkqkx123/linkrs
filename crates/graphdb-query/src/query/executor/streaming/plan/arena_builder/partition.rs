@@ -1013,14 +1013,20 @@ fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
         .collect();
     let count_only =
         is_count_only_aggregate(node) && count_only_expand_below(node.input()).is_some();
-    let aggregate_functions: Vec<AggregateFunction> = node
+    let agg_args = node.aggregation_args();
+    let aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)> = node
         .aggregation_functions()
         .iter()
-        .map(|func| {
+        .enumerate()
+        .map(|(i, func)| {
             if count_only {
-                AggregateFunction::Sum(COUNT_ONLY_COLUMN.to_string())
+                (
+                    AggregateFunction::Sum,
+                    vec![Expression::Variable(COUNT_ONLY_COLUMN.to_string())],
+                )
             } else {
-                func.clone()
+                let args = agg_args.get(i).cloned().unwrap_or_default();
+                (func.clone(), args)
             }
         })
         .collect();
@@ -1046,11 +1052,11 @@ fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
     funcs.iter().all(|f| {
         matches!(
             f,
-            AggregateFunction::Count(_)
-                | AggregateFunction::Sum(_)
-                | AggregateFunction::Min(_)
-                | AggregateFunction::Max(_)
-                | AggregateFunction::Avg(_)
+            AggregateFunction::Count
+                | AggregateFunction::Sum
+                | AggregateFunction::Min
+                | AggregateFunction::Max
+                | AggregateFunction::Avg
         )
     })
 }
@@ -1163,7 +1169,7 @@ mod tests {
         use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 
         let input = tagged_scan();
-        let mut agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count(None)])
+        let mut agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count])
             .expect("aggregate plan should build");
         agg.set_col_names(vec!["count(*)".to_string()]);
         let node = PlanNodeEnum::Aggregate(agg);

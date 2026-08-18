@@ -59,12 +59,14 @@ impl PushFilterDownAggregateRule {
         condition: &Expression,
         group_keys: &[String],
         agg_funcs: &[AggregateFunction],
+        agg_args: &[Vec<Expression>],
         agg_col_names: &[String],
     ) -> bool {
         fn check_expr(
             expr: &Expression,
             group_keys: &[String],
             agg_funcs: &[AggregateFunction],
+            agg_args: &[Vec<Expression>],
             agg_col_names: &[String],
         ) -> bool {
             // First, check whether there are any expressions containing aggregate function statements.
@@ -78,12 +80,18 @@ impl PushFilterDownAggregateRule {
                 if group_keys.contains(name) {
                     return false;
                 }
-                // Check whether it is the name of the output column of an aggregate function.
-                for agg_func in agg_funcs {
-                    if agg_func.name() == name
-                        || agg_func.field_name().map(|f| f == name).unwrap_or(false)
-                    {
+                // Check whether it is the name of the output column of an aggregate function,
+                // or references the field being aggregated (first arg).
+                for (i, agg_func) in agg_funcs.iter().enumerate() {
+                    if agg_func.name() == name {
                         return true;
+                    }
+                    if let Some(args) = agg_args.get(i) {
+                        if let Some(Expression::Variable(field)) = args.first() {
+                            if field == name {
+                                return true;
+                            }
+                        }
                     }
                 }
                 // Check if the variable name is an aggregate alias (in col_names but not in group_keys)
@@ -116,23 +124,23 @@ impl PushFilterDownAggregateRule {
 
             // Recursively checking the subexpressions of a binary expression
             if let Expression::Binary { left, right, .. } = expr {
-                if check_expr(left, group_keys, agg_funcs, agg_col_names) {
+                if check_expr(left, group_keys, agg_funcs, agg_args, agg_col_names) {
                     return true;
                 }
-                if check_expr(right, group_keys, agg_funcs, agg_col_names) {
+                if check_expr(right, group_keys, agg_funcs, agg_args, agg_col_names) {
                     return true;
                 }
             }
 
             // Recursively check other composite expressions.
             if let Expression::Unary { operand, .. } = expr {
-                return check_expr(operand, group_keys, agg_funcs, agg_col_names);
+                return check_expr(operand, group_keys, agg_funcs, agg_args, agg_col_names);
             }
 
             false
         }
 
-        check_expr(condition, group_keys, agg_funcs, agg_col_names)
+        check_expr(condition, group_keys, agg_funcs, agg_args, agg_col_names)
     }
 
     /// Rewrite the variable references in the filter conditions.
@@ -209,6 +217,7 @@ impl RewriteRule for PushFilterDownAggregateRule {
         // Obtain the aggregated group keys and the aggregate functions.
         let group_keys = agg_node.group_keys();
         let agg_funcs = agg_node.aggregation_functions();
+        let agg_args = agg_node.aggregation_args();
 
         // Check whether the filter conditions contain references to aggregate functions.
         // If the condition references aggregate results (e.g., HAVING COUNT(*) > 10), it cannot be pushed down
@@ -216,6 +225,7 @@ impl RewriteRule for PushFilterDownAggregateRule {
             &filter_expr,
             group_keys,
             agg_funcs,
+            agg_args,
             agg_node.col_names(),
         ) {
             return Ok(None);
@@ -303,7 +313,7 @@ mod tests {
     #[test]
     fn test_has_aggregate_function_reference_with_aggregate() {
         let condition = Expression::Aggregate {
-            func: AggregateFunction::Count(None),
+            func: AggregateFunction::Count,
             args: vec![Expression::Variable("amount".to_string())],
             distinct: false,
             filter: None,
@@ -313,7 +323,8 @@ mod tests {
             PushFilterDownAggregateRule::has_aggregate_function_reference(
                 &condition,
                 &[],
-                &[AggregateFunction::Count(None)],
+                &[AggregateFunction::Count],
+                &[vec![Expression::Variable("amount".to_string())]],
                 &[]
             )
         );
@@ -332,6 +343,7 @@ mod tests {
                 &condition,
                 &["name".to_string()],
                 &[],
+                &[],
                 &[]
             )
         );
@@ -348,7 +360,8 @@ mod tests {
             PushFilterDownAggregateRule::has_aggregate_function_reference(
                 &condition,
                 &[],
-                &[AggregateFunction::Sum("amount".to_string())],
+                &[AggregateFunction::Sum],
+                &[vec![Expression::Variable("amount".to_string())]],
                 &[]
             )
         );
@@ -378,7 +391,7 @@ mod tests {
 
         // Create an Aggregate node.
         let group_keys = vec!["category".to_string()];
-        let agg_funcs = vec![AggregateFunction::Count(None)];
+        let agg_funcs = vec![AggregateFunction::Count];
         let aggregate = AggregateNode::new(start_enum.clone(), group_keys, agg_funcs)
             .expect("Failed to create AggregateNode");
         let aggregate_enum = PlanNodeEnum::Aggregate(aggregate);
@@ -419,7 +432,7 @@ mod tests {
 
         // Create an Aggregate node.
         let group_keys = vec!["category".to_string()];
-        let agg_funcs = vec![AggregateFunction::Count(None)];
+        let agg_funcs = vec![AggregateFunction::Count];
         let aggregate = AggregateNode::new(start_enum.clone(), group_keys, agg_funcs)
             .expect("Failed to create AggregateNode");
         let aggregate_enum = PlanNodeEnum::Aggregate(aggregate);

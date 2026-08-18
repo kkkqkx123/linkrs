@@ -78,12 +78,12 @@ fn attach_vector_coordinator(
     runtime: &tokio::runtime::Handle,
 ) -> CoreResult<SyncManager> {
     if let Some(backend) = create_vector_backend(runtime)? {
-        let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-            backend,
-            #[cfg(feature = "vector-qdrant")]
-            None,
-            runtime.clone(),
-        ));
+        let vector_coordinator = Arc::new(
+            crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                backend,
+                runtime.clone(),
+            ),
+        );
         sync = sync.with_vector_coordinator(vector_coordinator);
     }
     Ok(sync)
@@ -101,12 +101,12 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
     let Some(backend) = create_vector_backend(runtime)? else {
         return Ok((None, None));
     };
-    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-        backend,
-        #[cfg(feature = "vector-qdrant")]
-        None,
-        runtime.clone(),
-    ));
+    let vector_coordinator = Arc::new(
+        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+            backend,
+            runtime.clone(),
+        ),
+    );
 
     let mut sync = SyncManager::new_without_fulltext();
     sync = sync.with_vector_coordinator(vector_coordinator);
@@ -119,12 +119,12 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
     let Some(backend) = create_vector_backend(runtime)? else {
         return Ok((None, None));
     };
-    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-        backend,
-        #[cfg(feature = "vector-qdrant")]
-        None,
-        runtime.clone(),
-    ));
+    let vector_coordinator = Arc::new(
+        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+            backend,
+            runtime.clone(),
+        ),
+    );
 
     let sync_config = SyncConfig::default();
     let batch_config = crate::sync::batch::BatchConfig::from(sync_config.clone());

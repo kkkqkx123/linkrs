@@ -257,7 +257,7 @@ pub enum BlockingSpec {
     },
     Aggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<(AggregateFunction, Expression)>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
     },
     GroupBy {
@@ -288,12 +288,12 @@ pub enum BlockingSpec {
     },
     PartialAggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<AggregateFunction>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
     },
     FinalAggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<AggregateFunction>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
     },
 }

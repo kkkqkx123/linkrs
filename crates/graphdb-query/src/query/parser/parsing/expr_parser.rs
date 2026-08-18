@@ -784,7 +784,7 @@ fn parse_function_call(
         if name_upper == "COUNT" {
             return Ok(ParseResult {
                 expr: Expression::Aggregate {
-                    func: crate::core::types::operators::AggregateFunction::Count(None),
+                    func: crate::core::types::operators::AggregateFunction::Count,
                     args: vec![Expression::Literal(crate::core::Value::string("*"))],
                     distinct: false,
                     filter: None,
@@ -838,69 +838,39 @@ fn parse_function_call(
 
     if is_aggregate {
         let distinct = ctx.match_token(TokenKind::Distinct);
-        let arg = args.first().map(|a| a.expr.clone()).unwrap_or_else(|| {
-            Expression::Literal(crate::core::Value::Null(crate::core::NullType::Null))
-        });
+        let mut agg_args: Vec<Expression> = args.iter().map(|a| a.expr.clone()).collect();
+        if agg_args.is_empty() {
+            agg_args.push(Expression::Literal(crate::core::Value::Null(
+                crate::core::NullType::Null,
+            )));
+        }
 
-        let field_name = match &arg {
-            Expression::Variable(name) => name.clone(),
-            Expression::Property { object, property } => {
-                if let Expression::Variable(var_name) = object.as_ref() {
-                    format!("{}.{}", var_name, property)
-                } else {
-                    property.clone()
-                }
-            }
-            Expression::TagProperty { tag_name, property } => {
-                format!("{}.{}", tag_name, property)
-            }
-            Expression::EdgeProperty {
-                edge_name,
-                property,
-            } => {
-                format!("{}.{}", edge_name, property)
-            }
-            _ => "_value".to_string(),
-        };
-
+        // Parameterized aggregates carry their extra parameters (e.g. the
+        // percentile fraction of PERCENTILE_CONT) in `args` after the field.
         let func = match name_upper.as_str() {
-            "COUNT" => crate::core::types::operators::AggregateFunction::Count(Some(field_name)),
-            "SUM" => crate::core::types::operators::AggregateFunction::Sum(field_name),
-            "AVG" => crate::core::types::operators::AggregateFunction::Avg(field_name),
-            "MIN" => crate::core::types::operators::AggregateFunction::Min(field_name),
-            "MAX" => crate::core::types::operators::AggregateFunction::Max(field_name),
-            "COLLECT" => crate::core::types::operators::AggregateFunction::Collect(field_name),
-            "COLLECT_SET" => {
-                crate::core::types::operators::AggregateFunction::CollectSet(field_name)
+            "COUNT" => crate::core::types::operators::AggregateFunction::Count,
+            "SUM" => crate::core::types::operators::AggregateFunction::Sum,
+            "AVG" => crate::core::types::operators::AggregateFunction::Avg,
+            "MIN" => crate::core::types::operators::AggregateFunction::Min,
+            "MAX" => crate::core::types::operators::AggregateFunction::Max,
+            "COLLECT" => crate::core::types::operators::AggregateFunction::Collect,
+            "COLLECT_SET" => crate::core::types::operators::AggregateFunction::CollectSet,
+            "STD" => crate::core::types::operators::AggregateFunction::Std,
+            "STDDEV_POP" => crate::core::types::operators::AggregateFunction::StddevPop,
+            "STDDEV_SAMP" => crate::core::types::operators::AggregateFunction::StddevSamp,
+            "PRODUCT" => crate::core::types::operators::AggregateFunction::Product,
+            "PERCENTILE_CONT" | "PERCENTILE" => {
+                if args.len() < 2 {
+                    agg_args.push(Expression::Literal(crate::core::Value::Double(50.0)));
+                }
+                crate::core::types::operators::AggregateFunction::PercentileCont
             }
-            "STD" => crate::core::types::operators::AggregateFunction::Std(field_name),
-            "STDDEV_POP" => crate::core::types::operators::AggregateFunction::StddevPop(field_name),
-            "STDDEV_SAMP" => {
-                crate::core::types::operators::AggregateFunction::StddevSamp(field_name)
-            }
-            "PRODUCT" => crate::core::types::operators::AggregateFunction::Product(field_name),
-            "PERCENTILE_CONT" => {
-                let percentile = if args.len() > 1 {
-                    match &args[1].expr {
-                        Expression::Literal(crate::core::Value::Int(v)) => *v as f64,
-                        Expression::Literal(crate::core::Value::BigInt(v)) => *v as f64,
-                        Expression::Literal(crate::core::Value::Float(v)) => *v as f64,
-                        Expression::Literal(crate::core::Value::Double(v)) => *v,
-                        _ => 50.0,
-                    }
-                } else {
-                    50.0
-                };
-                crate::core::types::operators::AggregateFunction::PercentileCont(
-                    field_name, percentile,
-                )
-            }
-            "VARIANCE" => crate::core::types::operators::AggregateFunction::Variance(field_name),
-            "MEDIAN" => crate::core::types::operators::AggregateFunction::Median(field_name),
-            "MODE" => crate::core::types::operators::AggregateFunction::Mode(field_name),
-            "BOOL_AND" => crate::core::types::operators::AggregateFunction::BoolAnd(field_name),
-            "BOOL_OR" => crate::core::types::operators::AggregateFunction::BoolOr(field_name),
-            _ => crate::core::types::operators::AggregateFunction::Count(None),
+            "VARIANCE" => crate::core::types::operators::AggregateFunction::Variance,
+            "MEDIAN" => crate::core::types::operators::AggregateFunction::Median,
+            "MODE" => crate::core::types::operators::AggregateFunction::Mode,
+            "BOOL_AND" => crate::core::types::operators::AggregateFunction::BoolAnd,
+            "BOOL_OR" => crate::core::types::operators::AggregateFunction::BoolOr,
+            _ => crate::core::types::operators::AggregateFunction::Count,
         };
 
         let filter = if ctx.match_token(TokenKind::Filter) {
@@ -917,7 +887,7 @@ fn parse_function_call(
         Ok(ParseResult {
             expr: Expression::Aggregate {
                 func,
-                args: vec![arg],
+                args: agg_args,
                 distinct,
                 filter,
             },

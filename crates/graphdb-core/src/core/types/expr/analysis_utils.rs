@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn test_has_aggregate_function() {
         let expr = Expression::Aggregate {
-            func: AggregateFunction::Count(None),
+            func: AggregateFunction::Count,
             args: vec![Expression::Variable("x".to_string())],
             distinct: false,
             filter: None,
@@ -539,13 +539,13 @@ mod tests {
         let expr = Expression::Binary {
             op: BinaryOperator::Add,
             left: Box::new(Expression::Aggregate {
-                func: AggregateFunction::Count(None),
+                func: AggregateFunction::Count,
                 args: vec![Expression::Variable("a".to_string())],
                 distinct: false,
                 filter: None,
             }),
             right: Box::new(Expression::Aggregate {
-                func: AggregateFunction::Sum("b".to_string()),
+                func: AggregateFunction::Sum,
                 args: vec![Expression::Variable("b".to_string())],
                 distinct: false,
                 filter: None,

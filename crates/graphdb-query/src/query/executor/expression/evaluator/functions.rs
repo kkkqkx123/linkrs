@@ -23,7 +23,7 @@ impl FunctionEvaluator {
         }
 
         match func {
-            AggregateFunction::Count(_) => {
+            AggregateFunction::Count => {
                 if distinct {
                     let unique_values: std::collections::HashSet<_> = args.iter().collect();
                     Ok(Value::BigInt(unique_values.len() as i64))
@@ -31,24 +31,20 @@ impl FunctionEvaluator {
                     Ok(Value::BigInt(args.len() as i64))
                 }
             }
-            AggregateFunction::Sum(_) => {
+            AggregateFunction::Sum => {
                 let mut sum = Value::Int(0);
                 for arg in args {
                     sum = sum.add(arg).map_err(ExpressionError::runtime_error)?;
                 }
                 Ok(sum)
             }
-            AggregateFunction::Avg(_) => {
-                let sum = Self::eval_aggregate_function(
-                    &AggregateFunction::Sum("".to_string()),
-                    args,
-                    distinct,
-                )?;
+            AggregateFunction::Avg => {
+                let sum = Self::eval_aggregate_function(&AggregateFunction::Sum, args, distinct)?;
                 let count =
-                    Self::eval_aggregate_function(&AggregateFunction::Count(None), args, distinct)?;
+                    Self::eval_aggregate_function(&AggregateFunction::Count, args, distinct)?;
                 sum.div(&count).map_err(ExpressionError::runtime_error)
             }
-            AggregateFunction::Min(_) => {
+            AggregateFunction::Min => {
                 let mut min = args[0].clone();
                 for arg in args.iter().skip(1) {
                     if arg < &min {
@@ -57,7 +53,7 @@ impl FunctionEvaluator {
                 }
                 Ok(min)
             }
-            AggregateFunction::Max(_) => {
+            AggregateFunction::Max => {
                 let mut max = args[0].clone();
                 for arg in args.iter().skip(1) {
                     if arg > &max {
@@ -66,7 +62,7 @@ impl FunctionEvaluator {
                 }
                 Ok(max)
             }
-            AggregateFunction::Collect(_) => {
+            AggregateFunction::Collect => {
                 if distinct {
                     let unique_values: std::collections::HashSet<_> =
                         args.iter().cloned().collect();
@@ -77,15 +73,11 @@ impl FunctionEvaluator {
                     Ok(Value::list(List::from(args.to_vec())))
                 }
             }
-            AggregateFunction::CollectSet(_) => {
+            AggregateFunction::CollectSet => {
                 let unique_values: std::collections::HashSet<_> = args.iter().cloned().collect();
                 Ok(Value::set(unique_values))
             }
-            AggregateFunction::Distinct(_) => {
-                let unique_values: std::collections::HashSet<_> = args.iter().cloned().collect();
-                Ok(Value::set(unique_values))
-            }
-            AggregateFunction::Percentile(_, _) => {
+            AggregateFunction::Percentile => {
                 if args.len() < 2 {
                     return Err(ExpressionError::argument_count_error(2, args.len()));
                 }
@@ -147,7 +139,7 @@ impl FunctionEvaluator {
                     Ok(Value::Double(interpolated))
                 }
             }
-            AggregateFunction::Std(_) => {
+            AggregateFunction::Std => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -188,7 +180,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::Double(std_dev))
             }
-            AggregateFunction::BitAnd(_) => {
+            AggregateFunction::BitAnd => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -218,7 +210,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::BigInt(result))
             }
-            AggregateFunction::BitOr(_) => {
+            AggregateFunction::BitOr => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -248,7 +240,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::BigInt(result))
             }
-            AggregateFunction::Variance(_) => {
+            AggregateFunction::Variance => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -288,7 +280,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::Double(variance))
             }
-            AggregateFunction::Median(_) => {
+            AggregateFunction::Median => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -330,7 +322,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::Double(median))
             }
-            AggregateFunction::Mode(_) => {
+            AggregateFunction::Mode => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -372,7 +364,7 @@ impl FunctionEvaluator {
                     None => Ok(Value::Null(crate::core::NullType::NaN)),
                 }
             }
-            AggregateFunction::BoolAnd(_) => {
+            AggregateFunction::BoolAnd => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -401,7 +393,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::Bool(result))
             }
-            AggregateFunction::BoolOr(_) => {
+            AggregateFunction::BoolOr => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -430,7 +422,7 @@ impl FunctionEvaluator {
 
                 Ok(Value::Bool(result))
             }
-            AggregateFunction::GroupConcat(_, separator) => {
+            AggregateFunction::GroupConcat => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -443,11 +435,16 @@ impl FunctionEvaluator {
                 if values.is_empty() {
                     return Ok(Value::string(String::new()));
                 }
+
+                let separator = match args.get(1) {
+                    Some(Value::String(s)) => s.to_string(),
+                    _ => ",".to_string(),
+                };
 
                 let result: Vec<String> = values.iter().map(|v| format!("{}", v)).collect();
-                Ok(Value::string(result.join(separator)))
+                Ok(Value::string(result.join(&separator)))
             }
-            AggregateFunction::GroupConcatWithOrder(_, separator, order_by_fields) => {
+            AggregateFunction::GroupConcatWithOrder => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -460,24 +457,31 @@ impl FunctionEvaluator {
                 if values.is_empty() {
                     return Ok(Value::string(String::new()));
                 }
+
+                let separator = match args.get(1) {
+                    Some(Value::String(s)) => s.to_string(),
+                    _ => ",".to_string(),
+                };
 
                 let mut indexed_values: Vec<(usize, &Value)> = values.iter().enumerate().collect();
 
-                if !order_by_fields.is_empty() {
-                    indexed_values.sort_by(|(_, val_a), (_, val_b)| {
-                        let cmp_a = format!("{}", val_a);
-                        let cmp_b = format!("{}", val_b);
-                        cmp_a.cmp(&cmp_b)
-                    });
+                if let Some(Value::List(order_by)) = args.get(2) {
+                    if !order_by.values.is_empty() {
+                        indexed_values.sort_by(|(_, val_a), (_, val_b)| {
+                            let cmp_a = format!("{}", val_a);
+                            let cmp_b = format!("{}", val_b);
+                            cmp_a.cmp(&cmp_b)
+                        });
+                    }
                 }
 
                 let result: Vec<String> = indexed_values
                     .iter()
                     .map(|(_, v)| format!("{}", v))
                     .collect();
-                Ok(Value::string(result.join(separator)))
+                Ok(Value::string(result.join(&separator)))
             }
-            AggregateFunction::VecSum(_) => {
+            AggregateFunction::VecSum => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -523,7 +527,7 @@ impl FunctionEvaluator {
                     None => Ok(Value::Null(NullType::NaN)),
                 }
             }
-            AggregateFunction::PercentileCont(_, _) => {
+            AggregateFunction::PercentileCont => {
                 // Same logic as PERCENTILE
                 if args.len() < 2 {
                     return Err(ExpressionError::argument_count_error(2, args.len()));
@@ -577,7 +581,7 @@ impl FunctionEvaluator {
                     Ok(Value::Double(interpolated))
                 }
             }
-            AggregateFunction::StddevPop(_) => {
+            AggregateFunction::StddevPop => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -611,7 +615,7 @@ impl FunctionEvaluator {
                     / n;
                 Ok(Value::Double(variance.sqrt()))
             }
-            AggregateFunction::StddevSamp(_) => {
+            AggregateFunction::StddevSamp => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -648,7 +652,7 @@ impl FunctionEvaluator {
                     / (n - 1.0);
                 Ok(Value::Double(variance.sqrt()))
             }
-            AggregateFunction::Product(_) => {
+            AggregateFunction::Product => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }
@@ -668,7 +672,7 @@ impl FunctionEvaluator {
                 }
                 Ok(product)
             }
-            AggregateFunction::VecAvg(_) => {
+            AggregateFunction::VecAvg => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));
                 }

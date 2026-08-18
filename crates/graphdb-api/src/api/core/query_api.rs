@@ -168,12 +168,9 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
 
         // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
         let handle = tokio::runtime::Handle::current();
-        let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new(
-            backend,
-            #[cfg(feature = "vector-qdrant")]
-            None,
-            handle,
-        ));
+        let vector_coordinator = Arc::new(
+            crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+        );
 
         // Create pipeline manager with vector coordinator and optional schema manager
         let mut pipeline_manager =

@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn test_fold_aggregate_is_not_folded() {
         let expr = Expression::Aggregate {
-            func: crate::core::AggregateFunction::Count(None),
+            func: crate::core::AggregateFunction::Count,
             args: vec![Expression::Literal(Value::Int(1))],
             distinct: false,
             filter: None,
@@ -1007,7 +1007,7 @@ mod tests {
         let aggregate = AggregateNode::new(
             start,
             vec!["g".to_string()],
-            vec![AggregateFunction::Count(None)],
+            vec![AggregateFunction::Count],
         )
         .expect("aggregate node");
         let mut aggregate = aggregate.clone();

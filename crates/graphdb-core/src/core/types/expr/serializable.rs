@@ -299,7 +299,7 @@ mod tests {
         use crate::core::types::operators::AggregateFunction;
 
         let expr = Expression::aggregate(
-            AggregateFunction::Count(None),
+            AggregateFunction::Count,
             Expression::variable("x"),
             false,
         );
@@ -318,7 +318,7 @@ mod tests {
         use crate::core::types::operators::AggregateFunction;
 
         let expr = Expression::aggregate(
-            AggregateFunction::Count(None),
+            AggregateFunction::Count,
             Expression::variable("x"),
             false,
         );

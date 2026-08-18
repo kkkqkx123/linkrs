@@ -1555,7 +1555,7 @@ mod tests {
             2,
         );
         let agg = Expression::Aggregate {
-            func: crate::core::types::operators::AggregateFunction::Count(None),
+            func: crate::core::types::operators::AggregateFunction::Count,
             args: vec![exists()],
             distinct: false,
             filter: Some(Box::new(in_subq(Expression::variable("t")))),

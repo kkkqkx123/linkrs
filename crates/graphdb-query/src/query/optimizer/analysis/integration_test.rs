@@ -183,7 +183,7 @@ fn test_expression_aggregate_detection() {
 
     // Expressions that contain aggregate functions
     let aggregate_expr = Expression::Aggregate {
-        func: crate::core::types::operators::AggregateFunction::Count(None),
+        func: crate::core::types::operators::AggregateFunction::Count,
         args: vec![Expression::Variable("n".to_string())],
         distinct: false,
         filter: None,

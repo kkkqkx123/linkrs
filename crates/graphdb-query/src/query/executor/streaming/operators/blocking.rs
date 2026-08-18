@@ -39,6 +39,24 @@ use aggregate::{value_to_partial_accumulator, ACCUMULATOR_OVERHEAD_BYTES};
 use sort::{find_min_run, refill_run_buffer, sort_columnar_batch, spill_sorted_run};
 use window::{compute_window_partition_result, sort_partition_rows};
 
+/// Extract the field name from an aggregate function's args, if any.
+/// COUNT(*) has no args; other aggregates have the field expression at index 0.
+fn aggregate_arg_field_name(
+    func: &AggregateFunction,
+    args: &[Expression],
+) -> Option<String> {
+    match func {
+        AggregateFunction::Count => None,
+        _ => {
+            if let Some(Expression::Variable(name)) = args.first() {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Reject spill for operators that do not support disk-based overflow.
 /// Per D9: may return resource-exhaustion error for non-spillable operators,
 /// but must not claim budget protection.
@@ -76,7 +94,7 @@ pub enum BlockingOperatorKind {
     },
     Aggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<(AggregateFunction, Expression)>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<AggregateState>,
@@ -128,14 +146,14 @@ pub enum BlockingOperatorKind {
     },
     PartialAggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<AggregateFunction>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<PartialAggregateState>,
     },
     FinalAggregate {
         group_by_expressions: Vec<Expression>,
-        aggregate_functions: Vec<AggregateFunction>,
+        aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<FinalAggregateState>,
@@ -729,8 +747,8 @@ impl BlockingOperator {
                                 let accs = group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
-                                        .map(|(f, _)| {
-                                            AggregateAccumulator::for_function(f).expect(
+                                        .map(|(f, args)| {
+                                            AggregateAccumulator::for_function(f, args).expect(
                                                 "every aggregate function has an accumulator",
                                             )
                                         })
@@ -742,9 +760,11 @@ impl BlockingOperator {
                                             .get(num_group_keys + i)
                                             .cloned()
                                             .unwrap_or(Value::Null(NullType::Null));
-                                        if let Some(other) =
-                                            value_to_partial_accumulator(&func.0, &partial_value)
-                                        {
+                                        if let Some(other) = value_to_partial_accumulator(
+                                            &func.0,
+                                            &func.1,
+                                            &partial_value,
+                                        ) {
                                             acc.merge(&other);
                                         }
                                     }
@@ -816,13 +836,19 @@ impl BlockingOperator {
                                             let mut args =
                                                 Vec::with_capacity(aggregate_functions.len());
                                             let mut ok = true;
-                                            for (_func, expr) in aggregate_functions.iter() {
-                                                match chunk.evaluate_expression(expr, None) {
-                                                    Ok(col) => args.push(col),
-                                                    Err(_) => {
-                                                        ok = false;
-                                                        break;
+                                            for (_func, func_args) in aggregate_functions.iter() {
+                                                if let Some(expr) = func_args.first() {
+                                                    match chunk.evaluate_expression(expr, None) {
+                                                        Ok(col) => args.push(col),
+                                                        Err(_) => {
+                                                            ok = false;
+                                                            break;
+                                                        }
                                                     }
+                                                } else {
+                                                    // No args (e.g. COUNT(*)): fall back to per-row
+                                                    ok = false;
+                                                    break;
                                                 }
                                             }
                                             if ok {
@@ -854,14 +880,17 @@ impl BlockingOperator {
                                         None => {
                                             let mut values =
                                                 Vec::with_capacity(aggregate_functions.len());
-                                            for (_func, expr) in aggregate_functions.iter() {
+                                            for (_func, func_args) in aggregate_functions.iter() {
                                                 let mut ctx = ValueRowContext::from_names(
                                                     row.to_vec(),
                                                     state.col_names.clone(),
                                                 );
+                                                let expr = func_args.first().cloned().unwrap_or_else(|| {
+                                                    Expression::Literal(Value::Int(1))
+                                                });
                                                 values.push(
                                                     match ExpressionEvaluator::evaluate(
-                                                        expr, &mut ctx,
+                                                        &expr, &mut ctx,
                                                     ) {
                                                         Ok(v) => v,
                                                         Err(_) => Value::Null(NullType::Null),
@@ -874,7 +903,7 @@ impl BlockingOperator {
                                     let partial_row_of =
                                         |group_key: &[Value], arg_values: &[Value]| -> Vec<Value> {
                                             let mut partial_row = group_key.to_vec();
-                                            for (i, (func, _)) in
+                                            for (i, (func, args)) in
                                                 aggregate_functions.iter().enumerate()
                                             {
                                                 let value = arg_values
@@ -882,7 +911,7 @@ impl BlockingOperator {
                                                     .cloned()
                                                     .unwrap_or_else(|| Value::Null(NullType::Null));
                                                 let mut acc = AggregateAccumulator::for_function(
-                                                    func,
+                                                    func, args,
                                                 )
                                                 .expect(
                                                     "every aggregate function has an accumulator",
@@ -978,8 +1007,9 @@ impl BlockingOperator {
                                         state.group_map.entry(group_key).or_insert_with(|| {
                                             aggregate_functions
                                                 .iter()
-                                                .map(|(f, _)| {
-                                                    AggregateAccumulator::for_function(f).expect(
+                                                .map(|(f, args)| {
+                                                    AggregateAccumulator::for_function(f, args)
+                                                        .expect(
                                                 "every aggregate function has an accumulator",
                                             )
                                                 })
@@ -2274,17 +2304,13 @@ impl BlockingOperator {
                             };
                         let field_indices: Vec<Option<usize>> = aggregate_functions
                             .iter()
-                            .map(|func| match func {
-                                // count(*) is a constant 1 (no field access).
-                                AggregateFunction::Count(None) => None,
-                                AggregateFunction::Count(Some(f))
-                                | AggregateFunction::Sum(f)
-                                | AggregateFunction::Avg(f)
-                                | AggregateFunction::Min(f)
-                                | AggregateFunction::Max(f) => {
-                                    col_names.iter().position(|c| c == f)
-                                }
-                                _ => None,
+                            .map(|(func, args)| {
+                                // count(*) is a constant 1 (no field access);
+                                // other field-based aggregates resolve their
+                                // argument column by the expression string of
+                                // args[0].
+                                let field = aggregate_arg_field_name(func, args);
+                                field.and_then(|f| col_names.iter().position(|c| c == &f))
                             })
                             .collect();
                         for idx in visible {
@@ -2318,11 +2344,13 @@ impl BlockingOperator {
                                 state.group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
-                                        .filter_map(AggregateAccumulator::for_function)
+                                        .filter_map(|(f, args)| {
+                                            AggregateAccumulator::for_function(f, args)
+                                        })
                                         .collect()
                                 });
 
-                            for (i, func) in aggregate_functions.iter().enumerate() {
+                            for (i, (func, _args)) in aggregate_functions.iter().enumerate() {
                                 if let Some(acc) = group_accs.get_mut(i) {
                                     let value = match &field_indices[i] {
                                         Some(j) => row
@@ -2330,7 +2358,7 @@ impl BlockingOperator {
                                             .cloned()
                                             .unwrap_or_else(|| Value::Null(NullType::Null)),
                                         None => match func {
-                                            AggregateFunction::Count(None) => Value::Int(1),
+                                            AggregateFunction::Count => Value::Int(1),
                                             _ => Value::Null(NullType::Null),
                                         },
                                     };
@@ -2410,7 +2438,9 @@ impl BlockingOperator {
                                 state.group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
-                                        .filter_map(AggregateAccumulator::for_function)
+                                        .filter_map(|(f, args)| {
+                                            AggregateAccumulator::for_function(f, args)
+                                        })
                                         .collect()
                                 });
 
@@ -2421,7 +2451,7 @@ impl BlockingOperator {
                                     let acc_col_idx = num_group_keys + i;
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
-                                        let partial_acc = value_to_partial_accumulator(func, val);
+                                        let partial_acc = value_to_partial_accumulator(&func.0, &func.1, val);
                                         if let Some(other) = partial_acc {
                                             acc.merge(&other);
                                         }

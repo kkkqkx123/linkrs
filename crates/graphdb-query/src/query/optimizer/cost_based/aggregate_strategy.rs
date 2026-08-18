@@ -870,7 +870,7 @@ mod tests {
             input: Some(Box::new(scan.clone())),
             deps: vec![scan],
             group_keys: vec!["n.age".to_string()],
-            aggregation_functions: vec![AggregateFunction::Count(None)],
+            aggregation_functions: vec![AggregateFunction::Count],
             aggregation_distinct: vec![],
             aggregation_filters: vec![],
             grouping_sets: vec![],
