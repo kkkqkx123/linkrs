@@ -355,8 +355,8 @@ pub struct BoundMatchStatement {
     pub where_clause: Option<BoundWhereClause>,
     pub return_clause: Option<BoundReturnClause>,
     pub order_by: Option<Vec<BoundOrderByItem>>,
-    pub limit: Option<usize>,
-    pub skip: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
     pub optional: bool,
     pub delete_clause: Option<BoundMatchDeleteClause>,
 }
@@ -413,8 +413,8 @@ pub struct BoundFindPathStatement {
     pub where_clause: Option<BoundWhereClause>,
     pub shortest: bool,
     pub max_steps: Option<usize>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
     pub yield_clause: Option<BoundYieldClause>,
 }
 
@@ -434,8 +434,8 @@ pub struct BoundReturnStatement {
     pub items: Vec<BoundReturnItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
-    pub skip: Option<usize>,
-    pub limit: Option<usize>,
+    pub skip: Option<SkipClause>,
+    pub limit: Option<LimitClause>,
 }
 
 #[derive(Debug, Clone)]

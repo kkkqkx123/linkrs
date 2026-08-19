@@ -1026,7 +1026,7 @@ fn split_aggregate(node: &AggregateNode) -> (BlockingSpec, BlockingSpec) {
                 )
             } else {
                 let args = agg_args.get(i).cloned().unwrap_or_default();
-                (func.clone(), args)
+                (*func, args)
             }
         })
         .collect();

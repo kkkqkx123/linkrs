@@ -120,8 +120,8 @@ pub fn extract_group_info(
         }
     }
 
-    group_keys.dedup_by(|a, b| a.equals_by_content(b));
-    group_items.dedup_by(|a, b| a.equals_by_content(b));
+    group_keys.dedup_by(|a, b| a.content_eq(b));
+    group_items.dedup_by(|a, b| a.content_eq(b));
 
     (group_keys, group_items)
 }

@@ -341,7 +341,7 @@ impl Expression {
                 distinct,
                 filter,
             } => Expression::Aggregate {
-                func: func.clone(),
+                func: *func,
                 args: args.iter().map(|arg| arg.transform(transformer)).collect(),
                 distinct: *distinct,
                 filter: filter.as_ref().map(|f| Box::new(f.transform(transformer))),

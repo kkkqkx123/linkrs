@@ -631,7 +631,7 @@ pub(super) fn build_aggregate_spec(
                 );
             }
             let args = agg_args.get(i).cloned().unwrap_or_default();
-            (func.clone(), args)
+            (*func, args)
         })
         .collect();
     Ok(BlockingSpec::Aggregate {
@@ -1399,8 +1399,8 @@ pub(super) fn build_update_vertices_spec(
             .updates()
             .iter()
             .flat_map(|update| update.properties.iter())
-            .map(|(name, value)| (name.clone(), value.clone().into_expression()))
-            .collect(),
+            .map(|(name, value)| contextual_to_expression(value).map(|expr| (name.clone(), expr)))
+            .collect::<Result<Vec<_>, _>>()?,
         condition: node
             .updates()
             .first()
@@ -1432,8 +1432,8 @@ pub(super) fn build_update_edges_spec(
             .updates()
             .iter()
             .flat_map(|update| update.properties.iter())
-            .map(|(name, value)| (name.clone(), value.clone().into_expression()))
-            .collect(),
+            .map(|(name, value)| contextual_to_expression(value).map(|expr| (name.clone(), expr)))
+            .collect::<Result<Vec<_>, _>>()?,
         condition: node
             .updates()
             .first()

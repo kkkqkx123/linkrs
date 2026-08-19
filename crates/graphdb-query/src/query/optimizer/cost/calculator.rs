@@ -716,7 +716,7 @@ impl CostCalculator {
             | Value::Double(_) => self.config.fixed_type_cost_factor,
 
             // Variable-length types
-            Value::String(_) | Value::FixedString { .. } | Value::Blob(_) => {
+            Value::String(_) | Value::FixedString(_) | Value::Blob(_) => {
                 self.config.variable_type_cost_factor
             }
 

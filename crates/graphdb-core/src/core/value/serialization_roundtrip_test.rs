@@ -42,7 +42,7 @@ fn exhaustive_variant_check(value: &Value) {
             | Value::Double(_)
             | Value::Decimal128(_)
             | Value::String(_)
-            | Value::FixedString { .. }
+            | Value::FixedString(_)
             | Value::Blob(_)
             | Value::Date(_)
             | Value::Time(_)

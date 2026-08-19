@@ -205,21 +205,10 @@ impl OrderedCodec {
                 } else if tag == TAG_BLOB {
                     Ok((Value::Blob(data), end))
                 } else {
-                    if bytes.len() < end + 4 {
-                        return Err(StorageError::deserialize_error(
-                            "truncated fixed-string length",
-                        ));
-                    }
-                    let len = u32::from_be_bytes([
-                        bytes[end],
-                        bytes[end + 1],
-                        bytes[end + 2],
-                        bytes[end + 3],
-                    ]) as usize;
                     let s = String::from_utf8(data).map_err(|e| {
                         StorageError::deserialize_error(format!("invalid UTF-8: {}", e))
                     })?;
-                    Ok((Value::FixedString { len, data: s }, end + 4))
+                    Ok((Value::FixedString(s), end))
                 }
             }
             TAG_DATE => {
@@ -461,7 +450,7 @@ impl OrderedCodec {
             // prefix remain covered.
             // Lower = full encoded value (TAG + data + 0x00).
             // Upper = TAG + prefix_upper_bound(data).
-            Value::String(_) | Value::FixedString { .. } | Value::Blob(_) => {
+            Value::String(_) | Value::FixedString(_) | Value::Blob(_) => {
                 let lower = self.encode(value)?;
                 let tag = lower[0];
                 let (_, terminator_end) = decode_escaped_bytes(&lower, 1)?;
@@ -534,10 +523,9 @@ impl OrderedCodec {
                 buf.push(TAG_STRING);
                 encode_escaped_bytes(s.as_bytes(), buf);
             }
-            Value::FixedString { len, data } => {
+            Value::FixedString(data) => {
                 buf.push(TAG_FIXED_STRING);
                 encode_escaped_bytes(data.as_bytes(), buf);
-                buf.extend_from_slice(&(*len as u32).to_be_bytes());
             }
             Value::Blob(b) => {
                 buf.push(TAG_BLOB);
@@ -1091,10 +1079,7 @@ mod tests {
             Value::string(""),
             Value::string("hello"),
             Value::string("世界"),
-            Value::FixedString {
-                len: 5,
-                data: "fixed".to_string(),
-            },
+            Value::FixedString("fixed".to_string()),
         ];
         for v in &cases {
             let enc = codec().encode(v).unwrap();
@@ -1518,10 +1503,7 @@ mod tests {
                 microsec: 0,
             }),
             Value::string(""),
-            Value::FixedString {
-                len: 0,
-                data: "".to_string(),
-            },
+            Value::FixedString(String::new()),
             Value::Blob(Vec::new()),
             Value::Uuid(UuidValue::from_bytes([0; 16])),
         ];

@@ -223,7 +223,7 @@ impl ClausePlanner for ReturnClausePlanner {
             .transpose()?;
 
         if has_aggregate {
-            let (group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters) =
+            let (group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters, agg_args) =
                 extract_aggregate_info(&yield_columns)?;
 
             let mut project_columns: Vec<YieldColumn> = yield_columns
@@ -293,6 +293,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 agg_functions.clone(),
                 agg_aliases,
             )?;
+            aggregate_node.set_aggregation_args(agg_args);
             aggregate_node.set_aggregation_distinct(agg_distinct.clone());
             aggregate_node.set_aggregation_filters(agg_filters.clone());
 
@@ -615,13 +616,14 @@ fn extract_window_function_info(
     Ok(window_specs)
 }
 
-/// Aggregate extraction result containing group keys, aggregate functions, their aliases, distinct flags, and filters
+/// Aggregate extraction result containing group keys, aggregate functions, their aliases, distinct flags, filters, and args
 type AggregateExtractionResult = (
     Vec<String>,
     Vec<AggregateFunction>,
     Vec<String>,
     Vec<bool>,
     Vec<Option<Expression>>,
+    Vec<Vec<Expression>>,
 );
 
 fn extract_aggregate_info(
@@ -632,16 +634,18 @@ fn extract_aggregate_info(
     let mut agg_aliases = Vec::new();
     let mut agg_distinct = Vec::new();
     let mut agg_filters = Vec::new();
+    let mut agg_args = Vec::new();
 
     for col in columns {
         if let Some(expr_meta) = col.expression.expression() {
             let expr = expr_meta.inner();
             if expression_contains_aggregate(expr) {
-                if let Some((agg_func, distinct, filter)) = extract_aggregate_function(expr) {
+                if let Some((agg_func, distinct, filter, args)) = extract_aggregate_function(expr) {
                     agg_functions.push(agg_func);
                     agg_aliases.push(col.alias.clone());
                     agg_distinct.push(distinct);
                     agg_filters.push(filter);
+                    agg_args.push(args);
                 }
             } else {
                 let key = col.alias.clone();
@@ -658,23 +662,26 @@ fn extract_aggregate_info(
         agg_aliases,
         agg_distinct,
         agg_filters,
+        agg_args,
     ))
 }
 
 fn extract_aggregate_function(
     expr: &crate::core::Expression,
-) -> Option<(AggregateFunction, bool, Option<Expression>)> {
+) -> Option<(AggregateFunction, bool, Option<Expression>, Vec<Expression>)> {
     use crate::core::Expression;
     match expr {
         Expression::Aggregate {
             func,
             distinct,
             filter,
+            args,
             ..
         } => Some((
-            func.clone(),
+            *func,
             *distinct,
             filter.as_ref().map(|f| f.as_ref().clone()),
+            args.clone(),
         )),
         Expression::Binary { left, right, .. } => {
             extract_aggregate_function(left).or_else(|| extract_aggregate_function(right))

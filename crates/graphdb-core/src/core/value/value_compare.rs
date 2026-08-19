@@ -22,7 +22,7 @@ impl PartialEq for Value {
             (Value::Double(a), Value::Double(b)) => (a == b) || (a.is_nan() && b.is_nan()),
             (Value::Decimal128(a), Value::Decimal128(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
-            (Value::FixedString { data: a, .. }, Value::FixedString { data: b, .. }) => a == b,
+            (Value::FixedString(a), Value::FixedString(b)) => a == b,
             (Value::Date(a), Value::Date(b)) => a == b,
             (Value::Time(a), Value::Time(b)) => a == b,
             (Value::DateTime(a), Value::DateTime(b)) => a == b,
@@ -101,7 +101,7 @@ impl Ord for Value {
             (Value::Decimal128(a), Value::Decimal128(b)) => a.cmp(b),
             (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
             (Value::String(a), Value::String(b)) => a.cmp(b),
-            (Value::FixedString { data: a, .. }, Value::FixedString { data: b, .. }) => a.cmp(b),
+            (Value::FixedString(a), Value::FixedString(b)) => a.cmp(b),
             (Value::Date(a), Value::Date(b)) => Self::cmp_date(a, b),
             (Value::Time(a), Value::Time(b)) => Self::cmp_time(a, b),
             (Value::DateTime(a), Value::DateTime(b)) => Self::cmp_datetime(a, b),
@@ -248,7 +248,7 @@ impl Hash for Value {
                 9u8.hash(state);
                 s.hash(state);
             }
-            Value::FixedString { data, .. } => {
+            Value::FixedString(data) => {
                 10u8.hash(state);
                 data.hash(state);
             }
@@ -714,7 +714,7 @@ impl Value {
             Value::Time(_) => 10,
             Value::DateTime(_) => 11,
             Value::String(_) => 12,
-            Value::FixedString { .. } => 13,
+            Value::FixedString(_) => 13,
             Value::Blob(_) => 14,
             Value::Vertex(_) => 15,
             Value::Edge(_) => 16,

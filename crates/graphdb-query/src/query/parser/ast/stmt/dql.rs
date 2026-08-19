@@ -30,8 +30,8 @@ pub struct MatchStmt {
     pub where_clause: Option<ContextualExpression>,
     pub return_clause: Option<ReturnClause>,
     pub order_by: Option<OrderByClause>,
-    pub limit: Option<usize>,
-    pub skip: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
     pub optional: bool,
     pub delete_clause: Option<MatchDeleteClause>,
 }
@@ -204,8 +204,8 @@ pub struct FindPathStmt {
     pub where_clause: Option<ContextualExpression>,
     pub shortest: bool,
     pub max_steps: Option<usize>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
     pub yield_clause: Option<YieldClause>,
     pub weight_expression: Option<String>,
     pub heuristic_expression: Option<String>,
@@ -219,8 +219,8 @@ pub struct ReturnStmt {
     pub items: Vec<ReturnItem>,
     pub distinct: bool,
     pub order_by: Option<OrderByClause>,
-    pub skip: Option<usize>,
-    pub limit: Option<usize>,
+    pub skip: Option<SkipClause>,
+    pub limit: Option<LimitClause>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,20 +230,6 @@ pub struct YieldStmt {
     pub where_clause: Option<ContextualExpression>,
     pub distinct: bool,
     pub order_by: Option<OrderByClause>,
-    pub skip: Option<usize>,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MatchClause {
-    pub span: Span,
-    pub patterns: Vec<Pattern>,
-    pub optional: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct WithClause {
-    pub span: Span,
-    pub items: Vec<ReturnItem>,
-    pub where_clause: Option<ContextualExpression>,
+    pub skip: Option<SkipClause>,
+    pub limit: Option<LimitClause>,
 }

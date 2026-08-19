@@ -78,9 +78,10 @@ impl FilterNode {
         self.condition_serializable = None;
     }
 
-    pub fn prepare_for_serialization(&mut self) {
+    pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         self.condition_serializable =
-            Some(SerializableExpression::from_contextual(&self.condition));
+            Some(SerializableExpression::from_contextual(&self.condition)?);
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {

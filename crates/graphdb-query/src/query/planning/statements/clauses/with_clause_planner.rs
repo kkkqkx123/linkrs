@@ -320,8 +320,8 @@ impl WithClausePlanner {
         // Building the pagination context
         let pagination = if with_stmt.skip.is_some() || with_stmt.limit.is_some() {
             Some(PaginationContext {
-                skip: with_stmt.skip.unwrap_or(0) as i64,
-                limit: with_stmt.limit.unwrap_or(0) as i64,
+                skip: with_stmt.skip.as_ref().map(|s| s.count).unwrap_or(0) as i64,
+                limit: with_stmt.limit.as_ref().map(|l| l.count).unwrap_or(0) as i64,
             })
         } else {
             None
@@ -340,8 +340,8 @@ impl WithClausePlanner {
             agg_output_column_names: vec![],
             proj_output_column_names: vec![],
             filter_condition: with_stmt.where_clause.clone(),
-            skip: with_stmt.skip,
-            limit: with_stmt.limit,
+            skip: with_stmt.skip.as_ref().map(|s| s.count),
+            limit: with_stmt.limit.as_ref().map(|l| l.count),
         };
 
         Ok(WithClauseContext {

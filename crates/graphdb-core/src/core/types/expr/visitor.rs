@@ -6,9 +6,11 @@
 //! # Examples of use
 //!
 //! ```rust
-//! use crate::core::types::expr::visitor::{ExpressionVisitor, PropertyCollector};
+//! use graphdb_core::core::Expression;
+//! use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+//! use graphdb_core::core::types::expr::visitor_collectors::PropertyCollector;
 //!
-//! let expr = Expression::property("a", "name");
+//! let expr = Expression::property(Expression::variable("a"), "name");
 //! let mut collector = PropertyCollector::new();
 //! collector.visit(&expr);
 //! assert_eq!(collector.properties, vec!["name".to_string()]);
@@ -28,7 +30,10 @@ use crate::core::Value;
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::Expression;
+/// use graphdb_core::core::Value;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::operators::BinaryOperator;
 ///
 /// struct MyVisitor {
 ///     count: usize,

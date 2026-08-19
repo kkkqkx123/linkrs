@@ -30,7 +30,7 @@ impl ExpressionId {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::{Expression, ExpressionMeta, Span, Position};
+/// use graphdb_core::core::types::{Expression, ExpressionMeta, Span, Position};
 ///
 /// let expr = Expression::literal(42);
 /// let meta = ExpressionMeta::with_span(expr, Span::new(Position::new(1, 1), Position::new(1, 2)));
@@ -64,7 +64,7 @@ impl ExpressionMeta {
     /// # Example
     ///
     /// ```rust
-    /// use crate::core::types::{Expression, ExpressionMeta};
+    /// use graphdb_core::core::types::{Expression, ExpressionMeta};
     ///
     /// let expr = Expression::variable("x");
     /// let meta = ExpressionMeta::new(expr);
@@ -83,7 +83,7 @@ impl ExpressionMeta {
     /// # Example
     ///
     /// ```rust
-    /// use crate::core::types::{Expression, ExpressionMeta, Span, Position};
+    /// use graphdb_core::core::types::{Expression, ExpressionMeta, Span, Position};
     ///
     /// let expr = Expression::literal("test");
     /// let span = Span::new(Position::new(5, 10), Position::new(5, 14));

@@ -29,7 +29,7 @@ impl From<QueryResponse> for QueryResult {
     fn from(response: QueryResponse) -> Self {
         let data = response
             .data
-            .unwrap_or_else(|| graphdb_wire::query::QueryData::empty());
+            .unwrap_or_else(graphdb_wire::query::QueryData::empty);
         Self {
             columns: data.columns,
             rows: data.rows,

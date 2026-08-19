@@ -301,8 +301,8 @@ impl FulltextSearchPlanner {
             search.yield_clause.clone(),
             search.where_clause.clone(),
             search.order_clause.clone(),
-            search.limit,
-            search.offset,
+            search.limit.as_ref().map(|l| l.count),
+            search.skip.as_ref().map(|s| s.count),
         );
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
@@ -330,8 +330,8 @@ impl FulltextSearchPlanner {
             search.yield_clause.clone(),
             where_clause,
             search.order_clause.clone(),
-            search.limit,
-            search.offset,
+            search.limit.as_ref().map(|l| l.count),
+            search.skip.as_ref().map(|s| s.count),
         )
         .with_metadata(
             index_metadata.space_id,

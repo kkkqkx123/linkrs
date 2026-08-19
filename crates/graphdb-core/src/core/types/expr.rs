@@ -37,9 +37,9 @@
 //! ## Usage Examples
 //!
 //! ```rust
-//! use crate::core::types::expr::Expression;
-//! use crate::core::types::operators::{BinaryOperator, AggregateFunction};
-//! use crate::core::Value;
+//! use graphdb_core::core::types::expr::Expression;
+//! use graphdb_core::core::types::operators::{BinaryOperator, AggregateFunction};
+//! use graphdb_core::core::Value;
 //!
 // Simple literals
 //! let expression = Expression::literal(Value::Int(42));

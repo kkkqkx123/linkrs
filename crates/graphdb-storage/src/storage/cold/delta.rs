@@ -568,7 +568,7 @@ fn encode_value(buf: &mut Vec<u8>, value: &Value) -> StorageResult<()> {
             buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
             buf.extend_from_slice(bytes);
         }
-        Value::FixedString { data, .. } => {
+        Value::FixedString(data) => {
             buf.push(6);
             let bytes = data.as_bytes();
             buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());

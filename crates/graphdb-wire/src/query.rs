@@ -60,7 +60,7 @@ pub struct QueryData {
 }
 
 /// Query metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryMetadata {
     #[serde(default)]
     pub execution_time_ms: u64,
@@ -123,17 +123,6 @@ impl QueryResponse {
                 details,
             }),
             metadata: QueryMetadata::default(),
-        }
-    }
-}
-
-impl Default for QueryMetadata {
-    fn default() -> Self {
-        Self {
-            execution_time_ms: 0,
-            rows_scanned: 0,
-            rows_returned: 0,
-            space_id: None,
         }
     }
 }

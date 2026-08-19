@@ -738,7 +738,7 @@ mod tests {
             shortest: true,
             max_steps: None,
             limit: None,
-            offset: None,
+            skip: None,
             yield_clause: None,
             weight_expression: None,
             heuristic_expression: None,

@@ -158,7 +158,7 @@ fn rewrite_expression_with_map(
             distinct,
             filter,
         } => Expression::Aggregate {
-            func: func.clone(),
+            func: *func,
             args: args
                 .iter()
                 .map(|a| rewrite_expression_with_map(a, rewrite_map, expr_context.clone()))

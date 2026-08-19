@@ -345,7 +345,7 @@ fn extract_aggregate_functions_recursive(
 ) {
     match expression {
         Expression::Aggregate { func, .. } => {
-            functions.push(func.clone());
+            functions.push(*func);
         }
         Expression::Binary { left, right, .. } => {
             extract_aggregate_functions_recursive(left, functions);

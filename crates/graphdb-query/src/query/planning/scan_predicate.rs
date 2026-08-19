@@ -166,7 +166,7 @@ fn is_scalar_literal(expr: &Expression) -> bool {
                 | Value::Float(_)
                 | Value::Double(_)
                 | Value::String(_)
-                | Value::FixedString { .. }
+                | Value::FixedString(_)
                 | Value::Bool(_)
         ),
         _ => false,

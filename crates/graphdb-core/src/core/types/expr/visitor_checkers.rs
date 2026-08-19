@@ -22,8 +22,8 @@ use crate::core::Expression;
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::ConstantChecker;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::ConstantChecker;
+/// use graphdb_core::core::Expression;
 ///
 /// let expr = Expression::literal(42);
 /// assert!(ConstantChecker::check(&expr));
@@ -296,10 +296,10 @@ impl ExpressionVisitor for ConstantChecker {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::PropertyContainsChecker;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::PropertyContainsChecker;
+/// use graphdb_core::core::Expression;
 ///
-/// let expr = Expression::property("a", "name");
+/// let expr = Expression::property(Expression::variable("a"), "name");
 /// assert!(PropertyContainsChecker::check(&expr, &["name".to_string()]));
 ///
 /// assert!(!PropertyContainsChecker::check(&expr, &["age".to_string()]));
@@ -585,10 +585,10 @@ impl ExpressionVisitor for PropertyContainsChecker {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::WildcardReplacer;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::WildcardReplacer;
+/// use graphdb_core::core::Expression;
 ///
-/// let expr = Expression::property("*", "name");
+/// let expr = Expression::property(Expression::variable("*"), "name");
 /// let mut replacer = WildcardReplacer::new("v");
 /// let replaced = replacer.replace(&expr);
 /// ```
@@ -657,7 +657,7 @@ impl WildcardReplacer {
                 distinct,
                 filter,
             } => Expression::Aggregate {
-                func: func.clone(),
+                func: *func,
                 args: args.iter().map(|arg| self.replace_internal(arg)).collect(),
                 distinct: *distinct,
                 filter: filter.as_ref().map(|f| Box::new(self.replace_internal(f))),
@@ -807,10 +807,11 @@ impl WildcardReplacer {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::AggregateFunctionChecker;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::AggregateFunctionChecker;
+/// use graphdb_core::core::Expression;
+/// use graphdb_core::core::types::operators::AggregateFunctionKind;
 ///
-/// let expr = Expression::aggregate("count", Expression::variable("v"), false);
+/// let expr = Expression::aggregate(AggregateFunctionKind::Count, Expression::variable("v"), false);
 /// assert!(AggregateFunctionChecker::check(&expr));
 ///
 /// let expr = Expression::variable("a");
@@ -1080,10 +1081,10 @@ impl ExpressionVisitor for AggregateFunctionChecker {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::VariableContainsChecker;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::VariableContainsChecker;
+/// use graphdb_core::core::Expression;
 ///
-/// let expr = Expression::property("a", "name");
+/// let expr = Expression::property(Expression::variable("a"), "name");
 /// assert!(VariableContainsChecker::check(&expr, "a"));
 ///
 /// assert!(!VariableContainsChecker::check(&expr, "b"));
@@ -1365,8 +1366,8 @@ impl ExpressionVisitor for VariableContainsChecker {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::PathBuildContainsChecker;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor_checkers::PathBuildContainsChecker;
+/// use graphdb_core::core::Expression;
 ///
 /// let expr = Expression::path_build(vec![Expression::variable("a")]);
 /// assert!(PathBuildContainsChecker::check(&expr));

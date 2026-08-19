@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::stmt::OrderByClause;
+use super::types::{LimitClause, SkipClause};
 
 // ============================================================================
 // Full-Text Index DDL Statements
@@ -107,8 +108,8 @@ pub struct SearchStatement {
     pub yield_clause: Option<FulltextYieldClause>,
     pub where_clause: Option<ContextualExpression>,
     pub order_clause: Option<OrderByClause>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
 }
 
 /// Full-text query expression
@@ -236,7 +237,7 @@ impl SearchStatement {
             where_clause: None,
             order_clause: None,
             limit: None,
-            offset: None,
+            skip: None,
         }
     }
 
@@ -255,13 +256,13 @@ impl SearchStatement {
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
+    pub fn with_limit(mut self, limit: LimitClause) -> Self {
         self.limit = Some(limit);
         self
     }
 
-    pub fn with_offset(mut self, offset: usize) -> Self {
-        self.offset = Some(offset);
+    pub fn with_skip(mut self, skip: SkipClause) -> Self {
+        self.skip = Some(skip);
         self
     }
 }

@@ -78,10 +78,11 @@ impl ExpandNode {
         self.filter_serializable = None;
     }
 
-    pub fn prepare_for_serialization(&mut self) {
+    pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
@@ -364,10 +365,11 @@ impl ExpandAllNode {
         self.filter_serializable = None;
     }
 
-    pub fn prepare_for_serialization(&mut self) {
+    pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
@@ -652,17 +654,18 @@ impl TraverseNode {
         self.first_step_filter_serializable = None;
     }
 
-    pub fn prepare_for_serialization(&mut self) {
+    pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.e_filter {
-            self.e_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.e_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
         if let Some(ref ctx_expr) = self.v_filter {
-            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
         if let Some(ref ctx_expr) = self.first_step_filter {
             self.first_step_filter_serializable =
-                Some(SerializableExpression::from_contextual(ctx_expr));
+                Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {
@@ -812,17 +815,18 @@ impl AppendVerticesNode {
         self.v_filter_serializable = None;
     }
 
-    pub fn prepare_for_serialization(&mut self) {
+    pub fn prepare_for_serialization(&mut self) -> Result<(), String> {
         if let Some(ref ctx_expr) = self.filter {
-            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
         if let Some(ref ctx_expr) = self.src_expression {
             self.src_expression_serializable =
-                Some(SerializableExpression::from_contextual(ctx_expr));
+                Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
         if let Some(ref ctx_expr) = self.v_filter {
-            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr));
+            self.v_filter_serializable = Some(SerializableExpression::from_contextual(ctx_expr)?);
         }
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {

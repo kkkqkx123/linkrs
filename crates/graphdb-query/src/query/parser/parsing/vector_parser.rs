@@ -6,7 +6,7 @@
 use crate::core::types::expr::{create_contextual_expression, Expression};
 use crate::query::parser::ast::stmt::Stmt;
 use crate::query::parser::ast::stmt::{OrderByClause, OrderByItem};
-use crate::query::parser::ast::types::OrderDirection;
+use crate::query::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::query::parser::ast::vector::{
     CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
     VectorDistance, VectorIndexConfig, VectorMatchCondition, VectorQueryExpr, VectorQueryType,
@@ -235,13 +235,21 @@ pub fn parse_search_vector_statement(
     let mut limit = None;
     if ctx.check_keyword("LIMIT") {
         ctx.consume_keyword("LIMIT")?;
-        limit = Some(ctx.consume_int()? as usize);
+        let count = ctx.consume_int()? as usize;
+        limit = Some(LimitClause {
+            span: ctx.current_span(),
+            count,
+        });
     }
 
-    let mut offset = None;
+    let mut skip = None;
     if ctx.check_keyword("OFFSET") {
         ctx.consume_keyword("OFFSET")?;
-        offset = Some(ctx.consume_int()? as usize);
+        let count = ctx.consume_int()? as usize;
+        skip = Some(SkipClause {
+            span: ctx.current_span(),
+            count,
+        });
     }
 
     let mut yield_clause = None;
@@ -258,7 +266,7 @@ pub fn parse_search_vector_statement(
         where_clause,
         order_clause,
         limit,
-        offset,
+        skip,
         yield_clause,
     }))
 }

@@ -31,8 +31,8 @@ impl PaginationPlanner {
 
 fn extract_pagination_info(stmt: &Stmt) -> PaginationInfo {
     if let Stmt::Match(match_stmt) = stmt {
-        let skip = match_stmt.skip.unwrap_or(0);
-        let limit = match_stmt.limit.unwrap_or(100);
+        let skip = match_stmt.skip.as_ref().map(|s| s.count).unwrap_or(0);
+        let limit = match_stmt.limit.as_ref().map(|l| l.count).unwrap_or(100);
         return PaginationInfo { skip, limit };
     }
     PaginationInfo {
@@ -89,9 +89,24 @@ impl ClausePlanner for PaginationPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::query::parser::ast::types::{LimitClause, SkipClause};
     use crate::query::parser::ast::Span;
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
+
+    fn limit(count: usize) -> Option<LimitClause> {
+        Some(LimitClause {
+            count,
+            span: Span::default(),
+        })
+    }
+
+    fn skip(count: usize) -> Option<SkipClause> {
+        Some(SkipClause {
+            count,
+            span: Span::default(),
+        })
+    }
 
     #[test]
     fn test_pagination_planner_creation() {
@@ -107,8 +122,8 @@ mod tests {
             where_clause: None,
             return_clause: None,
             order_by: None,
-            limit: Some(10),
-            skip: Some(5),
+            limit: limit(10),
+            skip: skip(5),
             optional: false,
             delete_clause: None,
         });
@@ -145,7 +160,7 @@ mod tests {
             where_clause: None,
             return_clause: None,
             order_by: None,
-            limit: Some(20),
+            limit: limit(20),
             skip: None,
             optional: false,
             delete_clause: None,
@@ -165,7 +180,7 @@ mod tests {
             return_clause: None,
             order_by: None,
             limit: None,
-            skip: Some(15),
+            skip: skip(15),
             optional: false,
             delete_clause: None,
         });
@@ -183,8 +198,8 @@ mod tests {
             where_clause: None,
             return_clause: None,
             order_by: None,
-            limit: Some(10),
-            skip: Some(5),
+            limit: limit(10),
+            skip: skip(5),
             optional: false,
             delete_clause: None,
         });
@@ -275,8 +290,8 @@ mod tests {
             where_clause: None,
             return_clause: None,
             order_by: None,
-            limit: Some(10),
-            skip: Some(5),
+            limit: limit(10),
+            skip: skip(5),
             optional: false,
             delete_clause: None,
         });

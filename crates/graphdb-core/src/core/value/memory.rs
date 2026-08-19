@@ -22,7 +22,7 @@ impl MemoryEstimatable for Value {
 
             // Variable-length string types
             Value::String(s) => base_size + s.capacity(),
-            Value::FixedString { data, .. } => base_size + data.capacity(),
+            Value::FixedString(data) => base_size + data.capacity(),
 
             // Binary data
             Value::Blob(b) => base_size + b.capacity(),

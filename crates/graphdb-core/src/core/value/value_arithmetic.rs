@@ -43,11 +43,9 @@ impl Value {
 
             // String concatenation
             (String(a), String(b)) => Ok(String(format!("{}{}", a, b).into())),
-            (String(a), FixedString { data: b, .. }) => Ok(String(format!("{}{}", a, b).into())),
-            (FixedString { data: a, .. }, String(b)) => Ok(String(format!("{}{}", a, b).into())),
-            (FixedString { data: a, .. }, FixedString { data: b, .. }) => {
-                Ok(String(format!("{}{}", a, b).into()))
-            }
+            (String(a), FixedString(b)) => Ok(String(format!("{}{}", a, b).into())),
+            (FixedString(a), String(b)) => Ok(String(format!("{}{}", a, b).into())),
+            (FixedString(a), FixedString(b)) => Ok(String(format!("{}{}", a, b).into())),
             _ => Err("Cannot perform addition on these value types".to_string()),
         }
     }
@@ -476,7 +474,7 @@ impl Value {
         use Value::*;
         match self {
             String(s) => Ok(Int(s.len() as i32)),
-            FixedString { data, .. } => Ok(Int(data.len() as i32)),
+            FixedString(data) => Ok(Int(data.len() as i32)),
             List(l) => Ok(Int(l.values.len() as i32)),
             Map(m) => Ok(Int(m.len() as i32)),
             Set(s) => Ok(Int(s.len() as i32)),

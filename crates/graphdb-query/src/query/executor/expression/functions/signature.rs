@@ -51,7 +51,7 @@ impl ValueType {
             Value::Double(_) => ValueType::Double,
             Value::Decimal128(_) => ValueType::Decimal128,
             Value::String(_) => ValueType::String,
-            Value::FixedString { .. } => ValueType::FixedString,
+            Value::FixedString(_) => ValueType::FixedString,
             Value::Blob(_) => ValueType::Blob,
             Value::Date(_) => ValueType::Date,
             Value::Time(_) => ValueType::Time,

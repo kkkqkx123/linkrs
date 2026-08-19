@@ -93,9 +93,7 @@ impl TraversalParser {
         }
 
         let (order_by, limit, skip) = if let Some(ref rc) = return_clause {
-            let limit = rc.limit.as_ref().map(|l| l.count);
-            let skip = rc.skip.as_ref().map(|s| s.count);
-            (rc.order_by.clone(), limit, skip)
+            (rc.order_by.clone(), rc.limit.clone(), rc.skip.clone())
         } else {
             (None, None, None)
         };
@@ -473,7 +471,7 @@ impl TraversalParser {
             shortest,
             max_steps,
             limit: None,
-            offset: None,
+            skip: None,
             yield_clause,
             weight_expression,
             heuristic_expression: None,

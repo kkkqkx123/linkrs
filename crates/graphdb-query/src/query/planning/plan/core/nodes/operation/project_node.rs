@@ -78,13 +78,17 @@ impl ProjectNode {
         self.col_names = self.columns.iter().map(|col| col.alias.clone()).collect();
     }
 
-    pub fn prepare_for_serialization(&mut self, _ctx: Arc<ExpressionAnalysisContext>) {
+    pub fn prepare_for_serialization(
+        &mut self,
+        _ctx: Arc<ExpressionAnalysisContext>,
+    ) -> Result<(), String> {
         self.columns_serializable = Some(
             self.columns
                 .iter()
                 .map(|col| SerializableExpression::from_contextual(&col.expression))
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
         );
+        Ok(())
     }
 
     pub fn after_deserialization(&mut self, ctx: Arc<ExpressionAnalysisContext>) {

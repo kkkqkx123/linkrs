@@ -59,7 +59,7 @@ impl GroupByPlanner {
                 ..
             } => {
                 functions.push((
-                    func.clone(),
+                    *func,
                     *distinct,
                     filter.as_ref().map(|f| f.as_ref().clone()),
                 ));

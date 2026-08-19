@@ -24,8 +24,6 @@ pub enum TypeInfo {
     /// ARRAY: fixed-length (`len = Some(n)`) or variable-length
     /// (`len = None`, equivalent to a LIST constraint).
     Array(ArrayTypeInfo),
-    /// DECIMAL128 precision/scale.
-    Decimal { precision: u8, scale: u8 },
 }
 
 /// STRUCT field list (order-preserving).

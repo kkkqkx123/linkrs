@@ -25,7 +25,7 @@ pub fn to_json(value: Value) -> serde_json::Value {
         ),
         Value::Decimal128(d) => serde_json::Value::String(d.to_string()),
         Value::String(s) => serde_json::Value::String(s.to_string()),
-        Value::FixedString { data, .. } => serde_json::Value::String(data.to_string()),
+        Value::FixedString(data) => serde_json::Value::String(data.to_string()),
         Value::Blob(blob) => serde_json::Value::String(format!("{:?}", blob)),
         Value::Date(d) => serde_json::Value::String(d.to_string()),
         Value::Time(t) => serde_json::Value::String(t.to_string()),
@@ -121,7 +121,7 @@ mod tests {
         assert_eq!(to_json(list), serde_json::json!([1, 2]));
 
         let map: Value = Value::Map(Box::new(
-            [(Value::string("a".to_string()), Value::BigInt(1))]
+            [(Value::string("a"), Value::BigInt(1))]
                 .into_iter()
                 .collect(),
         ));

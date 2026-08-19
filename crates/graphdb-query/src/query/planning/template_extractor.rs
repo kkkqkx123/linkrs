@@ -134,7 +134,7 @@ impl ParameterizingTransformer {
                     .as_ref()
                     .map(|f| self.transform_with_params(f, result));
                 Expression::Aggregate {
-                    func: func.clone(),
+                    func: *func,
                     args: new_args,
                     distinct: *distinct,
                     filter: new_filter.map(Box::new),
@@ -381,13 +381,13 @@ impl TemplateExtractor {
         }
 
         // Handle the SKIP command.
-        if let Some(skip) = stmt.skip {
-            parts.push(format!("SKIP ${}", skip));
+        if let Some(skip) = &stmt.skip {
+            parts.push(format!("SKIP ${}", skip.count));
         }
 
         // Handling the LIMIT clause
-        if let Some(limit) = stmt.limit {
-            parts.push(format!("LIMIT ${}", limit));
+        if let Some(limit) = &stmt.limit {
+            parts.push(format!("LIMIT ${}", limit.count));
         }
 
         // Handle the optional case.

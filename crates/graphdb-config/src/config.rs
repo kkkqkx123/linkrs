@@ -130,18 +130,12 @@ pub enum VectorEngineKind {
 }
 
 /// Local vector engine configuration
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LocalVectorConfig {
     /// Directory for the local vector engine; defaults to
     /// `<database.storage_path>/vector`.
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
-}
-
-impl Default for LocalVectorConfig {
-    fn default() -> Self {
-        Self { data_dir: None }
-    }
 }
 
 /// Vector search configuration

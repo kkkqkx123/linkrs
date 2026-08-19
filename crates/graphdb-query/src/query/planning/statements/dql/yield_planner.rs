@@ -148,16 +148,17 @@ impl Planner for YieldPlanner {
 
         // If there is a SKIP clause, create a restriction node.
         if let Some(skip) = yield_stmt.skip {
-            let limit_node = LimitNode::new(current_node.clone(), skip as i64, 0).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
-            })?;
+            let limit_node =
+                LimitNode::new(current_node.clone(), skip.count as i64, 0).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
+                })?;
             current_node = PlanNodeEnum::Limit(limit_node);
         }
 
         // If there is a LIMIT clause, create a limit node.
         if let Some(limit) = yield_stmt.limit {
             let limit_node =
-                LimitNode::new(current_node.clone(), 0, limit as i64).map_err(|e| {
+                LimitNode::new(current_node.clone(), 0, limit.count as i64).map_err(|e| {
                     PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
                 })?;
             current_node = PlanNodeEnum::Limit(limit_node);

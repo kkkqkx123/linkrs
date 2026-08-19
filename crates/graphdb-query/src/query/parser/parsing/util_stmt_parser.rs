@@ -333,8 +333,8 @@ impl UtilStmtParser {
             items: return_clause.items,
             distinct: return_clause.distinct,
             order_by: return_clause.order_by,
-            skip: return_clause.skip.map(|s| s.count),
-            limit: return_clause.limit.map(|l| l.count),
+            skip: return_clause.skip,
+            limit: return_clause.limit,
         }))
     }
 
@@ -387,7 +387,13 @@ impl UtilStmtParser {
         let skip = if ctx.match_token(TokenKind::Skip) {
             ctx.recover_clause(
                 |_| Ok(None),
-                |c| c.expect_integer_literal().map(|n| Some(n as usize)),
+                |c| {
+                    let count = c.expect_integer_literal()? as usize;
+                    Ok(Some(crate::query::parser::ast::types::SkipClause {
+                        span: c.current_span(),
+                        count,
+                    }))
+                },
             )?
         } else {
             None
@@ -397,7 +403,13 @@ impl UtilStmtParser {
         let limit = if ctx.match_token(TokenKind::Limit) {
             ctx.recover_clause(
                 |_| Ok(None),
-                |c| c.expect_integer_literal().map(|n| Some(n as usize)),
+                |c| {
+                    let count = c.expect_integer_literal()? as usize;
+                    Ok(Some(crate::query::parser::ast::types::LimitClause {
+                        span: c.current_span(),
+                        count,
+                    }))
+                },
             )?
         } else {
             None
@@ -428,8 +440,8 @@ impl UtilStmtParser {
             where_clause: yield_clause.where_clause,
             distinct: false,
             order_by: yield_clause.order_by,
-            skip: yield_clause.skip.map(|s| s.count),
-            limit: yield_clause.limit.map(|l| l.count),
+            skip: yield_clause.skip,
+            limit: yield_clause.limit,
         }))
     }
 

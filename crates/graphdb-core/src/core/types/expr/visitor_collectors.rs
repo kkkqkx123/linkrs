@@ -20,10 +20,11 @@ use crate::core::{Expression, Value};
 /// # Example
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::PropertyCollector;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::expr::visitor_collectors::PropertyCollector;
+/// use graphdb_core::core::Expression;
 ///
-/// let expr = Expression::property("a", "name");
+/// let expr = Expression::property(Expression::variable("a"), "name");
 /// let mut collector = PropertyCollector::new();
 /// collector.visit(&expr);
 /// assert_eq!(collector.properties, vec!["name".to_string()]);
@@ -201,8 +202,11 @@ impl ExpressionVisitor for PropertyCollector {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::OrConditionCollector;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::expr::visitor_collectors::OrConditionCollector;
+/// use graphdb_core::core::Expression;
+/// use graphdb_core::core::Value;
+/// use graphdb_core::core::types::operators::BinaryOperator;
 ///
 /// let expr = Expression::Binary {
 ///     left: Box::new(Expression::Binary {
@@ -222,7 +226,7 @@ impl ExpressionVisitor for PropertyCollector {
 /// collector.visit(&expr);
 ///
 /// assert_eq!(collector.can_convert_to_in(), true);
-/// assert_eq!(collector.property_name(), Some("age".to_string()));
+/// assert_eq!(collector.property_name().map(|s| s.as_str()), Some("age"));
 /// assert_eq!(collector.values(), vec![Value::Int(10), Value::Int(20)]);
 /// ```
 #[derive(Debug)]
@@ -445,8 +449,10 @@ impl ExpressionVisitor for OrConditionCollector {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::PropertyPredicateCollector;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::expr::visitor_collectors::PropertyPredicateCollector;
+/// use graphdb_core::core::Expression;
+/// use graphdb_core::core::types::operators::BinaryOperator;
 ///
 /// let expr = Expression::Binary {
 ///     left: Box::new(Expression::Binary {
@@ -512,6 +518,8 @@ impl ExpressionVisitor for PropertyPredicateCollector {
     }
 
     fn visit_binary(&mut self, op: BinaryOperator, left: &Expression, right: &Expression) {
+        self.visit(left);
+        self.visit(right);
         if matches!(
             op,
             BinaryOperator::Equal
@@ -670,8 +678,9 @@ impl ExpressionVisitor for PropertyPredicateCollector {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::VariableCollector;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::expr::visitor_collectors::VariableCollector;
+/// use graphdb_core::core::Expression;
 ///
 /// let expr = Expression::variable("a");
 /// let mut collector = VariableCollector::new();
@@ -853,8 +862,9 @@ impl ExpressionVisitor for VariableCollector {
 /// # Examples
 ///
 /// ```rust
-/// use crate::core::types::expr::visitor::FunctionCollector;
-/// use crate::core::Expression;
+/// use graphdb_core::core::types::expr::visitor::ExpressionVisitor;
+/// use graphdb_core::core::types::expr::visitor_collectors::FunctionCollector;
+/// use graphdb_core::core::Expression;
 ///
 /// let expr = Expression::function("count", vec![Expression::variable("a")]);
 /// let mut collector = FunctionCollector::new();

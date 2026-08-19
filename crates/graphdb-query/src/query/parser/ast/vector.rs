@@ -8,6 +8,7 @@ use crate::core::types::span::Span;
 use serde::{Deserialize, Serialize};
 
 use super::stmt::OrderByClause;
+use super::types::{LimitClause, SkipClause};
 
 // ============================================================================
 // Vector Index DDL Statements
@@ -54,8 +55,8 @@ pub struct SearchVectorStatement {
     pub threshold: Option<f32>,
     pub where_clause: Option<ContextualExpression>,
     pub order_clause: Option<OrderByClause>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
     pub yield_clause: Option<VectorYieldClause>,
 }
 

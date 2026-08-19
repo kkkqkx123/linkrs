@@ -26,17 +26,21 @@ pub struct SerializableExpression {
 }
 
 impl SerializableExpression {
-    /// Conversion from ContextualExpression to serializable form
-    pub fn from_contextual(ctx_expr: &ContextualExpression) -> Self {
+    /// Convert from a [`ContextualExpression`] reference.
+    ///
+    /// Returns `Ok(...)` when the expression metadata is present in the context,
+    /// or `Err` with a descriptive message otherwise. Callers must handle the
+    /// error explicitly — this replaces a previous `expect`-based implementation.
+    pub fn from_contextual(ctx_expr: &ContextualExpression) -> Result<Self, String> {
         let expr_meta = ctx_expr
             .expression()
-            .expect("Expression not found in context");
-        Self {
+            .ok_or_else(|| "Expression not found in context".to_string())?;
+        Ok(Self {
             id: ctx_expr.id().clone(),
             expression: expr_meta.inner().clone(),
             data_type: ctx_expr.data_type(),
             constant_value: ctx_expr.constant_value(),
-        }
+        })
     }
 
     /// Convert to ContextualExpression
@@ -163,7 +167,8 @@ mod tests {
         ctx.set_constant(&id, Value::Int(42));
 
         let ctx_expr = ContextualExpression::new(id, ctx);
-        let ser_expr = SerializableExpression::from_contextual(&ctx_expr);
+        let ser_expr = SerializableExpression::from_contextual(&ctx_expr)
+            .expect("expression must be in context");
 
         assert_eq!(ser_expr.id().0, 0);
         assert_eq!(ser_expr.data_type(), Some(&DataType::Int));

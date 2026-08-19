@@ -9,10 +9,19 @@ use super::ExpressionAnalysisContext;
 use super::{Expression, ExpressionId, ExpressionMeta};
 use crate::core::types::DataType;
 use crate::core::Value;
-/// Enhanced expression metadata with query context references
+/// Equality is identity-based: two `ContextualExpression` values are equal
+/// only when they share the same `ExpressionId` **and** point to the same
+/// `ExpressionAnalysisContext` (`Arc::ptr_eq`). This is deliberate — the
+/// context is the single source of truth for expression identity. Use
+/// [`Self::content_eq`] when you need structural comparison of the underlying
+/// expression instead.
 ///
-/// Lightweight expression references, holding ExpressionId and Context references.
-/// The ExpressionAnalysisContext provides access to full information about the expression, its type, constant value, etc.
+/// # Identity vs. Content
+///
+/// | Operation | Semantics |
+/// |-----------|-----------|
+/// | `==` / `!=` | Identity: same `id` + same `Arc` ptr |
+/// | [`content_eq`] | Structural: inner `Expression::PartialEq` |
 #[derive(Debug, Clone)]
 pub struct ContextualExpression {
     /// Expression ID
@@ -49,16 +58,21 @@ impl ContextualExpression {
         self.expression().map(|meta| meta.inner.as_ref().clone())
     }
 
-    /// Consume self and get the underlying Expression
+    /// Consume self and retrieve the underlying [`Expression`].
     ///
-    /// This method is used in scenarios where you need to get ownership of an Expression instead of a reference.
+    /// Returns `Ok(expression)` when the expression is registered in the context,
+    /// or `Err` with a descriptive message when it has been evicted or was
+    /// never registered.
     ///
-    /// # Restrictions on use
-    /// This method can only be used at the Executor level and is not allowed to be called at any other level.
-    /// Violation of this restriction would undermine the design principles of the expression system
-    pub fn into_expression(self) -> Expression {
+    /// # Safety contract
+    ///
+    /// This method replaces a previous `expect`-based implementation. Callers
+    /// **must** handle the `Err` branch explicitly; an `Err` here always
+    /// indicates a bug in the caller (the expression was dropped or the
+    /// context was corrupted), not a recoverable user error.
+    pub fn into_expression(self) -> Result<Expression, String> {
         self.get_expression()
-            .expect("Expression should exist in context")
+            .ok_or_else(|| format!("Expression {} not found in context", self.id.0))
     }
 
     /// Get expression type
@@ -265,8 +279,15 @@ impl ContextualExpression {
         s.contains("IS NOT EMPTY") || s.contains("is not empty")
     }
 
-    /// Compare whether two expressions are equal (based on the content of the expressions, not on their IDs).
-    pub fn equals_by_content(&self, other: &Self) -> bool {
+    /// Compare two `ContextualExpression` values by the **content** of their
+    /// underlying [`Expression`] (ignoring identity). Returns `true` when both
+    /// sides carry an expression and those expressions are structurally equal
+    /// via [`Expression::PartialEq`].
+    ///
+    /// This is the counterpart to the identity-based [`PartialEq`] impl above:
+    /// use this method when you care about "do these represent the same logical
+    /// expression?" rather than "are these the exact same reference?".
+    pub fn content_eq(&self, other: &Self) -> bool {
         if let (Some(expr1), Some(expr2)) = (self.expression(), other.expression()) {
             expr1.inner() == expr2.inner()
         } else {

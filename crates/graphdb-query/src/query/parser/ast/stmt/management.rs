@@ -6,6 +6,7 @@ use super::PatternUtils;
 
 use super::{CreateTarget, DeleteTarget, FetchTarget, UpdateTarget};
 use super::{OrderByClause, ReturnClause, ReturnItem, Stmt, YieldClause};
+use crate::query::parser::ast::types::{LimitClause, SkipClause};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseStmt {
@@ -114,8 +115,8 @@ pub struct UnwindStmt {
     pub variable: String,
     pub return_clause: Option<ReturnClause>,
     pub order_by: Option<OrderByClause>,
-    pub limit: Option<usize>,
-    pub skip: Option<usize>,
+    pub limit: Option<LimitClause>,
+    pub skip: Option<SkipClause>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,8 +126,8 @@ pub struct WithStmt {
     pub where_clause: Option<ContextualExpression>,
     pub distinct: bool,
     pub order_by: Option<OrderByClause>,
-    pub skip: Option<usize>,
-    pub limit: Option<usize>,
+    pub skip: Option<SkipClause>,
+    pub limit: Option<LimitClause>,
     pub recursive: bool,
 }
 

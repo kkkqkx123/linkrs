@@ -80,8 +80,11 @@ impl Planner for SubgraphPlanner {
 
             let filters: Vec<Expression> = where_clause
                 .into_iter()
-                .map(|expr| expr.into_expression())
-                .collect();
+                .map(|expr| {
+                    expr.into_expression()
+                        .map_err(PlannerError::PlanGenerationFailed)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             current_node = self.apply_filters(current_node, &filters, validated.expr_context())?;
 
             let project_node = match Project::new(current_node.clone(), vec![]) {
@@ -128,8 +131,11 @@ impl Planner for SubgraphPlanner {
 
         let filters: Vec<Expression> = where_clause
             .into_iter()
-            .map(|expr| expr.into_expression())
-            .collect();
+            .map(|expr| {
+                expr.into_expression()
+                    .map_err(PlannerError::PlanGenerationFailed)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         current_node = self.apply_filters(current_node, &filters, validated.expr_context())?;
 
         let project_node = match Project::new(current_node.clone(), vec![]) {

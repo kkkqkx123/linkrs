@@ -594,7 +594,7 @@ impl SyncManager {
                 ..
             } => {
                 for (field_name, value_type) in fields {
-                    if !matches!(value_type, Value::String(_) | Value::FixedString { .. }) {
+                    if !matches!(value_type, Value::String(_) | Value::FixedString(_)) {
                         continue;
                     }
                     if manager

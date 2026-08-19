@@ -14,16 +14,6 @@ pub type DataType = crate::core::types::DataType;
 pub type AggregateFunction = CoreAggregateFunction;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Label {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyRef {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct LimitClause {
     pub span: Span,
     pub count: usize,

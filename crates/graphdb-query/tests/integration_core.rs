@@ -988,7 +988,7 @@ fn test_map_operations() {
     );
     assert_eq!(
         map_value.get_type(),
-        DataType::Map(Box::new(DataType::String))
+        DataType::Map(Box::new(DataType::Empty))
     );
 }
 

@@ -298,8 +298,8 @@ impl VectorSearchPlanner {
             )
             .with_threshold(search.threshold.unwrap_or(0.0))
             .with_filter(filter)
-            .with_limit(search.limit.unwrap_or(10))
-            .with_offset(search.offset.unwrap_or(0))
+            .with_limit(search.limit.as_ref().map(|l| l.count).unwrap_or(10))
+            .with_offset(search.skip.as_ref().map(|s| s.count).unwrap_or(0))
             .with_output_fields(output_fields),
         )
     }

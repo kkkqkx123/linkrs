@@ -32,7 +32,7 @@ impl Value {
                     Value::Null(NullType::Null)
                 }
             }
-            Value::FixedString { data, .. } => {
+            Value::FixedString(data) => {
                 let lower = data.to_lowercase();
                 if lower == "true" {
                     Value::Bool(true)
@@ -71,7 +71,7 @@ impl Value {
                 Ok(i) => Value::BigInt(i),
                 Err(_) => Value::Null(NullType::Null),
             },
-            Value::FixedString { data, .. } => match data.parse::<i64>() {
+            Value::FixedString(data) => match data.parse::<i64>() {
                 Ok(i) => Value::BigInt(i),
                 Err(_) => Value::Null(NullType::Null),
             },
@@ -93,7 +93,7 @@ impl Value {
                 Ok(f) => Value::Double(f),
                 Err(_) => Value::Null(NullType::Null),
             },
-            Value::FixedString { data, .. } => match data.parse::<f64>() {
+            Value::FixedString(data) => match data.parse::<f64>() {
                 Ok(f) => Value::Double(f),
                 Err(_) => Value::Null(NullType::Null),
             },
@@ -106,7 +106,7 @@ impl Value {
     pub fn to_string(&self) -> Result<String, String> {
         match self {
             Value::String(s) => Ok(s.to_string()),
-            Value::FixedString { data, .. } => Ok(data.clone()),
+            Value::FixedString(data) => Ok(data.clone()),
             Value::SmallInt(i) => Ok(i.to_string()),
             Value::Int(i) => Ok(i.to_string()),
             Value::BigInt(i) => Ok(i.to_string()),
@@ -233,7 +233,7 @@ impl Value {
                 day: dt.day,
             }),
             Value::String(s) => Self::parse_date_string(s),
-            Value::FixedString { data, .. } => Self::parse_date_string(data),
+            Value::FixedString(data) => Self::parse_date_string(data),
             Value::SmallInt(i) => Value::Date(Self::days_to_date(*i as i64)),
             Value::Int(i) => Value::Date(Self::days_to_date(*i as i64)),
             Value::BigInt(i) => Value::Date(Self::days_to_date(*i)),
@@ -253,7 +253,7 @@ impl Value {
                 microsec: dt.microsec,
             }),
             Value::String(s) => Self::parse_time_string(s),
-            Value::FixedString { data, .. } => Self::parse_time_string(data),
+            Value::FixedString(data) => Self::parse_time_string(data),
             _ => Value::Null(NullType::BadData),
         }
     }
@@ -282,7 +282,7 @@ impl Value {
                 microsec: t.microsec,
             }),
             Value::String(s) => Self::parse_datetime_string(s),
-            Value::FixedString { data, .. } => Self::parse_datetime_string(data),
+            Value::FixedString(data) => Self::parse_datetime_string(data),
             Value::SmallInt(i) => {
                 let date = Self::days_to_date(*i as i64);
                 Value::DateTime(DateTimeValue {
@@ -332,7 +332,7 @@ impl Value {
                 Ok(i) => Value::Interval(i),
                 Err(_) => Value::Null(NullType::BadData),
             },
-            Value::FixedString { data, .. } => match IntervalValue::parse(data) {
+            Value::FixedString(data) => match IntervalValue::parse(data) {
                 Ok(i) => Value::Interval(i),
                 Err(_) => Value::Null(NullType::BadData),
             },
@@ -430,7 +430,7 @@ impl Value {
             DataType::String => self.to_string().map(Value::string),
             DataType::FixedString(len) => match self {
                 Value::String(s) => Ok(Value::fixed_string(*len, s.to_string())),
-                Value::FixedString { data: s, .. } => Ok(Value::fixed_string(*len, s.clone())),
+                Value::FixedString(s) => Ok(Value::fixed_string(*len, s.clone())),
                 _ => self.to_string().map(|s| Value::fixed_string(*len, s)),
             },
             DataType::Date => Ok(self.to_date()),
@@ -455,7 +455,7 @@ impl Value {
                 Ok(i) => Value::SmallInt(i),
                 Err(_) => Value::Null(NullType::Null),
             },
-            Value::FixedString { data, .. } => match data.parse::<i16>() {
+            Value::FixedString(data) => match data.parse::<i16>() {
                 Ok(i) => Value::SmallInt(i),
                 Err(_) => Value::Null(NullType::Null),
             },
@@ -477,7 +477,7 @@ impl Value {
                 Ok(i) => Value::Int(i),
                 Err(_) => Value::Null(NullType::Null),
             },
-            Value::FixedString { data, .. } => match data.parse::<i32>() {
+            Value::FixedString(data) => match data.parse::<i32>() {
                 Ok(i) => Value::Int(i),
                 Err(_) => Value::Null(NullType::Null),
             },
@@ -499,7 +499,7 @@ impl Value {
                 Ok(f) => Value::Float(f),
                 Err(_) => Value::Null(NullType::Null),
             },
-            Value::FixedString { data, .. } => match data.parse::<f32>() {
+            Value::FixedString(data) => match data.parse::<f32>() {
                 Ok(f) => Value::Float(f),
                 Err(_) => Value::Null(NullType::Null),
             },
@@ -630,7 +630,7 @@ impl Value {
                 Ok(u) => Value::Uuid(u),
                 Err(_) => Value::Null(NullType::BadData),
             },
-            Value::FixedString { data, .. } => match UuidValue::parse_str(data) {
+            Value::FixedString(data) => match UuidValue::parse_str(data) {
                 Ok(u) => Value::Uuid(u),
                 Err(_) => Value::Null(NullType::BadData),
             },

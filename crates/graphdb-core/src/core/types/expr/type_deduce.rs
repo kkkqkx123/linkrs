@@ -78,7 +78,7 @@ impl Expression {
             Value::Double(_) => DataType::Double,
             Value::Decimal128(_) => DataType::Decimal128,
             Value::String(_) => DataType::String,
-            Value::FixedString { len, .. } => DataType::FixedString(*len),
+            Value::FixedString(data) => DataType::FixedString(data.chars().count()),
             Value::Blob(_) => DataType::Blob,
             Value::Date(_) => DataType::Date,
             Value::Time(_) => DataType::Time,

@@ -332,8 +332,8 @@ impl StmtFactory {
         where_clause: Option<ContextualExpression>,
         return_clause: Option<ReturnClause>,
         order_by: Option<OrderByClause>,
-        limit: Option<usize>,
-        skip: Option<usize>,
+        limit: Option<LimitClause>,
+        skip: Option<SkipClause>,
         span: Span,
     ) -> Stmt {
         Stmt::Match(MatchStmt {
@@ -523,7 +523,7 @@ impl StmtFactory {
             shortest,
             max_steps: None,
             limit: None,
-            offset: None,
+            skip: None,
             yield_clause,
             weight_expression: None,
             heuristic_expression: None,

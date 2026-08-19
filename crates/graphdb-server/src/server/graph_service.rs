@@ -1018,28 +1018,26 @@ impl<
             parameters,
             session_variables,
         )?;
-        let value = match result {
-            result => {
-                // Contract: the LET plan evaluates to exactly one row with
-                // one value column. Guard instead of silently taking the
-                // first value if a planner regression changes the shape.
-                if result.columns().len() != 1 {
-                    return Err(format!(
-                        "LET expression must evaluate to a single value, got {} columns",
-                        result.columns().len()
-                    ));
-                }
-                if result.rows().len() != 1 {
-                    return Err(format!(
-                        "LET expression must evaluate to a single row, got {} rows",
-                        result.rows().len()
-                    ));
-                }
-                result
-                    .first_value()
-                    .cloned()
-                    .ok_or_else(|| "LET expression returned no value".to_string())?
+        let value = {
+            // Contract: the LET plan evaluates to exactly one row with
+            // one value column. Guard instead of silently taking the
+            // first value if a planner regression changes the shape.
+            if result.columns().len() != 1 {
+                return Err(format!(
+                    "LET expression must evaluate to a single value, got {} columns",
+                    result.columns().len()
+                ));
             }
+            if result.rows().len() != 1 {
+                return Err(format!(
+                    "LET expression must evaluate to a single row, got {} rows",
+                    result.rows().len()
+                ));
+            }
+            result
+                .first_value()
+                .cloned()
+                .ok_or_else(|| "LET expression returned no value".to_string())?
         };
         session.set_variable(assign.name.clone(), value);
         info!("Session {} set session variable", session.id());
@@ -1470,7 +1468,7 @@ where
             .write()
             .execute_batch(&permitted, query_request);
 
-        merge_batch_outcomes::<S>(&mut results, &batch_indices, &denied, outcomes);
+        merge_batch_outcomes(&mut results, &batch_indices, &denied, outcomes);
         finalize_batch_outcomes(results)
     }
 }
@@ -1577,7 +1575,7 @@ where
                 .write()
                 .execute_batch_grouped(&permitted, query_request, group_size);
 
-        merge_batch_outcomes::<S>(&mut results, &batch_indices, &denied, outcomes);
+        merge_batch_outcomes(&mut results, &batch_indices, &denied, outcomes);
         finalize_batch_outcomes(results)
     }
 }
@@ -1593,19 +1591,12 @@ fn finalize_batch_outcomes(
 }
 
 /// Merge the batch-window outcomes back into the per-slot results.
-fn merge_batch_outcomes<S>(
+fn merge_batch_outcomes(
     results: &mut [Option<Result<QueryResult, String>>],
     batch_indices: &[usize],
     denied: &[(usize, String)],
     outcomes: Vec<Result<graphdb_api::api::core::QueryResult, graphdb_api::api::core::CoreError>>,
-) where
-    S: StorageClient
-        + StorageSchemaContextOps
-        + StorageSyncContextOps
-        + StorageOperationContextOps
-        + Clone
-        + 'static,
-{
+) {
     let mut permitted_outcomes = outcomes.into_iter();
     for (batch_pos, original_index) in batch_indices.iter().enumerate() {
         if let Some((_, error)) = denied.iter().find(|(i, _)| *i == batch_pos) {

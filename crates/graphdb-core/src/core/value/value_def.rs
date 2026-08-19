@@ -42,11 +42,10 @@ pub enum Value {
     Double(f64), // 8 bytes, double precision
     Decimal128(Decimal128Value),
     String(CompactString),
-    /// Fixed-length strings for optimized storage of short strings
-    FixedString {
-        len: usize,
-        data: String,
-    },
+    /// Fixed-length strings for optimized storage of short strings.
+    /// Content is always padded/truncated to the declared length, so the
+    /// length is derivable via `chars().count()`.
+    FixedString(String),
     /// Binary data
     Blob(Vec<u8>),
     Date(DateValue),
@@ -138,7 +137,7 @@ impl Value {
             Value::Double(_) => DataType::Double,
             Value::Decimal128(_) => DataType::Decimal128,
             Value::String(_) => DataType::String,
-            Value::FixedString { len, .. } => DataType::FixedString(*len),
+            Value::FixedString(data) => DataType::FixedString(data.chars().count()),
             Value::Blob(_) => DataType::Blob,
             Value::Date(_) => DataType::Date,
             Value::Time(_) => DataType::Time,
@@ -244,7 +243,7 @@ impl Value {
     pub fn string_value(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
-            Value::FixedString { data, .. } => Some(data),
+            Value::FixedString(data) => Some(data),
             _ => None,
         }
     }
@@ -304,23 +303,20 @@ impl Value {
         Value::Vector(super::vector::VectorValue::sparse(indices, values))
     }
 
-    /// Create fixed-length string value
+    /// Create fixed-length string value (truncates or space-pads to `len`)
     pub fn fixed_string(len: usize, data: String) -> Self {
-        let padded_data = if data.len() > len {
+        let padded_data = if data.chars().count() > len {
             data.chars().take(len).collect()
         } else {
             format!("{:<width$}", data, width = len)
         };
-        Value::FixedString {
-            len,
-            data: padded_data,
-        }
+        Value::FixedString(padded_data)
     }
 
     /// Get the length of a fixed-length string
     pub fn fixed_string_len(&self) -> Option<usize> {
         match self {
-            Value::FixedString { len, .. } => Some(*len),
+            Value::FixedString(data) => Some(data.chars().count()),
             _ => None,
         }
     }
@@ -347,7 +343,7 @@ impl Value {
             Value::Double(_) => std::mem::size_of::<Self>(),
             Value::Decimal128(_) => std::mem::size_of::<Self>(),
             Value::String(s) => std::mem::size_of::<Self>() + s.capacity(),
-            Value::FixedString { data, .. } => std::mem::size_of::<Self>() + data.capacity(),
+            Value::FixedString(data) => std::mem::size_of::<Self>() + data.capacity(),
             Value::Blob(b) => std::mem::size_of::<Self>() + b.capacity(),
             Value::Date(_) => std::mem::size_of::<Self>(),
             Value::Time(_) => std::mem::size_of::<Self>(),
@@ -483,7 +479,9 @@ impl std::fmt::Display for Value {
             Value::Double(fl) => write!(f, "{}", fl),
             Value::Decimal128(d) => write!(f, "{}", d),
             Value::String(s) => write!(f, "{}", s),
-            Value::FixedString { len, data } => write!(f, "\"{}\"[fixed:{}]", data, len),
+            Value::FixedString(data) => {
+                write!(f, "\"{}\"[fixed:{}]", data, data.chars().count())
+            }
             Value::Blob(b) => write!(f, "Blob({} bytes)", b.len()),
             Value::Date(d) => write!(f, "{:04}-{:02}-{:02}", d.year, d.month, d.day),
             Value::Time(t) => write!(

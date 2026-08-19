@@ -767,8 +767,8 @@ impl Binder {
             where_clause,
             return_clause,
             order_by,
-            limit: stmt.limit,
-            skip: stmt.skip,
+            limit: stmt.limit.clone(),
+            skip: stmt.skip.clone(),
             optional: stmt.optional,
             delete_clause,
         }))
@@ -1304,8 +1304,8 @@ impl Binder {
             where_clause,
             shortest: stmt.shortest,
             max_steps: stmt.max_steps,
-            limit: stmt.limit,
-            offset: stmt.offset,
+            limit: stmt.limit.clone(),
+            skip: stmt.skip.clone(),
             yield_clause,
         }))
     }
@@ -1390,8 +1390,8 @@ impl Binder {
             items,
             distinct: stmt.distinct,
             order_by,
-            skip: stmt.skip,
-            limit: stmt.limit,
+            skip: stmt.skip.clone(),
+            limit: stmt.limit.clone(),
         }))
     }
 

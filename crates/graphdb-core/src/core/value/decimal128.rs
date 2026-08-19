@@ -33,7 +33,7 @@ use std::str::FromStr;
 /// ## Example
 ///
 /// ```rust
-/// use graphdb::core::value::decimal128::Decimal128Value;
+/// use graphdb_core::core::value::decimal128::Decimal128Value;
 ///
 /// let d1 = "123.456".parse::<Decimal128Value>().expect("parse failed");
 /// let d2 = "789.012".parse::<Decimal128Value>().expect("parse failed");

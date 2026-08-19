@@ -1,6 +1,6 @@
 //! Integration tests for metadata resolution in search operations
 //!
-#![cfg(feature = "qdrant")]
+#![cfg(feature = "vector-qdrant")]
 //! These tests verify that space_id, tag_name, and field_name are properly
 //! pre-resolved during query planning and passed to executors.
 

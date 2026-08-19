@@ -13,7 +13,7 @@ use crate::query::parser::ast::fulltext::{
 };
 use crate::query::parser::ast::stmt::Stmt;
 use crate::query::parser::ast::stmt::{OrderByClause, OrderByItem};
-use crate::query::parser::ast::types::OrderDirection;
+use crate::query::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
@@ -387,13 +387,20 @@ fn parse_search_statement_after_search(
 
     if ctx.check_keyword("LIMIT") {
         ctx.consume_keyword("LIMIT")?;
-        search.limit = Some(ctx.consume_int()? as usize);
+        let count = ctx.consume_int()? as usize;
+        search.limit = Some(LimitClause {
+            span: ctx.current_span(),
+            count,
+        });
     }
 
     if ctx.check_keyword("OFFSET") {
         ctx.consume_keyword("OFFSET")?;
-        let offset = ctx.consume_int()? as usize;
-        search.offset = Some(offset);
+        let count = ctx.consume_int()? as usize;
+        search.skip = Some(SkipClause {
+            span: ctx.current_span(),
+            count,
+        });
     }
 
     Ok(Stmt::Search(search))
