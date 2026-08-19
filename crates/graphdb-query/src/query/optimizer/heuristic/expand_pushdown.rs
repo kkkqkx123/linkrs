@@ -262,9 +262,7 @@ fn node_references_var(node: &PlanNodeEnum, var: &str) -> bool {
                     .aggregation_args()
                     .iter()
                     .flatten()
-                    .any(|expr| {
-                        matches!(expr, Expression::Variable(name) if name == var)
-                    })
+                    .any(|expr| matches!(expr, Expression::Variable(name) if name == var))
         }
         PlanNodeEnum::InnerJoin(join) => {
             join_references_var(join.hash_keys(), join.probe_keys(), var)
@@ -324,12 +322,10 @@ fn join_references_var(
 fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
     agg.group_keys().is_empty()
         && !agg.aggregation_functions().is_empty()
-        && agg.aggregation_functions().iter().all(|f| {
-            matches!(
-                f,
-                crate::core::types::operators::AggregateFunction::Count
-            )
-        })
+        && agg
+            .aggregation_functions()
+            .iter()
+            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count))
 }
 
 /// Apply the flag decisions to the matching `ExpandAll` nodes in place.
@@ -513,12 +509,8 @@ mod tests {
     }
 
     fn count_field_agg(input: PlanNodeEnum, field: &str) -> PlanNodeEnum {
-        let mut agg = AggregateNode::new(
-            input,
-            vec![],
-            vec![AggregateFunction::Count],
-        )
-        .expect("aggregate should build");
+        let mut agg = AggregateNode::new(input, vec![], vec![AggregateFunction::Count])
+            .expect("aggregate should build");
         agg.set_aggregation_args(vec![vec![Expression::Variable(field.to_string())]]);
         PlanNodeEnum::Aggregate(agg)
     }

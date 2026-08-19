@@ -1004,12 +1004,9 @@ mod tests {
         use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 
         let start = PlanNodeEnum::Start(StartNode::new());
-        let aggregate = AggregateNode::new(
-            start,
-            vec!["g".to_string()],
-            vec![AggregateFunction::Count],
-        )
-        .expect("aggregate node");
+        let aggregate =
+            AggregateNode::new(start, vec!["g".to_string()], vec![AggregateFunction::Count])
+                .expect("aggregate node");
         let mut aggregate = aggregate.clone();
         aggregate.set_aggregation_filters(vec![Some(Expression::Binary {
             left: Box::new(Expression::Literal(Value::Int(1))),

@@ -378,10 +378,9 @@ fn attach_vector_coordinator(
         handle,
     ));
     #[cfg(not(feature = "vector-qdrant"))]
-    let vector_coordinator = Arc::new(crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-        backend,
-        handle,
-    ));
+    let vector_coordinator = Arc::new(
+        crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
+    );
     info!("Vector index sync enabled");
     sync_manager.with_vector_coordinator(vector_coordinator)
 }

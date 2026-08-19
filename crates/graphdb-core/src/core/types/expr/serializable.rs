@@ -298,11 +298,8 @@ mod tests {
     fn test_serializable_expression_is_aggregate() {
         use crate::core::types::operators::AggregateFunction;
 
-        let expr = Expression::aggregate(
-            AggregateFunction::Count,
-            Expression::variable("x"),
-            false,
-        );
+        let expr =
+            Expression::aggregate(AggregateFunction::Count, Expression::variable("x"), false);
         let ser_expr = SerializableExpression {
             id: ExpressionId::new(1),
             expression: expr,
@@ -317,11 +314,8 @@ mod tests {
     fn test_serializable_expression_contains_aggregate() {
         use crate::core::types::operators::AggregateFunction;
 
-        let expr = Expression::aggregate(
-            AggregateFunction::Count,
-            Expression::variable("x"),
-            false,
-        );
+        let expr =
+            Expression::aggregate(AggregateFunction::Count, Expression::variable("x"), false);
         let ser_expr = SerializableExpression {
             id: ExpressionId::new(1),
             expression: expr,

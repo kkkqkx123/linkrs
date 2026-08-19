@@ -41,10 +41,7 @@ use window::{compute_window_partition_result, sort_partition_rows};
 
 /// Extract the field name from an aggregate function's args, if any.
 /// COUNT(*) has no args; other aggregates have the field expression at index 0.
-fn aggregate_arg_field_name(
-    func: &AggregateFunction,
-    args: &[Expression],
-) -> Option<String> {
+fn aggregate_arg_field_name(func: &AggregateFunction, args: &[Expression]) -> Option<String> {
     match func {
         AggregateFunction::Count => None,
         _ => {
@@ -885,9 +882,10 @@ impl BlockingOperator {
                                                     row.to_vec(),
                                                     state.col_names.clone(),
                                                 );
-                                                let expr = func_args.first().cloned().unwrap_or_else(|| {
-                                                    Expression::Literal(Value::Int(1))
-                                                });
+                                                let expr =
+                                                    func_args.first().cloned().unwrap_or_else(
+                                                        || Expression::Literal(Value::Int(1)),
+                                                    );
                                                 values.push(
                                                     match ExpressionEvaluator::evaluate(
                                                         &expr, &mut ctx,
@@ -2451,7 +2449,8 @@ impl BlockingOperator {
                                     let acc_col_idx = num_group_keys + i;
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
-                                        let partial_acc = value_to_partial_accumulator(&func.0, &func.1, val);
+                                        let partial_acc =
+                                            value_to_partial_accumulator(&func.0, &func.1, val);
                                         if let Some(other) = partial_acc {
                                             acc.merge(&other);
                                         }

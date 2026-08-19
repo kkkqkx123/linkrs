@@ -464,12 +464,10 @@ pub(super) fn is_count_only_aggregate(
 ) -> bool {
     agg.group_keys().is_empty()
         && !agg.aggregation_functions().is_empty()
-        && agg.aggregation_functions().iter().all(|f| {
-            matches!(
-                f,
-                crate::core::types::operators::AggregateFunction::Count
-            )
-        })
+        && agg
+            .aggregation_functions()
+            .iter()
+            .all(|f| matches!(f, crate::core::types::operators::AggregateFunction::Count))
 }
 
 pub(super) fn build_project_spec(

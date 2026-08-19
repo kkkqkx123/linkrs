@@ -86,11 +86,12 @@ fn create_sync_manager() -> Arc<SyncManager> {
                         HealthStatus::unhealthy("unknown", "unknown", "health check failed")
                     });
                 if health.is_healthy {
-                    let vector_coordinator =
-                        Arc::new(graphdb::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                    let vector_coordinator = Arc::new(
+                        graphdb::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
                             graphdb::sync::VectorBackend::Qdrant(Arc::new(vector_manager)),
                             rt.handle().clone(),
-                        ));
+                        ),
+                    );
                     sync_manager = sync_manager.with_vector_coordinator(vector_coordinator);
                 } else {
                     eprintln!(

@@ -798,7 +798,11 @@ pub fn decode_partial(func: &AggregateFunction, value: &Value) -> Option<Aggrega
 
 /// Decode a partial-accumulator Value back into an accumulator state,
 /// using the given args to initialize parameters (separator, percentile, etc.).
-pub fn decode_partial_with_args(func: &AggregateFunction, args: &[Expression], value: &Value) -> Option<AggregateAccumulator> {
+pub fn decode_partial_with_args(
+    func: &AggregateFunction,
+    args: &[Expression],
+    value: &Value,
+) -> Option<AggregateAccumulator> {
     let mut acc = AggregateAccumulator::for_function(func, args)?;
     match &mut acc {
         AggregateAccumulator::Count(c) => {
@@ -1266,29 +1270,110 @@ mod tests {
     fn test_for_function_mapping_covers_all_variants() {
         let funcs = [
             (AggregateFunction::Count, vec![]),
-            (AggregateFunction::Sum, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Min, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Max, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Avg, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Collect, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::CollectSet, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Percentile, vec![Expression::Variable("x".to_string()), Expression::Literal(Value::Double(50.0))]),
-            (AggregateFunction::Std, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::StddevPop, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::StddevSamp, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Variance, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Product, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::PercentileCont, vec![Expression::Variable("x".to_string()), Expression::Literal(Value::Double(50.0))]),
-            (AggregateFunction::Median, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::Mode, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::BitAnd, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::BitOr, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::BoolAnd, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::BoolOr, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::GroupConcat, vec![Expression::Variable("x".to_string()), Expression::Literal(Value::string(","))]),
-            (AggregateFunction::GroupConcatWithOrder, vec![Expression::Variable("x".to_string()), Expression::Literal(Value::string(","))]),
-            (AggregateFunction::VecSum, vec![Expression::Variable("x".to_string())]),
-            (AggregateFunction::VecAvg, vec![Expression::Variable("x".to_string())]),
+            (
+                AggregateFunction::Sum,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Min,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Max,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Avg,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Collect,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::CollectSet,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Percentile,
+                vec![
+                    Expression::Variable("x".to_string()),
+                    Expression::Literal(Value::Double(50.0)),
+                ],
+            ),
+            (
+                AggregateFunction::Std,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::StddevPop,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::StddevSamp,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Variance,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Product,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::PercentileCont,
+                vec![
+                    Expression::Variable("x".to_string()),
+                    Expression::Literal(Value::Double(50.0)),
+                ],
+            ),
+            (
+                AggregateFunction::Median,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::Mode,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::BitAnd,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::BitOr,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::BoolAnd,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::BoolOr,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::GroupConcat,
+                vec![
+                    Expression::Variable("x".to_string()),
+                    Expression::Literal(Value::string(",")),
+                ],
+            ),
+            (
+                AggregateFunction::GroupConcatWithOrder,
+                vec![
+                    Expression::Variable("x".to_string()),
+                    Expression::Literal(Value::string(",")),
+                ],
+            ),
+            (
+                AggregateFunction::VecSum,
+                vec![Expression::Variable("x".to_string())],
+            ),
+            (
+                AggregateFunction::VecAvg,
+                vec![Expression::Variable("x".to_string())],
+            ),
         ];
         for (func, args) in &funcs {
             assert!(
@@ -1409,7 +1494,10 @@ mod tests {
             ),
             (
                 AggregateFunction::GroupConcat,
-                vec![Expression::Variable("x".to_string()), Expression::Literal(Value::string(";"))],
+                vec![
+                    Expression::Variable("x".to_string()),
+                    Expression::Literal(Value::string(";")),
+                ],
                 AggregateAccumulator::GroupConcat {
                     parts: vec!["a".to_string(), "b".to_string()],
                     separator: ";".to_string(),
@@ -1431,7 +1519,8 @@ mod tests {
         ];
         for (func, args, acc) in cases {
             let encoded = accumulator_to_value(&acc);
-            let decoded = decode_partial_with_args(&func, &args, &encoded).expect("decode should succeed");
+            let decoded =
+                decode_partial_with_args(&func, &args, &encoded).expect("decode should succeed");
             let mut merged = AggregateAccumulator::for_function(&func, &args).unwrap();
             merged.merge(&decoded);
             assert_eq!(

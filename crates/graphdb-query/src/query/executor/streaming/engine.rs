@@ -1343,7 +1343,9 @@ mod tests {
                         ),
                         (
                             crate::core::types::operators::AggregateFunction::Sum,
-                            vec![crate::core::types::expr::Expression::Variable("amount".to_string())],
+                            vec![crate::core::types::expr::Expression::Variable(
+                                "amount".to_string(),
+                            )],
                         ),
                     ],
                     output_col_names: vec!["COUNT".to_string(), "SUM".to_string()],

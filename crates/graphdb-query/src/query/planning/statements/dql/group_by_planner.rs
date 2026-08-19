@@ -268,8 +268,13 @@ impl Planner for GroupByPlanner {
         // Build the input plan. A standalone GROUP BY aggregates over every
         // vertex of the current space; when the GROUP BY is the right side of
         // a pipe, PipePlanner replaces this adapter with the piped rows.
-        let (input_enum, input_tail) =
-            self.build_standalone_input(validated, &group_keys, &aggregation_functions, &aggregation_args, qctx)?;
+        let (input_enum, input_tail) = self.build_standalone_input(
+            validated,
+            &group_keys,
+            &aggregation_functions,
+            &aggregation_args,
+            qctx,
+        )?;
 
         // Generate grouping sets from GroupingType
         let grouping_sets = match &group_by_stmt.grouping_type {
@@ -392,7 +397,10 @@ impl GroupByPlanner {
         // aggregate function fields.
         let mut properties: Vec<String> = group_keys.to_vec();
         for (i, func) in aggregation_functions.iter().enumerate() {
-            if let Some(field) = Self::aggregate_field(func, aggregation_args.get(i).map(|a| a.as_slice()).unwrap_or(&[])) {
+            if let Some(field) = Self::aggregate_field(
+                func,
+                aggregation_args.get(i).map(|a| a.as_slice()).unwrap_or(&[]),
+            ) {
                 properties.push(field);
             }
         }
@@ -445,10 +453,7 @@ impl GroupByPlanner {
 
     /// Recursively collect args from Expression::Aggregate nodes in parallel
     /// with the `extract_aggregate_functions` traversal.
-    fn collect_aggregate_args_recursive(
-        expr: &Expression,
-        args_out: &mut Vec<Vec<Expression>>,
-    ) {
+    fn collect_aggregate_args_recursive(expr: &Expression, args_out: &mut Vec<Vec<Expression>>) {
         match expr {
             Expression::Aggregate { args, .. } => {
                 args_out.push(args.clone());
@@ -475,7 +480,11 @@ impl GroupByPlanner {
                     Self::collect_aggregate_args_recursive(value, args_out);
                 }
             }
-            Expression::Case { test_expr, conditions, default } => {
+            Expression::Case {
+                test_expr,
+                conditions,
+                default,
+            } => {
                 if let Some(test) = test_expr {
                     Self::collect_aggregate_args_recursive(test, args_out);
                 }
@@ -497,7 +506,11 @@ impl GroupByPlanner {
                 Self::collect_aggregate_args_recursive(collection, args_out);
                 Self::collect_aggregate_args_recursive(index, args_out);
             }
-            Expression::Range { collection, start, end } => {
+            Expression::Range {
+                collection,
+                start,
+                end,
+            } => {
                 Self::collect_aggregate_args_recursive(collection, args_out);
                 if let Some(s) = start {
                     Self::collect_aggregate_args_recursive(s, args_out);
@@ -514,7 +527,12 @@ impl GroupByPlanner {
             Expression::TypeCast { expression, .. } => {
                 Self::collect_aggregate_args_recursive(expression, args_out);
             }
-            Expression::ListComprehension { source, filter, map, .. } => {
+            Expression::ListComprehension {
+                source,
+                filter,
+                map,
+                ..
+            } => {
                 Self::collect_aggregate_args_recursive(source, args_out);
                 if let Some(f) = filter {
                     Self::collect_aggregate_args_recursive(f, args_out);
@@ -531,7 +549,12 @@ impl GroupByPlanner {
                     Self::collect_aggregate_args_recursive(arg, args_out);
                 }
             }
-            Expression::Reduce { initial, source, mapping, .. } => {
+            Expression::Reduce {
+                initial,
+                source,
+                mapping,
+                ..
+            } => {
                 Self::collect_aggregate_args_recursive(initial, args_out);
                 Self::collect_aggregate_args_recursive(source, args_out);
                 Self::collect_aggregate_args_recursive(mapping, args_out);

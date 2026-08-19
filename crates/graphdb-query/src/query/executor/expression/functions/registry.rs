@@ -285,8 +285,12 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevPop));
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::StddevSamp));
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Product));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::PercentileCont));
-        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::GroupConcatWithOrder));
+        self.register_builtin(BuiltinFunction::Aggregate(
+            AggregateFunction::PercentileCont,
+        ));
+        self.register_builtin(BuiltinFunction::Aggregate(
+            AggregateFunction::GroupConcatWithOrder,
+        ));
 
         // Register window functions
         // Window functions are only meaningful inside an OVER() clause and are

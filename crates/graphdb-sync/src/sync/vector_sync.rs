@@ -398,14 +398,15 @@ impl VectorSyncCoordinator {
     ///
     /// Avoids the `#[cfg]` feature-unification pitfall where callers in other
     /// crates see a different function signature than the one compiled here.
-    pub fn new_without_embedding(
-        backend: VectorBackend,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
+    pub fn new_without_embedding(backend: VectorBackend, runtime: tokio::runtime::Handle) -> Self {
         #[cfg(feature = "vector-qdrant")]
-        { Self::new(backend, None, runtime) }
+        {
+            Self::new(backend, None, runtime)
+        }
         #[cfg(not(feature = "vector-qdrant"))]
-        { Self::new(backend, runtime) }
+        {
+            Self::new(backend, runtime)
+        }
     }
 
     /// Create with transaction buffer support
