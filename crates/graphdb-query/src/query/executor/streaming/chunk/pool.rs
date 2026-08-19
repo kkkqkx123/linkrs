@@ -1,6 +1,7 @@
 //! Pool of recycled row/column buffers for DataChunk construction.
 
 use super::typed::{TypedColumn, TypedKind};
+use crate::core::value::decimal128::Decimal128Value;
 use crate::core::Value;
 use std::sync::Arc;
 
@@ -11,8 +12,9 @@ const ROW_POOL_MAX_SIZE: usize = 8;
 /// Reduces allocation overhead by reusing Vec buffers across chunk boundaries.
 /// Each acquired Vec is guaranteed to have `chunk_size` capacity (not length).
 /// Typed allocation pools (`Vec<i64>`/`Vec<f64>`/`Vec<i32>`/`Vec<bool>`/
-/// `Vec<i64>` for dates/`Vec<Arc<str>>` for strings) recycle typed column
-/// buffers for `TypedColumn` construction.
+/// `Vec<i64>` for dates and date-times/`Vec<Arc<str>>` for strings/
+/// `Vec<Decimal128Value>` for decimals) recycle typed column buffers for
+/// `TypedColumn` construction.
 pub struct RowPool {
     pool: parking_lot::Mutex<Vec<Vec<Vec<Value>>>>,
     typed_i64: parking_lot::Mutex<Vec<Vec<i64>>>,
@@ -20,7 +22,9 @@ pub struct RowPool {
     typed_i32: parking_lot::Mutex<Vec<Vec<i32>>>,
     typed_bool: parking_lot::Mutex<Vec<Vec<bool>>>,
     typed_date: parking_lot::Mutex<Vec<Vec<i64>>>,
+    typed_datetime: parking_lot::Mutex<Vec<Vec<i64>>>,
     typed_utf8: parking_lot::Mutex<Vec<Vec<Arc<str>>>>,
+    typed_decimal: parking_lot::Mutex<Vec<Vec<Decimal128Value>>>,
     chunk_size: usize,
     num_columns: usize,
 }
@@ -34,7 +38,9 @@ impl RowPool {
             typed_i32: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
             typed_bool: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
             typed_date: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            typed_datetime: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
             typed_utf8: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            typed_decimal: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
             chunk_size,
             num_columns,
         }
@@ -113,6 +119,15 @@ impl RowPool {
                     TypedColumn::Date(Vec::with_capacity(cap))
                 }
             }
+            TypedKind::DateTime => {
+                let mut p = self.typed_datetime.lock();
+                if let Some(mut buf) = p.pop() {
+                    buf.clear();
+                    TypedColumn::DateTime(buf)
+                } else {
+                    TypedColumn::DateTime(Vec::with_capacity(cap))
+                }
+            }
             TypedKind::Utf8 => {
                 let mut p = self.typed_utf8.lock();
                 if let Some(mut buf) = p.pop() {
@@ -120,6 +135,15 @@ impl RowPool {
                     TypedColumn::Utf8(buf)
                 } else {
                     TypedColumn::Utf8(Vec::with_capacity(cap))
+                }
+            }
+            TypedKind::Decimal => {
+                let mut p = self.typed_decimal.lock();
+                if let Some(mut buf) = p.pop() {
+                    buf.clear();
+                    TypedColumn::Decimal(buf)
+                } else {
+                    TypedColumn::Decimal(Vec::with_capacity(cap))
                 }
             }
         }
@@ -164,9 +188,23 @@ impl RowPool {
                     p.push(buf);
                 }
             }
+            TypedColumn::DateTime(mut buf) => {
+                buf.clear();
+                let mut p = self.typed_datetime.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
             TypedColumn::Utf8(mut buf) => {
                 buf.clear();
                 let mut p = self.typed_utf8.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::Decimal(mut buf) => {
+                buf.clear();
+                let mut p = self.typed_decimal.lock();
                 if p.len() < ROW_POOL_MAX_SIZE {
                     p.push(buf);
                 }
@@ -208,9 +246,23 @@ impl RowPool {
                     p.push(buf);
                 }
             }
+            TypedColumn::NullableDateTime(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_datetime.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
             TypedColumn::NullableUtf8(mut buf, _) => {
                 buf.clear();
                 let mut p = self.typed_utf8.lock();
+                if p.len() < ROW_POOL_MAX_SIZE {
+                    p.push(buf);
+                }
+            }
+            TypedColumn::NullableDecimal(mut buf, _) => {
+                buf.clear();
+                let mut p = self.typed_decimal.lock();
                 if p.len() < ROW_POOL_MAX_SIZE {
                     p.push(buf);
                 }

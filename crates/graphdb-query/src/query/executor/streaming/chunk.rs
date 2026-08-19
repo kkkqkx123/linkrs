@@ -32,6 +32,7 @@
 mod columnar_batch;
 mod core;
 mod eval;
+mod kind;
 mod policy;
 mod pool;
 mod schema;

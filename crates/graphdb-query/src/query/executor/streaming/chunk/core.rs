@@ -1,9 +1,8 @@
 //! DataChunk core: struct definition, construction, and basic access
 
 use super::schema::{ColumnInfo, Schema};
-use super::typed::{TypedColumn, TypedKind};
+use super::typed::TypedColumn;
 use super::view::ChunkView;
-use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::base::MemoryReservation;
 use crate::query::executor::streaming::runtime::ColumnarStats;
@@ -359,19 +358,18 @@ impl DataChunk {
         let mut extra_bytes = 0usize;
         for col_idx in 0..num_cols {
             let first = &self.rows[0][col_idx];
-            let kind = match first {
-                Value::BigInt(_) => Some(TypedKind::I64),
-                Value::Double(_) => Some(TypedKind::F64),
-                Value::Int(_) => Some(TypedKind::I32),
-                Value::Bool(_) => Some(TypedKind::Bool),
-                Value::Date(_) => Some(TypedKind::Date),
-                Value::String(_) => Some(TypedKind::Utf8),
-                // A leading NULL cannot reveal the column kind: fall back so
-                // the per-row path keeps the exact `Value` semantics.
-                Value::Null(_) => None,
-                _ => None,
+            let representative = if matches!(first, Value::Null(_)) {
+                // A leading NULL cannot reveal the column kind; probe the
+                // first non-NULL value so NULL-leading homogeneous columns
+                // stay on the typed path (all-NULL columns fall back).
+                super::kind::first_non_null(self.rows.iter().map(|row| &row[col_idx]))
+                    .unwrap_or(first)
+            } else {
+                first
             };
-            let Some(kind) = kind else {
+            let Some(kind) = super::kind::value_to_kind(representative) else {
+                // A non-scalar value cannot reveal the column kind: fall back
+                // so the per-row path keeps the exact `Value` semantics.
                 typed.push(TypedColumn::Fallback(
                     self.rows.iter().map(|row| row[col_idx].clone()).collect(),
                 ));
@@ -380,207 +378,26 @@ impl DataChunk {
             let mut ok = true;
             let mut has_null = false;
             let mut bitmap = vec![0u64; num_rows.div_ceil(64)];
-            let mut mark_valid = |i: usize| {
-                bitmap[i / 64] |= 1u64 << (i % 64);
-            };
-            let column = match kind {
-                TypedKind::I64 => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::BigInt(v) => {
-                                buf.push(v);
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(0);
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf.capacity() * std::mem::size_of::<i64>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableI64(buf, bitmap)
-                        } else {
-                            TypedColumn::I64(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
+            let mut builder = super::kind::TypedColumnBuilder::with_capacity(kind, num_rows);
+            for (i, row) in self.rows.iter().enumerate() {
+                match builder.push_value(&row[col_idx]) {
+                    super::kind::PushOutcome::Value => bitmap[i / 64] |= 1u64 << (i % 64),
+                    super::kind::PushOutcome::Null => has_null = true,
+                    super::kind::PushOutcome::Mismatch => {
+                        ok = false;
+                        break;
                     }
                 }
-                TypedKind::F64 => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::Double(v) => {
-                                buf.push(v);
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(0.0);
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf.capacity() * std::mem::size_of::<f64>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableF64(buf, bitmap)
-                        } else {
-                            TypedColumn::F64(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
-                    }
-                }
-                TypedKind::I32 => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::Int(v) => {
-                                buf.push(v);
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(0);
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf.capacity() * std::mem::size_of::<i32>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableI32(buf, bitmap)
-                        } else {
-                            TypedColumn::I32(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
-                    }
-                }
-                TypedKind::Bool => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::Bool(v) => {
-                                buf.push(v);
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(false);
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf.capacity() * std::mem::size_of::<bool>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableBool(buf, bitmap)
-                        } else {
-                            TypedColumn::Bool(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
-                    }
-                }
-                TypedKind::Date => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::Date(ref v) => {
-                                buf.push(v.to_days());
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(0);
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf.capacity() * std::mem::size_of::<i64>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableDate(buf, bitmap)
-                        } else {
-                            TypedColumn::Date(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
-                    }
-                }
-                TypedKind::Utf8 => {
-                    let mut buf = Vec::with_capacity(num_rows);
-                    for (i, row) in self.rows.iter().enumerate() {
-                        match row[col_idx] {
-                            Value::String(ref v) => {
-                                buf.push(Arc::from(v.as_str()));
-                                mark_valid(i);
-                            }
-                            Value::Null(NullType::Null) => {
-                                has_null = true;
-                                buf.push(Arc::from(""));
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        extra_bytes += buf
-                            .iter()
-                            .map(|s: &Arc<str>| s.len() + std::mem::size_of::<Arc<str>>())
-                            .sum::<usize>();
-                        extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
-                        if has_null {
-                            TypedColumn::NullableUtf8(buf, bitmap)
-                        } else {
-                            TypedColumn::Utf8(buf)
-                        }
-                    } else {
-                        TypedColumn::Fallback(
-                            self.rows.iter().map(|row| row[col_idx].clone()).collect(),
-                        )
-                    }
-                }
-            };
-            typed.push(column);
+            }
+            if ok {
+                extra_bytes += builder.estimated_bytes();
+                extra_bytes += bitmap.capacity() * std::mem::size_of::<u64>();
+                typed.push(builder.finish(has_null, bitmap));
+            } else {
+                typed.push(TypedColumn::Fallback(
+                    self.rows.iter().map(|row| row[col_idx].clone()).collect(),
+                ));
+            }
         }
         self.typed_columns = Some(typed);
         extra_bytes

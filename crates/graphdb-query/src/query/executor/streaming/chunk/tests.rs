@@ -2,6 +2,8 @@ use super::{set_typed_columns_enabled, DataChunk, RowPool, TypedColumn, TypedKin
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::BinaryOperator;
 use crate::core::types::storage_ids::VertexId;
+use crate::core::value::date_time::DateTimeValue;
+use crate::core::value::decimal128::Decimal128Value;
 use crate::core::value::DateValue;
 use crate::core::Value;
 use crate::core::Vertex;
@@ -203,7 +205,7 @@ fn typed_columns_build_pure_bigint_column() {
 }
 
 #[test]
-fn typed_columns_fallback_on_null_and_mixed() {
+fn typed_columns_probe_null_leading_and_fallback_on_mixed() {
     let layout = Arc::new(SlotLayout::from_names(&[
         "n".to_string(),
         "mixed".to_string(),
@@ -217,14 +219,92 @@ fn typed_columns_fallback_on_null_and_mixed() {
     ];
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     chunk.build_typed_columns(true);
-    assert!(matches!(
-        chunk.typed_column(0),
-        Some(TypedColumn::Fallback(_))
-    ));
+    assert!(
+        matches!(chunk.typed_column(0), Some(TypedColumn::NullableI64(..))),
+        "leading NULL probes the first non-NULL value (NullableI64)"
+    );
+    assert_eq!(
+        chunk.typed_column(0).and_then(|c| c.value_at(0)),
+        Some(Value::Null(crate::core::value::NullType::Null)),
+        "NULL placeholder preserved by the bitmap"
+    );
     assert!(matches!(
         chunk.typed_column(1),
         Some(TypedColumn::Fallback(_))
     ));
+}
+
+#[test]
+fn typed_columns_all_null_column_falls_back() {
+    let layout = Arc::new(SlotLayout::from_names(&["n".to_string()]));
+    let rows = vec![
+        vec![Value::Null(crate::core::value::NullType::Null)],
+        vec![Value::Null(crate::core::value::NullType::Null)],
+    ];
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    assert!(matches!(
+        chunk.typed_column(0),
+        Some(TypedColumn::Fallback(_))
+    ));
+}
+
+#[test]
+fn typed_columns_build_datetime_and_decimal_columns() {
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "dt".to_string(),
+        "dec".to_string(),
+    ]));
+    let mut rows: Vec<Vec<Value>> = (0..10)
+        .map(|i| {
+            vec![
+                Value::DateTime(DateTimeValue {
+                    year: 2024,
+                    month: 1,
+                    day: i as u32 + 1,
+                    hour: 0,
+                    minute: 0,
+                    sec: 0,
+                    microsec: 0,
+                }),
+                Value::Decimal128(Decimal128Value::from_i64(i as i64 * 100)),
+            ]
+        })
+        .collect();
+    rows[2][0] = Value::Null(crate::core::value::NullType::Null);
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    let dt = chunk.typed_column(0).expect("datetime column typed");
+    assert!(
+        matches!(dt, TypedColumn::NullableDateTime(..)),
+        "expected NullableDateTime layout (NULL at row 2)"
+    );
+    assert_eq!(
+        dt.value_at(1),
+        Some(Value::DateTime(DateTimeValue {
+            year: 2024,
+            month: 1,
+            day: 2,
+            hour: 0,
+            minute: 0,
+            sec: 0,
+            microsec: 0,
+        })),
+        "DateTime round-trips through micros"
+    );
+    assert_eq!(
+        dt.value_at(2),
+        Some(Value::Null(crate::core::value::NullType::Null))
+    );
+    let dec = chunk.typed_column(1).expect("decimal column typed");
+    assert!(
+        matches!(dec, TypedColumn::Decimal(_)),
+        "expected Decimal layout"
+    );
+    assert_eq!(
+        dec.value_at(5),
+        Some(Value::Decimal128(Decimal128Value::from_i64(500)))
+    );
 }
 
 #[test]
@@ -352,6 +432,75 @@ fn typed_eval_matches_value_path_for_date_and_string() {
     let typed = chunk.evaluate_expression(&str_expr, None).expect("eval");
     let expected: Vec<Value> = (0..100).map(|i| Value::Bool(i >= 50)).collect();
     assert_eq!(typed, expected);
+}
+
+#[test]
+fn typed_eval_matches_value_path_for_datetime_and_decimal() {
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "dt".to_string(),
+        "dec".to_string(),
+    ]));
+    let rows: Vec<Vec<Value>> = (0..100)
+        .map(|i| {
+            vec![
+                Value::DateTime(DateTimeValue {
+                    year: 2024,
+                    month: 1,
+                    day: (i % 28) as u32 + 1,
+                    hour: 12,
+                    minute: 0,
+                    sec: 0,
+                    microsec: 0,
+                }),
+                Value::Decimal128(Decimal128Value::from_i64(i as i64 * 7)),
+            ]
+        })
+        .collect();
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
+    chunk.build_typed_columns(true);
+    assert!(matches!(
+        chunk.typed_column(0),
+        Some(TypedColumn::DateTime(_))
+    ));
+    assert!(matches!(
+        chunk.typed_column(1),
+        Some(TypedColumn::Decimal(_))
+    ));
+
+    let pivot = DateTimeValue {
+        year: 2024,
+        month: 1,
+        day: 15,
+        hour: 12,
+        minute: 0,
+        sec: 0,
+        microsec: 0,
+    };
+    let dt_expr = Expression::binary(
+        Expression::variable("dt"),
+        BinaryOperator::LessThan,
+        Expression::literal(Value::DateTime(pivot)),
+    );
+    let typed = chunk.evaluate_expression(&dt_expr, None).expect("eval");
+    let expected: Vec<Value> = (0..100)
+        .map(|i| Value::Bool(((i % 28) as u32) + 1 < 15))
+        .collect();
+    assert_eq!(
+        typed, expected,
+        "DateTime typed ordering matches the field order"
+    );
+
+    let dec_expr = Expression::binary(
+        Expression::variable("dec"),
+        BinaryOperator::GreaterThanOrEqual,
+        Expression::literal(Value::Decimal128(Decimal128Value::from_i64(350))),
+    );
+    let typed = chunk.evaluate_expression(&dec_expr, None).expect("eval");
+    let expected: Vec<Value> = (0..100).map(|i| Value::Bool(i >= 50)).collect();
+    assert_eq!(
+        typed, expected,
+        "Decimal typed comparison uses decimal semantics"
+    );
 }
 
 #[test]

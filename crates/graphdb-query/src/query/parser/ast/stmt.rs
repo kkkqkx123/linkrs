@@ -44,6 +44,42 @@ impl Ast {
     }
 }
 
+/// Coarse classification of a statement, used for routing/permission/statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StmtCategory {
+    /// Subquery / compound statement wrappers (QUERY / PIPE / SET OPERATION / ASSIGNMENT).
+    Query,
+    /// Read & analytic statements (MATCH / GO / LOOKUP / FIND PATH / ... / RETURN / YIELD / LET).
+    Dql,
+    /// Write statements (INSERT / MERGE / UPDATE / DELETE / SET / REMOVE).
+    Dml,
+    /// Schema statements (CREATE / DROP / ALTER / DESC / SHOW CREATE / index DDL).
+    Ddl,
+    /// Access-control statements (CREATE USER / GRANT / REVOKE / ...).
+    Dcl,
+    /// Server / session administration (USE / SHOW / EXPLAIN / PROFILE / ANALYZE / KILL QUERY / ...).
+    Admin,
+    /// Full-text & vector search statements (SEARCH / SEARCH VECTOR / LOOKUP|MATCH FULLTEXT|VECTOR).
+    Search,
+    /// Transaction control (BEGIN / COMMIT / ROLLBACK / SAVEPOINT / RELEASE SAVEPOINT).
+    Transaction,
+}
+
+impl StmtCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StmtCategory::Query => "QUERY",
+            StmtCategory::Dql => "DQL",
+            StmtCategory::Dml => "DML",
+            StmtCategory::Ddl => "DDL",
+            StmtCategory::Dcl => "DCL",
+            StmtCategory::Admin => "ADMIN",
+            StmtCategory::Search => "SEARCH",
+            StmtCategory::Transaction => "TRANSACTION",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Query(QueryStmt),
@@ -115,79 +151,77 @@ pub enum Stmt {
     AssignVariable(AssignVariableStmt),
 }
 
-impl Stmt {
-    pub fn span(&self) -> Span {
-        match self {
-            Stmt::Query(s) => s.span,
-            Stmt::Create(s) => s.span,
-            Stmt::Match(s) => s.span,
-            Stmt::Delete(s) => s.span,
-            Stmt::Update(s) => s.span,
-            Stmt::Go(s) => s.span,
-            Stmt::Fetch(s) => s.span,
-            Stmt::Use(s) => s.span,
-            Stmt::Show(s) => s.span,
-            Stmt::Explain(s) => s.span,
-            Stmt::Profile(s) => s.span,
-            Stmt::Analyze(s) => s.span,
-            Stmt::GroupBy(s) => s.span,
-            Stmt::Lookup(s) => s.span,
-            Stmt::Subgraph(s) => s.span,
-            Stmt::FindPath(s) => s.span,
-            Stmt::Insert(s) => s.span,
-            Stmt::Merge(s) => s.span,
-            Stmt::Unwind(s) => s.span,
-            Stmt::Return(s) => s.span,
-            Stmt::With(s) => s.span,
-            Stmt::Yield(s) => s.span,
-            Stmt::Filter(s) => s.span,
-            Stmt::Collect(s) => s.span,
-            Stmt::Set(s) => s.span,
-            Stmt::Remove(s) => s.span,
-            Stmt::Pipe(s) => s.span,
-            Stmt::Drop(s) => s.span,
-            Stmt::Desc(s) => s.span,
-            Stmt::Alter(s) => s.span,
-            Stmt::CreateUser(s) => s.span,
-            Stmt::AlterUser(s) => s.span,
-            Stmt::DropUser(s) => s.span,
-            Stmt::ChangePassword(s) => s.span,
-            Stmt::Grant(s) => s.span,
-            Stmt::Revoke(s) => s.span,
-            Stmt::DescribeUser(s) => s.span,
-            Stmt::ShowUsers(s) => s.span,
-            Stmt::ShowRoles(s) => s.span,
-            Stmt::ShowCreate(s) => s.span,
-            Stmt::ShowSessions(s) => s.span,
-            Stmt::ShowQueries(s) => s.span,
-            Stmt::KillQuery(s) => s.span,
-            Stmt::ShowConfigs(s) => s.span,
-            Stmt::UpdateConfigs(s) => s.span,
-            Stmt::Assignment(s) => s.span,
-            Stmt::SetOperation(s) => s.span,
-            Stmt::ClearSpace(s) => s.span,
-            Stmt::CreateFulltextIndex(s) => s.span,
-            Stmt::DropFulltextIndex(s) => s.span,
-            Stmt::AlterFulltextIndex(s) => s.span,
-            Stmt::ShowFulltextIndex(s) => s.span,
-            Stmt::DescribeFulltextIndex(s) => s.span,
-            Stmt::Search(s) => s.span,
-            Stmt::LookupFulltext(s) => s.span,
-            Stmt::MatchFulltext(s) => s.span,
-            Stmt::CreateVectorIndex(s) => s.span,
-            Stmt::DropVectorIndex(s) => s.span,
-            Stmt::SearchVector(s) => s.span,
-            Stmt::LookupVector(s) => s.span,
-            Stmt::MatchVector(s) => s.span,
-            Stmt::BeginTransaction(s) => s.span,
-            Stmt::CommitTransaction(s) => s.span,
-            Stmt::RollbackTransaction(s) => s.span,
-            Stmt::Savepoint(s) => s.span,
-            Stmt::ReleaseSavepoint(s) => s.span,
-            Stmt::AssignVariable(s) => s.span,
-        }
-    }
+crate::define_stmt_helpers! {
+    Query => Query,
+    Create => Ddl,
+    Match => Dql,
+    Delete => Dml,
+    Update => Dml,
+    Go => Dql,
+    Fetch => Dql,
+    Use => Admin,
+    Show => Admin,
+    Explain => Admin,
+    Profile => Admin,
+    Analyze => Admin,
+    GroupBy => Dql,
+    Lookup => Dql,
+    Subgraph => Dql,
+    FindPath => Dql,
+    Insert => Dml,
+    Merge => Dml,
+    Unwind => Dql,
+    Return => Dql,
+    With => Dql,
+    Yield => Dql,
+    Filter => Dql,
+    Collect => Dql,
+    Set => Dml,
+    Remove => Dml,
+    Pipe => Query,
+    Drop => Ddl,
+    Desc => Ddl,
+    Alter => Ddl,
+    CreateUser => Dcl,
+    AlterUser => Dcl,
+    DropUser => Dcl,
+    ChangePassword => Dcl,
+    Grant => Dcl,
+    Revoke => Dcl,
+    DescribeUser => Dcl,
+    ShowUsers => Dcl,
+    ShowRoles => Dcl,
+    ShowCreate => Ddl,
+    ShowSessions => Admin,
+    ShowQueries => Admin,
+    KillQuery => Admin,
+    ShowConfigs => Admin,
+    UpdateConfigs => Admin,
+    Assignment => Query,
+    SetOperation => Query,
+    ClearSpace => Admin,
+    CreateFulltextIndex => Ddl,
+    DropFulltextIndex => Ddl,
+    AlterFulltextIndex => Ddl,
+    ShowFulltextIndex => Ddl,
+    DescribeFulltextIndex => Ddl,
+    Search => Search,
+    LookupFulltext => Search,
+    MatchFulltext => Search,
+    CreateVectorIndex => Ddl,
+    DropVectorIndex => Ddl,
+    SearchVector => Search,
+    LookupVector => Search,
+    MatchVector => Search,
+    BeginTransaction => Transaction,
+    CommitTransaction => Transaction,
+    RollbackTransaction => Transaction,
+    Savepoint => Transaction,
+    ReleaseSavepoint => Transaction,
+    AssignVariable => Dql,
+}
 
+impl Stmt {
     pub fn kind(&self) -> &'static str {
         match self {
             Stmt::Query(_) => "QUERY",
@@ -276,375 +310,9 @@ impl Stmt {
         }
     }
 
-    pub fn as_query(&self) -> Option<&QueryStmt> {
-        match self {
-            Stmt::Query(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_create(&self) -> Option<&CreateStmt> {
-        match self {
-            Stmt::Create(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_match(&self) -> Option<&MatchStmt> {
-        match self {
-            Stmt::Match(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_delete(&self) -> Option<&DeleteStmt> {
-        match self {
-            Stmt::Delete(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_update(&self) -> Option<&UpdateStmt> {
-        match self {
-            Stmt::Update(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_go(&self) -> Option<&GoStmt> {
-        match self {
-            Stmt::Go(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_fetch(&self) -> Option<&FetchStmt> {
-        match self {
-            Stmt::Fetch(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_use(&self) -> Option<&UseStmt> {
-        match self {
-            Stmt::Use(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show(&self) -> Option<&ShowStmt> {
-        match self {
-            Stmt::Show(s) => Some(s),
-            _ => None,
-        }
-    }
     pub fn as_explain(&self) -> Option<&ExplainStmt> {
         match self {
             Stmt::Explain(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_profile(&self) -> Option<&ProfileStmt> {
-        match self {
-            Stmt::Profile(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_group_by(&self) -> Option<&GroupByStmt> {
-        match self {
-            Stmt::GroupBy(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_lookup(&self) -> Option<&LookupStmt> {
-        match self {
-            Stmt::Lookup(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_subgraph(&self) -> Option<&SubgraphStmt> {
-        match self {
-            Stmt::Subgraph(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_find_path(&self) -> Option<&FindPathStmt> {
-        match self {
-            Stmt::FindPath(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_insert(&self) -> Option<&InsertStmt> {
-        match self {
-            Stmt::Insert(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_merge(&self) -> Option<&MergeStmt> {
-        match self {
-            Stmt::Merge(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_unwind(&self) -> Option<&UnwindStmt> {
-        match self {
-            Stmt::Unwind(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_return(&self) -> Option<&ReturnStmt> {
-        match self {
-            Stmt::Return(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_with(&self) -> Option<&WithStmt> {
-        match self {
-            Stmt::With(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_yield(&self) -> Option<&YieldStmt> {
-        match self {
-            Stmt::Yield(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_filter(&self) -> Option<&FilterStmt> {
-        match self {
-            Stmt::Filter(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_collect(&self) -> Option<&CollectStmt> {
-        match self {
-            Stmt::Collect(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_set(&self) -> Option<&SetStmt> {
-        match self {
-            Stmt::Set(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_remove(&self) -> Option<&RemoveStmt> {
-        match self {
-            Stmt::Remove(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_pipe(&self) -> Option<&PipeStmt> {
-        match self {
-            Stmt::Pipe(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_drop(&self) -> Option<&DropStmt> {
-        match self {
-            Stmt::Drop(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_desc(&self) -> Option<&DescStmt> {
-        match self {
-            Stmt::Desc(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_alter(&self) -> Option<&AlterStmt> {
-        match self {
-            Stmt::Alter(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_create_user(&self) -> Option<&CreateUserStmt> {
-        match self {
-            Stmt::CreateUser(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_alter_user(&self) -> Option<&AlterUserStmt> {
-        match self {
-            Stmt::AlterUser(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_drop_user(&self) -> Option<&DropUserStmt> {
-        match self {
-            Stmt::DropUser(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_change_password(&self) -> Option<&ChangePasswordStmt> {
-        match self {
-            Stmt::ChangePassword(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_grant(&self) -> Option<&GrantStmt> {
-        match self {
-            Stmt::Grant(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_revoke(&self) -> Option<&RevokeStmt> {
-        match self {
-            Stmt::Revoke(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_describe_user(&self) -> Option<&DescribeUserStmt> {
-        match self {
-            Stmt::DescribeUser(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_users(&self) -> Option<&ShowUsersStmt> {
-        match self {
-            Stmt::ShowUsers(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_roles(&self) -> Option<&ShowRolesStmt> {
-        match self {
-            Stmt::ShowRoles(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_create(&self) -> Option<&ShowCreateStmt> {
-        match self {
-            Stmt::ShowCreate(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_sessions(&self) -> Option<&ShowSessionsStmt> {
-        match self {
-            Stmt::ShowSessions(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_queries(&self) -> Option<&ShowQueriesStmt> {
-        match self {
-            Stmt::ShowQueries(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_kill_query(&self) -> Option<&KillQueryStmt> {
-        match self {
-            Stmt::KillQuery(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_configs(&self) -> Option<&ShowConfigsStmt> {
-        match self {
-            Stmt::ShowConfigs(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_update_configs(&self) -> Option<&UpdateConfigsStmt> {
-        match self {
-            Stmt::UpdateConfigs(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_assignment(&self) -> Option<&AssignmentStmt> {
-        match self {
-            Stmt::Assignment(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_set_operation(&self) -> Option<&SetOperationStmt> {
-        match self {
-            Stmt::SetOperation(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_create_fulltext_index(&self) -> Option<&CreateFulltextIndex> {
-        match self {
-            Stmt::CreateFulltextIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_drop_fulltext_index(&self) -> Option<&DropFulltextIndex> {
-        match self {
-            Stmt::DropFulltextIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_alter_fulltext_index(&self) -> Option<&AlterFulltextIndex> {
-        match self {
-            Stmt::AlterFulltextIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_show_fulltext_index(&self) -> Option<&ShowFulltextIndex> {
-        match self {
-            Stmt::ShowFulltextIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_describe_fulltext_index(&self) -> Option<&DescribeFulltextIndex> {
-        match self {
-            Stmt::DescribeFulltextIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_search(&self) -> Option<&SearchStatement> {
-        match self {
-            Stmt::Search(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_lookup_fulltext(&self) -> Option<&LookupFulltext> {
-        match self {
-            Stmt::LookupFulltext(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_match_fulltext(&self) -> Option<&MatchFulltext> {
-        match self {
-            Stmt::MatchFulltext(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_create_vector_index(&self) -> Option<&CreateVectorIndex> {
-        match self {
-            Stmt::CreateVectorIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_drop_vector_index(&self) -> Option<&DropVectorIndex> {
-        match self {
-            Stmt::DropVectorIndex(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_search_vector(&self) -> Option<&SearchVectorStatement> {
-        match self {
-            Stmt::SearchVector(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_lookup_vector(&self) -> Option<&LookupVector> {
-        match self {
-            Stmt::LookupVector(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_match_vector(&self) -> Option<&MatchVector> {
-        match self {
-            Stmt::MatchVector(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_savepoint(&self) -> Option<&SavepointStmt> {
-        match self {
-            Stmt::Savepoint(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_release_savepoint(&self) -> Option<&ReleaseSavepointStmt> {
-        match self {
-            Stmt::ReleaseSavepoint(s) => Some(s),
-            _ => None,
-        }
-    }
-    pub fn as_assign_variable(&self) -> Option<&AssignVariableStmt> {
-        match self {
-            Stmt::AssignVariable(s) => Some(s),
             _ => None,
         }
     }
@@ -653,6 +321,662 @@ impl Stmt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::query::parser::ast::vector::{
+        VectorDistance, VectorIndexConfig, VectorMatchCondition,
+    };
+
+    fn ctx_expr() -> ContextualExpression {
+        let expr_context = Arc::new(ExpressionAnalysisContext::new());
+        let expr = crate::core::types::expr::Expression::Variable("x".to_string());
+        let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+        let expr_id = expr_context.register_expression(expr_meta);
+        ContextualExpression::new(expr_id, expr_context)
+    }
+
+    #[test]
+    fn test_stmt_category_exhaustive() {
+        use StmtCategory::*;
+        let span = Span::default();
+        let from = FromClause {
+            span,
+            vertices: vec![],
+        };
+        let yield_clause = YieldClause {
+            span,
+            items: vec![],
+            where_clause: None,
+            order_by: None,
+            limit: None,
+            skip: None,
+            sample: None,
+        };
+        let nested = move || {
+            Stmt::Use(UseStmt {
+                span,
+                space: "s".to_string(),
+            })
+        };
+        let vector_query = VectorQueryExpr {
+            span,
+            query_type: crate::query::parser::ast::vector::VectorQueryType::Vector,
+            query_data: "[0.1, 0.2, 0.3]".to_string(),
+        };
+        let cases: Vec<(Stmt, StmtCategory)> = vec![
+            (Stmt::Query(QueryStmt::new(vec![], span)), Query),
+            (
+                Stmt::Pipe(PipeStmt {
+                    span,
+                    left: Box::new(nested()),
+                    right: Box::new(nested()),
+                }),
+                Query,
+            ),
+            (
+                Stmt::SetOperation(SetOperationStmt {
+                    span,
+                    op_type: SetOperationType::Union,
+                    left: Box::new(nested()),
+                    right: Box::new(nested()),
+                }),
+                Query,
+            ),
+            (
+                Stmt::Assignment(AssignmentStmt {
+                    span,
+                    variable: "v".to_string(),
+                    statement: Box::new(nested()),
+                }),
+                Query,
+            ),
+            (
+                Stmt::Match(MatchStmt {
+                    span,
+                    patterns: vec![],
+                    where_clause: None,
+                    return_clause: None,
+                    order_by: None,
+                    limit: None,
+                    skip: None,
+                    optional: false,
+                    delete_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Go(GoStmt {
+                    span,
+                    steps: Steps::Fixed(1),
+                    from: from.clone(),
+                    over: None,
+                    where_clause: None,
+                    yield_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Fetch(FetchStmt {
+                    span,
+                    target: FetchTarget::Vertices {
+                        tag_name: None,
+                        ids: vec![],
+                        properties: None,
+                    },
+                    yield_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Lookup(LookupStmt {
+                    span,
+                    target: LookupTarget::Tag("Person".to_string()),
+                    where_clause: None,
+                    yield_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Subgraph(SubgraphStmt {
+                    span,
+                    steps: Steps::Fixed(1),
+                    from: from.clone(),
+                    over: None,
+                    where_clause: None,
+                    yield_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::FindPath(FindPathStmt {
+                    span,
+                    from,
+                    to: ctx_expr(),
+                    over: None,
+                    where_clause: None,
+                    shortest: true,
+                    max_steps: None,
+                    limit: None,
+                    skip: None,
+                    yield_clause: None,
+                    weight_expression: None,
+                    heuristic_expression: None,
+                    with_loop: false,
+                    with_cycle: false,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Unwind(UnwindStmt {
+                    span,
+                    expression: ctx_expr(),
+                    variable: "v".to_string(),
+                    return_clause: None,
+                    order_by: None,
+                    limit: None,
+                    skip: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Return(ReturnStmt {
+                    span,
+                    items: vec![],
+                    distinct: false,
+                    order_by: None,
+                    skip: None,
+                    limit: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::With(WithStmt {
+                    span,
+                    items: vec![],
+                    where_clause: None,
+                    distinct: false,
+                    order_by: None,
+                    skip: None,
+                    limit: None,
+                    recursive: false,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Yield(YieldStmt {
+                    span,
+                    items: vec![],
+                    where_clause: None,
+                    distinct: false,
+                    order_by: None,
+                    skip: None,
+                    limit: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Filter(FilterStmt {
+                    span,
+                    expression: ctx_expr(),
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Collect(CollectStmt {
+                    span,
+                    items: vec![],
+                }),
+                Dql,
+            ),
+            (
+                Stmt::GroupBy(GroupByStmt {
+                    span,
+                    group_items: vec![],
+                    grouping_type: GroupingType::Standard,
+                    yield_clause,
+                    having_clause: None,
+                }),
+                Dql,
+            ),
+            (
+                Stmt::AssignVariable(AssignVariableStmt {
+                    span,
+                    name: "x".to_string(),
+                    expression: ctx_expr(),
+                }),
+                Dql,
+            ),
+            (
+                Stmt::Insert(InsertStmt {
+                    span,
+                    target: InsertTarget::Vertices {
+                        tags: vec![],
+                        values: vec![],
+                    },
+                    if_not_exists: false,
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Merge(MergeStmt {
+                    span,
+                    pattern: Pattern::Node(NodePattern::new(None, vec![], None, vec![], span)),
+                    on_create: None,
+                    on_match: None,
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Update(UpdateStmt {
+                    span,
+                    target: UpdateTarget::Vertex(ctx_expr()),
+                    set_clause: SetClause {
+                        span,
+                        assignments: vec![],
+                    },
+                    where_clause: None,
+                    is_upsert: false,
+                    yield_clause: None,
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Delete(DeleteStmt {
+                    span,
+                    target: DeleteTarget::Vertices(vec![]),
+                    where_clause: None,
+                    with_edge: false,
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Set(SetStmt {
+                    span,
+                    assignments: vec![],
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Remove(RemoveStmt {
+                    span,
+                    items: vec![],
+                }),
+                Dml,
+            ),
+            (
+                Stmt::Create(CreateStmt {
+                    span,
+                    target: CreateTarget::Tag {
+                        name: "tag".to_string(),
+                        properties: vec![],
+                        ttl_duration: None,
+                        ttl_col: None,
+                    },
+                    if_not_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::Drop(DropStmt {
+                    span,
+                    target: DropTarget::Space("s".to_string()),
+                    if_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::Alter(AlterStmt {
+                    span,
+                    target: AlterTarget::Space {
+                        space_name: "s".to_string(),
+                        comment: None,
+                    },
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::Desc(DescStmt {
+                    span,
+                    target: DescTarget::Space("s".to_string()),
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::ShowCreate(ShowCreateStmt {
+                    span,
+                    target: ShowCreateTarget::Space("s".to_string()),
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::CreateFulltextIndex(CreateFulltextIndex::new(
+                    span,
+                    "idx".to_string(),
+                    "s".to_string(),
+                    vec![],
+                    crate::core::types::FulltextEngineType::Bm25,
+                )),
+                Ddl,
+            ),
+            (
+                Stmt::DropFulltextIndex(DropFulltextIndex {
+                    span,
+                    index_name: "idx".to_string(),
+                    if_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::AlterFulltextIndex(AlterFulltextIndex {
+                    span,
+                    index_name: "idx".to_string(),
+                    actions: vec![],
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::ShowFulltextIndex(ShowFulltextIndex {
+                    span,
+                    pattern: None,
+                    from_schema: None,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::DescribeFulltextIndex(DescribeFulltextIndex {
+                    span,
+                    index_name: "idx".to_string(),
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::CreateVectorIndex(CreateVectorIndex {
+                    span,
+                    index_name: "idx".to_string(),
+                    schema_name: "s".to_string(),
+                    field_name: "f".to_string(),
+                    config: VectorIndexConfig {
+                        vector_size: 3,
+                        distance: VectorDistance::Cosine,
+                        hnsw_m: None,
+                        hnsw_ef_construct: None,
+                    },
+                    if_not_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::DropVectorIndex(DropVectorIndex {
+                    span,
+                    index_name: "idx".to_string(),
+                    if_exists: false,
+                }),
+                Ddl,
+            ),
+            (
+                Stmt::CreateUser(CreateUserStmt {
+                    span,
+                    username: "u".to_string(),
+                    password: "p".to_string(),
+                    role: None,
+                    if_not_exists: false,
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::AlterUser(AlterUserStmt {
+                    span,
+                    username: "u".to_string(),
+                    password: None,
+                    new_role: None,
+                    is_locked: None,
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::DropUser(DropUserStmt {
+                    span,
+                    username: "u".to_string(),
+                    if_exists: false,
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::ChangePassword(ChangePasswordStmt {
+                    span,
+                    username: None,
+                    old_password: "o".to_string(),
+                    new_password: "n".to_string(),
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::Grant(GrantStmt {
+                    span,
+                    role: RoleType::User,
+                    space_name: "s".to_string(),
+                    username: "u".to_string(),
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::Revoke(RevokeStmt {
+                    span,
+                    role: RoleType::User,
+                    space_name: "s".to_string(),
+                    username: "u".to_string(),
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::DescribeUser(DescribeUserStmt {
+                    span,
+                    username: "u".to_string(),
+                }),
+                Dcl,
+            ),
+            (Stmt::ShowUsers(ShowUsersStmt { span }), Dcl),
+            (
+                Stmt::ShowRoles(ShowRolesStmt {
+                    span,
+                    space_name: None,
+                }),
+                Dcl,
+            ),
+            (
+                Stmt::Use(UseStmt {
+                    span,
+                    space: "s".to_string(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::Show(ShowStmt {
+                    span,
+                    target: ShowTarget::Spaces,
+                }),
+                Admin,
+            ),
+            (
+                Stmt::Explain(ExplainStmt {
+                    span,
+                    statement: Box::new(nested()),
+                    format: ExplainFormat::Table,
+                    analyze: false,
+                }),
+                Admin,
+            ),
+            (
+                Stmt::Profile(ProfileStmt {
+                    span,
+                    statement: Box::new(nested()),
+                    format: ExplainFormat::Table,
+                }),
+                Admin,
+            ),
+            (Stmt::Analyze(AnalyzeStmt { span, space: None }), Admin),
+            (Stmt::ShowSessions(ShowSessionsStmt { span }), Admin),
+            (Stmt::ShowQueries(ShowQueriesStmt { span }), Admin),
+            (
+                Stmt::KillQuery(KillQueryStmt {
+                    span,
+                    session_id: 1,
+                    plan_id: 1,
+                }),
+                Admin,
+            ),
+            (
+                Stmt::ShowConfigs(ShowConfigsStmt { span, module: None }),
+                Admin,
+            ),
+            (
+                Stmt::UpdateConfigs(UpdateConfigsStmt {
+                    span,
+                    module: None,
+                    config_name: "c".to_string(),
+                    config_value: ctx_expr(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::ClearSpace(ClearSpaceStmt {
+                    span,
+                    space_name: "s".to_string(),
+                }),
+                Admin,
+            ),
+            (
+                Stmt::Search(SearchStatement::new(
+                    "idx".to_string(),
+                    FulltextQueryExpr::Simple("q".to_string()),
+                )),
+                Search,
+            ),
+            (
+                Stmt::SearchVector(SearchVectorStatement {
+                    span,
+                    index_name: "idx".to_string(),
+                    query: vector_query.clone(),
+                    threshold: None,
+                    where_clause: None,
+                    order_clause: None,
+                    limit: None,
+                    skip: None,
+                    yield_clause: None,
+                }),
+                Search,
+            ),
+            (
+                Stmt::LookupFulltext(LookupFulltext {
+                    span,
+                    schema_name: "s".to_string(),
+                    index_name: "idx".to_string(),
+                    query: "q".to_string(),
+                    yield_clause: None,
+                    limit: None,
+                }),
+                Search,
+            ),
+            (
+                Stmt::MatchFulltext(MatchFulltext {
+                    span,
+                    pattern: "p".to_string(),
+                    fulltext_condition: FulltextMatchCondition {
+                        field: "f".to_string(),
+                        query: "q".to_string(),
+                        index_name: None,
+                    },
+                    yield_clause: None,
+                }),
+                Search,
+            ),
+            (
+                Stmt::LookupVector(LookupVector {
+                    span,
+                    schema_name: "s".to_string(),
+                    index_name: "idx".to_string(),
+                    query: vector_query.clone(),
+                    yield_clause: None,
+                    limit: None,
+                }),
+                Search,
+            ),
+            (
+                Stmt::MatchVector(MatchVector {
+                    span,
+                    pattern: "p".to_string(),
+                    vector_condition: VectorMatchCondition {
+                        field: "f".to_string(),
+                        query: vector_query,
+                        threshold: None,
+                    },
+                    yield_clause: None,
+                }),
+                Search,
+            ),
+            (
+                Stmt::BeginTransaction(BeginTransactionStmt {
+                    span,
+                    read_only: None,
+                }),
+                Transaction,
+            ),
+            (
+                Stmt::CommitTransaction(CommitTransactionStmt { span }),
+                Transaction,
+            ),
+            (
+                Stmt::RollbackTransaction(RollbackTransactionStmt {
+                    span,
+                    savepoint_name: None,
+                }),
+                Transaction,
+            ),
+            (
+                Stmt::Savepoint(SavepointStmt {
+                    span,
+                    name: "sp".to_string(),
+                }),
+                Transaction,
+            ),
+            (
+                Stmt::ReleaseSavepoint(ReleaseSavepointStmt {
+                    span,
+                    name: "sp".to_string(),
+                }),
+                Transaction,
+            ),
+        ];
+        assert_eq!(cases.len(), 67, "Stmt has 67 variants; update this test");
+        for (stmt, expected) in cases {
+            assert_eq!(
+                stmt.category(),
+                expected,
+                "category mismatch for {}",
+                stmt.kind()
+            );
+        }
+    }
+
+    #[test]
+    fn test_category_str_roundtrip() {
+        let categories = [
+            StmtCategory::Query,
+            StmtCategory::Dql,
+            StmtCategory::Dml,
+            StmtCategory::Ddl,
+            StmtCategory::Dcl,
+            StmtCategory::Admin,
+            StmtCategory::Search,
+            StmtCategory::Transaction,
+        ];
+        let mut labels: Vec<&str> = categories.iter().map(|c| c.as_str()).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), categories.len(), "labels must be distinct");
+        for label in labels {
+            assert!(!label.is_empty());
+        }
+    }
 
     #[test]
     fn test_create_stmt() {

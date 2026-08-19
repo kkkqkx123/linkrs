@@ -11,6 +11,10 @@ pub use types::OrderDirection as CoreOrderDirection;
 pub mod stmt;
 pub use stmt::*;
 
+// Statement helper macros (loaded first so other modules can use them).
+#[macro_use]
+pub mod macros;
+
 // Pattern definition
 pub mod pattern;
 

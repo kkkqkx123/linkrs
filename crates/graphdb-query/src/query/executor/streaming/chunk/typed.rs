@@ -5,7 +5,8 @@
 //! constructing one `Value` per row.
 
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::value::date_time::DateValue;
+use crate::core::value::date_time::{DateTimeValue, DateValue};
+use crate::core::value::decimal128::Decimal128Value;
 use crate::core::value::NullType;
 use crate::core::Value;
 use std::cmp::Ordering;
@@ -20,18 +21,24 @@ pub enum TypedKind {
     Bool,
     /// Date stored as days since epoch (i64), reusing the numeric eval path.
     Date,
+    /// DateTime stored as micros since epoch (i64), reusing the numeric eval
+    /// path; matches `cmp_datetime` ordering for normalized values.
+    DateTime,
     /// String column stored as `Vec<Arc<str>>`, avoiding per-row `Value` boxing.
     Utf8,
+    /// Decimal128 column stored as `Vec<Decimal128Value>` (comparison via
+    /// `Ord` with decimal semantics).
+    Decimal,
 }
 
 /// Typed column representation for fixed-size scalar columns.
 ///
-/// `I64`/`F64`/`I32`/`Bool`/`Date`/`Utf8` columns are stored as dense raw
-/// `Vec`s so that batch evaluation operates on scalars (auto-vectorizable)
-/// instead of constructing one `Value` per row. Columns that contain NULLs
-/// keep the typed representation through the matching `Nullable*` variants
-/// (raw values + validity bitmap); columns that mix kinds or carry
-/// non-scalar values fall back to [`TypedColumn::Fallback`].
+/// `I64`/`F64`/`I32`/`Bool`/`Date`/`DateTime`/`Utf8`/`Decimal` columns are
+/// stored as dense raw `Vec`s so that batch evaluation operates on scalars
+/// (auto-vectorizable) instead of constructing one `Value` per row. Columns
+/// that contain NULLs keep the typed representation through the matching
+/// `Nullable*` variants (raw values + validity bitmap); columns that mix
+/// kinds or carry non-scalar values fall back to [`TypedColumn::Fallback`].
 ///
 /// Bitmap encoding: bit `i` of `bitmap[i / 64]` marks row `i` valid (`1` =
 /// valid value, `0` = NULL). Invalid rows keep a placeholder in the value
@@ -44,7 +51,11 @@ pub enum TypedColumn {
     Bool(Vec<bool>),
     /// Days since epoch per row (see [`DateValue::to_days`]).
     Date(Vec<i64>),
+    /// Micros since epoch per row (see [`DateTimeValue::to_micros`]).
+    DateTime(Vec<i64>),
     Utf8(Vec<Arc<str>>),
+    /// Decimal128 per row (decimal semantics, `Ord`).
+    Decimal(Vec<Decimal128Value>),
     /// I64 column with a validity bitmap (see the encoding note above).
     NullableI64(Vec<i64>, Vec<u64>),
     /// F64 column with a validity bitmap.
@@ -55,8 +66,12 @@ pub enum TypedColumn {
     NullableBool(Vec<bool>, Vec<u64>),
     /// Date column with a validity bitmap.
     NullableDate(Vec<i64>, Vec<u64>),
+    /// DateTime column with a validity bitmap.
+    NullableDateTime(Vec<i64>, Vec<u64>),
     /// Utf8 column with a validity bitmap.
     NullableUtf8(Vec<Arc<str>>, Vec<u64>),
+    /// Decimal column with a validity bitmap.
+    NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
     Fallback(Vec<Value>),
 }
 
@@ -93,13 +108,17 @@ impl TypedColumn {
             TypedColumn::I32(v) => v.len(),
             TypedColumn::Bool(v) => v.len(),
             TypedColumn::Date(v) => v.len(),
+            TypedColumn::DateTime(v) => v.len(),
             TypedColumn::Utf8(v) => v.len(),
+            TypedColumn::Decimal(v) => v.len(),
             TypedColumn::NullableI64(v, _) => v.len(),
             TypedColumn::NullableF64(v, _) => v.len(),
             TypedColumn::NullableI32(v, _) => v.len(),
             TypedColumn::NullableBool(v, _) => v.len(),
             TypedColumn::NullableDate(v, _) => v.len(),
+            TypedColumn::NullableDateTime(v, _) => v.len(),
             TypedColumn::NullableUtf8(v, _) => v.len(),
+            TypedColumn::NullableDecimal(v, _) => v.len(),
             TypedColumn::Fallback(v) => v.len(),
         }
     }
@@ -123,7 +142,11 @@ impl TypedColumn {
             TypedColumn::I32(v) => v.get(idx).map(|&x| Value::Int(x)),
             TypedColumn::Bool(v) => v.get(idx).map(|&x| Value::Bool(x)),
             TypedColumn::Date(v) => v.get(idx).map(|&x| Value::Date(DateValue::from_days(x))),
+            TypedColumn::DateTime(v) => v
+                .get(idx)
+                .map(|&x| Value::DateTime(DateTimeValue::from_micros(x))),
             TypedColumn::Utf8(v) => v.get(idx).map(|x| Value::String(x.as_ref().into())),
+            TypedColumn::Decimal(v) => v.get(idx).cloned().map(Value::Decimal128),
             TypedColumn::NullableI64(v, b) => {
                 if bitmap_is_valid(b, idx) {
                     v.get(idx).map(|&x| Value::BigInt(x))
@@ -159,9 +182,24 @@ impl TypedColumn {
                     null()
                 }
             }
+            TypedColumn::NullableDateTime(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx)
+                        .map(|&x| Value::DateTime(DateTimeValue::from_micros(x)))
+                } else {
+                    null()
+                }
+            }
             TypedColumn::NullableUtf8(v, b) => {
                 if bitmap_is_valid(b, idx) {
                     v.get(idx).map(|x| Value::String(x.as_ref().into()))
+                } else {
+                    null()
+                }
+            }
+            TypedColumn::NullableDecimal(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    v.get(idx).cloned().map(Value::Decimal128)
                 } else {
                     null()
                 }
@@ -181,7 +219,12 @@ impl TypedColumn {
                 .iter()
                 .map(|&x| Value::Date(DateValue::from_days(x)))
                 .collect(),
+            TypedColumn::DateTime(v) => v
+                .iter()
+                .map(|&x| Value::DateTime(DateTimeValue::from_micros(x)))
+                .collect(),
             TypedColumn::Utf8(v) => v.iter().map(|x| Value::String(x.as_ref().into())).collect(),
+            TypedColumn::Decimal(v) => v.iter().map(|x| Value::Decimal128(x.clone())).collect(),
             TypedColumn::NullableI64(v, b) => v
                 .iter()
                 .enumerate()
@@ -237,12 +280,34 @@ impl TypedColumn {
                     }
                 })
                 .collect(),
+            TypedColumn::NullableDateTime(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, &x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::DateTime(DateTimeValue::from_micros(x))
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
             TypedColumn::NullableUtf8(v, b) => v
                 .iter()
                 .enumerate()
                 .map(|(i, x)| {
                     if bitmap_is_valid(b, i) {
                         Value::String(x.as_ref().into())
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedColumn::NullableDecimal(v, b) => v
+                .iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    if bitmap_is_valid(b, i) {
+                        Value::Decimal128(x.clone())
                     } else {
                         Value::Null(NullType::Null)
                     }
@@ -260,7 +325,9 @@ impl TypedColumn {
             TypedColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
             TypedColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
             TypedColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
+            TypedColumn::DateTime(v) => v.capacity() * std::mem::size_of::<i64>(),
             TypedColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
+            TypedColumn::Decimal(v) => v.capacity() * std::mem::size_of::<Decimal128Value>(),
             TypedColumn::NullableI64(v, b) => {
                 v.capacity() * std::mem::size_of::<i64>()
                     + b.capacity() * std::mem::size_of::<u64>()
@@ -281,8 +348,16 @@ impl TypedColumn {
                 v.capacity() * std::mem::size_of::<i64>()
                     + b.capacity() * std::mem::size_of::<u64>()
             }
+            TypedColumn::NullableDateTime(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
             TypedColumn::NullableUtf8(v, b) => {
                 v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
+            }
+            TypedColumn::NullableDecimal(v, b) => {
+                v.capacity() * std::mem::size_of::<Decimal128Value>()
+                    + b.capacity() * std::mem::size_of::<u64>()
             }
             TypedColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
@@ -294,9 +369,10 @@ impl TypedColumn {
 /// A batch of raw typed values produced by the typed evaluator.
 ///
 /// Mirrors `Value::BigInt`/`Value::Double`/`Value::Int`/`Value::Bool`/
-/// `Value::Date`/`Value::String` in raw space; converted to `Vec<Value>`
-/// once at the end of evaluation. The `Nullable*` variants carry a validity
-/// bitmap (`1` = valid, `0` = NULL) and materialize NULL for invalid rows.
+/// `Value::Date`/`Value::DateTime`/`Value::String`/`Value::Decimal128` in
+/// raw space; converted to `Vec<Value>` once at the end of evaluation. The
+/// `Nullable*` variants carry a validity bitmap (`1` = valid, `0` = NULL)
+/// and materialize NULL for invalid rows.
 #[derive(Debug, Clone)]
 pub(super) enum TypedBatch {
     I64(Vec<i64>),
@@ -305,7 +381,11 @@ pub(super) enum TypedBatch {
     Bool(Vec<bool>),
     /// Days since epoch per row (see [`DateValue::to_days`]).
     Date(Vec<i64>),
+    /// Micros since epoch per row (see [`DateTimeValue::to_micros`]).
+    DateTime(Vec<i64>),
     Utf8(Vec<Arc<str>>),
+    /// Decimal128 per row (decimal semantics, `Ord`).
+    Decimal(Vec<Decimal128Value>),
     /// I64 batch with a validity bitmap.
     NullableI64(Vec<i64>, Vec<u64>),
     /// F64 batch with a validity bitmap.
@@ -316,8 +396,12 @@ pub(super) enum TypedBatch {
     NullableBool(Vec<bool>, Vec<u64>),
     /// Date batch with a validity bitmap.
     NullableDate(Vec<i64>, Vec<u64>),
+    /// DateTime batch with a validity bitmap.
+    NullableDateTime(Vec<i64>, Vec<u64>),
     /// Utf8 batch with a validity bitmap.
     NullableUtf8(Vec<Arc<str>>, Vec<u64>),
+    /// Decimal batch with a validity bitmap.
+    NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
 }
 
 impl TypedBatch {
@@ -331,10 +415,15 @@ impl TypedBatch {
                 .into_iter()
                 .map(|d| Value::Date(DateValue::from_days(d)))
                 .collect(),
+            TypedBatch::DateTime(v) => v
+                .into_iter()
+                .map(|d| Value::DateTime(DateTimeValue::from_micros(d)))
+                .collect(),
             TypedBatch::Utf8(v) => v
                 .into_iter()
                 .map(|s| Value::String(s.as_ref().into()))
                 .collect(),
+            TypedBatch::Decimal(v) => v.into_iter().map(Value::Decimal128).collect(),
             TypedBatch::NullableI64(v, b) => v
                 .into_iter()
                 .enumerate()
@@ -390,12 +479,34 @@ impl TypedBatch {
                     }
                 })
                 .collect(),
+            TypedBatch::NullableDateTime(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::DateTime(DateTimeValue::from_micros(d))
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
             TypedBatch::NullableUtf8(v, b) => v
                 .into_iter()
                 .enumerate()
                 .map(|(i, s)| {
                     if bitmap_is_valid(&b, i) {
                         Value::String(s.as_ref().into())
+                    } else {
+                        Value::Null(NullType::Null)
+                    }
+                })
+                .collect(),
+            TypedBatch::NullableDecimal(v, b) => v
+                .into_iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    if bitmap_is_valid(&b, i) {
+                        Value::Decimal128(d)
                     } else {
                         Value::Null(NullType::Null)
                     }
@@ -415,28 +526,22 @@ pub(super) fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
         TypedColumn::I32(v) => Some(TypedBatch::I32(v.clone())),
         TypedColumn::Bool(v) => Some(TypedBatch::Bool(v.clone())),
         TypedColumn::Date(v) => Some(TypedBatch::Date(v.clone())),
+        TypedColumn::DateTime(v) => Some(TypedBatch::DateTime(v.clone())),
         TypedColumn::Utf8(v) => Some(TypedBatch::Utf8(v.clone())),
+        TypedColumn::Decimal(v) => Some(TypedBatch::Decimal(v.clone())),
         TypedColumn::NullableI64(v, b) => Some(TypedBatch::NullableI64(v.clone(), b.clone())),
         TypedColumn::NullableF64(v, b) => Some(TypedBatch::NullableF64(v.clone(), b.clone())),
         TypedColumn::NullableI32(v, b) => Some(TypedBatch::NullableI32(v.clone(), b.clone())),
         TypedColumn::NullableBool(v, b) => Some(TypedBatch::NullableBool(v.clone(), b.clone())),
         TypedColumn::NullableDate(v, b) => Some(TypedBatch::NullableDate(v.clone(), b.clone())),
+        TypedColumn::NullableDateTime(v, b) => {
+            Some(TypedBatch::NullableDateTime(v.clone(), b.clone()))
+        }
         TypedColumn::NullableUtf8(v, b) => Some(TypedBatch::NullableUtf8(v.clone(), b.clone())),
+        TypedColumn::NullableDecimal(v, b) => {
+            Some(TypedBatch::NullableDecimal(v.clone(), b.clone()))
+        }
         TypedColumn::Fallback(_) => None,
-    }
-}
-
-/// Replicate a literal into a raw batch of `n` rows, when the literal has a
-/// typed scalar kind (BigInt/Double/Int/Bool/Date/String).
-pub(super) fn typed_literal_batch(value: &Value, n: usize) -> Option<TypedBatch> {
-    match value {
-        Value::BigInt(v) => Some(TypedBatch::I64(vec![*v; n])),
-        Value::Double(v) => Some(TypedBatch::F64(vec![*v; n])),
-        Value::Int(v) => Some(TypedBatch::I32(vec![*v; n])),
-        Value::Bool(v) => Some(TypedBatch::Bool(vec![*v; n])),
-        Value::Date(v) => Some(TypedBatch::Date(vec![v.to_days(); n])),
-        Value::String(v) => Some(TypedBatch::Utf8(vec![Arc::from(v.as_str()); n])),
-        _ => None,
     }
 }
 
@@ -458,14 +563,19 @@ pub(super) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option
                 v.into_iter().map(i32::wrapping_neg).collect(),
             )),
             TypedBatch::Bool(_) => None,
-            TypedBatch::Date(_) | TypedBatch::Utf8(_) => None,
+            TypedBatch::Date(_)
+            | TypedBatch::DateTime(_)
+            | TypedBatch::Utf8(_)
+            | TypedBatch::Decimal(_) => None,
             // NULL negation errors in the value path; fall back.
             TypedBatch::NullableI64(..)
             | TypedBatch::NullableF64(..)
             | TypedBatch::NullableI32(..)
             | TypedBatch::NullableBool(..)
             | TypedBatch::NullableDate(..)
-            | TypedBatch::NullableUtf8(..) => None,
+            | TypedBatch::NullableDateTime(..)
+            | TypedBatch::NullableUtf8(..)
+            | TypedBatch::NullableDecimal(..) => None,
         },
         UnaryOperator::Not => match batch {
             TypedBatch::Bool(v) => Some(TypedBatch::Bool(v.into_iter().map(|b| !b).collect())),
@@ -554,7 +664,9 @@ fn is_nullable_batch(batch: &TypedBatch) -> bool {
             | TypedBatch::NullableI32(..)
             | TypedBatch::NullableBool(..)
             | TypedBatch::NullableDate(..)
+            | TypedBatch::NullableDateTime(..)
             | TypedBatch::NullableUtf8(..)
+            | TypedBatch::NullableDecimal(..)
     )
 }
 
@@ -662,6 +774,32 @@ fn nullable_compare_batches(
         );
         return Some(TypedBatch::Bool(vals));
     }
+    // Date-times compare by micros-since-epoch, identical to `cmp_datetime`
+    // for normalized values (see `chunk/kind.rs` for the limitation).
+    if let (Some((l, lb)), Some((r, rb))) = (datetime_view(left), datetime_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &i64, b: &i64| a.cmp(b),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
+    // Decimals compare with decimal semantics (`Decimal128Value: Ord`),
+    // mirroring the `Value::Decimal128` ordering.
+    if let (Some((l, lb)), Some((r, rb))) = (decimal_view(left), decimal_view(right)) {
+        let vals = zip_compare(
+            op,
+            &l,
+            &r,
+            lb.as_deref(),
+            rb.as_deref(),
+            |a: &Decimal128Value, b: &Decimal128Value| a.cmp(b),
+        );
+        return Some(TypedBatch::Bool(vals));
+    }
     // Booleans support equality only.
     if matches!(op, Equal | NotEqual) {
         if let (Some((l, lb)), Some((r, rb))) = (bool_view(left), bool_view(right)) {
@@ -728,6 +866,24 @@ fn utf8_view(batch: &TypedBatch) -> Option<Utf8View> {
     match batch {
         TypedBatch::Utf8(v) => Some((v.clone(), None)),
         TypedBatch::NullableUtf8(v, b) => Some((v.clone(), Some(b.clone()))),
+        _ => None,
+    }
+}
+
+/// View a date-time batch as micros-since-epoch plus its validity bitmap.
+fn datetime_view(batch: &TypedBatch) -> Option<(Vec<i64>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::DateTime(v) => Some((v.clone(), None)),
+        TypedBatch::NullableDateTime(v, b) => Some((v.clone(), Some(b.clone()))),
+        _ => None,
+    }
+}
+
+/// View a decimal batch plus its validity bitmap.
+fn decimal_view(batch: &TypedBatch) -> Option<(Vec<Decimal128Value>, Option<Vec<u64>>)> {
+    match batch {
+        TypedBatch::Decimal(v) => Some((v.clone(), None)),
+        TypedBatch::NullableDecimal(v, b) => Some((v.clone(), Some(b.clone()))),
         _ => None,
     }
 }
@@ -814,6 +970,28 @@ fn compare_typed_batches(
             LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
             GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
             GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        })),
+        // DateTime values compare by micros-since-epoch, which matches the
+        // `cmp_datetime` field ordering for normalized values.
+        (TypedBatch::DateTime(l), TypedBatch::DateTime(r)) => Some(TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(&a, &b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(&a, &b)| a != b).collect(),
+            LessThan => l.iter().zip(r).map(|(&a, &b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(r).map(|(&a, &b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(r).map(|(&a, &b)| a >= b).collect(),
+            _ => return None,
+        })),
+        // Decimal values compare with decimal semantics (`Ord`), mirroring
+        // the `Value::Decimal128` ordering exactly.
+        (TypedBatch::Decimal(l), TypedBatch::Decimal(r)) => Some(TypedBatch::Bool(match op {
+            Equal => l.iter().zip(r).map(|(a, b)| a == b).collect(),
+            NotEqual => l.iter().zip(r).map(|(a, b)| a != b).collect(),
+            LessThan => l.iter().zip(r).map(|(a, b)| a < b).collect(),
+            LessThanOrEqual => l.iter().zip(r).map(|(a, b)| a <= b).collect(),
+            GreaterThan => l.iter().zip(r).map(|(a, b)| a > b).collect(),
+            GreaterThanOrEqual => l.iter().zip(r).map(|(a, b)| a >= b).collect(),
             _ => return None,
         })),
         // Strings compare lexicographically (bytewise), mirroring the
@@ -1092,7 +1270,11 @@ pub(super) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> Ty
         TypedColumn::I32(v) => TypedColumn::I32(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Bool(v) => TypedColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Date(v) => TypedColumn::Date(indices.iter().map(|&i| v[i]).collect()),
+        TypedColumn::DateTime(v) => TypedColumn::DateTime(indices.iter().map(|&i| v[i]).collect()),
         TypedColumn::Utf8(v) => TypedColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect()),
+        TypedColumn::Decimal(v) => {
+            TypedColumn::Decimal(indices.iter().map(|&i| v[i].clone()).collect())
+        }
         TypedColumn::NullableI64(v, b) => TypedColumn::NullableI64(
             indices.iter().map(|&i| v[i]).collect(),
             gather_bitmap(b, indices),
@@ -1113,7 +1295,15 @@ pub(super) fn gather_typed_column(column: &TypedColumn, indices: &[usize]) -> Ty
             indices.iter().map(|&i| v[i]).collect(),
             gather_bitmap(b, indices),
         ),
+        TypedColumn::NullableDateTime(v, b) => TypedColumn::NullableDateTime(
+            indices.iter().map(|&i| v[i]).collect(),
+            gather_bitmap(b, indices),
+        ),
         TypedColumn::NullableUtf8(v, b) => TypedColumn::NullableUtf8(
+            indices.iter().map(|&i| v[i].clone()).collect(),
+            gather_bitmap(b, indices),
+        ),
+        TypedColumn::NullableDecimal(v, b) => TypedColumn::NullableDecimal(
             indices.iter().map(|&i| v[i].clone()).collect(),
             gather_bitmap(b, indices),
         ),

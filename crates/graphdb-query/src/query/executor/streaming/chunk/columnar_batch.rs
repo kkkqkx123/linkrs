@@ -12,7 +12,8 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::core::value::date_time::DateValue;
+use crate::core::value::date_time::{DateTimeValue, DateValue};
+use crate::core::value::decimal128::Decimal128Value;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::core::DataChunk;
@@ -30,8 +31,12 @@ pub enum BatchColumn {
     Bool(Vec<bool>),
     /// Days since epoch per row (see [`DateValue::to_days`]).
     Date(Vec<i64>),
+    /// Micros since epoch per row (see [`DateTimeValue::to_micros`]).
+    DateTime(Vec<i64>),
     /// String column stored as `Vec<Arc<str>>`, avoiding per-row `Value` boxing.
     Utf8(Vec<Arc<str>>),
+    /// Decimal128 per row (decimal semantics, `Ord`).
+    Decimal(Vec<Decimal128Value>),
     /// Typed column with a validity bitmap (`1` = valid, `0` = NULL).
     /// Invalid rows materialize as NULL and sort last.
     NullableI64(Vec<i64>, Vec<u64>),
@@ -39,7 +44,9 @@ pub enum BatchColumn {
     NullableI32(Vec<i32>, Vec<u64>),
     NullableBool(Vec<bool>, Vec<u64>),
     NullableDate(Vec<i64>, Vec<u64>),
+    NullableDateTime(Vec<i64>, Vec<u64>),
     NullableUtf8(Vec<Arc<str>>, Vec<u64>),
+    NullableDecimal(Vec<Decimal128Value>, Vec<u64>),
     /// Mixed-kind or NULL-bearing column; value-level semantics preserved.
     Fallback(Vec<Value>),
 }
@@ -99,13 +106,17 @@ impl BatchColumn {
             BatchColumn::I32(v) => v.len(),
             BatchColumn::Bool(v) => v.len(),
             BatchColumn::Date(v) => v.len(),
+            BatchColumn::DateTime(v) => v.len(),
             BatchColumn::Utf8(v) => v.len(),
+            BatchColumn::Decimal(v) => v.len(),
             BatchColumn::NullableI64(v, _) => v.len(),
             BatchColumn::NullableF64(v, _) => v.len(),
             BatchColumn::NullableI32(v, _) => v.len(),
             BatchColumn::NullableBool(v, _) => v.len(),
             BatchColumn::NullableDate(v, _) => v.len(),
+            BatchColumn::NullableDateTime(v, _) => v.len(),
             BatchColumn::NullableUtf8(v, _) => v.len(),
+            BatchColumn::NullableDecimal(v, _) => v.len(),
             BatchColumn::Fallback(v) => v.len(),
         }
     }
@@ -128,7 +139,11 @@ impl BatchColumn {
             BatchColumn::I32(_) | BatchColumn::NullableI32(..) => Some(TypedKind::I32),
             BatchColumn::Bool(_) | BatchColumn::NullableBool(..) => Some(TypedKind::Bool),
             BatchColumn::Date(_) | BatchColumn::NullableDate(..) => Some(TypedKind::Date),
+            BatchColumn::DateTime(_) | BatchColumn::NullableDateTime(..) => {
+                Some(TypedKind::DateTime)
+            }
             BatchColumn::Utf8(_) | BatchColumn::NullableUtf8(..) => Some(TypedKind::Utf8),
+            BatchColumn::Decimal(_) | BatchColumn::NullableDecimal(..) => Some(TypedKind::Decimal),
         }
     }
 
@@ -142,7 +157,9 @@ impl BatchColumn {
             BatchColumn::I32(v) => Value::Int(v[idx]),
             BatchColumn::Bool(v) => Value::Bool(v[idx]),
             BatchColumn::Date(v) => Value::Date(DateValue::from_days(v[idx])),
+            BatchColumn::DateTime(v) => Value::DateTime(DateTimeValue::from_micros(v[idx])),
             BatchColumn::Utf8(v) => Value::String(v[idx].as_ref().into()),
+            BatchColumn::Decimal(v) => Value::Decimal128(v[idx].clone()),
             BatchColumn::NullableI64(v, b) => {
                 if bitmap_is_valid(b, idx) {
                     Value::BigInt(v[idx])
@@ -178,9 +195,23 @@ impl BatchColumn {
                     Value::Null(NullType::Null)
                 }
             }
+            BatchColumn::NullableDateTime(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::DateTime(DateTimeValue::from_micros(v[idx]))
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
             BatchColumn::NullableUtf8(v, b) => {
                 if bitmap_is_valid(b, idx) {
                     Value::String(v[idx].as_ref().into())
+                } else {
+                    Value::Null(NullType::Null)
+                }
+            }
+            BatchColumn::NullableDecimal(v, b) => {
+                if bitmap_is_valid(b, idx) {
+                    Value::Decimal128(v[idx].clone())
                 } else {
                     Value::Null(NullType::Null)
                 }
@@ -219,7 +250,12 @@ impl BatchColumn {
                 &Value::Date(DateValue::from_days(v[a])),
                 &Value::Date(DateValue::from_days(v[b])),
             ),
+            BatchColumn::DateTime(v) => compare_values(
+                &Value::DateTime(DateTimeValue::from_micros(v[a])),
+                &Value::DateTime(DateTimeValue::from_micros(v[b])),
+            ),
             BatchColumn::Utf8(v) => v[a].cmp(&v[b]),
+            BatchColumn::Decimal(v) => v[a].cmp(&v[b]),
             BatchColumn::NullableI64(v, bm) => {
                 nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
             }
@@ -241,7 +277,13 @@ impl BatchColumn {
             BatchColumn::NullableDate(v, bm) => {
                 nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
             }
+            BatchColumn::NullableDateTime(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
             BatchColumn::NullableUtf8(v, bm) => {
+                nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
+            }
+            BatchColumn::NullableDecimal(v, bm) => {
                 nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
             }
             BatchColumn::Fallback(v) => compare_values(&v[a], &v[b]),
@@ -309,7 +351,9 @@ impl BatchColumn {
             BatchColumn::I32(v) => v.capacity() * std::mem::size_of::<i32>(),
             BatchColumn::Bool(v) => v.capacity() * std::mem::size_of::<bool>(),
             BatchColumn::Date(v) => v.capacity() * std::mem::size_of::<i64>(),
+            BatchColumn::DateTime(v) => v.capacity() * std::mem::size_of::<i64>(),
             BatchColumn::Utf8(v) => v.iter().map(|s| s.len()).sum(),
+            BatchColumn::Decimal(v) => v.capacity() * std::mem::size_of::<Decimal128Value>(),
             BatchColumn::NullableI64(v, b) => {
                 v.capacity() * std::mem::size_of::<i64>()
                     + b.capacity() * std::mem::size_of::<u64>()
@@ -330,8 +374,16 @@ impl BatchColumn {
                 v.capacity() * std::mem::size_of::<i64>()
                     + b.capacity() * std::mem::size_of::<u64>()
             }
+            BatchColumn::NullableDateTime(v, b) => {
+                v.capacity() * std::mem::size_of::<i64>()
+                    + b.capacity() * std::mem::size_of::<u64>()
+            }
             BatchColumn::NullableUtf8(v, b) => {
                 v.iter().map(|s| s.len()).sum::<usize>() + b.capacity() * std::mem::size_of::<u64>()
+            }
+            BatchColumn::NullableDecimal(v, b) => {
+                v.capacity() * std::mem::size_of::<Decimal128Value>()
+                    + b.capacity() * std::mem::size_of::<u64>()
             }
             BatchColumn::Fallback(v) => v.iter().map(Value::estimated_size).sum(),
         }
@@ -429,12 +481,44 @@ impl BatchColumn {
                 }
                 _ => *self = Self::degraded_append(self, col, indices),
             },
+            BatchColumn::DateTime(buf) => match col {
+                TypedColumn::DateTime(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                TypedColumn::NullableDateTime(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableDateTime(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i]));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
             BatchColumn::Utf8(buf) => match col {
                 TypedColumn::Utf8(src) => buf.extend(indices.iter().map(|&i| src[i].clone())),
                 TypedColumn::NullableUtf8(src, bm) => {
                     let rows_before = buf.len();
                     *self = Self::to_nullable(self);
                     if let BatchColumn::NullableUtf8(buf, bm_out) = self {
+                        buf.extend(indices.iter().map(|&i| src[i].clone()));
+                        extend_bitmap(
+                            bm_out,
+                            rows_before,
+                            indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                        );
+                    }
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::Decimal(buf) => match col {
+                TypedColumn::Decimal(src) => buf.extend(indices.iter().map(|&i| src[i].clone())),
+                TypedColumn::NullableDecimal(src, bm) => {
+                    let rows_before = buf.len();
+                    *self = Self::to_nullable(self);
+                    if let BatchColumn::NullableDecimal(buf, bm_out) = self {
                         buf.extend(indices.iter().map(|&i| src[i].clone()));
                         extend_bitmap(
                             bm_out,
@@ -530,6 +614,23 @@ impl BatchColumn {
                 }
                 _ => *self = Self::degraded_append(self, col, indices),
             },
+            BatchColumn::NullableDateTime(buf, bm_out) => match col {
+                TypedColumn::NullableDateTime(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::DateTime(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i]));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
             BatchColumn::NullableUtf8(buf, bm_out) => match col {
                 TypedColumn::NullableUtf8(src, bm) => {
                     let rows_before = buf.len();
@@ -541,6 +642,23 @@ impl BatchColumn {
                     );
                 }
                 TypedColumn::Utf8(src) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i].clone()));
+                    extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
+                }
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::NullableDecimal(buf, bm_out) => match col {
+                TypedColumn::NullableDecimal(src, bm) => {
+                    let rows_before = buf.len();
+                    buf.extend(indices.iter().map(|&i| src[i].clone()));
+                    extend_bitmap(
+                        bm_out,
+                        rows_before,
+                        indices.iter().map(|&i| bitmap_is_valid(bm, i)),
+                    );
+                }
+                TypedColumn::Decimal(src) => {
                     let rows_before = buf.len();
                     buf.extend(indices.iter().map(|&i| src[i].clone()));
                     extend_bitmap(bm_out, rows_before, indices.iter().map(|_| true));
@@ -565,8 +683,14 @@ impl BatchColumn {
             TypedColumn::I32(v) => BatchColumn::I32(indices.iter().map(|&i| v[i]).collect()),
             TypedColumn::Bool(v) => BatchColumn::Bool(indices.iter().map(|&i| v[i]).collect()),
             TypedColumn::Date(v) => BatchColumn::Date(indices.iter().map(|&i| v[i]).collect()),
+            TypedColumn::DateTime(v) => {
+                BatchColumn::DateTime(indices.iter().map(|&i| v[i]).collect())
+            }
             TypedColumn::Utf8(v) => {
                 BatchColumn::Utf8(indices.iter().map(|&i| v[i].clone()).collect())
+            }
+            TypedColumn::Decimal(v) => {
+                BatchColumn::Decimal(indices.iter().map(|&i| v[i].clone()).collect())
             }
             TypedColumn::NullableI64(v, bm) => BatchColumn::NullableI64(
                 indices.iter().map(|&i| v[i]).collect(),
@@ -588,7 +712,15 @@ impl BatchColumn {
                 indices.iter().map(|&i| v[i]).collect(),
                 bitmap_from_indices(bm, indices),
             ),
+            TypedColumn::NullableDateTime(v, bm) => BatchColumn::NullableDateTime(
+                indices.iter().map(|&i| v[i]).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
             TypedColumn::NullableUtf8(v, bm) => BatchColumn::NullableUtf8(
+                indices.iter().map(|&i| v[i].clone()).collect(),
+                bitmap_from_indices(bm, indices),
+            ),
+            TypedColumn::NullableDecimal(v, bm) => BatchColumn::NullableDecimal(
                 indices.iter().map(|&i| v[i].clone()).collect(),
                 bitmap_from_indices(bm, indices),
             ),
@@ -617,8 +749,14 @@ impl BatchColumn {
             BatchColumn::Date(v) => {
                 BatchColumn::NullableDate(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
+            BatchColumn::DateTime(v) => {
+                BatchColumn::NullableDateTime(v.clone(), vec![!0u64; v.len().div_ceil(64)])
+            }
             BatchColumn::Utf8(v) => {
                 BatchColumn::NullableUtf8(v.clone(), vec![!0u64; v.len().div_ceil(64)])
+            }
+            BatchColumn::Decimal(v) => {
+                BatchColumn::NullableDecimal(v.clone(), vec![!0u64; v.len().div_ceil(64)])
             }
             _ => current.clone(),
         }
@@ -677,9 +815,23 @@ impl BatchColumn {
                     *self = BatchColumn::degraded_push(self, value);
                 }
             }
+            BatchColumn::DateTime(buf) => {
+                if let Value::DateTime(x) = value {
+                    buf.push(x.to_micros());
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
             BatchColumn::Utf8(buf) => {
                 if let Value::String(x) = value {
                     buf.push(Arc::from(x.as_str()));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::Decimal(buf) => {
+                if let Value::Decimal128(x) = value {
+                    buf.push(x.clone());
                 } else {
                     *self = BatchColumn::degraded_push(self, value);
                 }
@@ -724,9 +876,25 @@ impl BatchColumn {
                     *self = BatchColumn::degraded_push(self, value);
                 }
             }
+            BatchColumn::NullableDateTime(buf, bm) => {
+                if let Value::DateTime(x) = value {
+                    buf.push(x.to_micros());
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
             BatchColumn::NullableUtf8(buf, bm) => {
                 if let Value::String(x) = value {
                     buf.push(Arc::from(x.as_str()));
+                    extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::NullableDecimal(buf, bm) => {
+                if let Value::Decimal128(x) = value {
+                    buf.push(x.clone());
                     extend_bitmap(bm, buf.len() - 1, std::iter::once(true));
                 } else {
                     *self = BatchColumn::degraded_push(self, value);
@@ -750,7 +918,9 @@ impl BatchColumn {
             BatchColumn::I32(v) => v.truncate(len),
             BatchColumn::Bool(v) => v.truncate(len),
             BatchColumn::Date(v) => v.truncate(len),
+            BatchColumn::DateTime(v) => v.truncate(len),
             BatchColumn::Utf8(v) => v.truncate(len),
+            BatchColumn::Decimal(v) => v.truncate(len),
             BatchColumn::NullableI64(v, bm) => {
                 v.truncate(len);
                 bm.truncate(len.div_ceil(64));
@@ -771,7 +941,15 @@ impl BatchColumn {
                 v.truncate(len);
                 bm.truncate(len.div_ceil(64));
             }
+            BatchColumn::NullableDateTime(v, bm) => {
+                v.truncate(len);
+                bm.truncate(len.div_ceil(64));
+            }
             BatchColumn::NullableUtf8(v, bm) => {
+                v.truncate(len);
+                bm.truncate(len.div_ceil(64));
+            }
+            BatchColumn::NullableDecimal(v, bm) => {
                 v.truncate(len);
                 bm.truncate(len.div_ceil(64));
             }
@@ -802,7 +980,15 @@ impl BatchColumn {
                 let old = std::mem::take(v);
                 *v = perm.iter().map(|&i| old[i]).collect();
             }
+            BatchColumn::DateTime(v) => {
+                let old = std::mem::take(v);
+                *v = perm.iter().map(|&i| old[i]).collect();
+            }
             BatchColumn::Utf8(v) => {
+                let old = std::mem::take(v);
+                *v = perm.iter().map(|&i| old[i].clone()).collect();
+            }
+            BatchColumn::Decimal(v) => {
                 let old = std::mem::take(v);
                 *v = perm.iter().map(|&i| old[i].clone()).collect();
             }
@@ -831,7 +1017,17 @@ impl BatchColumn {
                 *v = perm.iter().map(|&i| old_v[i]).collect();
                 *bm = bitmap_from_indices(&old_bm, perm);
             }
+            BatchColumn::NullableDateTime(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i]).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
             BatchColumn::NullableUtf8(v, bm) => {
+                let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
+                *v = perm.iter().map(|&i| old_v[i].clone()).collect();
+                *bm = bitmap_from_indices(&old_bm, perm);
+            }
+            BatchColumn::NullableDecimal(v, bm) => {
                 let (old_v, old_bm) = (std::mem::take(v), std::mem::take(bm));
                 *v = perm.iter().map(|&i| old_v[i].clone()).collect();
                 *bm = bitmap_from_indices(&old_bm, perm);
@@ -1137,6 +1333,64 @@ mod tests {
             batch.column(0).compare_at(2, 0),
             Ordering::Less,
             "fig < pear"
+        );
+    }
+
+    #[test]
+    fn test_datetime_and_decimal_columns() {
+        use crate::core::value::date_time::DateTimeValue;
+        use crate::core::value::decimal128::Decimal128Value;
+        let dt = |day: u32| {
+            Value::DateTime(DateTimeValue {
+                year: 2024,
+                month: 1,
+                day,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })
+        };
+        let mut batch = ColumnarBatch::new(2);
+        let mut chunk = DataChunk::new(
+            vec![
+                vec![dt(3), Value::Decimal128(Decimal128Value::from_i64(30))],
+                vec![dt(1), Value::Decimal128(Decimal128Value::from_i64(10))],
+                vec![dt(2), Value::Decimal128(Decimal128Value::from_i64(20))],
+            ],
+            Arc::new(Schema::new(vec![
+                ColumnInfo {
+                    name: "dt".to_string(),
+                    data_type: "datetime".to_string(),
+                },
+                ColumnInfo {
+                    name: "dec".to_string(),
+                    data_type: "decimal128".to_string(),
+                },
+            ])),
+        );
+        chunk.build_typed_columns(true);
+        batch.append_chunk(&chunk);
+        assert!(batch.column(0).is_typed());
+        assert!(batch.column(1).is_typed());
+        assert_eq!(
+            batch.column(0).compare_at(0, 1),
+            Ordering::Greater,
+            "row 0 (day 3) > row 1 (day 1)"
+        );
+        assert_eq!(
+            batch.column(1).compare_at(0, 2),
+            Ordering::Greater,
+            "30 > 20"
+        );
+        assert_eq!(
+            batch.column(0).value_at(1),
+            dt(1),
+            "DateTime materializes from micros"
+        );
+        assert_eq!(
+            batch.column(1).value_at(2),
+            Value::Decimal128(Decimal128Value::from_i64(20))
         );
     }
 

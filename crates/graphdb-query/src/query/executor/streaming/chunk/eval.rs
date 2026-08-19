@@ -13,9 +13,9 @@ use crate::query::executor::streaming::slot::SlotId;
 use crate::query::executor::streaming::subquery::EvalEnv;
 use std::collections::HashMap;
 
+use super::kind::typed_literal_batch;
 use super::typed::{
-    typed_binary_batch, typed_cast_batch, typed_column_batch, typed_literal_batch,
-    typed_unary_batch, TypedBatch,
+    typed_binary_batch, typed_cast_batch, typed_column_batch, typed_unary_batch, TypedBatch,
 };
 
 impl DataChunk {

@@ -290,6 +290,48 @@ impl DateTimeValue {
     pub fn estimated_size(&self) -> usize {
         std::mem::size_of::<Self>()
     }
+
+    /// Convert to micros since the Unix epoch (1970-01-01T00:00:00.000000),
+    /// mirroring [`DateValue::to_days`] for the date part.
+    ///
+    /// For **normalized** fields the micros timeline is strictly monotonic in
+    /// the field-wise order used by `value_compare::cmp_datetime`; the typed
+    /// fast path relies on that (see `chunk/kind.rs` for the shared
+    /// limitation on non-normalized fields).
+    pub fn to_micros(&self) -> i64 {
+        let date = DateValue {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+        };
+        // `DateValue::to_days` counts from JDN 0 (1970-01-01 is day
+        // 2_440_588), so the epoch offset is subtracted to obtain
+        // micros-since-epoch.
+        (date.to_days() - 2_440_588) * 86_400_000_000
+            + i64::from(self.hour) * 3_600_000_000
+            + i64::from(self.minute) * 60_000_000
+            + i64::from(self.sec) * 1_000_000
+            + i64::from(self.microsec)
+    }
+
+    /// Convert micros since the Unix epoch back into a date-time.
+    ///
+    /// Pre-epoch values (negative micros) are handled with `div_euclid` /
+    /// `rem_euclid`, so the result fields are always normalized.
+    pub fn from_micros(micros: i64) -> Self {
+        let days = micros.div_euclid(86_400_000_000) + 2_440_588;
+        let time_of_day = micros.rem_euclid(86_400_000_000);
+        let date = DateValue::from_days(days);
+        DateTimeValue {
+            year: date.year,
+            month: date.month,
+            day: date.day,
+            hour: (time_of_day / 3_600_000_000) as u32,
+            minute: ((time_of_day % 3_600_000_000) / 60_000_000) as u32,
+            sec: ((time_of_day % 60_000_000) / 1_000_000) as u32,
+            microsec: (time_of_day % 1_000_000) as u32,
+        }
+    }
 }
 
 impl std::fmt::Display for DateTimeValue {
@@ -299,5 +341,76 @@ impl std::fmt::Display for DateTimeValue {
             "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
             self.year, self.month, self.day, self.hour, self.minute, self.sec
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_micros_epoch_is_zero() {
+        assert_eq!(DateTimeValue::default().to_micros(), 0);
+    }
+
+    #[test]
+    fn test_to_micros_before_epoch_is_negative() {
+        let dt = DateTimeValue {
+            year: 1969,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            sec: 59,
+            microsec: 999_999,
+        };
+        assert_eq!(dt.to_micros(), -1);
+    }
+
+    #[test]
+    fn test_micros_roundtrip() {
+        let dt = DateTimeValue {
+            year: 2024,
+            month: 2,
+            day: 29,
+            hour: 12,
+            minute: 34,
+            sec: 56,
+            microsec: 789_012,
+        };
+        assert_eq!(DateTimeValue::from_micros(dt.to_micros()), dt);
+        let pre_epoch = DateTimeValue {
+            year: 1900,
+            month: 6,
+            day: 15,
+            hour: 8,
+            minute: 30,
+            sec: 0,
+            microsec: 1,
+        };
+        assert_eq!(DateTimeValue::from_micros(pre_epoch.to_micros()), pre_epoch);
+    }
+
+    #[test]
+    fn test_micros_ordering_matches_field_order() {
+        let a = DateTimeValue {
+            year: 2023,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            sec: 59,
+            microsec: 999_999,
+        };
+        let b = DateTimeValue {
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            sec: 0,
+            microsec: 0,
+        };
+        assert!(a.to_micros() < b.to_micros());
     }
 }

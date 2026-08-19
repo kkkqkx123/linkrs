@@ -336,7 +336,7 @@ impl TemplateExtractor {
             Stmt::Insert(i) => Self::extract_insert_template(i),
             Stmt::Delete(d) => Self::extract_delete_template(d),
             Stmt::Update(u) => Self::extract_update_template(u),
-            _ => stmt.kind().to_string(),
+            _ => stmt.category().as_str().to_string(),
         }
     }
 
