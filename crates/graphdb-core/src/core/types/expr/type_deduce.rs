@@ -13,12 +13,14 @@ impl Expression {
     /// Deriving the data type of an expression
     ///
     /// Derive the return type of an expression from its structure and operators.
-    /// Returns DataType::Empty if the type cannot be determined.
+    /// Returns `DataType::Unknown` if the type cannot be determined without
+    /// schema/binding information (the binder completes these paths), and
+    /// `DataType::Empty` only for the explicit `Value::Empty`.
     pub fn deduce_type(&self) -> DataType {
         match self {
             Expression::Literal(value) => Self::deduce_value_type(value),
-            Expression::Variable(_) => DataType::Empty,
-            Expression::Property { .. } => DataType::Empty,
+            Expression::Variable(_) => DataType::Unknown,
+            Expression::Property { .. } => DataType::Unknown,
             Expression::StructField { base, field } => Self::deduce_struct_field_type(base, field),
             Expression::Binary { op, left, right } => Self::deduce_binary_type(op, left, right),
             Expression::Unary { op, operand } => Self::deduce_unary_type(op, operand),
@@ -37,18 +39,18 @@ impl Expression {
             Expression::Path(_) => DataType::Path,
             Expression::Label(_) => DataType::String,
             Expression::ListComprehension { .. } => DataType::List,
-            Expression::LabelTagProperty { .. } => DataType::Empty,
-            Expression::TagProperty { .. } => DataType::Empty,
-            Expression::EdgeProperty { .. } => DataType::Empty,
+            Expression::LabelTagProperty { .. } => DataType::Unknown,
+            Expression::TagProperty { .. } => DataType::Unknown,
+            Expression::EdgeProperty { .. } => DataType::Unknown,
             Expression::Predicate { .. } => DataType::Bool,
-            Expression::Reduce { .. } => DataType::Empty,
+            Expression::Reduce { .. } => DataType::Unknown,
             Expression::PathBuild(_) => DataType::Path,
-            Expression::Parameter(_) => DataType::Empty,
-            Expression::SessionVariable(_) => DataType::Empty,
+            Expression::Parameter(_) => DataType::Unknown,
+            Expression::SessionVariable(_) => DataType::Unknown,
             Expression::Vector(_) => DataType::Vector,
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
-            Expression::WindowFunction { .. } => DataType::Empty,
+            Expression::WindowFunction { .. } => DataType::Unknown,
         }
     }
 
@@ -107,7 +109,7 @@ impl Expression {
     /// Derive the type of a STRUCT field access `base.field`.
     ///
     /// Without schema context the base type is unknown, so this returns
-    /// `DataType::Empty` (the binder fills the type after schema resolution,
+    /// `DataType::Unknown` (the binder fills the type after schema resolution,
     /// matching the `Property` semantics).
     fn deduce_struct_field_type(base: &Expression, field: &str) -> DataType {
         match base.deduce_type() {
@@ -116,8 +118,8 @@ impl Expression {
                 .iter()
                 .find(|(name, _)| name == field)
                 .map(|(_, field_type)| field_type.clone())
-                .unwrap_or(DataType::Empty),
-            _ => DataType::Empty,
+                .unwrap_or(DataType::Unknown),
+            _ => DataType::Unknown,
         }
     }
 
@@ -150,7 +152,7 @@ impl Expression {
             | BinaryOperator::StartsWith
             | BinaryOperator::EndsWith => DataType::Bool,
             BinaryOperator::StringConcat => DataType::String,
-            _ => DataType::Empty,
+            _ => DataType::Unknown,
         }
     }
 
@@ -158,8 +160,13 @@ impl Expression {
     ///
     /// Reuses the numeric promotion hierarchy of `TypeUtils::get_common_type`
     /// so this cannot drift from the executor-level type computation.
+    /// A missing common type (e.g. String + Int) is reported as `Unknown`
+    /// rather than `Empty`; the binder/executor validates the operands.
     fn deduce_arithmetic_type(left: &DataType, right: &DataType) -> DataType {
-        crate::core::type_system::TypeUtils::get_common_type(left, right)
+        match crate::core::type_system::TypeUtils::get_common_type(left, right) {
+            DataType::Empty => DataType::Unknown,
+            common => common,
+        }
     }
 
     /// Derive the type of unary operation
@@ -182,7 +189,7 @@ impl Expression {
                 if let Some(first_arg) = args.first() {
                     first_arg.deduce_type()
                 } else {
-                    DataType::Empty
+                    DataType::Unknown
                 }
             }
             // string function
@@ -216,16 +223,19 @@ impl Expression {
             "TIME" => DataType::Time,
             // conditional function
             "COALESCE" => {
-                // Returns the type of the first non-null argument
+                // Returns the type of the first argument with a known type
                 for arg in args {
                     let arg_type = arg.deduce_type();
-                    if arg_type != DataType::Null && arg_type != DataType::Empty {
+                    if arg_type != DataType::Null
+                        && arg_type != DataType::Empty
+                        && arg_type != DataType::Unknown
+                    {
                         return arg_type;
                     }
                 }
-                DataType::Empty
+                DataType::Unknown
             }
-            _ => DataType::Empty,
+            _ => DataType::Unknown,
         }
     }
 
@@ -235,8 +245,8 @@ impl Expression {
             AggregateFunction::Count => DataType::Int,
             AggregateFunction::Sum => DataType::Float,
             AggregateFunction::Avg => DataType::Float,
-            AggregateFunction::Min => DataType::Empty,
-            AggregateFunction::Max => DataType::Empty,
+            AggregateFunction::Min => DataType::Unknown,
+            AggregateFunction::Max => DataType::Unknown,
             AggregateFunction::Collect => DataType::List,
             AggregateFunction::CollectSet => DataType::List,
             AggregateFunction::Percentile => DataType::Float,
@@ -247,7 +257,7 @@ impl Expression {
             AggregateFunction::PercentileCont => DataType::Float,
             AggregateFunction::Variance => DataType::Float,
             AggregateFunction::Median => DataType::Float,
-            AggregateFunction::Mode => DataType::Empty,
+            AggregateFunction::Mode => DataType::Unknown,
             AggregateFunction::BitAnd => DataType::Int,
             AggregateFunction::BitOr => DataType::Int,
             AggregateFunction::BoolAnd => DataType::Bool,
@@ -267,7 +277,7 @@ impl Expression {
         // Trying to derive types from conditional branches
         for (_, value) in conditions {
             let value_type = value.deduce_type();
-            if value_type != DataType::Empty {
+            if value_type != DataType::Unknown {
                 return value_type;
             }
         }
@@ -275,7 +285,7 @@ impl Expression {
         if let Some(def) = default {
             def.deduce_type()
         } else {
-            DataType::Empty
+            DataType::Unknown
         }
     }
 
@@ -283,11 +293,12 @@ impl Expression {
     fn deduce_subscript_type(collection: &Expression) -> DataType {
         let collection_type = collection.deduce_type();
         match collection_type {
-            DataType::List => DataType::Empty,
-            DataType::Map => DataType::Empty,
+            // Element type is not expressible without parameterized containers.
+            DataType::List => DataType::Unknown,
+            DataType::Map => DataType::Unknown,
             DataType::String => DataType::String,
             DataType::Path => DataType::Vertex,
-            _ => DataType::Empty,
+            _ => DataType::Unknown,
         }
     }
 }
@@ -481,6 +492,54 @@ mod tests {
             left: Box::new(literal(Value::string("a"))),
             right: Box::new(literal(Value::Int(1))),
         };
-        assert_eq!(expr.deduce_type(), DataType::Empty);
+        assert_eq!(expr.deduce_type(), DataType::Unknown);
+    }
+
+    #[test]
+    fn test_deduce_binding_dependent_expressions_are_unknown() {
+        // Expressions that need schema/binding info report `Unknown`, never
+        // `Empty` (which is reserved for the explicit `Value::Empty`).
+        let cases: Vec<Expression> = vec![
+            Expression::Variable("v".to_string()),
+            Expression::Property {
+                object: Box::new(literal(Value::string("v"))),
+                property: "p".to_string(),
+            },
+            Expression::TagProperty {
+                tag_name: "t".to_string(),
+                property: "p".to_string(),
+            },
+            Expression::EdgeProperty {
+                edge_name: "e".to_string(),
+                property: "p".to_string(),
+            },
+            Expression::LabelTagProperty {
+                tag: Box::new(literal(Value::string("t"))),
+                property: "p".to_string(),
+            },
+            Expression::Parameter("$p".to_string()),
+            Expression::SessionVariable("$$s".to_string()),
+            Expression::Reduce {
+                accumulator: "acc".to_string(),
+                initial: Box::new(literal(Value::Int(0))),
+                variable: "x".to_string(),
+                source: Box::new(Expression::List(vec![])),
+                mapping: Box::new(literal(Value::Int(1))),
+            },
+            Expression::WindowFunction {
+                name: "row_number".to_string(),
+                args: vec![],
+                over_partition_by: vec![],
+                over_order_by: vec![],
+                over_order_desc: vec![],
+            },
+        ];
+        for expr in cases {
+            assert_eq!(
+                expr.deduce_type(),
+                DataType::Unknown,
+                "binding-dependent expression must deduce to Unknown"
+            );
+        }
     }
 }

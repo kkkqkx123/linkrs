@@ -67,6 +67,9 @@ fn parse_type(input: &str, depth: usize, full: &str) -> Result<DataType, ParseDa
 
     match upper.as_str() {
         "EMPTY" => Ok(DataType::Empty),
+        // UNKNOWN is a binding-time sentinel; parsing it is accepted so the
+        // Display output roundtrips (it never appears in user schema DDL).
+        "UNKNOWN" => Ok(DataType::Unknown),
         "NULL" => Ok(DataType::Null),
         "BOOL" | "BOOLEAN" => Ok(DataType::Bool),
         // Integer aliases follow PostgreSQL conventions by bit width:
@@ -295,6 +298,7 @@ mod tests {
     fn all_data_types() -> Vec<DataType> {
         vec![
             DataType::Empty,
+            DataType::Unknown,
             DataType::Null,
             DataType::Bool,
             DataType::SmallInt,
@@ -346,6 +350,7 @@ mod tests {
         for data_type in all_data_types() {
             match data_type {
                 DataType::Empty
+                | DataType::Unknown
                 | DataType::Null
                 | DataType::Bool
                 | DataType::SmallInt

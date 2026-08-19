@@ -275,6 +275,13 @@ impl ContextualExpression {
     }
 }
 
+/// Create a ContextualExpression from a raw expression, registered in a fresh context.
+pub fn create_contextual_expression(expr: Expression) -> ContextualExpression {
+    let context = Arc::new(ExpressionAnalysisContext::new());
+    let id = context.register_expression(ExpressionMeta::new(expr));
+    ContextualExpression::new(id, context)
+}
+
 impl PartialEq for ContextualExpression {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id && Arc::ptr_eq(&self.context, &other.context)

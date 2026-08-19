@@ -112,6 +112,7 @@ pub mod visitor_checkers;
 pub mod visitor_collectors;
 
 // Unified Export - Core types
+pub use contextual::create_contextual_expression;
 pub use contextual::ContextualExpression;
 pub use def::Expression;
 pub use def::SubqueryBody;

@@ -56,7 +56,7 @@ impl ValueType {
     pub fn to_data_type(&self) -> DataType {
         match self {
             ValueType::Empty => DataType::Empty,
-            ValueType::Unknown => DataType::Empty,
+            ValueType::Unknown => DataType::Unknown,
             ValueType::Bool => DataType::Bool,
             ValueType::Int => DataType::Int,
             ValueType::Float => DataType::Float,

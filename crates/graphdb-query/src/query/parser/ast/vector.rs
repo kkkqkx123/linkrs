@@ -3,9 +3,11 @@
 //! This module defines the Abstract Syntax Tree (AST) nodes for vector search queries,
 //! including CREATE VECTOR INDEX, SEARCH VECTOR, and related statements.
 
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::span::Span;
-use crate::core::Value;
 use serde::{Deserialize, Serialize};
+
+use super::stmt::OrderByClause;
 
 // ============================================================================
 // Vector Index DDL Statements
@@ -44,14 +46,14 @@ pub struct DropVectorIndex {
 // ============================================================================
 
 /// SEARCH VECTOR statement
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SearchVectorStatement {
     pub span: Span,
     pub index_name: String,
     pub query: VectorQueryExpr,
     pub threshold: Option<f32>,
-    pub where_clause: Option<WhereClause>,
-    pub order_clause: Option<OrderClause>,
+    pub where_clause: Option<ContextualExpression>,
+    pub order_clause: Option<OrderByClause>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub yield_clause: Option<VectorYieldClause>,
@@ -86,74 +88,16 @@ pub enum VectorDistance {
 }
 
 /// YIELD clause for vector search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct VectorYieldClause {
     pub items: Vec<VectorYieldItem>,
 }
 
 /// Yield item for vector search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct VectorYieldItem {
-    pub expr: String,
+    pub expr: ContextualExpression,
     pub alias: Option<String>,
-}
-
-/// WHERE clause (reuse from fulltext)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhereClause {
-    pub condition: WhereCondition,
-}
-
-/// WHERE condition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WhereCondition {
-    /// Comparison: score > 0.5
-    Comparison(String, ComparisonOp, Value),
-    /// AND condition
-    And(Box<WhereCondition>, Box<WhereCondition>),
-    /// OR condition
-    Or(Box<WhereCondition>, Box<WhereCondition>),
-    /// NOT condition
-    Not(Box<WhereCondition>),
-}
-
-/// Comparison operator
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ComparisonOp {
-    #[serde(rename = "=")]
-    Eq,
-    #[serde(rename = "!=")]
-    Ne,
-    #[serde(rename = "<")]
-    Lt,
-    #[serde(rename = "<=")]
-    Le,
-    #[serde(rename = ">")]
-    Gt,
-    #[serde(rename = ">=")]
-    Ge,
-}
-
-/// ORDER BY clause
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderClause {
-    pub items: Vec<OrderItem>,
-}
-
-/// Order item
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderItem {
-    pub expr: String,
-    pub order: VectorOrderDirection,
-}
-
-/// Order direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VectorOrderDirection {
-    #[serde(rename = "asc")]
-    Asc,
-    #[serde(rename = "desc")]
-    Desc,
 }
 
 // ============================================================================
@@ -161,7 +105,7 @@ pub enum VectorOrderDirection {
 // ============================================================================
 
 /// MATCH with vector search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MatchVector {
     pub span: Span,
     pub pattern: String,
@@ -178,7 +122,7 @@ pub struct VectorMatchCondition {
 }
 
 /// LOOKUP with vector search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LookupVector {
     pub span: Span,
     pub schema_name: String,

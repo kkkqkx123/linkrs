@@ -1,17 +1,19 @@
 //! Logical search nodes: FulltextSearch, FulltextLookup, MatchFulltext, VectorSearch, VectorLookup, VectorMatch.
 
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::define_logical_plan_node;
 use crate::query::parser::ast::fulltext::{
-    FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause, OrderClause, WhereClause,
+    FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
 };
+use crate::query::parser::ast::stmt::OrderByClause;
 
 define_logical_plan_node! {
     pub struct LogicalFulltextSearchNode {
         index_name: String,
         query: FulltextQueryExpr,
         yield_clause: Option<FulltextYieldClause>,
-        where_clause: Option<WhereClause>,
-        order_clause: Option<OrderClause>,
+        where_clause: Option<ContextualExpression>,
+        order_clause: Option<OrderByClause>,
         limit: Option<usize>,
         offset: Option<usize>,
         space_id: u64,

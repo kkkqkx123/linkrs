@@ -3,11 +3,14 @@
 //! This module defines the Abstract Syntax Tree (AST) nodes for full-text search queries,
 //! including CREATE FULLTEXT INDEX, SEARCH, and related statements.
 
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::span::Span;
 use crate::core::types::FulltextEngineType;
 use crate::core::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use super::stmt::OrderByClause;
 
 // ============================================================================
 // Full-Text Index DDL Statements
@@ -96,14 +99,14 @@ pub struct DescribeFulltextIndex {
 // ============================================================================
 
 /// SEARCH statement
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SearchStatement {
     pub span: Span,
     pub index_name: String,
     pub query: FulltextQueryExpr,
     pub yield_clause: Option<FulltextYieldClause>,
-    pub where_clause: Option<WhereClause>,
-    pub order_clause: Option<OrderClause>,
+    pub where_clause: Option<ContextualExpression>,
+    pub order_clause: Option<OrderByClause>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -142,102 +145,16 @@ pub enum FulltextQueryExpr {
 }
 
 /// YIELD clause for full-text search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FulltextYieldClause {
     pub items: Vec<FulltextYieldItem>,
 }
 
 /// Yield item for full-text search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FulltextYieldItem {
-    pub expr: YieldExpression,
+    pub expr: ContextualExpression,
     pub alias: Option<String>,
-}
-
-/// Yield expression
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum YieldExpression {
-    /// Field reference
-    Field(String),
-    /// Score function
-    Score(Option<String>),
-    /// Highlight function
-    Highlight(String, Option<HighlightParams>),
-    /// Matched fields function
-    MatchedFields,
-    /// Snippet function
-    Snippet(String, Option<usize>),
-    /// All fields (*)
-    All,
-}
-
-/// Highlight function parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HighlightParams {
-    pub pre_tag: Option<String>,
-    pub post_tag: Option<String>,
-    pub fragment_size: Option<usize>,
-    pub num_fragments: Option<usize>,
-}
-
-/// WHERE clause
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhereClause {
-    pub condition: WhereCondition,
-}
-
-/// WHERE condition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WhereCondition {
-    /// Comparison: score > 0.5
-    Comparison(String, ComparisonOp, Value),
-    /// AND condition
-    And(Box<WhereCondition>, Box<WhereCondition>),
-    /// OR condition
-    Or(Box<WhereCondition>, Box<WhereCondition>),
-    /// NOT condition
-    Not(Box<WhereCondition>),
-    /// Fulltext match function
-    FulltextMatch(String, String),
-}
-
-/// Comparison operator
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ComparisonOp {
-    #[serde(rename = "=")]
-    Eq,
-    #[serde(rename = "!=")]
-    Ne,
-    #[serde(rename = "<")]
-    Lt,
-    #[serde(rename = "<=")]
-    Le,
-    #[serde(rename = ">")]
-    Gt,
-    #[serde(rename = ">=")]
-    Ge,
-}
-
-/// ORDER BY clause
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderClause {
-    pub items: Vec<OrderItem>,
-}
-
-/// Order item
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderItem {
-    pub expr: String,
-    pub order: FulltextOrderDirection,
-}
-
-/// Order direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FulltextOrderDirection {
-    #[serde(rename = "asc")]
-    Asc,
-    #[serde(rename = "desc")]
-    Desc,
 }
 
 // ============================================================================
@@ -245,7 +162,7 @@ pub enum FulltextOrderDirection {
 // ============================================================================
 
 /// MATCH with full-text search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MatchFulltext {
     pub span: Span,
     pub pattern: String,
@@ -262,7 +179,7 @@ pub struct FulltextMatchCondition {
 }
 
 /// LOOKUP with full-text search
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LookupFulltext {
     pub span: Span,
     pub schema_name: String,
@@ -328,12 +245,12 @@ impl SearchStatement {
         self
     }
 
-    pub fn with_where(mut self, where_clause: WhereClause) -> Self {
+    pub fn with_where(mut self, where_clause: ContextualExpression) -> Self {
         self.where_clause = Some(where_clause);
         self
     }
 
-    pub fn with_order(mut self, order_clause: OrderClause) -> Self {
+    pub fn with_order(mut self, order_clause: OrderByClause) -> Self {
         self.order_clause = Some(order_clause);
         self
     }
@@ -354,24 +271,10 @@ impl FulltextYieldClause {
         Self { items }
     }
 
-    pub fn single(expr: YieldExpression) -> Self {
+    pub fn single(expr: ContextualExpression) -> Self {
         Self {
             items: vec![FulltextYieldItem { expr, alias: None }],
         }
-    }
-}
-
-impl YieldExpression {
-    pub fn score() -> Self {
-        YieldExpression::Score(None)
-    }
-
-    pub fn highlight(field: String) -> Self {
-        YieldExpression::Highlight(field, None)
-    }
-
-    pub fn field(name: String) -> Self {
-        YieldExpression::Field(name)
     }
 }
 
@@ -410,7 +313,18 @@ mod tests {
 
     #[test]
     fn test_yield_clause() {
-        let yield_clause = FulltextYieldClause::single(YieldExpression::score());
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+        use std::sync::Arc;
+
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr = Expression::Function {
+            name: "score".to_string(),
+            args: vec![],
+        };
+        let meta = ExpressionMeta::new(expr);
+        let id = expr_ctx.register_expression(meta);
+        let yield_clause = FulltextYieldClause::single(ContextualExpression::new(id, expr_ctx));
         assert_eq!(yield_clause.items.len(), 1);
     }
 

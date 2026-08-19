@@ -31,14 +31,14 @@ impl TypeUtils {
 
     /// Check whether the type is a "superior type" (which can be compatible with any other type).
     pub fn is_superior_type(type_: &DataType) -> bool {
-        matches!(type_, DataType::Null | DataType::Empty)
+        matches!(type_, DataType::Null | DataType::Empty | DataType::Unknown)
     }
 
     /// Priority of the obtained type (used for type promotion)
     /// The smaller the priority value, the more "basic" the type is. When a type is upgraded, its priority value increases.
     pub fn get_type_priority(type_: &DataType) -> u8 {
         match type_ {
-            DataType::Null | DataType::Empty => 0,
+            DataType::Null | DataType::Empty | DataType::Unknown => 0,
             DataType::Bool => 10,
             DataType::SmallInt => 20,
             DataType::Int => 21,
@@ -507,6 +507,7 @@ impl TypeUtils {
     pub fn type_to_string(type_def: &DataType) -> String {
         match type_def {
             DataType::Empty => "empty".to_string(),
+            DataType::Unknown => "unknown".to_string(),
             DataType::Null => "null".to_string(),
             DataType::Bool => "bool".to_string(),
             DataType::SmallInt => "smallint".to_string(),

@@ -2,24 +2,25 @@
 //!
 //! This module defines plan nodes for full-text search data access operations.
 
+use crate::core::types::expr::contextual::ContextualExpression;
 use crate::query::parser::ast::fulltext::{
-    FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause, OrderClause, WhereClause,
+    FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
 };
+use crate::query::parser::ast::stmt::OrderByClause;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
-use serde::{Deserialize, Serialize};
 
 /// Full-text search plan node (SEARCH statement)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FulltextSearchNode {
     id: i64,
     pub index_name: String,
     pub query: FulltextQueryExpr,
     pub yield_clause: Option<FulltextYieldClause>,
-    pub where_clause: Option<WhereClause>,
-    pub order_clause: Option<OrderClause>,
+    pub where_clause: Option<ContextualExpression>,
+    pub order_clause: Option<OrderByClause>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     /// Pre-resolved space_id from metadata context
@@ -35,8 +36,8 @@ impl FulltextSearchNode {
         index_name: String,
         query: FulltextQueryExpr,
         yield_clause: Option<FulltextYieldClause>,
-        where_clause: Option<WhereClause>,
-        order_clause: Option<OrderClause>,
+        where_clause: Option<ContextualExpression>,
+        order_clause: Option<OrderByClause>,
         limit: Option<usize>,
         offset: Option<usize>,
     ) -> Self {
@@ -102,7 +103,7 @@ impl PlanNode for FulltextSearchNode {
 impl ZeroInputNode for FulltextSearchNode {}
 
 /// Full-text lookup plan node (LOOKUP FULLTEXT statement)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FulltextLookupNode {
     id: i64,
     pub schema_name: String,
@@ -186,7 +187,7 @@ impl PlanNode for FulltextLookupNode {
 impl ZeroInputNode for FulltextLookupNode {}
 
 /// Match with full-text plan node
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MatchFulltextNode {
     pub pattern: String,
     pub fulltext_condition: FulltextMatchCondition,
@@ -272,12 +273,12 @@ impl MemoryEstimatable for FulltextSearchNode {
         let where_size = self
             .where_clause
             .as_ref()
-            .map(|_| std::mem::size_of::<WhereClause>())
+            .map(|_| std::mem::size_of::<ContextualExpression>())
             .unwrap_or(0);
         let order_size = self
             .order_clause
             .as_ref()
-            .map(|_| std::mem::size_of::<OrderClause>())
+            .map(|_| std::mem::size_of::<OrderByClause>())
             .unwrap_or(0);
         let limit_size = self
             .limit

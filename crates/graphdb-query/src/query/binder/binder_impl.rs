@@ -339,7 +339,7 @@ impl Binder {
                 let arg_type = args
                     .first()
                     .map(|a| a.return_type())
-                    .unwrap_or(DataType::Empty);
+                    .unwrap_or(DataType::Unknown);
                 let return_type = {
                     let expr_binder = ExpressionBinder::new(&self.scope);
                     ValueType::from_data_type(
@@ -524,13 +524,20 @@ impl Binder {
                 let init = self.bind_inner_expr(initial, None)?;
                 let src = self.bind_inner_expr(source, None)?;
                 let map = self.bind_inner_expr(mapping, None)?;
+                // The REDUCE result type is the accumulator type: prefer the
+                // initial value type, fall back to the mapping result type.
+                let expr_binder = ExpressionBinder::new(&self.scope);
+                let mut return_type = init.return_type();
+                if return_type == DataType::Unknown {
+                    return_type = expr_binder.resolve_type(mapping);
+                }
                 Ok(BoundExpression::Reduce {
                     accumulator: accumulator.clone(),
                     initial: Box::new(init),
                     variable: variable.clone(),
                     source: Box::new(src),
                     mapping: Box::new(map),
-                    return_type: DataType::String,
+                    return_type,
                 })
             }
             Expression::PathBuild(elements) => {
@@ -545,7 +552,7 @@ impl Binder {
             }
             Expression::SessionVariable(name) => Ok(BoundExpression::SessionVariable(
                 name.clone(),
-                DataType::Empty,
+                DataType::Unknown,
             )),
             Expression::Vector(v) => Ok(BoundExpression::Vector(v.clone())),
             Expression::WindowFunction {
@@ -567,13 +574,21 @@ impl Binder {
                     .iter()
                     .map(|o| self.bind_inner_expr(o, None))
                     .collect::<DBResult<Vec<_>>>()?;
+                // Window functions derive their return type from the
+                // underlying function name and argument types.
+                let return_type = {
+                    let expr_binder = ExpressionBinder::new(&self.scope);
+                    let arg_types: Vec<DataType> =
+                        args.iter().map(|a| a.return_type()).collect();
+                    expr_binder.deduce_function_return_type(name, &arg_types)
+                };
                 Ok(BoundExpression::WindowFunction {
                     name: name.clone(),
                     args,
                     over_partition_by: part_by,
                     over_order_by: order_by,
                     over_order_desc: over_order_desc.clone(),
-                    return_type: DataType::String,
+                    return_type,
                 })
             }
             Expression::Exists { body } => {

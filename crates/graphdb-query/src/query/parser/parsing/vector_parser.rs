@@ -3,13 +3,16 @@
 //! This module implements the parser for vector search SQL statements,
 //! including CREATE VECTOR INDEX, SEARCH VECTOR, and related queries.
 
+use crate::core::types::expr::{create_contextual_expression, Expression};
 use crate::query::parser::ast::stmt::Stmt;
+use crate::query::parser::ast::stmt::{OrderByClause, OrderByItem};
+use crate::query::parser::ast::types::OrderDirection;
 use crate::query::parser::ast::vector::{
-    CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, OrderClause, OrderItem,
-    SearchVectorStatement, VectorDistance, VectorIndexConfig, VectorMatchCondition,
-    VectorOrderDirection, VectorQueryExpr, VectorQueryType, VectorYieldClause, VectorYieldItem,
-    WhereClause, WhereCondition,
+    CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
+    VectorDistance, VectorIndexConfig, VectorMatchCondition, VectorQueryExpr, VectorQueryType,
+    VectorYieldClause, VectorYieldItem,
 };
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 
@@ -216,7 +219,10 @@ pub fn parse_search_vector_statement(
     let mut where_clause = None;
     if ctx.check_keyword("WHERE") {
         ctx.consume_keyword("WHERE")?;
-        where_clause = Some(parse_where_clause(ctx)?);
+        where_clause = Some(parse_expression_with_context(
+            ctx,
+            ctx.expression_context_clone(),
+        )?);
     }
 
     let mut order_clause = None;
@@ -316,71 +322,34 @@ fn parse_vector_literal(
     Ok(format!("[{}]", elements.join(", ")))
 }
 
-/// Parse WHERE clause (caller must have already consumed the WHERE keyword)
-fn parse_where_clause(
-    ctx: &mut ParseContext,
-) -> Result<WhereClause, crate::query::parser::ParseError> {
-    // Simplified WHERE condition parsing - just parse basic comparison
-    let left = ctx.consume_identifier()?;
-
-    // Parse comparison operator
-    let op = if ctx.check_token(TokenKind::Eq) {
-        ctx.consume_token("=")?;
-        crate::query::parser::ast::vector::ComparisonOp::Eq
-    } else if ctx.check_token(TokenKind::Ne) {
-        ctx.consume_token("!=")?;
-        crate::query::parser::ast::vector::ComparisonOp::Ne
-    } else if ctx.check_token(TokenKind::Lt) {
-        ctx.consume_token("<")?;
-        crate::query::parser::ast::vector::ComparisonOp::Lt
-    } else if ctx.check_token(TokenKind::Le) {
-        ctx.consume_token("<=")?;
-        crate::query::parser::ast::vector::ComparisonOp::Le
-    } else if ctx.check_token(TokenKind::Gt) {
-        ctx.consume_token(">")?;
-        crate::query::parser::ast::vector::ComparisonOp::Gt
-    } else if ctx.check_token(TokenKind::Ge) {
-        ctx.consume_token(">=")?;
-        crate::query::parser::ast::vector::ComparisonOp::Ge
-    } else {
-        return Err(crate::query::parser::ParseError::new(
-            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-            "Expected comparison operator".to_string(),
-            ctx.current_position(),
-        ));
-    };
-
-    // Parse right side value
-    let right = ctx.consume_value()?;
-
-    let condition = WhereCondition::Comparison(left, op, right);
-    Ok(WhereClause { condition })
-}
-
 /// Parse ORDER BY clause
 fn parse_order_clause(
     ctx: &mut ParseContext,
-) -> Result<OrderClause, crate::query::parser::ParseError> {
+) -> Result<OrderByClause, crate::query::parser::ParseError> {
+    let span = ctx.current_span();
     let mut items = Vec::new();
 
     loop {
-        let expr = ctx.consume_identifier()?;
-        let order = if ctx.check_keyword("DESC") {
+        let expression = parse_expression_with_context(ctx, ctx.expression_context_clone())?;
+        let direction = if ctx.check_keyword("DESC") {
             ctx.consume_keyword("DESC")?;
-            VectorOrderDirection::Desc
+            OrderDirection::Desc
         } else {
             let _ = ctx.consume_keyword("ASC");
-            VectorOrderDirection::Asc
+            OrderDirection::Asc
         };
 
-        items.push(OrderItem { expr, order });
+        items.push(OrderByItem {
+            expression,
+            direction,
+        });
 
         if !ctx.consume_optional_token(",") {
             break;
         }
     }
 
-    Ok(OrderClause { items })
+    Ok(OrderByClause { span, items })
 }
 
 /// Parse YIELD clause
@@ -390,7 +359,11 @@ fn parse_vector_yield_clause(
     let mut items = Vec::new();
 
     loop {
-        let expr = ctx.consume_identifier()?;
+        let expr = if ctx.consume_optional_token("*") {
+            create_contextual_expression(Expression::variable("*"))
+        } else {
+            parse_expression_with_context(ctx, ctx.expression_context_clone())?
+        };
         let alias = if ctx.check_keyword("AS") {
             ctx.consume_keyword("AS")?;
             Some(ctx.consume_identifier()?)
@@ -486,4 +459,35 @@ pub fn parse_match_vector(
         vector_condition,
         yield_clause,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::query::parser::ast::stmt::Stmt;
+    use crate::query::parser::parsing::parser::Parser;
+
+    #[test]
+    fn test_parse_search_vector_statement() {
+        let sql = r#"SEARCH VECTOR idx_product_embedding WITH vector=[0.1, 0.2, 0.3]
+                     WHERE price < 500 AND score > 0.5
+                     ORDER BY price DESC
+                     YIELD product_id, name, price
+                     LIMIT 10"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse().expect("SEARCH VECTOR should parse");
+        let stmt = result.ast.stmt();
+        let search = match stmt {
+            Stmt::SearchVector(stmt) => stmt,
+            _ => panic!("expected SEARCH VECTOR statement"),
+        };
+
+        assert!(search.where_clause.is_some());
+        assert!(search.where_clause.as_ref().unwrap().is_binary());
+        assert!(search.order_clause.is_some());
+        assert_eq!(search.order_clause.as_ref().unwrap().items.len(), 1);
+
+        let yield_items = search.yield_clause.as_ref().expect("YIELD should parse");
+        assert_eq!(yield_items.items.len(), 3);
+    }
 }

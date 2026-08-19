@@ -3,16 +3,18 @@
 //! This module implements the parser for full-text search SQL statements,
 //! including CREATE FULLTEXT INDEX, SEARCH, and related queries.
 
+use crate::core::types::expr::{create_contextual_expression, Expression};
 use crate::core::types::FulltextEngineType;
-use crate::core::Value;
 use crate::query::parser::ast::fulltext::{
     AlterFulltextIndex, AlterIndexAction, BM25Options, CreateFulltextIndex, DescribeFulltextIndex,
-    DropFulltextIndex, FulltextMatchCondition, FulltextOrderDirection, FulltextQueryExpr,
-    FulltextYieldClause, FulltextYieldItem, IndexFieldDef, IndexOptions, LookupFulltext,
-    MatchFulltext, OrderClause, OrderItem, SearchStatement, ShowFulltextIndex, WhereClause,
-    WhereCondition, YieldExpression,
+    DropFulltextIndex, FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
+    FulltextYieldItem, IndexFieldDef, IndexOptions, LookupFulltext, MatchFulltext, SearchStatement,
+    ShowFulltextIndex,
 };
 use crate::query::parser::ast::stmt::Stmt;
+use crate::query::parser::ast::stmt::{OrderByClause, OrderByItem};
+use crate::query::parser::ast::types::OrderDirection;
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 use std::collections::HashMap;
@@ -372,7 +374,7 @@ fn parse_search_statement_after_search(
 
     if ctx.check_keyword("WHERE") {
         ctx.consume_keyword("WHERE")?;
-        let where_clause = parse_where_clause(ctx)?;
+        let where_clause = parse_expression_with_context(ctx, ctx.expression_context_clone())?;
         search.where_clause = Some(where_clause);
     }
 
@@ -429,29 +431,23 @@ fn parse_yield_clause(
     let mut items = Vec::new();
 
     loop {
-        let expr = if ctx.check_keyword("score") {
+        let expr = if ctx.check_keyword("score") && ctx.peek_token().kind != TokenKind::LParen {
             ctx.consume_identifier()?;
-            YieldExpression::Score(None)
-        } else if ctx.check_keyword("highlight") {
+            create_contextual_expression(Expression::Function {
+                name: "score".to_string(),
+                args: vec![],
+            })
+        } else if ctx.check_keyword("matched_fields") && ctx.peek_token().kind != TokenKind::LParen
+        {
             ctx.consume_identifier()?;
-            ctx.expect_token(TokenKind::LParen)?;
-            let field = ctx.consume_identifier()?;
-
-            let mut params = None;
-            if ctx.consume_optional_token(",") {
-                params = None;
-            }
-
-            ctx.expect_token(TokenKind::RParen)?;
-            YieldExpression::Highlight(field, params)
-        } else if ctx.check_keyword("matched_fields") {
-            ctx.consume_identifier()?;
-            YieldExpression::MatchedFields
+            create_contextual_expression(Expression::Function {
+                name: "matched_fields".to_string(),
+                args: vec![],
+            })
         } else if ctx.consume_optional_token("*") {
-            YieldExpression::All
+            create_contextual_expression(Expression::variable("*"))
         } else {
-            let field = ctx.consume_identifier()?;
-            YieldExpression::Field(field)
+            parse_expression_with_context(ctx, ctx.expression_context_clone())?
         };
 
         let alias = if ctx.check_keyword("AS") {
@@ -471,79 +467,35 @@ fn parse_yield_clause(
     Ok(FulltextYieldClause { items })
 }
 
-fn parse_where_clause(
-    ctx: &mut ParseContext,
-) -> Result<WhereClause, crate::query::parser::ParseError> {
-    let condition = parse_where_condition(ctx)?;
-    Ok(WhereClause { condition })
-}
-
-fn parse_where_condition(
-    ctx: &mut ParseContext,
-) -> Result<WhereCondition, crate::query::parser::ParseError> {
-    if ctx.check_keyword("score") {
-        ctx.consume_identifier()?;
-        let op = parse_comparison_op(ctx)?;
-        let value = ctx.consume_value()?;
-        Ok(WhereCondition::Comparison("score".to_string(), op, value))
-    } else {
-        Ok(WhereCondition::Comparison(
-            "field".to_string(),
-            crate::query::parser::ast::fulltext::ComparisonOp::Eq,
-            Value::Null(crate::core::null::NullType::Null),
-        ))
-    }
-}
-
-fn parse_comparison_op(
-    ctx: &mut ParseContext,
-) -> Result<crate::query::parser::ast::fulltext::ComparisonOp, crate::query::parser::ParseError> {
-    if ctx.consume_optional_token("=") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Eq)
-    } else if ctx.consume_optional_token("!=") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Ne)
-    } else if ctx.consume_optional_token("<") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Lt)
-    } else if ctx.consume_optional_token("<=") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Le)
-    } else if ctx.consume_optional_token(">") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Gt)
-    } else if ctx.consume_optional_token(">=") {
-        Ok(crate::query::parser::ast::fulltext::ComparisonOp::Ge)
-    } else {
-        Err(crate::query::parser::ParseError::new(
-            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-            "Expected comparison operator".to_string(),
-            ctx.current_position(),
-        ))
-    }
-}
-
 fn parse_order_clause(
     ctx: &mut ParseContext,
-) -> Result<OrderClause, crate::query::parser::ParseError> {
+) -> Result<OrderByClause, crate::query::parser::ParseError> {
+    let span = ctx.current_span();
     let mut items = Vec::new();
 
     loop {
-        let expr = ctx.consume_identifier()?;
-        let order = if ctx.check_keyword("ASC") {
+        let expression = parse_expression_with_context(ctx, ctx.expression_context_clone())?;
+        let direction = if ctx.check_keyword("ASC") {
             ctx.consume_keyword("ASC")?;
-            FulltextOrderDirection::Asc
+            OrderDirection::Asc
         } else if ctx.check_keyword("DESC") {
             ctx.consume_keyword("DESC")?;
-            FulltextOrderDirection::Desc
+            OrderDirection::Desc
         } else {
-            FulltextOrderDirection::Asc
+            OrderDirection::Asc
         };
 
-        items.push(OrderItem { expr, order });
+        items.push(OrderByItem {
+            expression,
+            direction,
+        });
 
         if !ctx.consume_optional_token(",") {
             break;
         }
     }
 
-    Ok(OrderClause { items })
+    Ok(OrderByClause { span, items })
 }
 
 fn parse_lookup_fulltext(ctx: &mut ParseContext) -> Result<Stmt, crate::query::parser::ParseError> {
@@ -646,6 +598,56 @@ mod tests {
         let mut parser = Parser::new(sql);
         let result = parser.parse();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_search_statement_where_and_order() {
+        let sql = r#"SEARCH INDEX idx_article MATCH 'database'
+                     YIELD doc_id, title, score
+                     WHERE score > 0.5 AND doc_id != 'art001'
+                     ORDER BY score DESC
+                     LIMIT 10"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse().expect("SEARCH should parse");
+        let stmt = result.ast.stmt();
+        let search = match stmt {
+            crate::query::parser::ast::stmt::Stmt::Search(stmt) => stmt,
+            _ => panic!("expected SEARCH statement"),
+        };
+
+        assert!(search.where_clause.is_some());
+        assert!(search.where_clause.as_ref().unwrap().is_binary());
+        assert!(search.order_clause.is_some());
+        assert_eq!(search.order_clause.as_ref().unwrap().items.len(), 1);
+
+        let yield_items = search.yield_clause.as_ref().expect("YIELD should parse");
+        assert_eq!(yield_items.items.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_search_statement_highlight() {
+        let sql = r#"SEARCH INDEX idx_article MATCH 'database'
+                     YIELD highlight(title), matched_fields, score"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse().expect("SEARCH should parse");
+        let stmt = result.ast.stmt();
+        match stmt {
+            crate::query::parser::ast::stmt::Stmt::Search(search) => {
+                let items = search
+                    .yield_clause
+                    .as_ref()
+                    .expect("YIELD should parse")
+                    .items
+                    .clone();
+                assert_eq!(items.len(), 3);
+                assert!(items[0].expr.is_function());
+                assert!(items[1].expr.is_function());
+                assert!(items[2].expr.is_function());
+            }
+            _ => panic!("expected SEARCH statement"),
+        }
     }
 
     #[test]

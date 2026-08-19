@@ -4,10 +4,13 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::Expression;
+use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::query::metadata::MetadataContext;
 use crate::query::parser::ast::vector::{
-    ComparisonOp, CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector,
-    SearchVectorStatement, WhereClause, WhereCondition,
+    CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
+    VectorYieldClause,
 };
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -255,10 +258,7 @@ impl VectorSearchPlanner {
     }
 
     /// Parse output fields from yield clause
-    fn parse_output_fields(
-        &self,
-        yield_clause: &Option<crate::query::parser::ast::vector::VectorYieldClause>,
-    ) -> Vec<OutputField> {
+    fn parse_output_fields(&self, yield_clause: &Option<VectorYieldClause>) -> Vec<OutputField> {
         yield_clause
             .as_ref()
             .map(|yield_clause| {
@@ -266,7 +266,11 @@ impl VectorSearchPlanner {
                     .items
                     .iter()
                     .map(|item| OutputField {
-                        name: item.expr.clone(),
+                        name: item
+                            .expr
+                            .get_expression()
+                            .and_then(|inner| self.expression_to_field_name(&inner))
+                            .unwrap_or_else(|| item.expr.to_expression_string()),
                         alias: item.alias.clone(),
                     })
                     .collect()
@@ -300,59 +304,77 @@ impl VectorSearchPlanner {
         )
     }
 
-    /// Convert WhereClause to VectorFilter
+    /// Convert a contextual WHERE expression to VectorFilter
     ///
-    /// This method transforms the AST WhereClause into a VectorFilter that can be
-    /// used by the vector search engine (e.g., Qdrant).
-    fn convert_where_clause_to_filter(&self, where_clause: &WhereClause) -> Option<VectorFilter> {
-        self.convert_where_condition_to_filter(&where_clause.condition)
+    /// This method transforms the contextual expression into a VectorFilter that can
+    /// be used by the vector search engine (e.g., Qdrant).
+    fn convert_where_clause_to_filter(
+        &self,
+        where_clause: &ContextualExpression,
+    ) -> Option<VectorFilter> {
+        let expr = where_clause.get_expression()?;
+        self.convert_expression_to_filter(&expr)
     }
 
-    /// Recursively convert WhereCondition to VectorFilter
-    fn convert_where_condition_to_filter(
-        &self,
-        condition: &WhereCondition,
-    ) -> Option<VectorFilter> {
-        match condition {
-            WhereCondition::Comparison(field, op, value) => {
-                self.convert_comparison_to_filter(field, *op, value)
-            }
-            WhereCondition::And(left, right) => {
-                let left_filter = self.convert_where_condition_to_filter(left)?;
-                let right_filter = self.convert_where_condition_to_filter(right)?;
+    /// Recursively convert an Expression to VectorFilter
+    fn convert_expression_to_filter(&self, expr: &Expression) -> Option<VectorFilter> {
+        match expr {
+            Expression::Binary { left, op, right } => match op {
+                BinaryOperator::And => {
+                    let left_filter = self.convert_expression_to_filter(left)?;
+                    let right_filter = self.convert_expression_to_filter(right)?;
 
-                // Merge filters: AND means both conditions must be met
-                Some(self.merge_filters_must(left_filter, right_filter))
-            }
-            WhereCondition::Or(left, right) => {
-                let left_filter = self.convert_where_condition_to_filter(left)?;
-                let right_filter = self.convert_where_condition_to_filter(right)?;
+                    // Merge filters: AND means both conditions must be met
+                    Some(self.merge_filters_must(left_filter, right_filter))
+                }
+                BinaryOperator::Or => {
+                    let left_filter = self.convert_expression_to_filter(left)?;
+                    let right_filter = self.convert_expression_to_filter(right)?;
 
-                // Merge filters: OR means either condition can be met
-                Some(self.merge_filters_should(left_filter, right_filter))
-            }
-            WhereCondition::Not(inner) => {
-                let inner_filter = self.convert_where_condition_to_filter(inner)?;
+                    // Merge filters: OR means either condition can be met
+                    Some(self.merge_filters_should(left_filter, right_filter))
+                }
+                BinaryOperator::Equal
+                | BinaryOperator::NotEqual
+                | BinaryOperator::LessThan
+                | BinaryOperator::LessThanOrEqual
+                | BinaryOperator::GreaterThan
+                | BinaryOperator::GreaterThanOrEqual => {
+                    self.convert_comparison_to_filter(left, op, right)
+                }
+                _ => None,
+            },
+            Expression::Unary {
+                op: UnaryOperator::Not,
+                operand,
+            } => {
+                let inner_filter = self.convert_expression_to_filter(operand)?;
                 // Negate the filter: must_not
                 Some(self.negate_filter(inner_filter))
             }
+            _ => None,
         }
     }
 
-    /// Convert a comparison condition to VectorFilter
+    /// Convert a comparison expression to VectorFilter
     fn convert_comparison_to_filter(
         &self,
-        field: &str,
-        op: ComparisonOp,
-        value: &crate::core::Value,
+        left: &Expression,
+        op: &BinaryOperator,
+        right: &Expression,
     ) -> Option<VectorFilter> {
+        let field = self.expression_to_field_name(left)?;
+        let value = match right {
+            Expression::Literal(value) => value,
+            _ => return None,
+        };
         let value_str = self.value_to_string(value)?;
 
         let condition = match op {
-            ComparisonOp::Eq => {
+            BinaryOperator::Equal => {
                 FilterCondition::new(field, ConditionType::Match { value: value_str })
             }
-            ComparisonOp::Ne => {
+            BinaryOperator::NotEqual => {
                 // For Not Equal, we use must_not with Match
                 let filter = VectorFilter::new().must_not(FilterCondition::new(
                     field,
@@ -360,31 +382,54 @@ impl VectorSearchPlanner {
                 ));
                 return Some(filter);
             }
-            ComparisonOp::Lt | ComparisonOp::Le | ComparisonOp::Gt | ComparisonOp::Ge => {
+            BinaryOperator::LessThan
+            | BinaryOperator::LessThanOrEqual
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterThanOrEqual => {
                 // Range condition
                 let range = self.create_range_condition(op, &value_str)?;
                 FilterCondition::new(field, ConditionType::Range(range))
             }
+            _ => return None,
         };
 
         Some(VectorFilter::new().must(condition))
     }
 
+    /// Convert an expression to a payload field name
+    fn expression_to_field_name(&self, expr: &Expression) -> Option<String> {
+        match expr {
+            Expression::Variable(name) => Some(name.clone()),
+            Expression::Property { object, property } => {
+                let object_name = match object.as_ref() {
+                    Expression::Variable(name) => name.clone(),
+                    _ => return None,
+                };
+                Some(format!("{}.{}", object_name, property))
+            }
+            _ => None,
+        }
+    }
+
     /// Create RangeCondition from comparison operator and value
-    fn create_range_condition(&self, op: ComparisonOp, value_str: &str) -> Option<RangeCondition> {
+    fn create_range_condition(
+        &self,
+        op: &BinaryOperator,
+        value_str: &str,
+    ) -> Option<RangeCondition> {
         let mut range = RangeCondition::new();
 
         match op {
-            ComparisonOp::Lt => {
+            BinaryOperator::LessThan => {
                 range.lt = Some(value_str.parse().ok()?);
             }
-            ComparisonOp::Le => {
+            BinaryOperator::LessThanOrEqual => {
                 range.lte = Some(value_str.parse().ok()?);
             }
-            ComparisonOp::Gt => {
+            BinaryOperator::GreaterThan => {
                 range.gt = Some(value_str.parse().ok()?);
             }
-            ComparisonOp::Ge => {
+            BinaryOperator::GreaterThanOrEqual => {
                 range.gte = Some(value_str.parse().ok()?);
             }
             _ => return None,
@@ -603,6 +648,7 @@ impl VectorSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::{create_contextual_expression, Expression};
     use crate::core::types::span::Span;
     use crate::query::parser::ast::vector::{
         VectorIndexConfig, VectorYieldClause, VectorYieldItem,
@@ -658,11 +704,11 @@ mod tests {
         let yield_clause = VectorYieldClause {
             items: vec![
                 VectorYieldItem {
-                    expr: "field1".to_string(),
+                    expr: create_contextual_expression(Expression::variable("field1")),
                     alias: Some("f1".to_string()),
                 },
                 VectorYieldItem {
-                    expr: "field2".to_string(),
+                    expr: create_contextual_expression(Expression::variable("field2")),
                     alias: None,
                 },
             ],

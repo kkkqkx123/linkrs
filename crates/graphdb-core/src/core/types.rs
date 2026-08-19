@@ -58,6 +58,10 @@ pub enum TypeCodecError {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataType {
     Empty,
+    /// Type unknown at parse/deduction time; resolved by the binder against
+    /// schema or binding scope. Distinct from `Empty` (which maps the explicit
+    /// `Value::Empty`), so "unknown type" and "empty value" never conflate.
+    Unknown,
     Null,
     Bool,
     // Integer types: simplified to 3 types (aligned with PostgreSQL)
@@ -105,6 +109,7 @@ impl std::fmt::Display for DataType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DataType::Empty => write!(f, "EMPTY"),
+            DataType::Unknown => write!(f, "UNKNOWN"),
             DataType::Null => write!(f, "NULL"),
             DataType::Bool => write!(f, "BOOL"),
             DataType::SmallInt => write!(f, "SMALLINT"),
@@ -160,10 +165,13 @@ impl DataType {
     ///
     /// Codes 0-31 are fixed. Codes 22 and 24 are reserved (previously used by
     /// the removed `VID` and `Timestamp` types) and must not be reused.
-    /// New types are allocated from code 64 onwards.
+    /// New types are allocated from code 64 onwards; code 32 is additionally
+    /// assigned to `Unknown` (a binding-time sentinel that never reaches
+    /// storage serialization).
     pub fn as_u8(&self) -> u8 {
         match self {
             DataType::Empty => 0,
+            DataType::Unknown => 32,
             DataType::Null => 1,
             DataType::Bool => 2,
             DataType::SmallInt => 3,
@@ -207,6 +215,7 @@ impl DataType {
     pub fn from_u8(value: u8) -> Result<DataType, TypeCodecError> {
         match value {
             0 => Ok(DataType::Empty),
+            32 => Ok(DataType::Unknown),
             1 => Ok(DataType::Null),
             2 => Ok(DataType::Bool),
             3 => Ok(DataType::SmallInt),
@@ -260,6 +269,7 @@ mod tests {
     fn all_data_types() -> Vec<DataType> {
         vec![
             DataType::Empty,
+            DataType::Unknown,
             DataType::Null,
             DataType::Bool,
             DataType::SmallInt,
@@ -299,12 +309,13 @@ mod tests {
 
     #[test]
     fn test_as_u8_codes_are_stable_within_range() {
-        // Assigned codes stay in 0-31 or the 64+ parameterized range.
+        // Assigned codes stay in 0-31, in the 64+ parameterized range, or are
+        // the dedicated `Unknown` code 32.
         for data_type in all_data_types() {
             let code = data_type.as_u8();
             assert!(
-                code <= 31 || (64..=65).contains(&code),
-                "assigned code {code} for {data_type:?} must stay within 0-31 or 64-65"
+                code <= 31 || code == 32 || (64..=65).contains(&code),
+                "assigned code {code} for {data_type:?} must stay within 0-32 or 64-65"
             );
         }
     }
@@ -369,7 +380,7 @@ mod tests {
     fn test_from_u8_rejects_unknown_codes_instead_of_empty() {
         // The reserved expansion range (64+) and any unassigned code must fail
         // loudly instead of silently degrading to `Empty`.
-        for code in [32u8, 63, 66, 100, 128, 255] {
+        for code in [33u8, 63, 66, 100, 128, 255] {
             assert_eq!(
                 DataType::from_u8(code),
                 Err(TypeCodecError::UnknownTypeCode(code)),
@@ -395,6 +406,8 @@ mod tests {
                 panic!("code {code} must not decode to Empty");
             }
         }
+        // Code 32 is the dedicated `Unknown` sentinel.
+        assert_eq!(DataType::from_u8(32), Ok(DataType::Unknown));
     }
 }
 

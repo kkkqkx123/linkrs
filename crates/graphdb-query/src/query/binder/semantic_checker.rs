@@ -212,7 +212,11 @@ fn check_subscript_types(expr: &Expression, depth: usize) -> DBResult<()> {
             let idx_type = index.deduce_type();
             match col_type {
                 DataType::List => {
-                    if idx_type != DataType::Int && idx_type != DataType::Empty {
+                    // Unknown index types are deferred to the executor.
+                    if idx_type != DataType::Int
+                        && idx_type != DataType::Empty
+                        && idx_type != DataType::Unknown
+                    {
                         return Err(DBError::from(QueryError::invalid_query(format!(
                             "List subscripts need to be of integer type, but get: {:?}",
                             idx_type
@@ -220,14 +224,17 @@ fn check_subscript_types(expr: &Expression, depth: usize) -> DBResult<()> {
                     }
                 }
                 DataType::Map => {
-                    if idx_type != DataType::String && idx_type != DataType::Empty {
+                    if idx_type != DataType::String
+                        && idx_type != DataType::Empty
+                        && idx_type != DataType::Unknown
+                    {
                         return Err(DBError::from(QueryError::invalid_query(format!(
                             "Mapping keys requires a string type, but gets: {:?}",
                             idx_type
                         ))));
                     }
                 }
-                DataType::Empty => {}
+                DataType::Empty | DataType::Unknown => {}
                 _ => {
                     return Err(DBError::from(QueryError::invalid_query(format!(
                         "Unsupported types for subscript operations: {:?}",

@@ -72,7 +72,7 @@ impl<'a> ExpressionBinder<'a> {
                     | BinaryOperator::Exponent => {
                         self.deduce_arithmetic_type(&left_type, &right_type)
                     }
-                    _ => DataType::Empty,
+                    _ => DataType::Unknown,
                 }
             }
 
@@ -92,7 +92,7 @@ impl<'a> ExpressionBinder<'a> {
                 let arg_type = args
                     .first()
                     .map(|a| self.resolve_type(a))
-                    .unwrap_or(DataType::Empty);
+                    .unwrap_or(DataType::Unknown);
                 self.deduce_aggregate_return_type(func, &arg_type)
             }
 
@@ -106,7 +106,7 @@ impl<'a> ExpressionBinder<'a> {
             } => {
                 for (_, value) in conditions {
                     let t = self.resolve_type(value);
-                    if t != DataType::Empty {
+                    if t != DataType::Unknown {
                         return t;
                     }
                 }
@@ -124,14 +124,28 @@ impl<'a> ExpressionBinder<'a> {
             Expression::TypeCast { target_type, .. } => target_type.clone(),
 
             Expression::ListComprehension { .. } => DataType::List,
-            Expression::Reduce { .. } => DataType::String,
+            // The REDUCE result type is the accumulator type, determined by
+            // the initial value and the mapping expression.
+            Expression::Reduce { initial, mapping, .. } => {
+                let initial_type = self.resolve_type(initial);
+                let mapping_type = self.resolve_type(mapping);
+                if initial_type != DataType::Unknown {
+                    initial_type
+                } else if mapping_type != DataType::Unknown {
+                    mapping_type
+                } else {
+                    DataType::Unknown
+                }
+            }
+            // Window functions derive their return type from the underlying
+            // function name and argument types (same table as scalar calls).
             Expression::WindowFunction { name, args, .. } => {
                 let arg_types: Vec<DataType> = args.iter().map(|a| self.resolve_type(a)).collect();
                 self.deduce_function_return_type(name, &arg_types)
             }
 
             Expression::Parameter(_) => DataType::String,
-            Expression::SessionVariable(_) => DataType::Empty,
+            Expression::SessionVariable(_) => DataType::Unknown,
             Expression::Vector(_) => DataType::Vector,
 
             Expression::Path(_) => DataType::List,
@@ -177,7 +191,7 @@ impl<'a> ExpressionBinder<'a> {
         );
 
         if !left_is_numeric || !right_is_numeric {
-            return DataType::Empty;
+            return DataType::Unknown;
         }
 
         let left_is_float = matches!(left, DataType::Float | DataType::Double);
