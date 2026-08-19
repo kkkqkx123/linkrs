@@ -211,7 +211,7 @@ fn check_subscript_types(expr: &Expression, depth: usize) -> DBResult<()> {
             let col_type = collection.deduce_type();
             let idx_type = index.deduce_type();
             match col_type {
-                DataType::List => {
+                DataType::List(_) => {
                     // Unknown index types are deferred to the executor.
                     if idx_type != DataType::Int
                         && idx_type != DataType::Empty
@@ -223,7 +223,7 @@ fn check_subscript_types(expr: &Expression, depth: usize) -> DBResult<()> {
                         ))));
                     }
                 }
-                DataType::Map => {
+                DataType::Map(_) => {
                     if idx_type != DataType::String
                         && idx_type != DataType::Empty
                         && idx_type != DataType::Unknown

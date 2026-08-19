@@ -737,8 +737,8 @@ impl Value {
             DataType::Date => self.to_date(),
             DataType::Time => self.to_time(),
             DataType::DateTime => self.to_datetime(),
-            DataType::List => self.to_list(),
-            DataType::Map => self.to_map(),
+            DataType::List(_) => self.to_list(),
+            DataType::Map(_) => self.to_map(),
             DataType::Struct(target_info) => match self {
                 Value::Null(_) | Value::Empty => Value::Null(NullType::Null),
                 Value::Struct(_) => self.clone(),

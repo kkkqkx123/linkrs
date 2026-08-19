@@ -26,8 +26,12 @@ impl Expression {
             Expression::Unary { op, operand } => Self::deduce_unary_type(op, operand),
             Expression::Function { name, args } => Self::deduce_function_type(name, args),
             Expression::Aggregate { func, .. } => Self::deduce_aggregate_type(func),
-            Expression::List(_) => DataType::List,
-            Expression::Map(_) => DataType::Map,
+            Expression::List(items) => {
+                DataType::List(Box::new(Self::deduce_expression_container_element(items)))
+            }
+            Expression::Map(entries) => {
+                DataType::Map(Box::new(Self::deduce_map_value_type(entries)))
+            }
             Expression::Case {
                 conditions,
                 default,
@@ -35,10 +39,14 @@ impl Expression {
             } => Self::deduce_case_type(conditions, default.as_deref()),
             Expression::TypeCast { target_type, .. } => target_type.clone(),
             Expression::Subscript { collection, .. } => Self::deduce_subscript_type(collection),
-            Expression::Range { .. } => DataType::List,
+            Expression::Range { collection, .. } => Self::deduce_slice_type(collection),
             Expression::Path(_) => DataType::Path,
             Expression::Label(_) => DataType::String,
-            Expression::ListComprehension { .. } => DataType::List,
+            Expression::ListComprehension { map, .. } => DataType::List(Box::new(
+                map.as_deref()
+                    .map(Self::deduce_type)
+                    .unwrap_or(DataType::Unknown),
+            )),
             Expression::LabelTagProperty { .. } => DataType::Unknown,
             Expression::TagProperty { .. } => DataType::Unknown,
             Expression::EdgeProperty { .. } => DataType::Unknown,
@@ -47,7 +55,7 @@ impl Expression {
             Expression::PathBuild(_) => DataType::Path,
             Expression::Parameter(_) => DataType::Unknown,
             Expression::SessionVariable(_) => DataType::Unknown,
-            Expression::Vector(_) => DataType::Vector,
+            Expression::Vector(v) => DataType::VectorDense(v.len()),
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
             Expression::WindowFunction { .. } => DataType::Unknown,
@@ -78,9 +86,7 @@ impl Expression {
             Value::Vertex(_) => DataType::Vertex,
             Value::Edge(_) => DataType::Edge,
             Value::Path(_) => DataType::Path,
-            Value::List(_) => DataType::List,
-            Value::Map(_) => DataType::Map,
-            Value::Set(_) => DataType::Set,
+            Value::List(_) | Value::Map(_) | Value::Set(_) => value.get_type(),
             Value::Geography(_) => DataType::Geography,
             Value::Vector(v) => DataType::VectorDense(v.dimension()),
             Value::DataSet(_) => DataType::DataSet,
@@ -88,6 +94,10 @@ impl Expression {
             Value::JsonB(_) => DataType::JsonB,
             Value::Uuid(_) => DataType::Uuid,
             Value::Interval(_) => DataType::Interval,
+            // Value::VertexId/EdgeId are internal executor optimizations that
+            // substitute the full Vertex/Edge during traversal intermediate hops
+            // (see expand_pushdown / graph_operator). They are semantically the
+            // same entity as Vertex/Edge, so they deduce to the same DataType.
             Value::VertexId(_) => DataType::Vertex,
             Value::EdgeId(_) => DataType::Edge,
             Value::Struct(s) => DataType::Struct(Arc::new(StructTypeInfo::new(
@@ -207,13 +217,22 @@ impl Expression {
                 if let Some(first_arg) = args.first() {
                     first_arg.deduce_type()
                 } else {
-                    DataType::Empty
+                    DataType::Unknown
                 }
             }
-            "TAIL" | "NODES" | "RELATIONSHIPS" | "KEYS" | "LABELS" | "RANGE" => DataType::List,
+            "TAIL" => {
+                if let Some(first_arg) = args.first() {
+                    DataType::List(Box::new(first_arg.deduce_type()))
+                } else {
+                    DataType::List(Box::new(DataType::Unknown))
+                }
+            }
+            "NODES" | "RELATIONSHIPS" | "KEYS" | "LABELS" | "RANGE" => {
+                DataType::List(Box::new(DataType::Empty))
+            }
             // Aggregation Related Functions
             "COUNT" => DataType::Int,
-            "COLLECT" => DataType::List,
+            "COLLECT" => DataType::List(Box::new(DataType::Empty)),
             // Graph Related Functions
             "ID" | "SRC" | "DST" | "TYPE" => DataType::String,
             "STARTNODE" | "ENDNODE" => DataType::Vertex,
@@ -247,8 +266,8 @@ impl Expression {
             AggregateFunction::Avg => DataType::Float,
             AggregateFunction::Min => DataType::Unknown,
             AggregateFunction::Max => DataType::Unknown,
-            AggregateFunction::Collect => DataType::List,
-            AggregateFunction::CollectSet => DataType::List,
+            AggregateFunction::Collect => DataType::List(Box::new(DataType::Unknown)),
+            AggregateFunction::CollectSet => DataType::Set(Box::new(DataType::Unknown)),
             AggregateFunction::Percentile => DataType::Float,
             AggregateFunction::Std => DataType::Float,
             AggregateFunction::StddevPop => DataType::Float,
@@ -293,13 +312,60 @@ impl Expression {
     fn deduce_subscript_type(collection: &Expression) -> DataType {
         let collection_type = collection.deduce_type();
         match collection_type {
-            // Element type is not expressible without parameterized containers.
-            DataType::List => DataType::Unknown,
-            DataType::Map => DataType::Unknown,
+            DataType::List(element) => element.as_ref().clone(),
+            DataType::Map(value) => value.as_ref().clone(),
+            DataType::Set(element) => element.as_ref().clone(),
+            DataType::Array(info) => info.element.as_ref().clone(),
             DataType::String => DataType::String,
             DataType::Path => DataType::Vertex,
             _ => DataType::Unknown,
         }
+    }
+
+    /// Element type of a LIST/MAP/ARRAY-typed expression, used for slicing
+    /// (`Range` access preserves the collection element type).
+    fn deduce_slice_type(collection: &Expression) -> DataType {
+        match collection.deduce_type() {
+            DataType::List(element) => DataType::List(element),
+            DataType::Array(info) => DataType::Array(info),
+            _ => DataType::List(Box::new(DataType::Unknown)),
+        }
+    }
+
+    /// Common element type of an `Expression::List` literal (falls back to
+    /// `Unknown` for an empty/heterogeneous list).
+    fn deduce_expression_container_element(items: &[Expression]) -> DataType {
+        let mut common = DataType::Unknown;
+        for item in items {
+            let item_type = item.deduce_type();
+            common = if common == DataType::Unknown {
+                item_type
+            } else {
+                crate::core::type_system::TypeUtils::get_common_type(&common, &item_type)
+            };
+            if common == DataType::Empty {
+                return DataType::Unknown;
+            }
+        }
+        common
+    }
+
+    /// Common value type of an `Expression::Map` literal (falls back to
+    /// `Unknown` for an empty/heterogeneous map).
+    fn deduce_map_value_type(entries: &[(String, Expression)]) -> DataType {
+        let mut common = DataType::Unknown;
+        for (_, value) in entries {
+            let value_type = value.deduce_type();
+            common = if common == DataType::Unknown {
+                value_type
+            } else {
+                crate::core::type_system::TypeUtils::get_common_type(&common, &value_type)
+            };
+            if common == DataType::Empty {
+                return DataType::Unknown;
+            }
+        }
+        common
     }
 }
 
@@ -397,15 +463,15 @@ mod tests {
                 Value::list(List {
                     values: vec![Value::Int(1)],
                 }),
-                DataType::List,
+                DataType::List(Box::new(DataType::Int)),
             ),
             (
                 Value::string_map(HashMap::from([("k".to_string(), Value::Int(1))])),
-                DataType::Map,
+                DataType::Map(Box::new(DataType::Int)),
             ),
             (
                 Value::set(std::collections::HashSet::from([Value::Int(1)])),
-                DataType::Set,
+                DataType::Set(Box::new(DataType::Int)),
             ),
             (
                 Value::Geography(Geography::from_wkt("POINT(1 2)").expect("wkt")),
@@ -493,6 +559,38 @@ mod tests {
             right: Box::new(literal(Value::Int(1))),
         };
         assert_eq!(expr.deduce_type(), DataType::Unknown);
+    }
+
+    #[test]
+    fn test_deduce_vector_expression_matches_value_type() {
+        // P0-3 / Phase 4a: `Expression::Vector` deduces to `VectorDense(n)`,
+        // aligned with `Value::Vector → VectorDense(dim)`. No dimension-less
+        // `DataType::Vector` leak from the literal path.
+        let expr = Expression::Vector(vec![1.0, 2.0, 3.0]);
+        assert_eq!(expr.deduce_type(), DataType::VectorDense(3));
+    }
+
+    #[test]
+    fn test_deduce_container_literals_carry_element_type() {
+        // P0-3 / Phase 4b: literal containers deduce with their element/value
+        // type instead of the bare parameter-free `List`/`Map`/`Set`.
+        let list = Expression::List(vec![literal(Value::Int(1)), literal(Value::Int(2))]);
+        assert_eq!(list.deduce_type(), DataType::List(Box::new(DataType::Int)));
+        // Heterogeneous numeric list promotes to the common supertype.
+        let promoted = Expression::List(vec![literal(Value::Int(1)), literal(Value::Float(2.0))]);
+        assert_eq!(
+            promoted.deduce_type(),
+            DataType::List(Box::new(DataType::Float))
+        );
+        // Empty / untyped list carries the `Unknown` element marker.
+        let empty = Expression::List(vec![]);
+        assert_eq!(
+            empty.deduce_type(),
+            DataType::List(Box::new(DataType::Unknown))
+        );
+        // Map value type is derived from the entry values.
+        let map = Expression::Map(vec![("k".to_string(), literal(Value::Int(1)))]);
+        assert_eq!(map.deduce_type(), DataType::Map(Box::new(DataType::Int)));
     }
 
     #[test]

@@ -96,8 +96,12 @@ impl<'a> ExpressionBinder<'a> {
                 self.deduce_aggregate_return_type(func, &arg_type)
             }
 
-            Expression::List(_) => DataType::List,
-            Expression::Map(_) => DataType::Map,
+            Expression::List(items) => {
+                DataType::List(Box::new(self.resolve_container_element(items)))
+            }
+            Expression::Map(entries) => {
+                DataType::Map(Box::new(self.resolve_map_value_type(entries)))
+            }
 
             Expression::Case {
                 conditions,
@@ -123,10 +127,12 @@ impl<'a> ExpressionBinder<'a> {
 
             Expression::TypeCast { target_type, .. } => target_type.clone(),
 
-            Expression::ListComprehension { .. } => DataType::List,
+            Expression::ListComprehension { .. } => DataType::List(Box::new(DataType::Unknown)),
             // The REDUCE result type is the accumulator type, determined by
             // the initial value and the mapping expression.
-            Expression::Reduce { initial, mapping, .. } => {
+            Expression::Reduce {
+                initial, mapping, ..
+            } => {
                 let initial_type = self.resolve_type(initial);
                 let mapping_type = self.resolve_type(mapping);
                 if initial_type != DataType::Unknown {
@@ -146,16 +152,20 @@ impl<'a> ExpressionBinder<'a> {
 
             Expression::Parameter(_) => DataType::String,
             Expression::SessionVariable(_) => DataType::Unknown,
-            Expression::Vector(_) => DataType::Vector,
+            Expression::Vector(v) => DataType::VectorDense(v.len()),
 
-            Expression::Path(_) => DataType::List,
-            Expression::PathBuild(_) => DataType::List,
+            Expression::Path(_) => DataType::List(Box::new(DataType::Unknown)),
+            Expression::PathBuild(_) => DataType::List(Box::new(DataType::Unknown)),
             Expression::Label(_) => DataType::String,
             Expression::TagProperty { .. } => DataType::String,
             Expression::EdgeProperty { .. } => DataType::String,
             Expression::LabelTagProperty { .. } => DataType::String,
             Expression::Predicate { .. } => DataType::Bool,
-            Expression::Range { .. } => DataType::List,
+            Expression::Range { collection, .. } => match self.resolve_type(collection) {
+                DataType::List(element) => DataType::List(element),
+                DataType::Array(info) => DataType::Array(info),
+                _ => DataType::List(Box::new(DataType::Unknown)),
+            },
             Expression::Exists { .. } => DataType::Bool,
             Expression::In { .. } => DataType::Bool,
         }
@@ -169,6 +179,42 @@ impl<'a> ExpressionBinder<'a> {
             }
         }
         DataType::String
+    }
+
+    /// Common element type of an `Expression::List` literal (falls back to
+    /// `Unknown` for an empty/heterogeneous list).
+    fn resolve_container_element(&self, items: &[Expression]) -> DataType {
+        let mut common = DataType::Unknown;
+        for item in items {
+            let item_type = self.resolve_type(item);
+            common = if common == DataType::Unknown {
+                item_type
+            } else {
+                crate::core::type_system::TypeUtils::get_common_type(&common, &item_type)
+            };
+            if common == DataType::Empty {
+                return DataType::Unknown;
+            }
+        }
+        common
+    }
+
+    /// Common value type of an `Expression::Map` literal (falls back to
+    /// `Unknown` for an empty/heterogeneous map).
+    fn resolve_map_value_type(&self, entries: &[(String, Expression)]) -> DataType {
+        let mut common = DataType::Unknown;
+        for (_, value) in entries {
+            let value_type = self.resolve_type(value);
+            common = if common == DataType::Unknown {
+                value_type
+            } else {
+                crate::core::type_system::TypeUtils::get_common_type(&common, &value_type)
+            };
+            if common == DataType::Empty {
+                return DataType::Unknown;
+            }
+        }
+        common
     }
 
     /// Arithmetic type promotion: int + float → float.
@@ -213,8 +259,9 @@ impl<'a> ExpressionBinder<'a> {
                 DataType::String
             }
             "id" => DataType::Int,
-            "properties" => DataType::Map,
-            "labels" | "keys" | "values" | "range" | "reverse" => DataType::List,
+            "properties" => DataType::Map(Box::new(DataType::Empty)),
+            "labels" | "keys" => DataType::List(Box::new(DataType::String)),
+            "values" | "range" | "reverse" => DataType::List(Box::new(DataType::Empty)),
             "toboolean" | "toBoolean" => DataType::Bool,
             "tointeger" | "toInteger" => DataType::Int,
             "tofloat" | "toFloat" => DataType::Float,
@@ -237,8 +284,8 @@ impl<'a> ExpressionBinder<'a> {
             AggregateFunction::Sum => DataType::Float,
             AggregateFunction::Avg => DataType::Float,
             AggregateFunction::Max | AggregateFunction::Min => arg_type.clone(),
-            AggregateFunction::Collect => DataType::List,
-            AggregateFunction::CollectSet => DataType::Set,
+            AggregateFunction::Collect => DataType::List(Box::new(arg_type.clone())),
+            AggregateFunction::CollectSet => DataType::Set(Box::new(arg_type.clone())),
             AggregateFunction::Percentile => DataType::Float,
             AggregateFunction::PercentileCont => DataType::Float,
             AggregateFunction::Std => DataType::Float,

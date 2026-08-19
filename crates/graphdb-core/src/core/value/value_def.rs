@@ -146,9 +146,9 @@ impl Value {
             Value::Vertex(_) => DataType::Vertex,
             Value::Edge(_) => DataType::Edge,
             Value::Path(_) => DataType::Path,
-            Value::List(_) => DataType::List,
-            Value::Map(_) => DataType::Map,
-            Value::Set(_) => DataType::Set,
+            Value::List(l) => DataType::List(Box::new(Self::container_element_type(l.iter()))),
+            Value::Map(m) => DataType::Map(Box::new(Self::container_element_type(m.values()))),
+            Value::Set(s) => DataType::Set(Box::new(Self::container_element_type(s.iter()))),
             Value::Geography(_) => DataType::Geography,
             Value::Vector(v) => DataType::VectorDense(v.dimension()),
             Value::DataSet(_) => DataType::DataSet,
@@ -177,6 +177,27 @@ impl Value {
     /// Alias for get_type
     pub fn data_type(&self) -> DataType {
         self.get_type()
+    }
+
+    /// Common type of a container's elements.
+    ///
+    /// Folds `Value::get_type` over the element types with the numeric/temporal
+    /// promotion hierarchy. Returns `DataType::Empty` for an empty container
+    /// (the "untyped container" marker on the parameterized `List`/`Map`/`Set`
+    /// variants).
+    pub fn container_element_type<'a, I>(elements: I) -> DataType
+    where
+        I: IntoIterator<Item = &'a Value>,
+    {
+        let mut common = DataType::Empty;
+        for element in elements {
+            common =
+                crate::core::type_system::TypeUtils::get_common_type(&common, &element.get_type());
+            if common == DataType::Empty {
+                break;
+            }
+        }
+        common
     }
 
     /// Check if the value is null

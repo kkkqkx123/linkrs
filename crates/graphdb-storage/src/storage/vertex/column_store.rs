@@ -75,9 +75,9 @@ pub fn is_variable_length_type(data_type: &DataType) -> bool {
         data_type,
         DataType::String
             | DataType::Geography
-            | DataType::List
-            | DataType::Map
-            | DataType::Set
+            | DataType::List(_)
+            | DataType::Map(_)
+            | DataType::Set(_)
             | DataType::Vertex
             | DataType::Edge
             | DataType::Path

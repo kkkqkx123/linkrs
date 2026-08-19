@@ -369,8 +369,8 @@ impl ExpressionEvaluator {
                     .map(Value::string)
                     .map_err(ExpressionError::type_error);
             }
-            DataType::List => value.to_list(),
-            DataType::Map => value.to_map(),
+            DataType::List(_) => value.to_list(),
+            DataType::Map(_) => value.to_map(),
             DataType::Json => match value {
                 Value::String(s) => {
                     let j = crate::core::value::json::Json::parse(s)

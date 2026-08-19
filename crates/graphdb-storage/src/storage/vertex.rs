@@ -171,9 +171,9 @@ impl VertexSchema {
         let invalid_key_types = [
             DataType::Empty,
             DataType::Null,
-            DataType::List,
-            DataType::Map,
-            DataType::Set,
+            DataType::List(Box::new(DataType::Empty)),
+            DataType::Map(Box::new(DataType::Empty)),
+            DataType::Set(Box::new(DataType::Empty)),
             DataType::DataSet,
             DataType::Json,
             DataType::JsonB,

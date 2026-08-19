@@ -359,14 +359,41 @@ impl Binder {
                     .iter()
                     .map(|i| self.bind_inner_expr(i, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::List(items, DataType::List))
+                let element_type = {
+                    let mut common = DataType::Unknown;
+                    for item in &items {
+                        let item_type = item.return_type();
+                        common = if common == DataType::Unknown {
+                            item_type
+                        } else {
+                            crate::core::type_system::TypeUtils::get_common_type(
+                                &common, &item_type,
+                            )
+                        };
+                        if common == DataType::Empty {
+                            break;
+                        }
+                    }
+                    if common == DataType::Empty {
+                        DataType::Unknown
+                    } else {
+                        common
+                    }
+                };
+                Ok(BoundExpression::List(
+                    items,
+                    DataType::List(Box::new(element_type)),
+                ))
             }
             Expression::Map(entries) => {
                 let entries = entries
                     .iter()
                     .map(|(k, v)| self.bind_inner_expr(v, None).map(|b| (k.clone(), b)))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::Map(entries, DataType::Map))
+                Ok(BoundExpression::Map(
+                    entries,
+                    DataType::Map(Box::new(DataType::Empty)),
+                ))
             }
             Expression::Case {
                 test_expr,
@@ -445,7 +472,7 @@ impl Binder {
                             DataType::Null,
                         )),
                     ],
-                    DataType::List,
+                    DataType::List(Box::new(DataType::Empty)),
                 ))
             }
             Expression::Path(elements) => {
@@ -453,7 +480,10 @@ impl Binder {
                     .iter()
                     .map(|e| self.bind_inner_expr(e, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::Path(elems, DataType::List))
+                Ok(BoundExpression::Path(
+                    elems,
+                    DataType::List(Box::new(DataType::Unknown)),
+                ))
             }
             Expression::Label(l) => Ok(BoundExpression::Label(l.clone())),
             Expression::ListComprehension {
@@ -476,7 +506,7 @@ impl Binder {
                     source: Box::new(src),
                     filter: flt.map(Box::new),
                     map: mp.map(Box::new),
-                    return_type: DataType::List,
+                    return_type: DataType::List(Box::new(DataType::Unknown)),
                 })
             }
             Expression::LabelTagProperty { tag, property } => {
@@ -545,7 +575,10 @@ impl Binder {
                     .iter()
                     .map(|e| self.bind_inner_expr(e, None))
                     .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundExpression::PathBuild(elems, DataType::List))
+                Ok(BoundExpression::PathBuild(
+                    elems,
+                    DataType::List(Box::new(DataType::Unknown)),
+                ))
             }
             Expression::Parameter(p) => {
                 Ok(BoundExpression::ParameterRef(p.clone(), DataType::String))
@@ -578,8 +611,7 @@ impl Binder {
                 // underlying function name and argument types.
                 let return_type = {
                     let expr_binder = ExpressionBinder::new(&self.scope);
-                    let arg_types: Vec<DataType> =
-                        args.iter().map(|a| a.return_type()).collect();
+                    let arg_types: Vec<DataType> = args.iter().map(|a| a.return_type()).collect();
                     expr_binder.deduce_function_return_type(name, &arg_types)
                 };
                 Ok(BoundExpression::WindowFunction {

@@ -54,9 +54,9 @@ impl TypeUtils {
             DataType::Vertex => 80,
             DataType::Edge => 90,
             DataType::Path => 100,
-            DataType::List => 110,
-            DataType::Set => 120,
-            DataType::Map => 130,
+            DataType::List(_) => 110,
+            DataType::Set(_) => 120,
+            DataType::Map(_) => 130,
             DataType::Blob => 140,
             DataType::Geography => 150,
             DataType::DataSet => 160,
@@ -148,24 +148,38 @@ impl TypeUtils {
                 None,
             )));
         }
-        if (type1 == &DataType::List && matches!(type2, DataType::Array(_)))
-            || (matches!(type1, DataType::Array(_)) && type2 == &DataType::List)
-        {
-            let element = if let DataType::Array(a) = type1 {
-                a.element.as_ref()
-            } else if let DataType::Array(b) = type2 {
-                b.element.as_ref()
+        if let (DataType::List(a), DataType::List(b)) = (type1, type2) {
+            let element = Self::get_common_type(a.as_ref(), b.as_ref());
+            return if element == DataType::Empty {
+                DataType::List(Box::new(DataType::Empty))
             } else {
-                &DataType::Empty
+                DataType::List(Box::new(element))
             };
-            return if element == &DataType::Empty {
-                DataType::List
-            } else {
-                DataType::Array(Arc::new(ArrayTypeInfo::new(element.clone(), None)))
-            };
+        }
+        // Array <-> List: an untyped List (Empty element) adopts the Array
+        // element type; a typed List unifies with it.
+        if let (DataType::Array(a), DataType::List(l)) = (type1, type2) {
+            return Self::unify_array_list(a, l);
+        }
+        if let (DataType::List(l), DataType::Array(a)) = (type1, type2) {
+            return Self::unify_array_list(a, l);
         }
 
         DataType::Empty
+    }
+
+    /// Unify an ARRAY and a LIST container to an ARRAY whose element type is
+    /// the common supertype of the two elements (an untyped side yields to the
+    /// typed side).
+    fn unify_array_list(array: &ArrayTypeInfo, list_element: &DataType) -> DataType {
+        let element = if array.element.as_ref() == &DataType::Empty {
+            list_element.clone()
+        } else if list_element == &DataType::Empty {
+            array.element.as_ref().clone()
+        } else {
+            Self::get_common_type(array.element.as_ref(), list_element)
+        };
+        DataType::Array(Arc::new(ArrayTypeInfo::new(element, None)))
     }
 
     /// Union two Struct types field-wise: fields present in both take the
@@ -324,13 +338,13 @@ impl TypeUtils {
 
             // Struct <-> Map: isomorphic (same field name set; the Map value type
             // is the common supertype of the field types, which always exists).
-            (DataType::Struct(s), DataType::Map) => Self::struct_isomorphic_to_map(s),
-            (DataType::Map, DataType::Struct(s)) => Self::struct_isomorphic_to_map(s),
+            (DataType::Struct(s), DataType::Map(_)) => Self::struct_isomorphic_to_map(s),
+            (DataType::Map(_), DataType::Struct(s)) => Self::struct_isomorphic_to_map(s),
 
-            // Array <-> List: List is untyped, so every Array converts to List and
-            // vice versa; the element check happens at cast time.
-            (DataType::Array(_), DataType::List) => true,
-            (DataType::List, DataType::Array(_)) => true,
+            // Array <-> List: the element check happens at cast time; an
+            // untyped List accepts every Array and vice versa.
+            (DataType::Array(_), DataType::List(_)) => true,
+            (DataType::List(_), DataType::Array(_)) => true,
             // Array <-> Array: element types must inter-cast.
             (DataType::Array(a), DataType::Array(b)) => {
                 if a.element.as_ref() == &DataType::Empty || b.element.as_ref() == &DataType::Empty
@@ -524,9 +538,27 @@ impl TypeUtils {
             DataType::Vertex => "vertex".to_string(),
             DataType::Edge => "edge".to_string(),
             DataType::Path => "path".to_string(),
-            DataType::List => "list".to_string(),
-            DataType::Map => "map".to_string(),
-            DataType::Set => "set".to_string(),
+            DataType::List(element) => {
+                if element.as_ref() == &DataType::Empty {
+                    "list".to_string()
+                } else {
+                    format!("list<{}>", element)
+                }
+            }
+            DataType::Map(value) => {
+                if value.as_ref() == &DataType::Empty {
+                    "map".to_string()
+                } else {
+                    format!("map<{}>", value)
+                }
+            }
+            DataType::Set(element) => {
+                if element.as_ref() == &DataType::Empty {
+                    "set".to_string()
+                } else {
+                    format!("set<{}>", element)
+                }
+            }
             DataType::Blob => "blob".to_string(),
             DataType::Geography => "geography".to_string(),
             DataType::DataSet => "dataset".to_string(),
@@ -560,8 +592,8 @@ impl TypeUtils {
             DataType::Float => Some(Value::Float(0.0)),
             DataType::Double => Some(Value::Double(0.0)),
             DataType::String => Some(Value::string("")),
-            DataType::List => Some(Value::list(List::from(Vec::new()))),
-            DataType::Map => Some(Value::map(std::collections::HashMap::new())),
+            DataType::List(_) => Some(Value::list(List::from(Vec::new()))),
+            DataType::Map(_) => Some(Value::map(std::collections::HashMap::new())),
             _ => None,
         }
     }
@@ -688,18 +720,35 @@ mod tests {
 
     #[test]
     fn test_get_common_type_array_and_list() {
+        let untyped_list = DataType::List(Box::new(DataType::Empty));
         assert_eq!(
             TypeUtils::get_common_type(&array_type(DataType::Int), &array_type(DataType::Float)),
             array_type(DataType::Float)
         );
-        // Array + List unify to an Array of the element type.
+        // Array + untyped List unify to an Array of the element type.
         assert_eq!(
-            TypeUtils::get_common_type(&array_type(DataType::Int), &DataType::List),
+            TypeUtils::get_common_type(&array_type(DataType::Int), &untyped_list),
             array_type(DataType::Int)
         );
         assert_eq!(
-            TypeUtils::get_common_type(&DataType::List, &array_type(DataType::Int)),
+            TypeUtils::get_common_type(&untyped_list, &array_type(DataType::Int)),
             array_type(DataType::Int)
+        );
+        // Typed List + List unify to a List of the common element type.
+        assert_eq!(
+            TypeUtils::get_common_type(
+                &DataType::List(Box::new(DataType::Int)),
+                &DataType::List(Box::new(DataType::Float)),
+            ),
+            DataType::List(Box::new(DataType::Float))
+        );
+        // Typed List + Array unify to an Array of the common element type.
+        assert_eq!(
+            TypeUtils::get_common_type(
+                &DataType::List(Box::new(DataType::Int)),
+                &array_type(DataType::Float),
+            ),
+            array_type(DataType::Float)
         );
         // Struct and Array do not unify.
         assert_eq!(
@@ -714,20 +763,22 @@ mod tests {
 
         let person = struct_type(vec![("name", DataType::String), ("age", DataType::Int)]);
         let doubles = array_type(DataType::Double);
+        let map_ty = DataType::Map(Box::new(DataType::Empty));
+        let list_ty = DataType::List(Box::new(DataType::Empty));
 
         // Struct <-> Map (isomorphic).
-        assert!(TypeUtils::can_cast(&person, &DataType::Map));
-        assert!(TypeUtils::can_cast(&DataType::Map, &person));
+        assert!(TypeUtils::can_cast(&person, &map_ty));
+        assert!(TypeUtils::can_cast(&map_ty, &person));
         // Duplicate field names break isomorphism.
         let dup = DataType::Struct(Arc::new(StructTypeInfo::new(vec![
             ("x".to_string(), DataType::Int),
             ("x".to_string(), DataType::Int),
         ])));
-        assert!(!TypeUtils::can_cast(&dup, &DataType::Map));
+        assert!(!TypeUtils::can_cast(&dup, &map_ty));
 
         // Array <-> List.
-        assert!(TypeUtils::can_cast(&doubles, &DataType::List));
-        assert!(TypeUtils::can_cast(&DataType::List, &doubles));
+        assert!(TypeUtils::can_cast(&doubles, &list_ty));
+        assert!(TypeUtils::can_cast(&list_ty, &doubles));
         // Array -> Array with inter-castable elements.
         assert!(TypeUtils::can_cast(
             &array_type(DataType::Int),
@@ -745,7 +796,7 @@ mod tests {
         // No reverse: String -> Struct.
         assert!(!TypeUtils::can_cast(&DataType::String, &person));
         // List -> Array -> List is allowed, but Struct/List stays disjoint.
-        assert!(!TypeUtils::can_cast(&person, &DataType::List));
+        assert!(!TypeUtils::can_cast(&person, &list_ty));
     }
 
     #[test]
@@ -1050,7 +1101,9 @@ mod tests {
         assert!(TypeUtils::is_indexable_type(&DataType::Int));
         assert!(TypeUtils::is_indexable_type(&DataType::String));
         assert!(!TypeUtils::is_indexable_type(&DataType::Null));
-        assert!(!TypeUtils::is_indexable_type(&DataType::List));
+        assert!(!TypeUtils::is_indexable_type(&DataType::List(Box::new(
+            DataType::Int
+        ))));
     }
 
     #[test]

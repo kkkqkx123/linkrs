@@ -287,8 +287,10 @@ impl GraphTypeInference {
                 Some(DataType::DateTime)
             }
             "active" | "enabled" | "visible" | "valid" | "exists" => Some(DataType::Bool),
-            "tags" | "labels" | "categories" => Some(DataType::List),
-            "properties" | "attrs" | "attributes" => Some(DataType::Map),
+            "tags" | "labels" | "categories" => Some(DataType::List(Box::new(DataType::String))),
+            "properties" | "attrs" | "attributes" => {
+                Some(DataType::Map(Box::new(DataType::String)))
+            }
             _ => None,
         }
     }
@@ -366,11 +368,11 @@ mod tests {
         );
         assert_eq!(
             inference.deduce_property_type("tags", "person"),
-            Some(DataType::List)
+            Some(DataType::List(Box::new(DataType::String)))
         );
         assert_eq!(
             inference.deduce_property_type("properties", "person"),
-            Some(DataType::Map)
+            Some(DataType::Map(Box::new(DataType::String)))
         );
         assert_eq!(inference.deduce_property_type("unknown", "person"), None);
     }

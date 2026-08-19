@@ -89,9 +89,12 @@ fn parse_type(input: &str, depth: usize, full: &str) -> Result<DataType, ParseDa
         "VERTEX" => Ok(DataType::Vertex),
         "EDGE" => Ok(DataType::Edge),
         "PATH" => Ok(DataType::Path),
-        "LIST" => Ok(DataType::List),
-        "MAP" => Ok(DataType::Map),
-        "SET" => Ok(DataType::Set),
+        // Bare container names map to an untyped container (`Empty` element /
+        // value type), the pre-parameterization spelling. Typed containers use
+        // the `LIST<...>`/`MAP<...>`/`SET<...>` parameterized forms below.
+        "LIST" => Ok(DataType::List(Box::new(DataType::Empty))),
+        "MAP" => Ok(DataType::Map(Box::new(DataType::Empty))),
+        "SET" => Ok(DataType::Set(Box::new(DataType::Empty))),
         "GEOGRAPHY" => Ok(DataType::Geography),
         "DATASET" => Ok(DataType::DataSet),
         "BLOB" => Ok(DataType::Blob),
@@ -109,15 +112,51 @@ fn parse_type(input: &str, depth: usize, full: &str) -> Result<DataType, ParseDa
     }
 }
 
-/// Parse the parameterized forms: `STRUCT<...>`, `ARRAY<...>(len)`,
-/// `FIXEDSTRING(n)`, `FIXED_STRING(n)`, `VECTOR(n)`, `VECTOR_DENSE(n)` and
-/// `VECTOR_SPARSE(n)`.
+/// Parse the parameterized forms: `LIST<...>`, `MAP<...>`, `SET<...>`,
+/// `STRUCT<...>`, `ARRAY<...>(len)`, `FIXEDSTRING(n)`, `FIXED_STRING(n)`,
+/// `VECTOR(n)`, `VECTOR_DENSE(n)` and `VECTOR_SPARSE(n)`.
 fn parse_parameterized(
     input: &str,
     upper: &str,
     depth: usize,
     full: &str,
 ) -> Result<DataType, ParseDataTypeError> {
+    for (prefix, kind) in [
+        ("LIST<", ContainerKind::List),
+        ("MAP<", ContainerKind::Map),
+        ("SET<", ContainerKind::Set),
+    ] {
+        if upper.starts_with(prefix) {
+            let (content, rest) = take_angle_brackets(input).ok_or_else(|| {
+                ParseDataTypeError::new(
+                    full,
+                    format!("unterminated {}: missing '>'", prefix.trim_end_matches('<')),
+                )
+            })?;
+            if !rest.trim().is_empty() {
+                return Err(ParseDataTypeError::new(
+                    full,
+                    format!(
+                        "unexpected trailing content after {}: '{}'",
+                        prefix.trim_end_matches('<'),
+                        rest.trim()
+                    ),
+                ));
+            }
+            if content.trim().is_empty() {
+                return Err(ParseDataTypeError::new(
+                    full,
+                    format!("{} requires an element type", prefix.trim_end_matches('<')),
+                ));
+            }
+            let element = parse_type(content, depth + 1, full)?;
+            return Ok(match kind {
+                ContainerKind::List => DataType::List(Box::new(element)),
+                ContainerKind::Map => DataType::Map(Box::new(element)),
+                ContainerKind::Set => DataType::Set(Box::new(element)),
+            });
+        }
+    }
     if upper.starts_with("STRUCT<") {
         let (content, rest) = take_angle_brackets(input)
             .ok_or_else(|| ParseDataTypeError::new(full, "unterminated STRUCT: missing '>'"))?;
@@ -163,6 +202,12 @@ enum SizedKind {
     FixedString,
     VectorDense,
     VectorSparse,
+}
+
+enum ContainerKind {
+    List,
+    Map,
+    Set,
 }
 
 /// Split `input` at the angle bracket that closes the opening '<', returning
@@ -314,9 +359,11 @@ mod tests {
             DataType::Vertex,
             DataType::Edge,
             DataType::Path,
-            DataType::List,
-            DataType::Map,
-            DataType::Set,
+            DataType::List(Box::new(DataType::Empty)),
+            DataType::List(Box::new(DataType::Int)),
+            DataType::Map(Box::new(DataType::Empty)),
+            DataType::Map(Box::new(DataType::String)),
+            DataType::Set(Box::new(DataType::Int)),
             DataType::Geography,
             DataType::DataSet,
             DataType::FixedString(8),
@@ -366,9 +413,9 @@ mod tests {
                 | DataType::Vertex
                 | DataType::Edge
                 | DataType::Path
-                | DataType::List
-                | DataType::Map
-                | DataType::Set
+                | DataType::List(_)
+                | DataType::Map(_)
+                | DataType::Set(_)
                 | DataType::Geography
                 | DataType::DataSet
                 | DataType::FixedString(_)
@@ -498,6 +545,53 @@ mod tests {
             "VECTOR_DENSE(3",
             "VECTOR_SPARSE()",
             "VECTOR(3))",
+        ] {
+            assert!(
+                DataType::from_str(bad).is_err(),
+                "expected error for '{bad}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_map_set_composites() {
+        // Typed containers parameterize with a nested element/value type.
+        let ty = DataType::from_str("LIST<INT>").unwrap();
+        assert_eq!(ty, DataType::List(Box::new(DataType::Int)));
+        let ty = DataType::from_str("MAP<DOUBLE>").unwrap();
+        assert_eq!(ty, DataType::Map(Box::new(DataType::Double)));
+        let ty = DataType::from_str("SET<STRING>").unwrap();
+        assert_eq!(ty, DataType::Set(Box::new(DataType::String)));
+        // Nested containers recurse.
+        let ty = DataType::from_str("LIST<ARRAY<DOUBLE>>").unwrap();
+        assert_eq!(
+            ty,
+            DataType::List(Box::new(DataType::Array(Arc::new(ArrayTypeInfo::new(
+                DataType::Double,
+                None
+            )))))
+        );
+        // Display of the typed form roundtrips; the untyped bare form stays.
+        assert_eq!(
+            DataType::List(Box::new(DataType::Int)).to_string(),
+            "LIST<INT>"
+        );
+        assert_eq!(
+            DataType::List(Box::new(DataType::Empty)).to_string(),
+            "LIST"
+        );
+        assert_eq!(
+            "list<int>".parse::<DataType>(),
+            Ok(DataType::List(Box::new(DataType::Int)))
+        );
+        // Parameterized containers reject empty/malformed element types.
+        for bad in [
+            "LIST<>",
+            "MAP<>",
+            "SET<>",
+            "LIST<INT> junk",
+            "MAP<INT",
+            "SET<",
         ] {
             assert!(
                 DataType::from_str(bad).is_err(),

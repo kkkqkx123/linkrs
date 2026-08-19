@@ -549,9 +549,9 @@ mod tests {
 
         // Test invalid key types - composite/complex types
         let invalid_types = vec![
-            ("List", DataType::List),
-            ("Map", DataType::Map),
-            ("Set", DataType::Set),
+            ("List", DataType::List(Box::new(DataType::Empty))),
+            ("Map", DataType::Map(Box::new(DataType::Empty))),
+            ("Set", DataType::Set(Box::new(DataType::Empty))),
             ("Vertex", DataType::Vertex),
             ("Edge", DataType::Edge),
             ("Path", DataType::Path),

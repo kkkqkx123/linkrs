@@ -466,9 +466,9 @@ fn test_datatype_variants() {
         DataType::Vertex,
         DataType::Edge,
         DataType::Path,
-        DataType::List,
-        DataType::Map,
-        DataType::Set,
+        DataType::List(Box::new(DataType::String)),
+        DataType::Map(Box::new(DataType::Empty)),
+        DataType::Set(Box::new(DataType::Int)),
         DataType::Geography,
         DataType::DataSet,
         DataType::FixedString(100),
@@ -962,7 +962,7 @@ fn test_list_operations() {
     }));
 
     assert_eq!(list.len().expect("列表长度计算应该成功"), Value::Int(3));
-    assert_eq!(list.get_type(), DataType::List);
+    assert_eq!(list.get_type(), DataType::List(Box::new(DataType::Int)));
 
     // Empty list
     let empty_list = Value::List(Box::new(graphdb_query::core::List { values: vec![] }));
@@ -986,7 +986,10 @@ fn test_map_operations() {
         map_value.len().expect("映射长度计算应该成功"),
         Value::Int(2)
     );
-    assert_eq!(map_value.get_type(), DataType::Map);
+    assert_eq!(
+        map_value.get_type(),
+        DataType::Map(Box::new(DataType::String))
+    );
 }
 
 #[test]

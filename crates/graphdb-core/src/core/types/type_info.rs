@@ -13,6 +13,12 @@ use std::sync::Arc;
 /// Type-level metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeInfo {
+    /// LIST: homogeneous element type.
+    List(Box<DataType>),
+    /// MAP: shared value type (string keys).
+    Map(Box<DataType>),
+    /// SET: homogeneous element type.
+    Set(Box<DataType>),
     /// STRUCT: named-field composite type (fields preserve declaration order).
     Struct(StructTypeInfo),
     /// ARRAY: fixed-length (`len = Some(n)`) or variable-length
@@ -52,6 +58,18 @@ impl ArrayTypeInfo {
 }
 
 impl TypeInfo {
+    pub fn list(element: DataType) -> Self {
+        TypeInfo::List(Box::new(element))
+    }
+
+    pub fn map(value: DataType) -> Self {
+        TypeInfo::Map(Box::new(value))
+    }
+
+    pub fn set(element: DataType) -> Self {
+        TypeInfo::Set(Box::new(element))
+    }
+
     pub fn struct_(fields: Vec<(String, DataType)>) -> Self {
         TypeInfo::Struct(StructTypeInfo::new(fields))
     }
@@ -62,9 +80,13 @@ impl TypeInfo {
 }
 
 /// Extract the `TypeInfo` from a `DataType` variant that carries one
-/// (`Struct`/`Array`). Returns `None` for parameter-free types.
+/// (`List`/`Map`/`Set`/`Struct`/`Array`). Returns `None` for parameter-free
+/// types.
 pub fn type_info_of(data_type: &DataType) -> Option<TypeInfo> {
     match data_type {
+        DataType::List(element) => Some(TypeInfo::List(element.clone())),
+        DataType::Map(value) => Some(TypeInfo::Map(value.clone())),
+        DataType::Set(element) => Some(TypeInfo::Set(element.clone())),
         DataType::Struct(info) => Some(TypeInfo::Struct(info.as_ref().clone())),
         DataType::Array(info) => Some(TypeInfo::Array(info.as_ref().clone())),
         _ => None,
@@ -74,6 +96,9 @@ pub fn type_info_of(data_type: &DataType) -> Option<TypeInfo> {
 /// Rebuild a `DataType` from its `TypeInfo` if the variant is parameterized.
 pub fn data_type_from_info(code: u8, info: &TypeInfo) -> Option<DataType> {
     match (code, info) {
+        (16, TypeInfo::List(e)) => Some(DataType::List(e.clone())),
+        (17, TypeInfo::Map(v)) => Some(DataType::Map(v.clone())),
+        (18, TypeInfo::Set(e)) => Some(DataType::Set(e.clone())),
         (64, TypeInfo::Struct(s)) => Some(DataType::Struct(Arc::new(s.clone()))),
         (65, TypeInfo::Array(a)) => Some(DataType::Array(Arc::new(a.clone()))),
         _ => None,
@@ -110,8 +135,30 @@ mod tests {
     }
 
     #[test]
+    fn test_list_map_set_type_info_roundtrip() {
+        for (info, code) in [
+            (TypeInfo::list(DataType::Int), 16u8),
+            (TypeInfo::map(DataType::Double), 17u8),
+            (TypeInfo::set(DataType::String), 18u8),
+        ] {
+            let encoded = postcard::to_allocvec(&info).expect("encode type info");
+            let decoded: TypeInfo = postcard::from_bytes(&encoded).expect("decode type info");
+            assert_eq!(decoded, info);
+            let rebuilt = data_type_from_info(code, &info)
+                .unwrap_or_else(|| panic!("code {code} must rebuild from TypeInfo"));
+            assert_eq!(
+                type_info_of(&rebuilt),
+                Some(info),
+                "code {code} type must roundtrip through type_info_of"
+            );
+        }
+    }
+
+    #[test]
     fn test_data_type_from_info_mismatched_code() {
         let info = TypeInfo::array(DataType::Int, None);
         assert!(data_type_from_info(64, &info).is_none());
+        // Container metadata must not decode under a different code.
+        assert!(data_type_from_info(16, &info).is_none());
     }
 }

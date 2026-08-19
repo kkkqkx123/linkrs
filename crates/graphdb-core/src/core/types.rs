@@ -79,9 +79,16 @@ pub enum DataType {
     Vertex,
     Edge,
     Path,
-    List,
-    Map,
-    Set,
+    /// Variable-length list. Carries the homogeneous element type; an `Empty`
+    /// element type marks an untyped container (the pre-parameterization form
+    /// still accepted by DDL as bare `LIST`).
+    List(Box<DataType>),
+    /// String-keyed map. Carries the shared value type; an `Empty` value type
+    /// marks an untyped container (bare `MAP` in DDL).
+    Map(Box<DataType>),
+    /// Set of unique elements. Carries the homogeneous element type; an
+    /// `Empty` element type marks an untyped container (bare `SET` in DDL).
+    Set(Box<DataType>),
     Geography,
     DataSet,
     FixedString(usize),
@@ -125,9 +132,29 @@ impl std::fmt::Display for DataType {
             DataType::Vertex => write!(f, "VERTEX"),
             DataType::Edge => write!(f, "EDGE"),
             DataType::Path => write!(f, "PATH"),
-            DataType::List => write!(f, "LIST"),
-            DataType::Map => write!(f, "MAP"),
-            DataType::Set => write!(f, "SET"),
+            DataType::List(element) => {
+                // Untyped containers (element `Empty`) keep the legacy bare
+                // spelling so `Display` roundtrips through `from_str`.
+                if element.as_ref() == &DataType::Empty {
+                    write!(f, "LIST")
+                } else {
+                    write!(f, "LIST<{}>", element)
+                }
+            }
+            DataType::Map(value) => {
+                if value.as_ref() == &DataType::Empty {
+                    write!(f, "MAP")
+                } else {
+                    write!(f, "MAP<{}>", value)
+                }
+            }
+            DataType::Set(element) => {
+                if element.as_ref() == &DataType::Empty {
+                    write!(f, "SET")
+                } else {
+                    write!(f, "SET<{}>", element)
+                }
+            }
             DataType::Geography => write!(f, "GEOGRAPHY"),
             DataType::DataSet => write!(f, "DATASET"),
             DataType::FixedString(n) => write!(f, "FIXEDSTRING({})", n),
@@ -167,7 +194,9 @@ impl DataType {
     /// the removed `VID` and `Timestamp` types) and must not be reused.
     /// New types are allocated from code 64 onwards; code 32 is additionally
     /// assigned to `Unknown` (a binding-time sentinel that never reaches
-    /// storage serialization).
+    /// storage serialization). Codes 16/17/18 (`List`/`Map`/`Set`) are
+    /// parameterized: decoding a bare code requires the accompanying `TypeInfo`
+    /// metadata, exactly like `Struct`/`Array`.
     pub fn as_u8(&self) -> u8 {
         match self {
             DataType::Empty => 0,
@@ -187,9 +216,9 @@ impl DataType {
             DataType::Vertex => 13,
             DataType::Edge => 14,
             DataType::Path => 15,
-            DataType::List => 16,
-            DataType::Map => 17,
-            DataType::Set => 18,
+            DataType::List(_) => 16,
+            DataType::Map(_) => 17,
+            DataType::Set(_) => 18,
             DataType::Geography => 19,
             DataType::DataSet => 20,
             DataType::FixedString(_) => 21,
@@ -209,9 +238,10 @@ impl DataType {
     /// Decode a data type from its compact byte code.
     ///
     /// Returns an error for unknown codes, for the reserved codes 22/24
-    /// (previously `VID`/`Timestamp`), and for codes >= 64 that were not yet
-    /// allocated by a newer version. Unknown codes never silently decode to
-    /// `Empty`; forward compatibility failures surface explicitly.
+    /// (previously `VID`/`Timestamp`), for the parameterized codes 16/17/18
+    /// and >= 64 (which need `TypeInfo` metadata), and for codes >= 64 that
+    /// were not yet allocated by a newer version. Unknown codes never silently
+    /// decode to `Empty`; forward compatibility failures surface explicitly.
     pub fn from_u8(value: u8) -> Result<DataType, TypeCodecError> {
         match value {
             0 => Ok(DataType::Empty),
@@ -231,9 +261,9 @@ impl DataType {
             13 => Ok(DataType::Vertex),
             14 => Ok(DataType::Edge),
             15 => Ok(DataType::Path),
-            16 => Ok(DataType::List),
-            17 => Ok(DataType::Map),
-            18 => Ok(DataType::Set),
+            16 => Err(TypeCodecError::ParameterizedTypeCode(16)),
+            17 => Err(TypeCodecError::ParameterizedTypeCode(17)),
+            18 => Err(TypeCodecError::ParameterizedTypeCode(18)),
             19 => Ok(DataType::Geography),
             20 => Ok(DataType::DataSet),
             21 => Ok(DataType::FixedString(0)),
@@ -265,7 +295,8 @@ mod tests {
     ///
     /// Codes 22 and 24 are intentionally absent: they were previously used by
     /// the removed `VID`/`Timestamp` types and are now reserved.
-    /// Parameterized types (`Struct`/`Array`) decode to code 64/65.
+    /// Parameterized types (`List`/`Map`/`Set`/`Struct`/`Array`) decode to
+    /// their codes (16/17/18/64/65) only together with `TypeInfo` metadata.
     fn all_data_types() -> Vec<DataType> {
         vec![
             DataType::Empty,
@@ -285,9 +316,9 @@ mod tests {
             DataType::Vertex,
             DataType::Edge,
             DataType::Path,
-            DataType::List,
-            DataType::Map,
-            DataType::Set,
+            DataType::List(Box::new(DataType::String)),
+            DataType::Map(Box::new(DataType::Int)),
+            DataType::Set(Box::new(DataType::String)),
             DataType::Geography,
             DataType::DataSet,
             DataType::FixedString(0),
@@ -341,17 +372,17 @@ mod tests {
 
     #[test]
     fn test_parameterized_codes_require_metadata() {
-        // Codes 64/65 are known but parameterized: decoding the bare code must
-        // fail with the explicit `ParameterizedTypeCode` error, never silently
-        // yield a parameter-free type.
-        assert_eq!(
-            DataType::from_u8(64),
-            Err(TypeCodecError::ParameterizedTypeCode(64))
-        );
-        assert_eq!(
-            DataType::from_u8(65),
-            Err(TypeCodecError::ParameterizedTypeCode(65))
-        );
+        // Codes 16/17/18 (List/Map/Set) and 64/65 (Struct/Array) are known but
+        // parameterized: decoding the bare code must fail with the explicit
+        // `ParameterizedTypeCode` error, never silently yield a
+        // parameter-free type.
+        for code in [16u8, 17, 18, 64, 65] {
+            assert_eq!(
+                DataType::from_u8(code),
+                Err(TypeCodecError::ParameterizedTypeCode(code)),
+                "code {code} must be parameterized"
+            );
+        }
         // Unknown codes in the 64+ range still error as unknown.
         for code in [66u8, 100, 255] {
             assert_eq!(
@@ -388,14 +419,12 @@ mod tests {
             );
         }
         // Parameterized codes fail with a distinct, explicit error.
-        assert_eq!(
-            DataType::from_u8(64),
-            Err(TypeCodecError::ParameterizedTypeCode(64))
-        );
-        assert_eq!(
-            DataType::from_u8(65),
-            Err(TypeCodecError::ParameterizedTypeCode(65))
-        );
+        for code in [16u8, 17, 18, 64, 65] {
+            assert_eq!(
+                DataType::from_u8(code),
+                Err(TypeCodecError::ParameterizedTypeCode(code))
+            );
+        }
     }
 
     #[test]

@@ -1199,14 +1199,23 @@ impl PropertyTable {
             result.extend_from_slice(name_bytes);
             result.extend_from_slice(&prop.prop_id.to_le_bytes());
             result.push(prop.data_type.as_u8());
-            // Parameterized types (code >= 64) carry a postcard-encoded
-            // TypeInfo block right after the code byte. Plain codes (<= 31)
-            // have no block, keeping the old format byte-compatible.
-            if prop.data_type.as_u8() >= 64 {
+            // Parameterized types (List/Map/Set/Struct/Array) carry a
+            // postcard-encoded TypeInfo block right after the code byte. Plain
+            // codes have no block, keeping the old format byte-compatible for
+            // scalar types.
+            if prop.data_type.as_u8() >= 64
+                || matches!(
+                    prop.data_type,
+                    DataType::List(_) | DataType::Map(_) | DataType::Set(_)
+                )
+            {
                 let info = match &prop.data_type {
+                    DataType::List(e) => TypeInfo::List(e.clone()),
+                    DataType::Map(v) => TypeInfo::Map(v.clone()),
+                    DataType::Set(e) => TypeInfo::Set(e.clone()),
                     DataType::Struct(s) => TypeInfo::Struct(s.as_ref().clone()),
                     DataType::Array(a) => TypeInfo::Array(a.as_ref().clone()),
-                    _ => unreachable!("code >= 64 only for Struct/Array"),
+                    _ => unreachable!("parameterized data type without TypeInfo"),
                 };
                 // Infallible for schema-valid input: only an allocation
                 // overflow could error, which would abort the process anyway.

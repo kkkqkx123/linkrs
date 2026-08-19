@@ -278,7 +278,7 @@ impl BoundExpression {
             Self::ListComprehension { return_type, .. } => return_type.clone(),
             Self::Reduce { return_type, .. } => return_type.clone(),
             Self::PathBuild(_, dt) => dt.clone(),
-            Self::Vector(_) => DataType::Vector,
+            Self::Vector(v) => DataType::VectorDense(v.len()),
         }
     }
 }

@@ -44,9 +44,9 @@ impl ValueType {
             DataType::Vertex => ValueType::Vertex,
             DataType::Edge => ValueType::Edge,
             DataType::Path => ValueType::Path,
-            DataType::List => ValueType::List,
-            DataType::Map => ValueType::Map,
-            DataType::Set => ValueType::Set,
+            DataType::List(_) => ValueType::List,
+            DataType::Map(_) => ValueType::Map,
+            DataType::Set(_) => ValueType::Set,
             // Parameterized composite types are opaque at the semantic level.
             DataType::Struct(_) | DataType::Array(_) => ValueType::Unknown,
             _ => ValueType::Unknown,
@@ -67,9 +67,11 @@ impl ValueType {
             ValueType::Vertex => DataType::Vertex,
             ValueType::Edge => DataType::Edge,
             ValueType::Path => DataType::Path,
-            ValueType::List => DataType::List,
-            ValueType::Map => DataType::Map,
-            ValueType::Set => DataType::Set,
+            // The semantic layer is lower-dimension: containers map back to the
+            // untyped (bare) form, matching the DDL spelling.
+            ValueType::List => DataType::List(Box::new(DataType::Empty)),
+            ValueType::Map => DataType::Map(Box::new(DataType::Empty)),
+            ValueType::Set => DataType::Set(Box::new(DataType::Empty)),
             ValueType::Null => DataType::Null,
         }
     }
