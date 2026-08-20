@@ -55,9 +55,7 @@ impl TimeTravelEdgeStore {
         );
         let in_segments_after = self.in_segments.len();
 
-        self.mvcc
-            .segment_tombstones
-            .extend(self.mvcc.pending_segment_deletions.drain());
+                self.mvcc.promote_pending_deletions();
 
         // Update indices incrementally for newly frozen segments
         // This is more efficient than full rebuild when only a few segments are added

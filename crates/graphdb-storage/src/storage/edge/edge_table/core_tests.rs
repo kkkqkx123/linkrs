@@ -1188,3 +1188,157 @@ fn test_compact_reclaims_deleted_edge_properties() {
     table.compact_properties(300);
     assert_eq!(table.properties.row_count(), 0);
 }
+
+#[test]
+fn test_auto_freeze_on_write_pressure() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    // A tiny delta cap forces a freeze after the very first insert.
+    config.auto_maintenance.max_delta_memory_bytes = 1;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    assert_eq!(table.out_segments.len(), 0);
+    for i in 0..10u64 {
+        table
+            .insert_edge(0, 1, i as i64, &[], 100 + i)
+            .unwrap();
+    }
+
+    // The write path must have frozen the delta into segments automatically.
+    assert!(!table.out_segments.is_empty());
+    assert_eq!(table.out_csr.edge_count(), 0);
+}
+
+#[test]
+fn test_auto_gc_tombstones() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    // A low tombstone threshold triggers GC on the write path.
+    config.auto_maintenance.tombstone_gc_threshold = 10;
+    config.auto_maintenance.gc_min_serial = 0;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    // Freeze first so deletions take the segment (tombstone) path.
+    for i in 0..20u64 {
+        table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(150);
+
+    // A snapshot at ts=100 pins the deletion at ts=200: GC must not drop it.
+    table.mvcc.register_active_snapshot(100);
+    for i in 0..20u64 {
+        table.delete_edge(0, 1, i as i64, 200).unwrap();
+    }
+    // 20 deletions × 2 layers (pending + main) = 40 tombstones > threshold.
+    assert!(table.mvcc.total_tombstone_count() >= 20);
+    assert!(table.mvcc.is_tombstoned(EdgeId(0), 200));
+
+    // Release the snapshot: min_active_snapshot_ts becomes MAX, so the next
+    // write-path GC pass reclaims every tombstone.
+    table.mvcc.unregister_active_snapshot(100);
+    table.insert_edge(0, 2, 0, &[], 300).unwrap();
+
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    assert!(!table.mvcc.is_tombstoned(EdgeId(0), 200));
+}
+
+#[test]
+fn test_auto_physical_merge_on_high_deletion_density() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    // Any frozen-segment deletion density triggers the physical merge tier.
+    config.auto_maintenance.deletion_compact_ratio = 0.0001;
+    // Disable the delta-freeze tier so segment count stays deterministic.
+    config.auto_maintenance.max_delta_memory_bytes = 0;
+    config.max_mutable_csr_bytes = 1024 * 1024 * 1024;
+    // Large merge threshold so all segments are grouped into one merge.
+    config.segment_merge_threshold = 100_000;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    // Two batches of 20 edges frozen into segments.
+    for i in 0..20u64 {
+        table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(110);
+    for i in 20..40u64 {
+        table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(120);
+
+    // A snapshot at ts=100 can still observe the deletions (200 > 100), so
+    // the physical merge must keep every edge.
+    table.mvcc.register_active_snapshot(100);
+    for i in 0..40u64 {
+        table.delete_edge(0, 1, i as i64, 200).unwrap();
+    }
+
+    // Add live edges so the merge has >1 segment to work with, then trigger.
+    for i in 0..20u64 {
+        table.insert_edge(0, 2, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(125);
+    for i in 20..40u64 {
+        table.insert_edge(0, 2, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(130);
+    table.insert_edge(0, 3, 0, &[], 300).unwrap();
+
+    // Nothing was physically dropped: 40 deleted (kept) + 40 live.
+    let segment_edges: u64 = table
+        .out_segments
+        .iter()
+        .map(|s| s.csr.read().edge_count() as u64)
+        .sum();
+    assert_eq!(segment_edges, 80);
+    assert!(table.mvcc.is_tombstoned(EdgeId(0), 300));
+}
+
+#[test]
+fn test_auto_physical_merge_reclaims_when_snapshot_released() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    config.auto_maintenance.deletion_compact_ratio = 0.0001;
+    config.auto_maintenance.max_delta_memory_bytes = 0;
+    config.max_mutable_csr_bytes = 1024 * 1024 * 1024;
+    config.segment_merge_threshold = 100_000;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    for i in 0..20u64 {
+        table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(110);
+    for i in 20..40u64 {
+        table.insert_edge(0, 1, i as i64, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(120);
+
+    // A snapshot at ts=250 cannot observe deletions at 200, so the physical
+    // merge drops them.
+    table.mvcc.register_active_snapshot(250);
+    for i in 0..40u64 {
+        table.delete_edge(0, 1, i as i64, 200).unwrap();
+    }
+
+    // Add live edges so the merge has >1 segment to work with, then trigger.
+    for i in 0..20u64 {
+        table.insert_edge(0, 2, i as i64, &[], 250).unwrap();
+    }
+    table.freeze_csr_only(260);
+    for i in 20..40u64 {
+        table.insert_edge(0, 2, i as i64, &[], 250).unwrap();
+    }
+    table.freeze_csr_only(270);
+    table.insert_edge(0, 3, 0, &[], 300).unwrap();
+
+    // The 40 deleted edges were physically dropped; only the 40 live remain.
+    let segment_edges: u64 = table
+        .out_segments
+        .iter()
+        .map(|s| s.csr.read().edge_count() as u64)
+        .sum();
+    assert_eq!(segment_edges, 40);
+    // Tombstone metadata is retained for GC even after physical deletion.
+    assert!(table.mvcc.is_tombstoned(EdgeId(0), 300));
+    // The trigger edge is live.
+    assert_eq!(table.edge_count(), 41);
+}

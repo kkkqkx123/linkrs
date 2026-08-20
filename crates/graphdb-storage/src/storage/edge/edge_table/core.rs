@@ -8,7 +8,7 @@ use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
-use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
+use crate::core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::edge::PropertyTable;
 use crate::storage::index::edge_index_manager::EdgePropertyIndex;
@@ -40,6 +40,45 @@ pub struct EdgeTableConfig {
     /// keep only the N newest segments (others are merged).
     /// Default: 5 (keeps 5 newest, merges the rest).
     pub merge_keep_newest: usize,
+
+    /// Automatic maintenance: run freeze / GC / property compaction on the
+    /// write path when the configured thresholds are exceeded.
+    pub auto_maintenance: AutoMaintenanceConfig,
+}
+
+/// Thresholds that trigger automatic maintenance on the write path.
+#[derive(Debug, Clone, Copy)]
+pub struct AutoMaintenanceConfig {
+    /// Run GC when the total tombstone count exceeds this value.
+    /// Set to 0 to disable tombstone GC.
+    pub tombstone_gc_threshold: usize,
+    /// Run property compaction when deleted-but-not-reclaimed property rows
+    /// exceed this ratio of total rows. Set to 0.0 to disable.
+    pub property_compact_ratio: f32,
+    /// Freeze the mutable CSR when its estimated memory exceeds this value.
+    /// Set to 0 to disable (falls back to global `max_mutable_csr_bytes`).
+    pub max_delta_memory_bytes: usize,
+    /// Minimum serial number between automatic GC runs. Each time GC runs
+    /// the serial is incremented; subsequent write-path calls skip GC until
+    /// the counter reaches this value again. Set to 0 to disable cooldown.
+    pub gc_min_serial: u64,
+    /// Run a PhysicalDeletion segment merge when the deleted edge ratio in
+    /// frozen segments exceeds this value (0.0 to 1.0). Set to 0.0 to disable.
+    /// Edges are only physically dropped when an active snapshot bounds the
+    /// retention horizon; without snapshots the merge is a no-op for reclamation.
+    pub deletion_compact_ratio: f64,
+}
+
+impl Default for AutoMaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            tombstone_gc_threshold: 200_000,
+            property_compact_ratio: 0.15,
+            max_delta_memory_bytes: 150 * 1024 * 1024,
+            gc_min_serial: 500,
+            deletion_compact_ratio: 0.5,
+        }
+    }
 }
 
 impl Default for EdgeTableConfig {
@@ -55,6 +94,7 @@ impl Default for EdgeTableConfig {
             segment_merge_threshold: 50,
             // Keep only 5 newest segments, merge the rest (oldest 45 become 1)
             merge_keep_newest: 5,
+            auto_maintenance: AutoMaintenanceConfig::default(),
         }
     }
 }
@@ -119,6 +159,13 @@ pub struct TimeTravelEdgeStore {
     /// Edge property index for efficient property-based filtering.
     /// When set, insert/delete operations automatically maintain the index.
     pub property_index: Option<EdgePropertyIndex>,
+
+    /// Serial counter for automatic maintenance: incremented on every
+    /// maintenance run so tombstone GC can be rate-limited.
+    pub maintenance_serial: u64,
+    /// Snapshot timestamp used by the last automatic GC run. Used to avoid
+    /// re-running GC when `min_active_snapshot_ts` has not advanced.
+    pub last_gc_min_snapshot_ts: Timestamp,
 }
 
 impl TimeTravelEdgeStore {
@@ -191,6 +238,8 @@ impl TimeTravelEdgeStore {
             current_snapshot_in: None,
             snapshot_dirty: true,
             property_index: None,
+            maintenance_serial: 0,
+            last_gc_min_snapshot_ts: 0,
         })
     }
 
@@ -576,6 +625,7 @@ impl TimeTravelEdgeStore {
 
         // Check write backpressure after successful insertion
         self.check_and_apply_write_backpressure(ts);
+        self.maybe_run_auto_maintenance();
 
         Ok(())
     }
@@ -621,6 +671,7 @@ impl TimeTravelEdgeStore {
                 let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             }
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
+            self.maybe_run_auto_maintenance();
             return Ok(true);
         }
 
@@ -632,8 +683,8 @@ impl TimeTravelEdgeStore {
             ts,
         ) {
             let edge_id = nbr.edge_id;
-            self.mvcc.pending_segment_deletions.insert(edge_id, ts);
-            self.mvcc.tombstones.insert(edge_id, ts);
+            self.mvcc.record_deletion(edge_id, ts);
+            self.mvcc.record_pending_deletion(edge_id, ts);
             // Invalidate the cached current snapshot: it still contains this
             // edge and is only rebuilt lazily on the next maintenance pass.
             self.snapshot_dirty = true;
@@ -643,6 +694,7 @@ impl TimeTravelEdgeStore {
                 let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             }
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
+            self.maybe_run_auto_maintenance();
             return Ok(true);
         }
 
@@ -694,6 +746,7 @@ impl TimeTravelEdgeStore {
             if nbr.prop_offset > 0 {
                 let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             }
+            self.maybe_run_auto_maintenance();
             return Ok(true);
         }
         Ok(false)
@@ -1081,6 +1134,7 @@ impl TimeTravelEdgeStore {
         ) {
             self.properties
                 .set_property(nbr.prop_offset, prop_name, Some(value.clone()), ts)?;
+            self.maybe_run_auto_maintenance();
             return Ok(true);
         }
 
@@ -1127,6 +1181,7 @@ impl TimeTravelEdgeStore {
                     )));
                 }
             }
+            self.maybe_run_auto_maintenance();
             return Ok(true);
         }
 
@@ -1204,7 +1259,7 @@ impl TimeTravelEdgeStore {
             .iter()
             .map(|segment| segment.csr.read().used_memory_size())
             .sum::<usize>();
-        total += self.mvcc.tombstones.len() * std::mem::size_of::<(EdgeId, Timestamp)>();
+        total += self.mvcc.total_tombstone_count() * std::mem::size_of::<(EdgeId, Timestamp)>();
         total += self.properties.used_memory_size();
 
         // Account for property_index_cache
@@ -1435,6 +1490,115 @@ impl TimeTravelEdgeStore {
     pub fn needs_background_freeze(&self) -> bool {
         self.config.max_mutable_csr_bytes > 0
             && self.estimate_memory_usage() > self.config.max_mutable_csr_bytes
+    }
+
+    /// Run automatic maintenance based on configured thresholds.
+    ///
+    /// Called from write paths (`insert_edge`, `delete_edge`, updates) so
+    /// deleted entries and stale metadata are reclaimed without waiting for
+    /// an explicit maintenance invocation:
+    ///
+    /// - tombstone GC when the total tombstone count exceeds the threshold
+    ///   (rate-limited by `gc_min_serial` to bound write-path latency)
+    /// - property compaction when the deleted-row ratio is high
+    /// - delta freeze when the mutable CSR exceeds its memory cap
+    ///
+    /// Returns the number of edges removed (0 if no maintenance ran).
+    pub fn maybe_run_auto_maintenance(&mut self) -> usize {
+        let cfg = self.config.auto_maintenance;
+        if cfg.tombstone_gc_threshold == 0 && cfg.max_delta_memory_bytes == 0 {
+            return 0;
+        }
+        let mut maintenance_ran = 0;
+
+        // Tier 1: tombstone GC (rate-limited by serial counter).
+        if cfg.tombstone_gc_threshold > 0
+            && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
+        {
+            let min_ts = self.mvcc.get_min_active_snapshot_ts();
+            if min_ts != self.last_gc_min_snapshot_ts
+                || (cfg.gc_min_serial > 0 && self.maintenance_serial % cfg.gc_min_serial == 0)
+            {
+                let cleaned = self.mvcc.gc_tombstones(min_ts);
+                self.last_gc_min_snapshot_ts = min_ts;
+                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                if cleaned > 0 {
+                    maintenance_ran += 1;
+                    log::debug!(
+                        "Auto-maintenance GC: removed {} tombstones (min_ts={}, total={})",
+                        cleaned,
+                        min_ts,
+                        self.mvcc.total_tombstone_count()
+                    );
+                }
+            }
+        }
+
+        // Tier 2: property table compaction when the deleted-row ratio is high.
+        // Only runs while a snapshot is active: compaction reclaims version
+        // chains older than the oldest active snapshot, so without a snapshot
+        // there is no known safe retention boundary (ad-hoc time-travel reads
+        // may still need the history).
+        let min_ts = self.mvcc.get_min_active_snapshot_ts();
+        if cfg.property_compact_ratio > 0.0 && min_ts != Timestamp::MAX {
+            let prop_stats = self.properties.compaction_stats();
+            if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
+                self.compact_properties(min_ts);
+                self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                maintenance_ran += 1;
+            }
+        }
+
+        // Tier 3: freeze delta when it exceeds its own memory cap (or the
+        // global cap, whichever is lower).
+        let freeze_cap = if cfg.max_delta_memory_bytes > 0 {
+            cfg.max_delta_memory_bytes
+        } else {
+            self.config.max_mutable_csr_bytes
+        };
+        if freeze_cap > 0 && self.estimate_memory_usage() > freeze_cap {
+            self.freeze_csr_only(Timestamp::MAX);
+            self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+            maintenance_ran += 1;
+        }
+
+        // Tier 4: PhysicalDeletion merge when the tombstone pressure on frozen
+        // segments is high. Edges are physically dropped only when a bounded
+        // `min_active_snapshot_ts` exists (no snapshot can observe them);
+        // without snapshots the merge keeps every edge.
+        if cfg.deletion_compact_ratio > 0.0 {
+            let del_stats = self.deletion_stats();
+            let density = if del_stats.total_frozen_edges == 0 {
+                0.0
+            } else {
+                self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
+            };
+            if density >= cfg.deletion_compact_ratio {
+                let min_ts = self.mvcc.get_min_active_snapshot_ts();
+                let merge_threshold = CompactConfig::default()
+                    .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
+                let result = self.merge_segments_with_config_and_deletion_filter(
+                    self.config.segment_merge_threshold as Timestamp,
+                    merge_threshold,
+                    if min_ts < Timestamp::MAX {
+                        Some(min_ts)
+                    } else {
+                        None
+                    },
+                );
+                if result.segments_reduced > 0 {
+                    self.maintenance_serial = self.maintenance_serial.saturating_add(1);
+                    maintenance_ran += 1;
+                    log::debug!(
+                        "Auto-maintenance physical merge reduced segments by {} (density={:.2})",
+                        result.segments_reduced,
+                        density
+                    );
+                }
+            }
+        }
+
+        maintenance_ran
     }
 
     // ── Edge Property Index ──

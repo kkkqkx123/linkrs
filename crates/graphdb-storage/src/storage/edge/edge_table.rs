@@ -92,6 +92,18 @@ impl EdgeStore {
         self.0.needs_background_freeze()
     }
 
+    /// Run automatic maintenance on this table (tombstone GC, property
+    /// compaction, delta freeze) based on configured thresholds.
+    /// Returns the number of maintenance passes that actually ran.
+    pub fn maybe_run_auto_maintenance(&mut self) -> usize {
+        self.0.maybe_run_auto_maintenance()
+    }
+
+    /// Get the current tombstone statistics for observability and GC decisions.
+    pub fn tombstone_stats(&self) -> stats::TombstoneStats {
+        self.0.mvcc.tombstone_stats()
+    }
+
     // ── Accessors ──
     pub fn label(&self) -> super::LabelId {
         self.0.label()

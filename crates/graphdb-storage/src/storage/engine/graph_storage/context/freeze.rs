@@ -61,12 +61,36 @@ impl GraphStorageContext {
     }
 
     /// Run background maintenance synchronously: automatic vertex compaction
-    /// followed by the existing delta freeze pass.
+    /// followed by the existing delta freeze pass, then per-table automatic
+    /// maintenance (tombstone GC, property compaction, delta freeze).
     pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
         if let Err(e) = self.maybe_auto_compact_vertices() {
             log::warn!("Automatic vertex compaction failed: {}", e);
         }
-        self.trigger_background_freeze()
+        self.trigger_background_freeze()?;
+        self.trigger_auto_edge_maintenance()
+    }
+
+    /// Run the storage-level automatic maintenance pass on every edge
+    /// partition: tombstone GC, property compaction, and delta freeze
+    /// based on each table's configured thresholds.
+    fn trigger_auto_edge_maintenance(&self) -> StorageResult<()> {
+        self.persistent
+            .data_store
+            .for_all_edge_partitions_mut(|_key, table| {
+                let ran = table.maybe_run_auto_maintenance();
+                if ran > 0 && log::log_enabled!(log::Level::Debug) {
+                    let stats = table.tombstone_stats();
+                    log::debug!(
+                        "Auto edge maintenance ran {} passes on {} (tombstones={})",
+                        ran,
+                        table.label(),
+                        stats.count
+                    );
+                }
+                Ok(())
+            })?;
+        Ok(())
     }
 
     /// Compact vertex tables whose deleted-vertex ID holes exceed the
