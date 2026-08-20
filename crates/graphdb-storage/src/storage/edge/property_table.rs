@@ -311,7 +311,19 @@ pub struct PropertyTable {
     /// O(1) sum of live record payload bytes, maintained incrementally on
     /// insert/update/delete so `used_memory_size` does not scan all records.
     used_data_bytes: usize,
+
+    /// Upper bound on the before-image version chain length per row.
+    ///
+    /// When a row is updated more than this many times, the oldest before-images
+    /// are folded together (interval-merged) so memory stays bounded. This
+    /// trades unbounded historical precision for a bounded chain: the most
+    /// recent `cap` versions remain exact, older history is coarsened into a
+    /// single representative interval.
+    version_chain_cap: usize,
 }
+
+/// Default upper bound on the per-row before-image version chain length.
+const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
 
 impl PropertyTable {
     pub fn new() -> Self {
@@ -326,6 +338,7 @@ impl PropertyTable {
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
             used_data_bytes: 0,
+            version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
         }
     }
 
@@ -341,7 +354,17 @@ impl PropertyTable {
             column_byte_offsets: Vec::new(),
             value_index: PropertyValueIndex::new(),
             used_data_bytes: 0,
+            version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
         }
+    }
+
+    /// Set the upper bound on the per-row before-image version chain length.
+    ///
+    /// A value of `0` disables the bound (unbounded history, pre-F10
+    /// behaviour). When the chain exceeds the bound, the oldest before-images
+    /// are folded together; see [`PropertyTable::fold_oldest_versions`].
+    pub fn set_version_chain_cap(&mut self, cap: usize) {
+        self.version_chain_cap = cap;
     }
 
     pub fn add_property(
@@ -849,7 +872,41 @@ impl PropertyTable {
                     self.chain_records.resize(row_idx + 1, Vec::new());
                 }
                 self.chain_records[row_idx].push(record.clone());
+                // Bound the chain length: fold the oldest before-images once
+                // the cap is exceeded so memory stays bounded.
+                self.fold_oldest_versions(row_idx);
             }
+        }
+    }
+
+    /// Bound the before-image chain length for `row_idx` by folding the oldest
+    /// entries when the chain exceeds `version_chain_cap`.
+    ///
+    /// Folding merges the two oldest before-images: the older entry's data is
+    /// kept as the representative and its visibility interval `[create_ts,
+    /// delete_ts)` is extended to cover the second entry's interval, which is
+    /// then dropped. This preserves the original oldest value and the newest
+    /// current value while coarsening intermediate history, so the most recent
+    /// updates remain exact.
+    ///
+    /// A cap of `0` disables the bound (unbounded history).
+    fn fold_oldest_versions(&mut self, row_idx: usize) {
+        let cap = self.version_chain_cap;
+        if cap == 0 {
+            return;
+        }
+        let chain = &mut self.chain_records[row_idx];
+        while chain.len() > cap {
+            if chain.len() < 2 {
+                break;
+            }
+            // Merge the two oldest entries into one: keep the older data,
+            // extend its interval to cover the younger entry.
+            let second = chain.remove(1);
+            if let Some(end) = second.delete_ts {
+                chain[0].delete_ts = Some(end);
+            }
+            self.used_data_bytes = self.used_data_bytes.saturating_sub(second.data.len());
         }
     }
 
@@ -869,6 +926,10 @@ impl PropertyTable {
         if !self.has_property(name) {
             return Err(StorageError::column_not_found(name.to_string()));
         }
+
+        // Storage-layer write-write conflict detection: reject a write whose
+        // timestamp would overlap a newer existing version or a tombstoned row.
+        self.check_write_conflict(row_idx, offset, ts)?;
 
         // Get old property value for index maintenance
         let old_props = self.get(offset, None);
@@ -933,6 +994,10 @@ impl PropertyTable {
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
+        // Storage-layer write-write conflict detection (direct callers such as
+        // `set_property_by_id` bypass `set_property`'s check).
+        self.check_write_conflict(row_idx, offset, ts)?;
+
         let Some(record) = self.records[row_idx].as_ref() else {
             return Err(StorageError::invalid_offset(offset));
         };
@@ -950,6 +1015,40 @@ impl PropertyTable {
         self.used_data_bytes += new_record_obj.data.len();
         self.records[row_idx] = Some(new_record_obj);
 
+        Ok(())
+    }
+
+    /// Reject a write whose timestamp would contradict the row's current
+    /// version. This is the storage-layer write-write conflict detection:
+    ///
+    /// - Writing at `ts` strictly **before** the current version's creation
+    ///   time would clobber a newer version without preserving it as history
+    ///   (a "back-in-time" write overlapping an existing interval).
+    /// - Writing at `ts` strictly **after** the row was marked deleted writes
+    ///   to a tombstoned entity.
+    ///
+    /// Same-timestamp re-writes (rollback / WAL redo that reuse the original
+    /// transaction timestamp) and strictly forward writes (the normal
+    /// time-travel version chain) pass through unchanged, preserving the
+    /// distinction between "concurrent transaction conflict" and "historical
+    /// version write".
+    fn check_write_conflict(&self, row_idx: usize, offset: u32, ts: Timestamp) -> StorageResult<()> {
+        let Some(record) = self.records[row_idx].as_ref() else {
+            return Ok(());
+        };
+        if let Some(del_ts) = record.delete_ts {
+            if ts > del_ts {
+                return Err(StorageError::write_write_conflict(format!(
+                    "property row at offset {} deleted at ts={}, attempted write at ts={}",
+                    offset, del_ts, ts
+                )));
+            }
+        } else if record.create_ts > ts {
+            return Err(StorageError::write_write_conflict(format!(
+                "property row at offset {} already has a newer version at ts={}, attempted write at ts={}",
+                offset, record.create_ts, ts
+            )));
+        }
         Ok(())
     }
 

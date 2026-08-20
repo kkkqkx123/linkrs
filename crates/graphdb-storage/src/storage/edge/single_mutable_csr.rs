@@ -195,26 +195,37 @@ impl SingleMutableCsr {
         Ok(())
     }
 
-    pub fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    pub fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         let src_idx = src as usize;
 
         if src_idx >= self.vertex_capacity() {
-            return false;
+            return Ok(false);
         }
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.delete_ts < Timestamp::MAX || nbr.create_ts > ts {
-            return false;
+        if nbr.delete_ts < Timestamp::MAX {
+            if nbr.delete_ts != ts {
+                return Err(StorageError::write_write_conflict(format!(
+                    "edge {:?} already deleted at ts={}, attempted delete at ts={}",
+                    nbr.edge_id, nbr.delete_ts, ts
+                )));
+            }
+            // Idempotent re-delete at the same timestamp.
+            return Ok(false);
+        }
+
+        if nbr.create_ts > ts {
+            return Ok(false);
         }
 
         if edge_id.0 != u64::MAX && nbr.edge_id != edge_id {
-            return false;
+            return Ok(false);
         }
 
         nbr.delete_ts = ts;
         self.edge_count.fetch_sub(1, Ordering::Relaxed);
-        true
+        Ok(true)
     }
 
     pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> bool {
@@ -287,7 +298,7 @@ impl SingleMutableCsr {
             return false;
         }
         let edge_id = self.nbr_list[src_idx].edge_id;
-        self.delete_edge(src, edge_id, ts)
+        self.delete_edge(src, edge_id, ts).unwrap_or(false)
     }
 
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
@@ -493,7 +504,7 @@ impl MutableCsrTrait for SingleMutableCsr {
         SingleMutableCsr::insert_edge(self, src, dst, edge_id, prop_offset, ts)
     }
 
-    fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         SingleMutableCsr::delete_edge(self, src, edge_id, ts)
     }
 

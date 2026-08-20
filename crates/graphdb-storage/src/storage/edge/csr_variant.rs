@@ -359,8 +359,15 @@ impl MutableCsrTrait for CsrVariant {
         }
     }
 
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
-        dispatch!(self, delete_edge(src_vid, edge_id, ts) -> false)
+    fn delete_edge(
+        &mut self,
+        src_vid: u32,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        dispatch!(self, delete_edge(src_vid, edge_id, ts) -> Err(StorageError::invalid_operation(
+            "no edges stored for this edge type".to_string()
+        )))
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
@@ -565,10 +572,10 @@ mod tests {
             .is_err());
         assert_eq!(csr.edge_count(), 0);
 
-        // None variant should reject all deletions
-        assert!(!csr.delete_edge(0, EdgeId(100), 1));
-        assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
-        assert!(!csr.revert_delete_by_offset(0, 0, 1));
+// None variant should reject all deletions
+assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
+assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
+assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
         // None variant should return None for get_edge
         assert!(csr.get_edge(0, VertexId::from_int64(1), 1).is_none());

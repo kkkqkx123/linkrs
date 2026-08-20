@@ -315,11 +315,22 @@ impl MutableCsr {
         result
     }
 
-    /// Delete an edge by edge_id
-    pub fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    /// Delete an edge by edge_id.
+    ///
+    /// Returns `Ok(true)` when deleted, `Ok(false)` when the edge does not
+    /// exist or is not deletable at `ts`, and
+    /// `Err(StorageError::write_write_conflict)` when the edge was already
+    /// deleted at a different timestamp (write-write conflict at the storage
+    /// layer, surfaced immediately instead of a silent `false`).
+    pub fn delete_edge(
+        &mut self,
+        src_vid: u32,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         let src_idx = src_vid as usize;
         if src_idx >= self.vertex_capacity() {
-            return false;
+            return Ok(false);
         }
 
         // Scan primary
@@ -327,10 +338,24 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
-            if nbr.edge_id == edge_id && nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
-                nbr.delete_ts = ts;
-                self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                return true;
+            if nbr.edge_id == edge_id {
+                if nbr.delete_ts != Timestamp::MAX {
+                    if nbr.delete_ts != ts {
+                        return Err(StorageError::write_write_conflict(format!(
+                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
+                            edge_id, nbr.delete_ts, ts
+                        )));
+                    }
+                    // Idempotent re-delete at the same timestamp.
+                    return Ok(false);
+                }
+                if nbr.create_ts <= ts {
+                    nbr.delete_ts = ts;
+                    self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                    return Ok(true);
+                }
+                // Cannot delete an edge that is not yet created at `ts`.
+                return Ok(false);
             }
         }
 
@@ -338,15 +363,25 @@ impl MutableCsr {
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
             if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
                 let nbr = &mut chunks[chunk_idx][edge_idx];
-                if nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
+                if nbr.delete_ts != Timestamp::MAX {
+                    if nbr.delete_ts != ts {
+                        return Err(StorageError::write_write_conflict(format!(
+                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
+                            edge_id, nbr.delete_ts, ts
+                        )));
+                    }
+                    return Ok(false);
+                }
+                if nbr.create_ts <= ts {
                     nbr.delete_ts = ts;
                     self.edge_count.fetch_sub(1, Ordering::Relaxed);
-                    return true;
+                    return Ok(true);
                 }
+                return Ok(false);
             }
         }
 
-        false
+        Ok(false)
     }
 
     /// Delete edge by destination vertex
@@ -1156,7 +1191,12 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::insert_edge(self, src_vid, dst, edge_id, prop_offset, ts)
     }
 
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    fn delete_edge(
+        &mut self,
+        src_vid: u32,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         MutableCsr::delete_edge(self, src_vid, edge_id, ts)
     }
 
@@ -1228,9 +1268,29 @@ mod tests {
         csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 0, 1)
             .unwrap();
 
-        assert!(csr.delete_edge(0u32, EdgeId(100), 2));
+        assert!(csr.delete_edge(0u32, EdgeId(100), 2).unwrap());
 
         assert_eq!(csr.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_double_delete_conflict() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 10)
+            .unwrap();
+
+        // First delete succeeds.
+        assert!(csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
+        // Idempotent re-delete at the same timestamp is a no-op, not a conflict.
+        assert!(!csr.delete_edge(0u32, EdgeId(100), 100).unwrap());
+        // Deleting the same edge at a different timestamp is a write-write
+        // conflict, surfaced at the storage write path.
+        let err = csr.delete_edge(0u32, EdgeId(100), 200).unwrap_err();
+        assert_eq!(err.kind(), crate::core::error::storage::StorageErrorKind::Conflict);
+
+        // The edge is still logically deleted at the original timestamp.
+        assert_eq!(csr.edges_of(0u32, 50).len(), 1);
+        assert_eq!(csr.edges_of(0u32, 150).len(), 0);
     }
 
     #[test]
@@ -1304,7 +1364,7 @@ mod tests {
             .insert_edge(0u32, VertexId::from_int64(5), EdgeId(105), 0, 1)
             .is_err());
 
-        assert!(csr.delete_edge(0u32, EdgeId(104), 2));
+        assert!(csr.delete_edge(0u32, EdgeId(104), 2).unwrap());
     }
 
     #[test]
@@ -1340,9 +1400,9 @@ mod tests {
             csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
         }
 
-        csr.delete_edge(0u32, EdgeId(3), 5);
-        csr.delete_edge(0u32, EdgeId(5), 5);
-        csr.delete_edge(0u32, EdgeId(6), 5);
+        csr.delete_edge(0u32, EdgeId(3), 5).unwrap();
+        csr.delete_edge(0u32, EdgeId(5), 5).unwrap();
+        csr.delete_edge(0u32, EdgeId(6), 5).unwrap();
 
         // Cutoff 6: deletions at 5 predate the cutoff, so they are removed.
         let removed = csr.compact_with_ts(6, 0.25);
@@ -1362,7 +1422,7 @@ mod tests {
             let dst = VertexId::from_int64(i as i64);
             csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
         }
-        csr.delete_edge(0u32, EdgeId(2), 5);
+        csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
 
         // cutoff == MAX (no active snapshot): the deletion history must be
         // preserved for time-travel queries before the deletion.
@@ -1386,7 +1446,7 @@ mod tests {
             let dst = VertexId::from_int64(i as i64);
             csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
         }
-        csr.delete_edge(0u32, EdgeId(2), 5);
+        csr.delete_edge(0u32, EdgeId(2), 5).unwrap();
 
         let mut reported = Vec::new();
         let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |edge_id, delete_ts| {
@@ -1482,7 +1542,7 @@ mod tests {
         assert_eq!(csr.vertex_capacity(), (10_001.0_f64 * 1.25).ceil() as usize);
 
         // Compact reclaims slots of rows whose edges were all removed
-        csr.delete_edge(0u32, EdgeId(100), 2);
+        csr.delete_edge(0u32, EdgeId(100), 2).unwrap();
         csr.compact_with_ts(3, 0.0);
         assert_eq!(csr.total_edge_capacity, 1);
         assert_eq!(csr.primary_capacities[0], 0);
@@ -1590,7 +1650,7 @@ mod tests {
             .unwrap();
 
         // Delete the second edge at ts=2
-        csr.delete_edge(0u32, EdgeId(101), 2);
+        csr.delete_edge(0u32, EdgeId(101), 2).unwrap();
 
         // At ts=1, only first edge should be visible
         let edges_ts1: Vec<_> = csr.iter_edges_of(0u32, 1).collect();

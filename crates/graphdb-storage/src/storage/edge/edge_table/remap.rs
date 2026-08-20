@@ -94,7 +94,7 @@ fn remap_variant(
             nbr.create_ts,
         )?;
         if nbr.delete_ts != Timestamp::MAX {
-            csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
+            let _ = csr.delete_edge(*src, nbr.edge_id, nbr.delete_ts);
         }
     }
     Ok(csr)

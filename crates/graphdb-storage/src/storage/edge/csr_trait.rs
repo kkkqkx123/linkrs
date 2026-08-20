@@ -38,9 +38,17 @@ pub trait MutableCsrTrait: CsrBase {
 
     /// Delete an edge by edge_id.
     ///
+    /// Returns:
+    /// - `Ok(true)` when the edge was deleted.
+    /// - `Ok(false)` when the edge does not exist or cannot be deleted at `ts`
+    ///   (e.g. `create_ts > ts`), or when it was already deleted at exactly
+    ///   `ts` (idempotent re-delete).
+    /// - `Err(StorageError::write_write_conflict)` when the edge already exists
+    ///   but was deleted at a **different** timestamp.
+    ///
     /// - `MutableCsr`: uses `edge_id` to locate and delete the specific edge.
     /// - `SingleMutableCsr`: `edge_id` is **ignored** since there is only one edge per vertex.
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool;
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool>;
 
     /// Delete all edges matching (src, dst).
     ///

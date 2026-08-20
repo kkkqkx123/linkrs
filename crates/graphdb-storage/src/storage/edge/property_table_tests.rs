@@ -405,6 +405,174 @@ fn test_property_table_offset_reuse() {
 
 // ==================== MVCC Tests ====================
 
+/// Storage-layer write-write conflict detection: a write that would overlap a
+/// newer existing version ("back-in-time" write) or a tombstoned row is
+/// rejected at the write path, while forward time-travel version writes and
+/// same-timestamp re-writes (rollback / WAL redo) pass through.
+#[test]
+fn test_concurrent_update_conflict() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+
+    // Forward write at ts=200 creates a new version (legal history).
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+
+    // Same-timestamp re-write (rollback / WAL redo) is allowed.
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 200)
+        .unwrap();
+
+    // A write at ts=150 would overlap the version created at ts=200: conflict.
+    let err = table
+        .set_property(offset, "v", Some(Value::Int(3)), 150)
+        .unwrap_err();
+    assert_eq!(
+        err.kind(),
+        crate::core::error::storage::StorageErrorKind::Conflict
+    );
+
+    // The newer version is unchanged.
+    assert_eq!(
+        table
+            .get(offset, Some(200))
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(2))
+    );
+    // And the historical version is still queryable.
+    assert_eq!(
+        table
+            .get(offset, Some(150))
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(1))
+    );
+
+    // Writing to a row tombstoned at ts=300, at a later ts, is a conflict.
+    table.mark_deleted(offset, 300).unwrap();
+    let err2 = table
+        .set_property(offset, "v", Some(Value::Int(4)), 400)
+        .unwrap_err();
+    assert_eq!(
+        err2.kind(),
+        crate::core::error::storage::StorageErrorKind::Conflict
+    );
+}
+
+/// The before-image chain length must stay bounded under heavy updates once a
+/// cap is configured (F10): memory grows with the cap, not with the update count.
+#[test]
+fn test_version_chain_bounded() {
+    let mut table = PropertyTable::new();
+    table.set_version_chain_cap(4);
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(0))], 100)
+        .unwrap();
+
+    for i in 1..=200u32 {
+        table
+            .set_property(
+                offset,
+                "v",
+                Some(Value::Int(i as i32)),
+                100 + i as Timestamp,
+            )
+            .unwrap();
+    }
+
+    let row_idx = prop_offset_to_index(offset).unwrap();
+    let chain_len = table.chain_records[row_idx].len();
+    assert!(
+        chain_len <= 4,
+        "chain length {} exceeds cap 4",
+        chain_len
+    );
+    // The current (newest) value is always exact.
+    assert_eq!(
+        table
+            .get(offset, None)
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(200))
+    );
+}
+
+/// After folding, the oldest interval returns the folded (oldest) value while
+/// recent history stays exact (F10 merge semantics).
+#[test]
+fn test_merged_oldest_version() {
+    let mut table = PropertyTable::new();
+    table.set_version_chain_cap(3);
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+
+    // Updates at 110/120/130/140 create versions 2..5, overflowing the cap.
+    for (i, ts) in [110u64, 120, 130, 140].iter().enumerate() {
+        table
+            .set_property(offset, "v", Some(Value::Int(i as i32 + 2)), *ts)
+            .unwrap();
+    }
+
+    let row_idx = prop_offset_to_index(offset).unwrap();
+    let chain = &table.chain_records[row_idx];
+    // The two oldest before-images (v1 and v2) were folded: the oldest entry
+    // now covers [100, 120) and represents the oldest value.
+    assert_eq!(chain[0].create_ts, 100);
+    assert_eq!(chain[0].delete_ts, Some(120));
+    assert_eq!(chain.len(), 3);
+
+    // Querying the folded (oldest) range returns the oldest value.
+    assert_eq!(
+        table
+            .get(offset, Some(115))
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(1))
+    );
+    // Recent history remains exact.
+    assert_eq!(
+        table
+            .get(offset, Some(135))
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(4))
+    );
+    assert_eq!(
+        table
+            .get(offset, Some(145))
+            .unwrap()
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v),
+        Some(Value::Int(5))
+    );
+}
+
 /// P3: the O(1) `used_data_bytes` counter must match the sum of record
 /// payloads after a sequence of insert / update / delete / compact.
 #[test]

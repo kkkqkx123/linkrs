@@ -608,7 +608,7 @@ impl TimeTravelEdgeStore {
             // tombstone residue remains; fall back to logical deletion if
             // the entry cannot be located (e.g. strategy mismatch).
             if !self.out_csr.remove_edge(src, edge_id) {
-                self.out_csr.delete_edge(src, edge_id, ts);
+                let _ = self.out_csr.delete_edge(src, edge_id, ts);
             }
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
@@ -654,7 +654,7 @@ impl TimeTravelEdgeStore {
         if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
             let edge_id = nbr.edge_id;
 
-            if !self.out_csr.delete_edge(src, edge_id, ts) {
+            if !self.out_csr.delete_edge(src, edge_id, ts)? {
                 // Defensive: the out side could not be deleted.
                 return Ok(false);
             }

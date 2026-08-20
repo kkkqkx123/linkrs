@@ -304,9 +304,9 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         )))
     }
 
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         if src_vid as usize >= self.vertex_capacity() {
-            return false;
+            return Ok(false);
         }
 
         let base = self.vertex_offset(src_vid);
@@ -314,11 +314,21 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
 
         for i in 0..count {
             if self.edges[base + i].edge_id == edge_id {
+                if self.edges[base + i].delete_ts != Timestamp::MAX {
+                    if self.edges[base + i].delete_ts != ts {
+                        return Err(StorageError::write_write_conflict(format!(
+                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
+                            edge_id, self.edges[base + i].delete_ts, ts
+                        )));
+                    }
+                    // Idempotent re-delete at the same timestamp.
+                    return Ok(false);
+                }
                 self.edges[base + i].delete_ts = ts;
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
@@ -606,7 +616,7 @@ mod tests {
         assert_eq!(csr.edges_of(0, 35).len(), 3); // After all edges
 
         // Delete one edge
-        assert!(csr.delete_edge(0, EdgeId(101), 40));
+        assert!(csr.delete_edge(0, EdgeId(101), 40).unwrap());
 
         // Query after deletion
         assert_eq!(csr.edges_of(0, 35).len(), 3); // Before deletion
@@ -626,8 +636,8 @@ mod tests {
             .unwrap();
 
         // Delete some edges
-        assert!(csr.delete_edge(0, EdgeId(100), 20));
-        assert!(csr.delete_edge(0, EdgeId(101), 25));
+        assert!(csr.delete_edge(0, EdgeId(100), 20).unwrap());
+        assert!(csr.delete_edge(0, EdgeId(101), 25).unwrap());
 
         // Compact at ts=30
         let removed = csr.compact_with_ts(30, 0.2);

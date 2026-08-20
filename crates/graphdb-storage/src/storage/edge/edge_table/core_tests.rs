@@ -945,7 +945,7 @@ fn test_delete_in_failure_rolls_back_out() {
 
     // Simulate an in-direction failure: delete the in entry directly so the
     // delete_edge call below finds nothing to delete on the in side.
-    assert!(table.in_csr.delete_edge(1, edge_id, 200));
+    assert!(table.in_csr.delete_edge(1, edge_id, 200).unwrap());
 
     let result = table.delete_edge(0, 1, 0, 250).unwrap();
     assert!(!result);

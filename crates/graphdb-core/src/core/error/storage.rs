@@ -183,6 +183,19 @@ impl StorageError {
         Self::new(StorageErrorKind::Conflict, message)
     }
 
+    /// A write-write conflict detected at the storage layer write path.
+    ///
+    /// Two writes touched the same entity with incompatible timestamps (e.g.
+    /// deleting an edge that another write already deleted at a different
+    /// timestamp). This is the first line of defense; the transaction layer's
+    /// commit-time WriteSet certification remains the fallback.
+    pub fn write_write_conflict(entity: impl Into<String>) -> Self {
+        Self::new(
+            StorageErrorKind::Conflict,
+            format!("Write-write conflict: {}", entity.into()),
+        )
+    }
+
     pub fn lock_timeout(message: impl Into<String>) -> Self {
         Self::new(StorageErrorKind::LockTimeout, message)
     }

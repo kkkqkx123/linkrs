@@ -288,18 +288,28 @@ impl MutableCsrTrait for LabeledMutableCsr {
         self.insert_edge_with_label(src_vid, dst, edge_id, prop_offset, 0, ts)
     }
 
-    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         if src_vid as usize >= self.vertex_capacity() {
-            return false;
+            return Ok(false);
         }
 
         for nbr in &mut self.nbr_list {
             if nbr.edge_id == edge_id {
+                if nbr.delete_ts != Timestamp::MAX {
+                    if nbr.delete_ts != ts {
+                        return Err(StorageError::write_write_conflict(format!(
+                            "edge {:?} already deleted at ts={}, attempted delete at ts={}",
+                            edge_id, nbr.delete_ts, ts
+                        )));
+                    }
+                    // Idempotent re-delete at the same timestamp.
+                    return Ok(false);
+                }
                 nbr.delete_ts = ts;
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
@@ -594,7 +604,7 @@ mod tests {
         assert_eq!(csr.edges_of(0, 25).len(), 2); // After both edges
 
         // Delete edge
-        assert!(csr.delete_edge(0, EdgeId(100), 30));
+        assert!(csr.delete_edge(0, EdgeId(100), 30).unwrap());
 
         // Check deletion at different timestamps
         assert_eq!(csr.edges_of(0, 29).len(), 2); // Before deletion
