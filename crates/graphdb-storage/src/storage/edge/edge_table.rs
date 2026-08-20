@@ -675,41 +675,42 @@ impl core::TimeTravelEdgeStore {
         let start = Instant::now();
         let segments_before = self.out_segments.len() + self.in_segments.len();
 
-        if let Some(_min_ts) = min_active_snapshot_ts {
-            if self.out_segments.len() > 1 {
-                let out_indices: Vec<usize> = (0..self.out_segments.len()).collect();
-                merge::merge_selected_segments_with_deletion_filter_with_free_space(
-                    &mut self.out_segments,
-                    out_indices,
-                    Timestamp::MAX,
-                    min_active_snapshot_ts,
-                    &mut self.out_free_space,
-                );
-            }
-            if self.in_segments.len() > 1 {
-                let in_indices: Vec<usize> = (0..self.in_segments.len()).collect();
-                merge::merge_selected_segments_with_deletion_filter_with_free_space(
-                    &mut self.in_segments,
-                    in_indices,
-                    Timestamp::MAX,
-                    min_active_snapshot_ts,
-                    &mut self.in_free_space,
-                );
-            }
+        let (out_metrics, in_metrics) = if let Some(min_ts) = min_active_snapshot_ts {
+            // Physical merge respects the time/size thresholds and drops only
+            // edges no active snapshot can observe.
+            let mvcc = &self.mvcc;
+            let out_metrics = merge::merge_in_place_physical_with_free_space(
+                &mut self.out_segments,
+                time_threshold,
+                size_threshold_bytes,
+                min_ts,
+                &mut self.out_free_space,
+                &|edge_id| mvcc.delete_ts_of(edge_id),
+            );
+            let in_metrics = merge::merge_in_place_physical_with_free_space(
+                &mut self.in_segments,
+                time_threshold,
+                size_threshold_bytes,
+                min_ts,
+                &mut self.in_free_space,
+                &|edge_id| mvcc.delete_ts_of(edge_id),
+            );
+            (out_metrics, in_metrics)
         } else {
-            let _ = merge::merge_in_place_with_free_space(
+            let out_metrics = merge::merge_in_place_with_free_space(
                 &mut self.out_segments,
                 time_threshold,
                 size_threshold_bytes,
                 &mut self.out_free_space,
             );
-            let _ = merge::merge_in_place_with_free_space(
+            let in_metrics = merge::merge_in_place_with_free_space(
                 &mut self.in_segments,
                 time_threshold,
                 size_threshold_bytes,
                 &mut self.in_free_space,
             );
-        }
+            (out_metrics, in_metrics)
+        };
 
         let segments_after = self.out_segments.len() + self.in_segments.len();
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -724,7 +725,7 @@ impl core::TimeTravelEdgeStore {
             metrics: MergeMetrics {
                 segments_before,
                 segments_after,
-                edges_merged: 0,
+                edges_merged: out_metrics.edges_processed + in_metrics.edges_processed,
                 duration_ms,
             },
             segments_reduced: segments_before.saturating_sub(segments_after),

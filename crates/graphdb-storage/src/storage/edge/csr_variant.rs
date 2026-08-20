@@ -375,6 +375,14 @@ impl MutableCsrTrait for CsrVariant {
         dispatch!(self, revert_delete_by_offset(src_vid, offset, ts) -> false)
     }
 
+    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        dispatch!(self, remove_edge(src_vid, edge_id) -> false)
+    }
+
+    fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+        dispatch!(self, revert_delete_by_edge_id(src_vid, edge_id, ts) -> false)
+    }
+
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         dispatch_immutable!(self, get_edge(src_vid, dst, ts) -> None)
     }
@@ -441,6 +449,25 @@ impl CsrVariant {
             CsrVariant::MultiSingle(csr) => CsrIterator::MultiSingle(csr.iter_all()),
             CsrVariant::Labeled(csr) => CsrIterator::Labeled(csr.iter_all()),
             CsrVariant::None { .. } => CsrIterator::None,
+        }
+    }
+
+    /// Compact with per-edge removal reporting.
+    ///
+    /// Only the `Multiple` strategy tracks per-edge delete timestamps;
+    /// the other strategies fall back to their existing `compact_with_ts`
+    /// semantics.
+    pub fn compact_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                csr.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
+            }
+            _ => self.compact_with_ts(cutoff, reserve_ratio),
         }
     }
 }

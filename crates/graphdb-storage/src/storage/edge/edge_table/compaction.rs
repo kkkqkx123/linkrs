@@ -9,7 +9,7 @@ use super::segment::DeletionInfo;
 use super::stats::DeletionStats;
 use crate::core::types::{CompactConfig, Timestamp};
 
-use crate::storage::edge::{CsrBase, MutableCsrTrait};
+use crate::storage::edge::CsrBase;
 
 /// Compaction mode for the unified compact_and_freeze pipeline.
 ///
@@ -37,7 +37,11 @@ impl TimeTravelEdgeStore {
     /// # Layer 1: Mutable CSR Deletion
     ///
     /// - Scope: Only operates on out_csr and in_csr (delta CSRs)
-    /// - What it does: Physically removes entries marked as deleted in mvcc.tombstones
+    /// - What it does: Physically removes entries whose deletion predates the
+    ///   oldest active snapshot (delete_ts < min_active_snapshot_ts) and
+    ///   promotes their deletion into the global tombstone layer. When no
+    ///   active snapshot exists, deleted entries are kept so time-travel
+    ///   queries before the deletion remain possible.
     /// - What it doesn't do: Does NOT freeze segments or merge them
     /// - Result: Immediate space reclamation in memory
     /// - When: Called before freeze to clean up the delta
@@ -48,18 +52,32 @@ impl TimeTravelEdgeStore {
     /// - Layer 2: merge_segments_with_config_and_deletion_filter() - physical removal during merge
     /// - Layer 3: compact_properties() - reclaims unused property offsets
     ///
+    /// The `ts` parameter is retained for API compatibility but does not gate
+    /// removal: the active-snapshot cutoff governs what may be dropped.
+    ///
     /// Returns number of edges removed.
-    pub fn compact_csr_only(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
-        self.out_csr.compact_with_ts(ts, reserve_ratio)
-            + self.in_csr.compact_with_ts(ts, reserve_ratio)
+    pub fn compact_csr_only(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
+        let cutoff = self.mvcc.get_min_active_snapshot_ts();
+        let removed_out = self.out_csr.compact_with_ts_reporting(
+            cutoff,
+            reserve_ratio,
+            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+        );
+        let removed_in = self.in_csr.compact_with_ts_reporting(
+            cutoff,
+            reserve_ratio,
+            &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+        );
+        removed_out + removed_in
     }
 
     /// Compact mutable CSRs if fragmentation exceeds threshold.
     ///
     /// Uses `FragmentationStats::should_compact` for adaptive threshold decision.
     /// Useful before flushing to disk to reduce memory usage.
-    pub fn maybe_compact_for_flush(&mut self, ts: Timestamp, threshold: f32) {
+    pub fn maybe_compact_for_flush(&mut self, _ts: Timestamp, threshold: f32) {
         const RESERVE_RATIO: f32 = 0.25;
+        let cutoff = self.mvcc.get_min_active_snapshot_ts();
         let out_stats = self.out_csr.fragmentation_stats();
         let in_stats = self.in_csr.fragmentation_stats();
         let out_wasted = self.out_csr.wasted_bytes_estimate();
@@ -69,7 +87,11 @@ impl TimeTravelEdgeStore {
             .is_some_and(|s| s.should_compact(threshold))
             || self.out_csr.fragmentation_ratio() >= threshold
         {
-            self.out_csr.compact_with_ts(ts, RESERVE_RATIO);
+            self.out_csr.compact_with_ts_reporting(
+                cutoff,
+                RESERVE_RATIO,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+            );
             if let Some(ref stats) = out_stats {
                 log::debug!(
                     "Compacted out_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes, wasted={}",
@@ -85,7 +107,11 @@ impl TimeTravelEdgeStore {
             .is_some_and(|s| s.should_compact(threshold))
             || self.in_csr.fragmentation_ratio() >= threshold
         {
-            self.in_csr.compact_with_ts(ts, RESERVE_RATIO);
+            self.in_csr.compact_with_ts_reporting(
+                cutoff,
+                RESERVE_RATIO,
+                &mut |edge_id, delete_ts| self.mvcc.record_deletion(edge_id, delete_ts),
+            );
             if let Some(ref stats) = in_stats {
                 log::debug!(
                     "Compacted in_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes, wasted={}",

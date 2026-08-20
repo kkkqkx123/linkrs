@@ -835,3 +835,122 @@ fn test_version_history_multiple_changes() -> StorageResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_compact_preserves_deleted_edge_history() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+
+    // Hot-path deletion: only Nbr.delete_ts is set, no tombstone yet.
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    // No active snapshot pins the history, so compaction must NOT drop the
+    // deleted entry: time-travel before the deletion stays possible.
+    let removed = table.compact_csr_only(300, 0.25);
+    assert_eq!(removed, 0);
+
+    let before_delete = table.out_edges(0, 150);
+    assert_eq!(before_delete.len(), 1);
+    let after_delete = table.out_edges(0, 250);
+    assert!(after_delete.is_empty());
+}
+
+#[test]
+fn test_freeze_preserves_deleted_edge_history() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    // Freeze must carry the deletion into the tombstone layer and keep the
+    // entry in the frozen segment so queries before the deletion still see it.
+    let frozen = table.freeze_csr_only(300);
+    assert!(frozen > 0);
+
+    let before_delete = table.out_edges(0, 150);
+    assert_eq!(before_delete.len(), 1);
+    let after_delete = table.out_edges(0, 250);
+    assert!(after_delete.is_empty());
+}
+
+#[test]
+fn test_compact_removes_expired_deletions_with_snapshot() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    // An active snapshot at 300 makes pre-300 history unreachable, so
+    // compaction may physically drop the entry and promote its tombstone.
+    let edge_id = table
+        .out_csr
+        .get_edge(0, TimeTravelEdgeStore::edge_endpoint_key(1, 0), 150)
+        .unwrap()
+        .edge_id;
+    table.mvcc.register_active_snapshot(300);
+
+    let removed = table.compact_csr_only(300, 0.25);
+    // One entry removed per direction (out + in).
+    assert_eq!(removed, 2);
+
+    // The deletion is still visible through the tombstone layer and can be
+    // garbage collected once the snapshot goes away.
+    assert!(table.mvcc.is_tombstoned(edge_id, 300));
+    assert!(!table.mvcc.is_tombstoned(edge_id, 100));
+    assert!(!table.has_edge(0, 1, 0, 250));
+}
+
+#[test]
+fn test_insert_failure_rolls_back_physically() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    // Force the in-direction insert to fail by swapping in a None CSR; this
+    // mirrors an internal strategy mismatch (no public schema allows it).
+    table.in_csr = CsrVariant::None {
+        vertex_capacity: table.in_csr.vertex_capacity(),
+    };
+
+    let result = table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100);
+    assert!(result.is_err());
+
+    // No residue in the out direction: physically rolled back, no tombstone.
+    assert_eq!(table.out_csr.edge_count(), 0);
+    assert_eq!(table.out_csr.iter_all().count(), 0);
+    assert!(!table.has_edge(0, 1, 0, 100));
+}
+
+#[test]
+fn test_delete_in_failure_rolls_back_out() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+
+    let dst_key = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
+    let edge_id = table.out_csr.get_edge(0, dst_key, 150).unwrap().edge_id;
+
+    // Simulate an in-direction failure: delete the in entry directly so the
+    // delete_edge call below finds nothing to delete on the in side.
+    assert!(table.in_csr.delete_edge(1, edge_id, 200));
+
+    let result = table.delete_edge(0, 1, 0, 250).unwrap();
+    assert!(!result);
+
+    // The out-direction deletion was rolled back: the edge stays visible.
+    assert!(table.has_edge(0, 1, 0, 250));
+    let nbr = table.out_csr.get_edge(0, dst_key, 250).unwrap();
+    assert_eq!(nbr.delete_ts, Timestamp::MAX);
+}

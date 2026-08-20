@@ -57,6 +57,27 @@ pub trait MutableCsrTrait: CsrBase {
     /// - `SingleMutableCsr`: only offset == 0 is valid.
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool;
 
+    /// Physically remove an edge by edge id (no tombstone trace).
+    ///
+    /// Reclaims the slot and updates the edge count. Only implemented by
+    /// `MutableCsr`; other strategies default to no-op.
+    fn remove_edge(&mut self, _src_vid: u32, _edge_id: EdgeId) -> bool {
+        false
+    }
+
+    /// Revert a deletion by edge id if it happened at or before `ts`.
+    ///
+    /// Restores the entry as live. Only implemented by `MutableCsr`; other
+    /// strategies default to no-op.
+    fn revert_delete_by_edge_id(
+        &mut self,
+        _src_vid: u32,
+        _edge_id: EdgeId,
+        _ts: Timestamp,
+    ) -> bool {
+        false
+    }
+
     /// Get a specific edge by source and destination.
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr>;
 

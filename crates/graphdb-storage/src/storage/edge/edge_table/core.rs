@@ -538,7 +538,12 @@ impl TimeTravelEdgeStore {
             .in_csr
             .insert_edge(dst, src_key, edge_id, prop_offset, ts)
         {
-            self.out_csr.delete_edge(src, edge_id, ts);
+            // Roll back the out-direction insertion physically so no
+            // tombstone residue remains; fall back to logical deletion if
+            // the entry cannot be located (e.g. strategy mismatch).
+            if !self.out_csr.remove_edge(src, edge_id) {
+                self.out_csr.delete_edge(src, edge_id, ts);
+            }
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
@@ -582,8 +587,16 @@ impl TimeTravelEdgeStore {
         if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
             let edge_id = nbr.edge_id;
 
-            self.out_csr.delete_edge(src, edge_id, ts);
-            self.in_csr.delete_edge_by_dst(dst, src_key, ts);
+            if !self.out_csr.delete_edge(src, edge_id, ts) {
+                // Defensive: the out side could not be deleted.
+                return Ok(false);
+            }
+            if !self.in_csr.delete_edge_by_dst(dst, src_key, ts) {
+                // Roll back the out-direction deletion to keep both sides
+                // consistent.
+                self.out_csr.revert_delete_by_edge_id(src, edge_id, ts);
+                return Ok(false);
+            }
 
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             return Ok(true);
@@ -637,8 +650,15 @@ impl TimeTravelEdgeStore {
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
         if self.out_csr.get_edge(src, dst_key, ts).is_some() {
-            self.out_csr.delete_edge_by_offset(src, oe_offset, ts);
-            self.in_csr.delete_edge_by_offset(dst, ie_offset, ts);
+            if !self.out_csr.delete_edge_by_offset(src, oe_offset, ts) {
+                return Ok(false);
+            }
+            if !self.in_csr.delete_edge_by_offset(dst, ie_offset, ts) {
+                // Roll back the out-direction deletion to keep both sides
+                // consistent.
+                self.out_csr.revert_delete_by_offset(src, oe_offset, ts);
+                return Ok(false);
+            }
             return Ok(true);
         }
         Ok(false)

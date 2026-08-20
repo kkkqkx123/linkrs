@@ -287,6 +287,50 @@ impl MVCCManager {
         self.min_active_snapshot_ts
     }
 
+    /// Earliest deletion timestamp of an edge across all layers, if any.
+    ///
+    /// Hot layers are checked first (O(1)), then the cold layer with a bloom
+    /// pre-filter plus binary search. Used by the merge path to decide whether
+    /// a per-edge deletion is still observable and to rebuild `DeletionInfo`
+    /// from the actual remaining deletions.
+    pub fn delete_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        let mut earliest: Option<Timestamp> = None;
+        for layer in [
+            &self.pending_segment_deletions,
+            &self.segment_tombstones,
+            &self.tombstones,
+        ] {
+            if let Some(&delete_ts) = layer.get(&edge_id) {
+                earliest = Some(earliest.map_or(delete_ts, |ts| ts.min(delete_ts)));
+            }
+        }
+
+        if self.cold_bloom_filter.might_contain(edge_id.0) {
+            if let Ok(idx) = self
+                .cold_tombstones
+                .binary_search_by_key(&edge_id, |&(id, _)| id)
+            {
+                let cold_ts = self.cold_tombstones[idx].1;
+                earliest = Some(earliest.map_or(cold_ts, |ts| ts.min(cold_ts)));
+            }
+        }
+
+        earliest
+    }
+
+    /// Record a deletion in the global tombstone map.
+    ///
+    /// Keeps the earliest `delete_ts` when the same edge is recorded more
+    /// than once: an earlier deletion covers a wider query range and must
+    /// win. Used when a deleted entry is physically removed from the hot
+    /// CSR, so its deletion stays visible through the tombstone layer.
+    pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
+        let earliest = self
+            .delete_ts_of(edge_id)
+            .map_or(delete_ts, |ts| ts.min(delete_ts));
+        self.tombstones.insert(edge_id, earliest);
+    }
+
     /// Get number of active snapshots (for testing and debugging)
     #[cfg(test)]
     pub fn active_snapshot_count(&self) -> usize {
@@ -522,6 +566,23 @@ mod tests {
 
         table.mvcc.unregister_active_snapshot(1);
         assert_eq!(table.mvcc.active_snapshot_count(), 1);
+    }
+
+    #[test]
+    fn test_record_deletion_keeps_earliest_ts() {
+        let mut mvcc = MVCCManager::new();
+
+        mvcc.record_deletion(EdgeId(7), 200);
+        mvcc.record_deletion(EdgeId(7), 150);
+
+        // The earlier deletion wins: it covers a wider query range.
+        assert_eq!(mvcc.tombstones.get(&EdgeId(7)), Some(&150));
+        assert!(mvcc.is_tombstoned(EdgeId(7), 200));
+        assert!(!mvcc.is_tombstoned(EdgeId(7), 100));
+
+        // delete_ts_of resolves the same value across layers.
+        assert_eq!(mvcc.delete_ts_of(EdgeId(7)), Some(150));
+        assert_eq!(mvcc.delete_ts_of(EdgeId(999)), None);
     }
 
     #[test]

@@ -20,6 +20,17 @@ impl TimeTravelEdgeStore {
     /// Does NOT perform physical compaction.
     /// Uses incremental index updates for efficiency.
     pub fn freeze_csr_only(&mut self, ts: Timestamp) -> usize {
+        // Promote deletions of delta entries into the global tombstone layer
+        // before freezing. Delta entries carry delete_ts inline; frozen
+        // segments store none and rely on tombstones for filtering, so
+        // without this promotion the deletion history would be lost. Only the
+        // out direction needs scanning (tombstones are global).
+        for (_, nbr) in self.out_csr.iter_all() {
+            if nbr.delete_ts != Timestamp::MAX {
+                self.mvcc.record_deletion(nbr.edge_id, nbr.delete_ts);
+            }
+        }
+
         // Freeze out direction
         let out_segments_before = self.out_segments.len();
         let out_result = Self::freeze_delta(
@@ -96,7 +107,8 @@ impl TimeTravelEdgeStore {
         segment_tombstones: &HashMap<EdgeId, Timestamp>,
     ) -> merge::FreezeDeltaResult {
         let entries: Vec<_> = delta
-            .iter(ts)
+            .iter_all()
+            .filter(|(_, nbr)| nbr.create_ts <= ts)
             .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 (src_u32, nbr)
@@ -271,6 +283,10 @@ impl TimeTravelEdgeStore {
 
         let mut total_merged = 0;
         let min_snapshot_ts = self.mvcc.get_min_active_snapshot_ts();
+        // Physical deletion is only safe while an active snapshot pins the
+        // history; with no active snapshot (min == MAX) pass None so the
+        // merge never drops tombstoned edges.
+        let deletion_filter = (min_snapshot_ts < Timestamp::MAX).then_some(min_snapshot_ts);
 
         // Emergency merge: if segment count exceeds hard limit, merge aggressively
         if self.config.max_segments_per_direction > 0 {
@@ -287,7 +303,8 @@ impl TimeTravelEdgeStore {
                             &mut self.out_segments,
                             merge_indices,
                             ts,
-                            Some(min_snapshot_ts),
+                            deletion_filter,
+                            &|edge_id| self.mvcc.delete_ts_of(edge_id),
                             &mut self.out_free_space,
                         );
                     total_merged += merged;
@@ -307,7 +324,8 @@ impl TimeTravelEdgeStore {
                             &mut self.in_segments,
                             merge_indices,
                             ts,
-                            Some(min_snapshot_ts),
+                            deletion_filter,
+                            &|edge_id| self.mvcc.delete_ts_of(edge_id),
                             &mut self.in_free_space,
                         );
                     total_merged += merged;
@@ -342,7 +360,8 @@ impl TimeTravelEdgeStore {
                     &mut self.out_segments,
                     merge_indices.clone(),
                     ts,
-                    Some(min_snapshot_ts),
+                    deletion_filter,
+                    &|edge_id| self.mvcc.delete_ts_of(edge_id),
                     &mut self.out_free_space,
                 );
                 total_merged += merged;
@@ -368,7 +387,8 @@ impl TimeTravelEdgeStore {
                     &mut self.in_segments,
                     merge_indices.clone(),
                     ts,
-                    Some(min_snapshot_ts),
+                    deletion_filter,
+                    &|edge_id| self.mvcc.delete_ts_of(edge_id),
                     &mut self.in_free_space,
                 );
                 total_merged += merged;

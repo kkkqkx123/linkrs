@@ -439,6 +439,87 @@ impl MutableCsr {
         false
     }
 
+    /// Physically remove an edge by edge id from primary or overflow.
+    ///
+    /// Reclaims the slot and updates degree/edge count; no tombstone trace is
+    /// left behind. Used to roll back the out-direction when the in-direction
+    /// insertion fails.
+    pub fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+
+        // Scan primary
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            if self.nbr_list[offset + i].edge_id == edge_id {
+                // Shift left to close the gap, then decrement the degree.
+                for j in i..degree - 1 {
+                    self.nbr_list[offset + j] = self.nbr_list[offset + j + 1];
+                }
+                self.degrees[src_idx] -= 1;
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                return true;
+            }
+        }
+
+        // Scan overflow
+        if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
+            if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+                chunks[chunk_idx].remove(edge_idx);
+                self.edge_count.fetch_sub(1, Ordering::Relaxed);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Revert a deletion of an edge by edge id.
+    ///
+    /// Restores `delete_ts` to MAX when the entry was deleted at or before the
+    /// given timestamp. Used to roll back the out-direction when the
+    /// in-direction deletion fails.
+    pub fn revert_delete_by_edge_id(
+        &mut self,
+        src_vid: u32,
+        edge_id: EdgeId,
+        ts: Timestamp,
+    ) -> bool {
+        let src_idx = src_vid as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+
+        // Scan primary
+        let degree = self.degrees[src_idx] as usize;
+        let offset = self.adj_offsets[src_idx] as usize;
+        for i in 0..degree {
+            let nbr = &mut self.nbr_list[offset + i];
+            if nbr.edge_id == edge_id && nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
+                nbr.delete_ts = Timestamp::MAX;
+                self.edge_count.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
+        }
+
+        // Scan overflow
+        if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_vid, edge_id) {
+            if let Some(chunks) = self.overflow_chunks.get_mut(&src_vid) {
+                let nbr = &mut chunks[chunk_idx][edge_idx];
+                if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts <= ts {
+                    nbr.delete_ts = Timestamp::MAX;
+                    self.edge_count.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Get edges of a vertex at a given timestamp
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let src_idx = src_vid as usize;
@@ -697,9 +778,30 @@ impl MutableCsr {
     /// Compact CSR by removing deleted edges and reclaiming space.
     /// Merges overflow back into primary, restoring flat CSR layout.
     ///
-    /// Removes all edges marked as deleted (delete_ts != Timestamp::MAX).
-    /// The ts parameter reserves space for future edges.
-    pub fn compact_with_ts(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
+    /// Only entries whose deletion predates the active-snapshot cutoff are
+    /// physically removed (`delete_ts < cutoff` with `cutoff <
+    /// Timestamp::MAX`). With no active snapshot (`cutoff == MAX`) every
+    /// deleted entry is kept so time-travel queries before the deletion stay
+    /// possible; without that protection the deletion history would be lost.
+    /// The `reserve_ratio` parameter reserves space for future edges.
+    pub fn compact_with_ts(&mut self, cutoff: Timestamp, reserve_ratio: f32) -> usize {
+        self.compact_with_ts_reporting(cutoff, reserve_ratio, &mut |_, _| {})
+    }
+
+    /// Compact with per-edge removal reporting.
+    ///
+    /// Same semantics as `compact_with_ts`; `on_edge_removed` is invoked for
+    /// every entry physically dropped, with its edge id and delete timestamp,
+    /// so the caller can promote the deletion into the global tombstone layer.
+    pub fn compact_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+    ) -> usize {
+        // Without an active snapshot cutoff no deletion may be dropped.
+        let removals_enabled = cutoff < Timestamp::MAX;
+
         // Phase 1: compact individual vertex data (primary + overflow)
         // and compute new layout.
         let mut new_offsets = Vec::with_capacity(self.vertex_capacity());
@@ -717,10 +819,11 @@ impl MutableCsr {
             // Collect active edges from primary (not deleted)
             for i in 0..degree {
                 let nbr = &self.nbr_list[start + i];
-                if nbr.delete_ts == Timestamp::MAX {
-                    new_edges.push(*nbr);
-                } else {
+                if nbr.delete_ts != Timestamp::MAX && removals_enabled && nbr.delete_ts < cutoff {
+                    on_edge_removed(nbr.edge_id, nbr.delete_ts);
                     removed_count += 1;
+                } else {
+                    new_edges.push(*nbr);
                 }
             }
 
@@ -728,10 +831,14 @@ impl MutableCsr {
             if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
                 for chunk in chunks {
                     for nbr in chunk {
-                        if nbr.delete_ts == Timestamp::MAX {
-                            new_edges.push(*nbr);
-                        } else {
+                        if nbr.delete_ts != Timestamp::MAX
+                            && removals_enabled
+                            && nbr.delete_ts < cutoff
+                        {
+                            on_edge_removed(nbr.edge_id, nbr.delete_ts);
                             removed_count += 1;
+                        } else {
+                            new_edges.push(*nbr);
                         }
                     }
                 }
@@ -1065,6 +1172,14 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::revert_delete_by_offset(self, src_vid, offset, ts)
     }
 
+    fn remove_edge(&mut self, src_vid: u32, edge_id: EdgeId) -> bool {
+        MutableCsr::remove_edge(self, src_vid, edge_id)
+    }
+
+    fn revert_delete_by_edge_id(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
+        MutableCsr::revert_delete_by_edge_id(self, src_vid, edge_id, ts)
+    }
+
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         MutableCsr::get_edge(self, src_vid, dst, ts)
     }
@@ -1229,13 +1344,56 @@ mod tests {
         csr.delete_edge(0u32, EdgeId(5), 5);
         csr.delete_edge(0u32, EdgeId(6), 5);
 
-        let removed = csr.compact_with_ts(3, 0.25);
+        // Cutoff 6: deletions at 5 predate the cutoff, so they are removed.
+        let removed = csr.compact_with_ts(6, 0.25);
         assert_eq!(removed, 3);
 
         assert!(csr.overflow_chunks.get(&0).is_none_or(Vec::is_empty));
 
         let edges = csr.edges_of(0u32, 3);
         assert_eq!(edges.len(), 3);
+    }
+
+    #[test]
+    fn test_compact_with_ts_keeps_deleted_entries_without_cutoff() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+
+        for i in 1..=3 {
+            let dst = VertexId::from_int64(i as i64);
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+        }
+        csr.delete_edge(0u32, EdgeId(2), 5);
+
+        // cutoff == MAX (no active snapshot): the deletion history must be
+        // preserved for time-travel queries before the deletion.
+        let removed = csr.compact_with_ts(Timestamp::MAX, 0.25);
+        assert_eq!(removed, 0);
+
+        assert_eq!(csr.edges_of(0u32, 3).len(), 3);
+        assert_eq!(csr.edges_of(0u32, 6).len(), 2);
+
+        // A real cutoff drops the entry again.
+        let removed = csr.compact_with_ts(6, 0.25);
+        assert_eq!(removed, 1);
+        assert_eq!(csr.edges_of(0u32, 3).len(), 2);
+    }
+
+    #[test]
+    fn test_compact_with_ts_reporting_reports_removed_edges() {
+        let mut csr = MutableCsr::with_capacity(10, 100);
+
+        for i in 1..=3 {
+            let dst = VertexId::from_int64(i as i64);
+            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1).unwrap();
+        }
+        csr.delete_edge(0u32, EdgeId(2), 5);
+
+        let mut reported = Vec::new();
+        let removed = csr.compact_with_ts_reporting(6, 0.25, &mut |edge_id, delete_ts| {
+            reported.push((edge_id, delete_ts));
+        });
+        assert_eq!(removed, 1);
+        assert_eq!(reported, vec![(EdgeId(2), 5)]);
     }
 
     #[test]
