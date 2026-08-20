@@ -3,6 +3,7 @@ use crate::core::types::{DataType, VertexId};
 use crate::core::Value;
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::storage::edge::edge_table::segment::DeletionInfo;
 use crate::storage::edge::{EdgeSchema, EdgeStrategy};
 use crate::storage::schema::ChangeDetails;
 use crate::storage::types::StoragePropertyDef;
@@ -953,4 +954,237 @@ fn test_delete_in_failure_rolls_back_out() {
     assert!(table.has_edge(0, 1, 0, 250));
     let nbr = table.out_csr.get_edge(0, dst_key, 250).unwrap();
     assert_eq!(nbr.delete_ts, Timestamp::MAX);
+}
+
+#[test]
+fn test_freeze_deletion_info_counts_delta_deletions() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    // 5 edges in the delta, 2 logically deleted before freezing.
+    for i in 0..5 {
+        table.insert_edge(0, i, 0, &[], 100).unwrap();
+    }
+    assert!(table.delete_edge(0, 0, 0, 200).unwrap());
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    table.freeze_csr_only(300);
+
+    // The frozen segment keeps every entry (including the deleted ones) and
+    // now reports the real deletion statistics for this segment.
+    let out_seg = &table.out_segments[0];
+    assert_eq!(out_seg.csr.read().edge_count(), 5);
+    match out_seg.deletion_info {
+        DeletionInfo::HasDeletes {
+            min_ts,
+            max_ts,
+            deleted_count,
+        } => {
+            assert_eq!(min_ts, 200);
+            assert_eq!(max_ts, 200);
+            assert_eq!(deleted_count, 2);
+        }
+        other => panic!("expected HasDeletes, got {:?}", other),
+    }
+    assert!(matches!(
+        table.in_segments[0].deletion_info,
+        DeletionInfo::HasDeletes {
+            deleted_count: 2,
+            ..
+        }
+    ));
+
+    // Segment-level observability reflects the real deletion density.
+    assert_eq!(out_seg.deletion_ratio(), 0.4);
+    assert_eq!(out_seg.deletion_info.deletion_percentage(5), 40);
+
+    // Aggregate stats no longer report zero deletions.
+    let stats = table.deletion_stats();
+    assert!(stats.segments_with_deletions >= 2);
+    assert!(stats.total_deleted_edges >= 4);
+    assert_eq!(stats.oldest_deletion_ts, Some(200));
+}
+
+#[test]
+fn test_deletion_info_skip_optimization_works() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    // Fully-deleted segment: all 3 edges deleted before the freeze.
+    for i in 0..3 {
+        table.insert_edge(0, i, 0, &[], 100).unwrap();
+    }
+    assert!(table.delete_edge(0, 0, 0, 200).unwrap());
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table.delete_edge(0, 2, 0, 200).unwrap());
+
+    table.freeze_csr_only(300);
+    let out_seg = &table.out_segments[0];
+    assert!(matches!(
+        out_seg.deletion_info,
+        DeletionInfo::HasDeletes {
+            min_ts: 200,
+            max_ts: 200,
+            deleted_count: 3
+        }
+    ));
+
+    // Queries after the deletions are skipped entirely (all edges deleted
+    // before the query timestamp), while time-travel queries before the
+    // deletions still see the edges.
+    assert!(table.out_edges(0, 250).is_empty());
+    assert_eq!(table.out_edges(0, 150).len(), 3);
+    assert!(!table.has_edge(0, 0, 0, 250));
+    assert!(table.has_edge(0, 0, 0, 150));
+}
+
+#[test]
+fn test_partial_deletion_keeps_live_edges_after_freeze() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    // Partially-deleted segment: 5 edges, 2 deleted. The segment must NOT be
+    // skipped wholesale at query times after the deletions, the 3 live edges
+    // have to survive.
+    for i in 0..5 {
+        table.insert_edge(0, i, 0, &[], 100).unwrap();
+    }
+    assert!(table.delete_edge(0, 0, 0, 200).unwrap());
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+
+    table.freeze_csr_only(300);
+
+    let before_delete = table.out_edges(0, 150);
+    assert_eq!(before_delete.len(), 5);
+    let after_delete = table.out_edges(0, 250);
+    assert_eq!(after_delete.len(), 3);
+    for i in 2..5 {
+        assert!(table.has_edge(0, i, 0, 250));
+    }
+    assert!(!table.has_edge(0, 0, 0, 250));
+    assert!(!table.has_edge(0, 1, 0, 250));
+}
+
+#[test]
+fn test_delete_sets_snapshot_dirty() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table.freeze_csr_only(150);
+
+    // Freeze rebuilds the current snapshot and clears the dirty flag.
+    assert!(!table.snapshot_dirty);
+    assert!(table.current_snapshot_out.is_some());
+
+    // Deleting an edge from a frozen segment must invalidate the snapshot.
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table.snapshot_dirty);
+
+    // Lazy rebuild restores a clean snapshot.
+    table.rebuild_current_snapshot();
+    assert!(!table.snapshot_dirty);
+}
+
+#[test]
+fn test_snapshot_excludes_tombstoned_after_rebuild() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    table
+        .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .unwrap();
+
+    let dst_key_1 = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
+    let deleted_id = table.out_csr.get_edge(0, dst_key_1, 100).unwrap().edge_id;
+    table.freeze_csr_only(150);
+
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    table.rebuild_current_snapshot();
+    assert!(!table.snapshot_dirty);
+
+    // The rebuilt snapshot no longer contains the tombstoned edge.
+    let snapshot_edges = table.current_snapshot_out.as_ref().unwrap().edges_of(0);
+    assert_eq!(snapshot_edges.len(), 1);
+    assert_ne!(snapshot_edges[0].edge_id, deleted_id);
+
+    // Fast path (ts=MAX, clean snapshot) returns the same live set.
+    let nbrs = table.merged_out_nbrs(0, Timestamp::MAX);
+    assert_eq!(nbrs.len(), 1);
+    assert_ne!(nbrs[0].edge_id, deleted_id);
+}
+
+#[test]
+fn test_delete_marks_properties_deleted() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+
+    let dst_key = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
+    let prop_offset = table.out_csr.get_edge(0, dst_key, 100).unwrap().prop_offset;
+    assert!(!table.properties.is_deleted(prop_offset));
+
+    // Hot-path delete must mark the property record deleted immediately.
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table.properties.is_deleted(prop_offset));
+
+    // Time travel before the deletion still sees the original properties.
+    let props = table.properties.get(prop_offset, Some(150)).unwrap();
+    let weight = props.iter().find(|(k, _)| k == "weight").unwrap().1.clone();
+    assert_eq!(weight, Some(Value::Double(1.5)));
+}
+
+#[test]
+fn test_revert_delete_restores_properties() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+
+    let dst_key = TimeTravelEdgeStore::edge_endpoint_key(1, 0);
+    let prop_offset = table.out_csr.get_edge(0, dst_key, 100).unwrap().prop_offset;
+
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(table.properties.is_deleted(prop_offset));
+
+    // Undo the hot-path delete: the edge and its properties must return.
+    let reverted = table
+        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .unwrap();
+    assert!(reverted);
+    assert!(!table.properties.is_deleted(prop_offset));
+
+    let edge = table.get_edge(0, 1, 0, 250).unwrap();
+    assert_eq!(
+        edge.properties.iter().find(|(k, _)| k == "weight").map(|(_, v)| v),
+        Some(&Value::Double(1.5))
+    );
+}
+
+#[test]
+fn test_compact_reclaims_deleted_edge_properties() {
+    let schema = create_test_schema();
+    let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .unwrap();
+    assert_eq!(table.properties.row_count(), 1);
+
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert_eq!(table.properties.row_count(), 1);
+
+    // compact_properties reclaims the orphaned, marked-deleted property row.
+    table.compact_properties(300);
+    assert_eq!(table.properties.row_count(), 0);
 }

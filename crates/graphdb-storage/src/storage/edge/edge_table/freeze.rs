@@ -143,10 +143,27 @@ impl TimeTravelEdgeStore {
             .max()
             .unwrap_or(0);
 
+        // Count deletions belonging to THIS segment. The primary source is
+        // the inline delete_ts carried by entries that were logically
+        // deleted while still in the mutable delta: those deletions happened
+        // at freeze time and must be reflected in the segment's DeletionInfo.
+        // Matching against the pending/segment tombstone maps used to be the
+        // only source, but those maps record deletions of ALREADY frozen
+        // edges, so the intersection with delta entries was always empty and
+        // deleted_count stayed 0 (DeletionInfo was perpetually NoDeletes).
         let mut deleted_count = 0u32;
         let (delete_ts_min, delete_ts_max) = entries
             .iter()
             .filter_map(|(_, nbr)| {
+                if nbr.delete_ts != Timestamp::MAX {
+                    deleted_count += 1;
+                    return Some(nbr.delete_ts);
+                }
+                // Defensive: replay/rollback paths may record a deletion
+                // through the tombstone layers instead of the inline flag.
+                // Normally empty for delta edges (an edge lives either in
+                // the delta or in a segment, never both), but kept so such
+                // deletions are not undercounted.
                 if let Some(&ts) = pending_deletions.get(&nbr.edge_id) {
                     deleted_count += 1;
                     return Some(ts);

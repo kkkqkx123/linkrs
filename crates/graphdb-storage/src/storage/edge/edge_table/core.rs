@@ -253,9 +253,17 @@ impl TimeTravelEdgeStore {
                 continue;
             }
 
-            // Fast path: skip segments where all deletions happened before or at query_ts
-            // This means the segment is effectively not relevant for this query
-            if segment.deletion_info.all_deleted_before(ts) {
+            // Fast path: skip segments where every edge has been deleted at
+            // or before the query timestamp, so no entry in the segment can
+            // be visible to this query. Both conditions are required: all
+            // known deletions must predate the query AND the deleted count
+            // must cover the whole segment. Checking only all_deleted_before
+            // would drop the live edges of a partially deleted segment.
+            if segment.deletion_info.all_deleted_before(ts)
+                && segment
+                    .deletion_info
+                    .all_edges_deleted(segment.csr.read().edge_count())
+            {
                 continue;
             }
 
@@ -316,8 +324,17 @@ impl TimeTravelEdgeStore {
                 continue;
             }
 
-            // Skip segments where all edges have been deleted before the query timestamp
-            if segment.deletion_info.all_deleted_before(ts) {
+            // Skip segments where every edge has been deleted at or before the
+            // query timestamp (no edge can be visible). Both conditions are
+            // required: all known deletions predate the query AND the
+            // deleted count covers the whole segment. all_deleted_before
+            // alone is not sufficient, a partially deleted segment still
+            // holds live edges.
+            if segment.deletion_info.all_deleted_before(ts)
+                && segment
+                    .deletion_info
+                    .all_edges_deleted(segment.csr.read().edge_count())
+            {
                 continue;
             }
 
@@ -598,6 +615,11 @@ impl TimeTravelEdgeStore {
                 return Ok(false);
             }
 
+            // Mark the property record deleted once both sides are gone so
+            // the row is reclaimable by compact_properties.
+            if nbr.prop_offset > 0 {
+                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
+            }
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             return Ok(true);
         }
@@ -612,6 +634,14 @@ impl TimeTravelEdgeStore {
             let edge_id = nbr.edge_id;
             self.mvcc.pending_segment_deletions.insert(edge_id, ts);
             self.mvcc.tombstones.insert(edge_id, ts);
+            // Invalidate the cached current snapshot: it still contains this
+            // edge and is only rebuilt lazily on the next maintenance pass.
+            self.snapshot_dirty = true;
+            // Mark the property record deleted so it can be reclaimed by
+            // compact_properties (it filters via mvcc.is_tombstoned).
+            if nbr.prop_offset > 0 {
+                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
+            }
             self.update_property_index_on_delete(&edge_properties, src, dst, rank, ts);
             return Ok(true);
         }
@@ -649,7 +679,7 @@ impl TimeTravelEdgeStore {
             return Err(StorageError::storage_not_open());
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        if self.out_csr.get_edge(src, dst_key, ts).is_some() {
+        if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
             if !self.out_csr.delete_edge_by_offset(src, oe_offset, ts) {
                 return Ok(false);
             }
@@ -658,6 +688,11 @@ impl TimeTravelEdgeStore {
                 // consistent.
                 self.out_csr.revert_delete_by_offset(src, oe_offset, ts);
                 return Ok(false);
+            }
+            // Mark the property record deleted once both sides are gone so
+            // the row is reclaimable by compact_properties.
+            if nbr.prop_offset > 0 {
+                let _ = self.properties.mark_deleted(nbr.prop_offset, ts);
             }
             return Ok(true);
         }
@@ -668,7 +703,7 @@ impl TimeTravelEdgeStore {
         &mut self,
         src: u32,
         dst: u32,
-        _rank: i64,
+        rank: i64,
         oe_offset: i32,
         ie_offset: i32,
         ts: Timestamp,
@@ -681,6 +716,14 @@ impl TimeTravelEdgeStore {
 
         if reverted {
             self.in_csr.revert_delete_by_offset(dst, ie_offset, ts);
+            // Restore the property record marked by mark_deleted so the edge
+            // regains its original properties after the undo.
+            let dst_key = Self::edge_endpoint_key(dst, rank);
+            if let Some(nbr) = self.out_csr.get_edge(src, dst_key, ts) {
+                if nbr.prop_offset > 0 {
+                    self.properties.revert_deletion(nbr.prop_offset);
+                }
+            }
         }
 
         Ok(reverted)

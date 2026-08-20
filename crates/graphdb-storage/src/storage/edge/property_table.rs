@@ -1017,6 +1017,41 @@ impl PropertyTable {
         }
     }
 
+    /// Revert a [`PropertyTable::mark_deleted`]: clear the deletion mark and
+    /// drop the tombstone entry so the record is visible again. Used by the
+    /// edge delete undo path to restore properties alongside the adjacency.
+    ///
+    /// Returns true if a deletion mark was actually cleared.
+    pub fn revert_deletion(&mut self, offset: u32) -> bool {
+        let row_idx = match prop_offset_to_index(offset) {
+            Some(idx) => idx,
+            None => return false,
+        };
+        let Some(record) = self.records[row_idx].as_mut() else {
+            return false;
+        };
+        if record.delete_ts.is_none() {
+            return false;
+        }
+        record.delete_ts = None;
+        self.tombstones_manager.remove(offset);
+        if let Some(props) = self.get(offset, None) {
+            self.value_index.index_record(&props, offset);
+        }
+        true
+    }
+
+    /// Check whether the record at `offset` is currently marked deleted.
+    pub fn is_deleted(&self, offset: u32) -> bool {
+        let Some(row_idx) = prop_offset_to_index(offset) else {
+            return false;
+        };
+        self.records
+            .get(row_idx)
+            .and_then(|r| r.as_ref())
+            .is_some_and(|r| r.delete_ts.is_some())
+    }
+
     /// Garbage collect before-image chain entries no longer visible to any
     /// active snapshot at `min_active_snapshot_ts`. Returns the number of
     /// entries removed.

@@ -105,6 +105,22 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
         }
     }
 
+    /// Remove a tombstone entry (undo of [`Self::add_tombstone`]).
+    ///
+    /// Searches both the hot and cold layers; returns true if the key was
+    /// present in either.
+    pub fn remove(&mut self, key: T) -> bool {
+        let hot_removed = self.hot_tombstones.remove(&key).is_some();
+        let cold_removed = match self.cold_tombstones.binary_search_by_key(&key, |e| e.key) {
+            Ok(idx) => {
+                self.cold_tombstones.remove(idx);
+                true
+            }
+            Err(_) => false,
+        };
+        hot_removed || cold_removed
+    }
+
     /// Promote oldest entries from hot layer to cold layer (maintaining sort order)
     fn promote_to_cold(&mut self) {
         let mut entries: Vec<_> = self

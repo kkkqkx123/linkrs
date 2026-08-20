@@ -80,12 +80,14 @@ impl DeletionInfo {
 
     /// Get deletion percentage (0-100) for observability
     pub fn deletion_percentage(&self, total_edge_count: u64) -> u32 {
-        match self {
+        let deleted_count = match self {
             DeletionInfo::NoDeletes => 0,
-            DeletionInfo::HasDeletes { deleted_count, .. } => total_edge_count
-                .checked_div(*deleted_count as u64)
-                .map_or(0, |v| v as u32),
+            DeletionInfo::HasDeletes { deleted_count, .. } => *deleted_count as u64,
+        };
+        if total_edge_count == 0 {
+            return 0;
         }
+        (deleted_count * 100 / total_edge_count) as u32
     }
 
     /// Merge two deletion infos by taking min of mins, max of maxs, and sum of counts
