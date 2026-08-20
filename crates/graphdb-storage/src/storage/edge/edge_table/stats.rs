@@ -248,8 +248,8 @@ mod tests {
         table.delete_edge(0, 3, 0, 300).unwrap();
 
         let stats = table.mvcc.tombstone_stats();
-        // 3 deletions × 2 layers (pending + main tombstones) = 6
-        assert_eq!(stats.count, 6);
+        // 3 deletions recorded once each in the authoritative table.
+        assert_eq!(stats.count, 3);
         assert!(stats.memory_bytes > 0);
         assert_eq!(stats.oldest_delete_ts, Some(200));
         assert_eq!(stats.newest_delete_ts, Some(300));

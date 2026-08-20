@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn test_deduce_vector_expression_matches_value_type() {
-        // P0-3 / Phase 4a: `Expression::Vector` deduces to `VectorDense(n)`,
+        // `Expression::Vector` deduces to `VectorDense(n)`,
         // aligned with `Value::Vector → VectorDense(dim)`. No dimension-less
         // `DataType::Vector` leak from the literal path.
         let expr = Expression::Vector(vec![1.0, 2.0, 3.0]);
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_deduce_container_literals_carry_element_type() {
-        // P0-3 / Phase 4b: literal containers deduce with their element/value
+        // literal containers deduce with their element/value
         // type instead of the bare parameter-free `List`/`Map`/`Set`.
         let list = Expression::List(vec![literal(Value::Int(1)), literal(Value::Int(2))]);
         assert_eq!(list.deduce_type(), DataType::List(Box::new(DataType::Int)));

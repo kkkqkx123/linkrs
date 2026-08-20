@@ -99,7 +99,7 @@ fn median_us(samples: &[u64]) -> u64 {
 }
 
 fn main() {
-    println!("== Phase B neighbor batch accessor benchmark ==");
+    println!("== neighbor batch accessor benchmark ==");
     let storage = setup();
     println!("vertices={VERTEX_COUNT}, edges/vertex={EDGES_PER_VERTEX}");
 

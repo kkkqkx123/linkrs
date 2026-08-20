@@ -290,13 +290,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self
     }
 
-    /// Toggle P1 DML shape plan caching (independent switch / rollback path).
+    /// Toggle DML shape plan caching (independent switch / rollback path).
     pub fn with_dml_shape_cache(mut self, enabled: bool) -> Self {
         self.dml_shape_cache_enabled = enabled;
         self
     }
 
-    /// Whether P1 DML shape plan caching is enabled.
+    /// Whether DML shape plan caching is enabled.
     pub fn dml_shape_cache_enabled(&self) -> bool {
         self.dml_shape_cache_enabled
     }

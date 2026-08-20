@@ -4,8 +4,7 @@
 //! evaluated expression has a compound slot (`var.prop`) in the chunk
 //! layout. Scan sources expose slots only for their `projected_properties`,
 //! so a residual predicate directly above a scan falls back to per-row
-//! evaluation when its condition references a column that is not projected
-//! (gap G1 in `docs/plan/plan_columnar_fastpath_improvements.md`).
+//! evaluation when its condition references a column that is not projected.
 //!
 //! Rules in this module widen the scan output layout by merging predicate
 //! columns into `projected_properties`, without changing the output

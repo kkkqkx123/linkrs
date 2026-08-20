@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# Built-in local vector engine (W6+). Enables the `vector_sync` module and
+# Built-in local vector engine. Enables the `vector_sync` module and
 # `VectorBackend::Local`.
 vector = ["dep:vector-search"]
 # Remote qdrant client on top of the local engine types.
 vector-qdrant = ["vector", "dep:vector-client"]
 # Backward-compatible alias kept so downstream crates can keep their existing
-# `qdrant` feature names while the built-in vector path lands (phase A).
+# `qdrant` feature names while the built-in vector path lands.
 qdrant = ["vector-qdrant"]
 fulltext-search = ["graphdb-search/fulltext-search"]
 

@@ -96,20 +96,20 @@ pub struct OptimizerEngine {
     enable_heuristic: bool,
     /// Maximum iterations for heuristic rules
     max_heuristic_iterations: usize,
-    /// Shared query feedback history (stats feedback loop, phase 1).
+    /// Shared query feedback history (stats feedback loop).
     ///
     /// The pipeline injects this history into every execution instance so
     /// that estimated-vs-actual operator feedback is recorded after each
-    /// query; phase 2 (selectivity auto-correction) consumes it.
+    /// query; selectivity auto-correction consumes it.
     feedback_history: Arc<QueryFeedbackHistory>,
-    /// Shared selectivity correction manager (stats feedback loop, phase 2).
+    /// Shared selectivity correction manager (stats feedback loop).
     ///
     /// `maybe_apply_feedback` folds the estimated-vs-actual ratios recorded
     /// in `feedback_history` into per-predicate EWMA corrections; the
     /// `SelectivityEstimator` consults these corrections before falling back
     /// to histogram / heuristic estimates.
     selectivity_feedback: Arc<SelectivityFeedbackManager>,
-    /// Shared cardinality correction manager (stats feedback loop, phase 3).
+    /// Shared cardinality correction manager (stats feedback loop).
     ///
     /// `maybe_apply_feedback` folds the estimated-vs-actual ratios of every
     /// shape-keyed operator (scans, traversals, joins, applies) into
@@ -124,7 +124,7 @@ pub struct OptimizerEngine {
     /// Trigger for when the feedback history should be folded into
     /// `selectivity_feedback` (cooldown + error threshold).
     feedback_trigger: AutoFeedbackTrigger,
-    /// Master switch for the feedback correction loop (phase 2).
+    /// Master switch for the feedback correction loop.
     enable_feedback: bool,
     /// Cross-query adaptive policy for the typed columnar chunk layout.
     ///
@@ -259,26 +259,26 @@ impl OptimizerEngine {
         &self.expression_context
     }
 
-    /// Obtain the shared query feedback history (stats feedback loop, phase 1).
+    /// Obtain the shared query feedback history (stats feedback loop).
     ///
-    /// Executions write estimated-vs-actual feedback here; phase 2 (selectivity
-    /// auto-correction) consumes it.  The history is process-shared across all
+    /// Executions write estimated-vs-actual feedback here; selectivity
+    /// auto-correction consumes it.  The history is process-shared across all
     /// queries running through this engine.
     pub fn feedback_history(&self) -> Arc<QueryFeedbackHistory> {
         Arc::clone(&self.feedback_history)
     }
 
-    /// Obtain the shared selectivity correction manager (feedback loop, phase 2).
+    /// Obtain the shared selectivity correction manager (feedback loop).
     pub fn selectivity_feedback(&self) -> &Arc<SelectivityFeedbackManager> {
         &self.selectivity_feedback
     }
 
-    /// Obtain the shared cardinality correction manager (feedback loop, phase 3).
+    /// Obtain the shared cardinality correction manager (feedback loop).
     pub fn cardinality_feedback(&self) -> &Arc<CardinalityFeedbackManager> {
         &self.cardinality_feedback
     }
 
-    /// Obtain the shared decision feedback store (feedback loop, phase 3).
+    /// Obtain the shared decision feedback store (feedback loop).
     pub fn decision_feedback(&self) -> &Arc<DecisionFeedbackStore> {
         &self.decision_feedback
     }
@@ -519,7 +519,7 @@ impl OptimizerEngine {
         let mut current_plan = plan;
 
         // Phase 0: fold recorded execution feedback into the selectivity
-        // corrections (stats feedback loop, phase 2).  Gated by
+        // corrections (stats feedback loop).  Gated by
         // `enable_feedback`; cheap when no history is present.
         self.maybe_apply_feedback();
 

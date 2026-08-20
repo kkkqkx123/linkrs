@@ -23,7 +23,7 @@ pub struct QueryRequest {
 }
 
 /// Batch query request: multiple auto-commit DML statements executed inside a
-/// single shared auto-commit batch window (P4/P6).
+/// single shared auto-commit batch window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchQueryRequest {
     pub session_id: i64,

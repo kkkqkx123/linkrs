@@ -474,7 +474,7 @@ mod tests {
         assert!(!chunk.is_empty());
     }
 
-    // ── Resource regression tests (R5) ──
+    // ── Resource regression tests ──
 
     #[test]
     fn test_on_drop_callback_fires_on_drop() {

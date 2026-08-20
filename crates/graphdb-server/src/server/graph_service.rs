@@ -662,7 +662,7 @@ impl<
     ///
     /// Flow per command: ① API-layer TransactionManager side effect (the
     /// parameters are read from the AST), ② QueryRequest construction with
-    /// the transaction id semantics of §3.1, ③ plan execution through the
+    /// the transaction id semantics, ③ plan execution through the
     /// query API (the `TxnOperator` validates the session controller and
     /// produces a structured result), ④ API-layer session post-processing.
     /// Execute a transaction / session command through the unified
@@ -670,7 +670,7 @@ impl<
     ///
     /// Flow per command: ① API-layer TransactionManager side effect (the
     /// parameters are read from the AST), ② QueryRequest construction with
-    /// the transaction id semantics of §3.1, ③ plan execution through the
+    /// the transaction id semantics, ③ plan execution through the
     /// query API (the `TxnOperator` validates the session controller and
     /// produces a structured result), ④ API-layer session post-processing.
     #[allow(clippy::too_many_arguments)]
@@ -931,7 +931,7 @@ impl<
     /// `TxnOperator` validates/tracks the session controller and produces
     /// the structured command/result row. An active transaction binds
     /// through `create_execution` (preserving timestamps and the read-only
-    /// mode for G2); finished transactions (COMMIT / ROLLBACK already
+    /// mode); finished transactions (COMMIT / ROLLBACK already
     /// performed the TM side effect) bind an auto-commit context.
     #[allow(clippy::too_many_arguments)]
     fn run_transaction_command_plan(
@@ -1371,7 +1371,7 @@ where
         + 'static,
 {
     /// Execute a batch of auto-commit DML statements inside one shared
-    /// auto-commit batch window (P4/P6): the write gate is acquired and MVCC
+    /// auto-commit batch window: the write gate is acquired and MVCC
     /// snapshots registered once for the whole batch instead of once per
     /// statement. Each statement is permission-checked individually and runs
     /// independently (own timestamp / transaction id / undo log); a failure
@@ -1485,7 +1485,7 @@ where
         + 'static,
 {
     /// Execute a batch of auto-commit DML statements inside shared
-    /// group-commit windows (P0 C): each consecutive group of `group_size`
+    /// group-commit windows: each consecutive group of `group_size`
     /// statements shares one write timestamp, one WAL fsync, and one commit
     /// point. See [`QueryApi::execute_batch_grouped`].
     ///

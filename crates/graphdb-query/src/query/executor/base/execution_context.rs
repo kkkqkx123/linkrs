@@ -33,7 +33,7 @@ pub struct ExecutionContext {
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Snapshot handle pinned by the bound storage, when the storage was
-    /// bound to a read/auto-commit operation context (P2: storage boundary).
+    /// bound to a read/auto-commit operation context (storage boundary).
     ///
     /// Populated by the pipeline when it binds the per-query storage; lets
     /// the execution layer observe which snapshot the query reads at.
@@ -45,7 +45,7 @@ pub struct ExecutionContext {
     pub session_variables: Arc<HashMap<String, crate::core::Value>>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
-    /// Maximum intra-query workers (P8). 1 = serial only.
+    /// Maximum intra-query workers. 1 = serial only.
     pub max_workers: usize,
     /// Server-assigned query ID for KILL QUERY / cancellation support.
     pub query_id: u64,

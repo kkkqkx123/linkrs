@@ -1,5 +1,5 @@
-//! `VectorFilter` evaluation against point payloads (post-filter, Qdrant
-//! semantics §3.5).
+//! `VectorFilter` evaluation against point payloads (post-filter,
+//! Qdrant-compatible semantics).
 //!
 //! Semantics:
 //! - `must`: every condition must match;

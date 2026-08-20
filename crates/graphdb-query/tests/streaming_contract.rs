@@ -4,7 +4,7 @@
 //! verifies layout identity, error propagation, and profile identity
 //! regardless of chunk boundaries, NULLs, or cancellation.
 //!
-//! Phase A fixtures: single/multi chunk, empty input, first-row NULL,
+//! Fixtures: single/multi chunk, empty input, first-row NULL,
 //! mid-stream empty chunk, cancel, early stop.
 
 use graphdb_query::core::Value;

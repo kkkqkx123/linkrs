@@ -1,4 +1,4 @@
-//! E2E tests for EXISTS / IN / NOT IN subqueries (P1).
+//! E2E tests for EXISTS / IN / NOT IN subqueries.
 //!
 //! Exercises the conjunctive-WHERE transformation: the parser+binder let
 //! subqueries through, the exists planner turns them into PatternApply (or
@@ -700,7 +700,7 @@ fn test_explain_shows_expression_subqueries() {
     );
 }
 
-/// Conjunctive WHERE subqueries still plan and execute (P1/P2 regression).
+/// Conjunctive WHERE subqueries still plan and execute.
 #[test]
 fn test_conjunctive_where_still_executes() {
     let mut db = create_test_db();

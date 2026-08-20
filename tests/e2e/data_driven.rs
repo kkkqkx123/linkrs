@@ -234,7 +234,7 @@ fn test_optimizer_aggregate() {
 }
 
 // ---------------------------------------------------------------------------
-// P4/P6: batch load reuses the auto-commit window and DML plan memo
+// batch load reuses the auto-commit window and DML plan memo
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -251,7 +251,7 @@ fn test_batch_load_reuses_dml_plan() {
         hits > 15_000,
         "consecutive same-shape DML should hit the plan memo, got {hits}"
     );
-    // P0 A: the shape-normalized template AST must be parsed at most once per
+    // the shape-normalized template AST must be parsed at most once per
     // distinct template. optimizer_data.gql has exactly three templates
     // (person / company INSERT VERTEX, works_at INSERT EDGE).
     let template_parses = db.query_api().dml_template_ast_parse_count();
@@ -274,7 +274,7 @@ fn test_batch_load_reuses_dml_plan() {
 }
 
 // ---------------------------------------------------------------------------
-// P0 C: group-commit batch load
+// group-commit batch load
 // ---------------------------------------------------------------------------
 
 #[test]

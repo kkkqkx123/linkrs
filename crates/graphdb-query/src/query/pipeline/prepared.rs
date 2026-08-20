@@ -78,7 +78,7 @@ pub struct PreparedRequest {
     pub stmt: Stmt,
     /// The parsed AST, retained for the legacy `transform()` planning path.
     pub ast: Arc<crate::query::parser::ast::stmt::Ast>,
-    /// P1: whether the query text is a shape-normalized DML template that may
+    /// whether the query text is a shape-normalized DML template that may
     /// reuse a cached physical plan with per-statement parameter values.
     pub dml_shape_cacheable: bool,
 }
@@ -276,7 +276,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None => self.parse_into_context(query_text)?,
         };
 
-        // P1: shape-normalize DML statements so structurally identical
+        // shape-normalize DML statements so structurally identical
         // INSERT/UPDATE/DELETE reuse a cached physical plan, binding their
         // literal values as parameters at execution time.
         let (effective_query, effective_rctx, dml_shape_cacheable) = if self.dml_shape_cache_enabled

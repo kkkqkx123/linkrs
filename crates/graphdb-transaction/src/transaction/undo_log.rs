@@ -18,7 +18,7 @@ pub use crate::core::types::UndoLogError;
 /// Undo log result type
 pub use crate::core::types::UndoLogResult;
 
-/// Target for undo operations (will be GraphStorageContext in phase 2)
+/// Target for undo operations (will be GraphStorageContext)
 pub use crate::core::types::UndoTarget;
 
 /// Undo log for create vertex type operation

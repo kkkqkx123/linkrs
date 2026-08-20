@@ -1,8 +1,8 @@
-//! Stats feedback loop (phase 1) end-to-end test.
+//! Stats feedback loop end-to-end test.
 //!
 //! Verifies that after a query executes, estimated-vs-actual operator
 //! feedback is recorded into the optimizer engine's shared
-//! `QueryFeedbackHistory` (see `docs/plan/residual_issues.md` §1).
+//! `QueryFeedbackHistory`.
 
 use graphdb::core::stats::StatsManager;
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};

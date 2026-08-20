@@ -38,11 +38,11 @@ pub struct ExecutionPlan {
     /// partition-safe streaming plan; unsupported plans fail explicitly.
     pub partition_spec: Option<PartitionSpec>,
 
-    /// Maximum worker threads for intra-query parallelism (P8).
+    /// Maximum worker threads for intra-query parallelism.
     /// 1 means fully serial. Propagated from PartitioningConfig.
     pub max_workers: usize,
 
-    /// Per-partition output channel capacity for P8 backpressure.
+    /// Per-partition output channel capacity for backpressure.
     pub max_buffered_chunks: usize,
 
     /// Why parallel partitioning was not selected (empty = partitioning

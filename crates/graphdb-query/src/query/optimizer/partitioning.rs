@@ -24,10 +24,10 @@ pub struct PartitioningConfig {
     /// domain. Ranges use `i64` to match the real vertex ID type and avoid
     /// silent truncation of values >= 2^32.
     pub vertex_id_range: Option<std::ops::Range<i64>>,
-    /// Maximum worker threads for intra-query parallelism (P8).
-    /// 1 means fully serial (P7 fallback).
+    /// Maximum worker threads for intra-query parallelism.
+    /// 1 means fully serial.
     pub max_workers: usize,
-    /// Maximum queued chunks per partition worker for P8 backpressure.
+    /// Maximum queued chunks per partition worker for backpressure.
     pub max_buffered_chunks: usize,
 }
 

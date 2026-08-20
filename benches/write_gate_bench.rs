@@ -1,15 +1,7 @@
-//! B2: write-path gate contention share (G2).
+//! Write-path gate contention share.
 //!
 //! Measures the share of auto-commit write time spent waiting on the global
-//! `AutoCommitWriteGate` when N threads write concurrently, per the analysis
-//! document §三.3 B2:
-//!
-//! ```text
-//! 场景：N 线程并发自动提交写（insert vertex），N ∈ {1, 4, 8, 16}
-//! 测量：gate 等待 / 总写耗时占比
-//! 方法：gate acquire 前后打点（WriteGateStats 计数器）
-//! 验收：N=16 时 gate 等待占比 < 5% 才考虑 R3
-//! ```
+//! `AutoCommitWriteGate` when N threads write concurrently:
 //!
 //! Gate wait time is accumulated by the storage engine's `AutoCommitWriteGate`
 //! counters (`GraphStorage::write_gate_stats`); this bench only reads the
@@ -151,7 +143,7 @@ fn main() {
         );
     }
     println!(
-        "\nacceptance: gate wait share < 5% at N=16 -> R3 not justified (see docs/archive/storage-parallelization-benchmark-verification.md)"
+        "\nresult: gate wait share < 5% at N=16 -> sharding not justified"
     );
 }
 

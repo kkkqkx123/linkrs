@@ -52,7 +52,7 @@ impl GraphStorageContext {
         })
     }
 
-    /// P5: assemble the index GC manager by default so generation retirement
+    /// assemble the index GC manager by default so generation retirement
     /// and reclamation stay bounded. Callers that manage GC themselves can
     /// replace this via [`with_index_gc`](Self::with_index_gc).
     fn with_default_index_gc(self) -> Self {

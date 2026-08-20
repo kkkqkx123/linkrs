@@ -19,11 +19,10 @@ const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
 /// MVCC and snapshot management for EdgeTable
 pub struct MVCCManager {
-    /// Deletions of edges still in mutable CSR or recently deleted (hot layer)
-    pub pending_segment_deletions: HashMap<EdgeId, Timestamp>,
-    /// Deletions of edges already in frozen segments (hot layer)
-    pub segment_tombstones: HashMap<EdgeId, Timestamp>,
-    /// Legacy tombstones field for backward compatibility during transition (hot layer)
+    /// Authoritative tombstone table (hot layer). Every deletion, regardless
+    /// of path (hot CSR inline delete, frozen segment, delta freeze, physical
+    /// compaction), is recorded here exactly once, keyed by edge id with the
+    /// earliest `delete_ts`.
     pub tombstones: HashMap<EdgeId, Timestamp>,
     /// Cold layer: older tombstones beyond hot threshold, kept for snapshot isolation
     /// Stored as Vec<(EdgeId, Timestamp)> to save memory and reduce lookup overhead
@@ -51,8 +50,6 @@ impl MVCCManager {
     /// Create a new MVCC manager
     pub fn new() -> Self {
         Self {
-            pending_segment_deletions: HashMap::new(),
-            segment_tombstones: HashMap::new(),
             tombstones: HashMap::new(),
             cold_tombstones: Vec::new(),
             cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
@@ -63,25 +60,14 @@ impl MVCCManager {
     }
 
     /// Check if an edge is tombstoned at a given timestamp
-    /// Uses hot-first lookup: checks hashtables first, then cold layer with binary search
+    /// Uses hot-first lookup: checks the authoritative table first, then cold layer with binary search
     pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
         // Hot layer: fast path - O(1) average
-        let pending_deleted = self
-            .pending_segment_deletions
-            .get(&edge_id)
-            .is_some_and(|delete_ts| *delete_ts <= ts);
-
-        let segment_deleted = self
-            .segment_tombstones
-            .get(&edge_id)
-            .is_some_and(|delete_ts| *delete_ts <= ts);
-
-        let legacy_deleted = self
+        if self
             .tombstones
             .get(&edge_id)
-            .is_some_and(|delete_ts| *delete_ts <= ts);
-
-        if pending_deleted || segment_deleted || legacy_deleted {
+            .is_some_and(|delete_ts| *delete_ts <= ts)
+        {
             return true;
         }
 
@@ -166,19 +152,8 @@ impl MVCCManager {
             }
         }
 
-        // The pending and segment layers mirror the authoritative `tombstones`
-        // table; stale entries there are equally safe to drop and only
-        // inflate memory. Retain uses the same predicate as the hot layer so
-        // GC keeps all layers consistent.
-        let pending_before = self.pending_segment_deletions.len();
-        self.pending_segment_deletions
-            .retain(|_, delete_ts| *delete_ts >= min_active_snapshot_ts);
-        removed += pending_before.saturating_sub(self.pending_segment_deletions.len());
-
-        let segment_before = self.segment_tombstones.len();
-        self.segment_tombstones
-            .retain(|_, delete_ts| *delete_ts >= min_active_snapshot_ts);
-        removed += segment_before.saturating_sub(self.segment_tombstones.len());
+        // Tombstones is the single authoritative table; no mirrored layers
+        // remain to GC after the tombstone unification.
 
         self.min_active_snapshot_ts = min_active_snapshot_ts;
 
@@ -264,36 +239,30 @@ impl MVCCManager {
 
     /// Get current tombstone statistics for observability.
     ///
-    /// Counts all four layers (pending, segment, hot, cold) so the metric
-    /// reflects the true total cost of deletion metadata.
+    /// Counts both layers (hot + cold) so the metric reflects the true total
+    /// cost of deletion metadata.
     pub fn tombstone_stats(&self) -> TombstoneStats {
-        let pending_count = self.pending_segment_deletions.len();
-        let segment_count = self.segment_tombstones.len();
         let hot_count = self.tombstones.len();
         let cold_count = self.cold_tombstones.len();
-        let total_count = pending_count + segment_count + hot_count + cold_count;
+        let total_count = hot_count + cold_count;
 
         let oldest = self
-            .pending_segment_deletions
+            .tombstones
             .values()
-            .chain(self.segment_tombstones.values())
-            .chain(self.tombstones.values())
             .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
             .copied()
             .min();
 
         let newest = self
-            .pending_segment_deletions
+            .tombstones
             .values()
-            .chain(self.segment_tombstones.values())
-            .chain(self.tombstones.values())
             .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
             .copied()
             .max();
 
         TombstoneStats {
             count: total_count,
-            memory_bytes: TombstoneStats::estimate_memory(pending_count + segment_count + hot_count)
+            memory_bytes: TombstoneStats::estimate_memory(hot_count)
                 + (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>())
                 + self.cold_bloom_filter.memory_bytes(),
             oldest_delete_ts: oldest,
@@ -303,10 +272,7 @@ impl MVCCManager {
 
     /// Total count of deletions across all layers (for memory accounting).
     pub fn total_tombstone_count(&self) -> usize {
-        self.pending_segment_deletions.len()
-            + self.segment_tombstones.len()
-            + self.tombstones.len()
-            + self.cold_tombstones.len()
+        self.tombstones.len() + self.cold_tombstones.len()
     }
 
     /// Get the minimum active snapshot timestamp.
@@ -320,20 +286,14 @@ impl MVCCManager {
 
     /// Earliest deletion timestamp of an edge across all layers, if any.
     ///
-    /// Hot layers are checked first (O(1)), then the cold layer with a bloom
+    /// Hot layer is checked first (O(1)), then the cold layer with a bloom
     /// pre-filter plus binary search. Used by the merge path to decide whether
     /// a per-edge deletion is still observable and to rebuild `DeletionInfo`
     /// from the actual remaining deletions.
     pub fn delete_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
         let mut earliest: Option<Timestamp> = None;
-        for layer in [
-            &self.pending_segment_deletions,
-            &self.segment_tombstones,
-            &self.tombstones,
-        ] {
-            if let Some(&delete_ts) = layer.get(&edge_id) {
-                earliest = Some(earliest.map_or(delete_ts, |ts| ts.min(delete_ts)));
-            }
+        if let Some(&delete_ts) = self.tombstones.get(&edge_id) {
+            earliest = Some(delete_ts);
         }
 
         if self.cold_bloom_filter.might_contain(edge_id.0) {
@@ -349,45 +309,17 @@ impl MVCCManager {
         earliest
     }
 
-    /// Record a deletion in the global tombstone map.
+    /// Record a deletion in the authoritative tombstone table.
     ///
-    /// Keeps the earliest `delete_ts` when the same edge is recorded more
-    /// than once: an earlier deletion covers a wider query range and must
-    /// win. Used when a deleted entry is physically removed from the hot
-    /// CSR, so its deletion stays visible through the tombstone layer.
+    /// Single entry point for every deletion path (hot CSR inline delete,
+    /// frozen segment delete, delta freeze, physical compaction). Keeps the
+    /// earliest `delete_ts` when the same edge is recorded more than once: an
+    /// earlier deletion covers a wider query range and must win.
     pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
         let earliest = self
             .delete_ts_of(edge_id)
             .map_or(delete_ts, |ts| ts.min(delete_ts));
         self.tombstones.insert(edge_id, earliest);
-    }
-
-    /// Record a deletion in the pending segment deletions buffer.
-    ///
-    /// This is a temporary layer for deletions of edges in frozen segments,
-    /// which are drained into `segment_tombstones` at the next freeze.
-    /// Keeps the earliest `delete_ts` for deduplication.
-    pub fn record_pending_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
-        let earliest = self
-            .pending_segment_deletions
-            .get(&edge_id)
-            .map_or(delete_ts, |&ts| ts.min(delete_ts));
-        self.pending_segment_deletions.insert(edge_id, earliest);
-    }
-
-    /// Promote pending segment deletions into the segment tombstone layer.
-    ///
-    /// Drains `pending_segment_deletions` and merges into `segment_tombstones`,
-    /// keeping the earliest `delete_ts` for each edge (deduplication).
-    /// Called after `freeze_delta` completes.
-    pub fn promote_pending_deletions(&mut self) {
-        for (edge_id, ts) in self.pending_segment_deletions.drain() {
-            let earliest = self
-                .segment_tombstones
-                .get(&edge_id)
-                .map_or(ts, |&old| old.min(ts));
-            self.segment_tombstones.insert(edge_id, earliest);
-        }
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -510,7 +442,7 @@ mod tests {
         table.delete_edge(0, 1, 0, 150).unwrap();
 
         let stats_before = table.mvcc.tombstone_stats();
-        assert_eq!(stats_before.count, 2);
+        assert_eq!(stats_before.count, 1);
 
         table.mvcc.register_active_snapshot(100);
         table.mvcc.register_active_snapshot(100);
@@ -520,7 +452,7 @@ mod tests {
         assert_eq!(count_after_first, 1);
 
         let stats_after_first = table.mvcc.tombstone_stats();
-        assert_eq!(stats_after_first.count, 2);
+        assert_eq!(stats_after_first.count, 1);
 
         let count_after_second = table.mvcc.unregister_active_snapshot(100);
         assert_eq!(count_after_second, 0);
@@ -556,12 +488,12 @@ mod tests {
         table.mvcc.register_active_snapshot(1);
         table.mvcc.register_active_snapshot(4);
 
-        assert_eq!(table.mvcc.total_tombstone_count(), 4);
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
 
-        // GC removes entries from all layers; the pending layer mirrors the
-        // main tombstone table, so both drop the edge deleted at ts=2.
+        // GC removes entries from the single authoritative table: the edge
+        // deleted at ts=2 predates the cutoff and is dropped.
         let removed = table.mvcc.gc_tombstones(3);
-        assert_eq!(removed, 2);
+        assert_eq!(removed, 1);
         assert_eq!(table.mvcc.tombstones.len(), 1);
     }
 
@@ -594,9 +526,9 @@ mod tests {
         table.delete_edge(0, 1, 2, 12).unwrap();
 
         let tom_stats = table.mvcc.tombstone_stats();
-        // All-layer counting: 3 segment deletions mirrored in the pending
-        // layer plus the main tombstone table = 6 entries.
-        assert_eq!(tom_stats.count, 6);
+        // Single-table counting: 3 segment deletions recorded once each in
+        // the authoritative tombstone table.
+        assert_eq!(tom_stats.count, 3);
 
         stats_manager.record_tombstone_stats(
             tom_stats.count as u64,
@@ -609,7 +541,7 @@ mod tests {
         let tombstone_count = stats_manager
             .get_value(MetricType::TombstoneCount)
             .unwrap_or(0);
-        assert_eq!(tombstone_count, 6);
+        assert_eq!(tombstone_count, 3);
 
         let tombstone_memory = stats_manager
             .get_value(MetricType::TombstoneMemoryBytes)
@@ -653,24 +585,16 @@ mod tests {
         let mut mvcc = MVCCManager::new();
 
         // Repeated deletions of the same edge must not grow the tombstone
-        // count: each layer keeps a single entry with the earliest delete_ts.
+        // count: the authoritative table keeps a single entry with the
+        // earliest delete_ts.
         mvcc.record_deletion(EdgeId(3), 150);
         mvcc.record_deletion(EdgeId(3), 200);
-        mvcc.record_pending_deletion(EdgeId(3), 150);
-        mvcc.record_pending_deletion(EdgeId(3), 200);
 
         assert_eq!(mvcc.tombstones.len(), 1);
-        assert_eq!(mvcc.pending_segment_deletions.len(), 1);
-        assert_eq!(mvcc.total_tombstone_count(), 2);
         assert_eq!(mvcc.tombstones.get(&EdgeId(3)), Some(&150));
-        assert_eq!(mvcc.pending_segment_deletions.get(&EdgeId(3)), Some(&150));
-
-        // Promotion must keep the earliest timestamp and deduplicate.
-        mvcc.promote_pending_deletions();
-        assert_eq!(mvcc.segment_tombstones.len(), 1);
-        assert_eq!(mvcc.segment_tombstones.get(&EdgeId(3)), Some(&150));
-        assert_eq!(mvcc.pending_segment_deletions.len(), 0);
-        assert_eq!(mvcc.total_tombstone_count(), 2);
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        assert!(mvcc.is_tombstoned(EdgeId(3), 200));
+        assert!(!mvcc.is_tombstoned(EdgeId(3), 100));
     }
 
     #[test]

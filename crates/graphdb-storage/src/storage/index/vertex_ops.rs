@@ -85,7 +85,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     }
                 }
             }
-            // P2: also account for entries still awaiting generation publication.
+            // also account for entries still awaiting generation publication.
             let pending_guard = self.pending_deltas.lock();
             if let Some(pending) = pending_guard.get(&identity) {
                 let mut scan = crate::storage::index::index_data_manager::PendingExistingScan {
@@ -270,7 +270,7 @@ impl IndexDataManagerImpl {
         };
         let identity = IndexIdentity { space_id, index_id };
         if !merge_pending {
-            // P2: make any pending (unpublished) writes visible to this read.
+            // make any pending (unpublished) writes visible to this read.
             self.publish_pending_delta(identity)?;
         }
         let runtime = self.runtime(space_id, index_id)?;
@@ -286,7 +286,7 @@ impl IndexDataManagerImpl {
         let mut tombstoned = std::collections::HashSet::new();
         let mut results = Vec::new();
 
-        // P2: pending holds the newest writes. Scan it first so its per-entry
+        // pending holds the newest writes. Scan it first so its per-entry
         // state wins over older published generations, mirroring the
         // newest-first semantics of the published generation chain.
         if merge_pending {

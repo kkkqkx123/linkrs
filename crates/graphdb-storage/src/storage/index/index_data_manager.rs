@@ -56,20 +56,20 @@ pub struct IndexDataManagerImpl {
     /// and resynced by the (rare) GC/retirement/compaction paths. Keeps the
     /// per-statement admission check from scanning every generation.
     pub(crate) cached_tombstone_count: Arc<AtomicU64>,
-    /// P2: per-index deltas awaiting publication into a new generation.
+    /// per-index deltas awaiting publication into a new generation.
     ///
     /// Writes accumulate here (O(1) per statement) instead of publishing a new
     /// generation per statement. The pending delta is folded into a fresh
     /// generation when the entry count reaches `delta_publish_threshold` or
     /// when a read needs a stable snapshot (`publish_pending_delta`).
     pub(crate) pending_deltas: Arc<Mutex<HashMap<IndexIdentity, PendingDelta>>>,
-    /// P2: number of pending entries that triggers publication of a new
+    /// number of pending entries that triggers publication of a new
     /// generation. A value of 0 or 1 disables accumulation, restoring the
     /// per-statement publish behavior (rollback path).
     pub(crate) delta_publish_threshold: Arc<AtomicUsize>,
 }
 
-/// Accumulated index deltas awaiting publication into a new generation (P2).
+/// Accumulated index deltas awaiting publication into a new generation.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PendingDelta {
     /// Per-shard forward/reverse maps with FULL (prefix-included) keys.
@@ -210,7 +210,7 @@ impl IndexDataManagerImpl {
                 }
             }
         }
-        // P2: include deltas still awaiting generation publication.
+        // include deltas still awaiting generation publication.
         for entry in self.pending_deltas.lock().values() {
             for (forward, reverse) in entry.per_shard.values() {
                 count += forward
@@ -809,7 +809,7 @@ impl IndexDataManagerImpl {
         Ok(())
     }
 
-    /// Configure the P2 delta-publish threshold (entries per generation).
+    /// Configure the delta-publish threshold (entries per generation).
     pub fn set_delta_publish_threshold(&self, threshold: usize) {
         self.delta_publish_threshold
             .store(threshold.max(1), Ordering::Relaxed);
@@ -1023,7 +1023,7 @@ impl IndexDataManagerImpl {
         safe_ts: Timestamp,
         force: bool,
     ) -> StorageResult<bool> {
-        // P2: fold pending writes into the generation chain before compacting.
+        // fold pending writes into the generation chain before compacting.
         self.publish_pending_delta(identity)?;
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
@@ -1266,7 +1266,7 @@ impl IndexDataManagerImpl {
         F: FnOnce() -> StorageResult<CommitLsn>,
         G: FnOnce(CommitLsn, CommitLsn) -> StorageResult<Vec<OutboxIntent>>,
     {
-        // P2: fold pending writes into the generation chain before splitting.
+        // fold pending writes into the generation chain before splitting.
         self.publish_pending_delta(identity)?;
         let IndexIdentity { space_id, index_id } = identity;
         if let Some(stats) = &self.stats_manager {
@@ -1635,7 +1635,7 @@ impl IndexDataManagerImpl {
             return Ok(());
         };
         let identity = IndexIdentity { space_id, index_id };
-        // P2: fold pending writes into the chain so their entries can be
+        // fold pending writes into the chain so their entries can be
         // tombstoned; otherwise a delete would miss accumulated entries.
         self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
@@ -1764,7 +1764,7 @@ impl IndexDataManagerImpl {
             return Ok(());
         };
         let identity = IndexIdentity { space_id, index_id };
-        // P2: fold pending writes into the chain so their entries can be
+        // fold pending writes into the chain so their entries can be
         // tombstoned; otherwise a delete would miss accumulated entries.
         self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
@@ -1888,7 +1888,7 @@ impl IndexDataManagerImpl {
         write_ts: Timestamp,
     ) -> StorageResult<()> {
         let identity = IndexIdentity { space_id, index_id };
-        // P2: fold pending writes into the chain before clearing the index.
+        // fold pending writes into the chain before clearing the index.
         self.publish_pending_delta(identity)?;
         let runtime = self.runtime(space_id, index_id)?;
 

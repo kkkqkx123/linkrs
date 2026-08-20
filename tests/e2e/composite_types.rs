@@ -1,6 +1,6 @@
 //! E2E Test Suite for STRUCT/ARRAY composite types.
 //!
-//! Covers the M3 milestone verification surface:
+//! Covers the composite-types verification surface:
 //! - DDL with nested STRUCT / fixed-length and variable-length ARRAY
 //! - STRUCT/ARRAY literals in INSERT VALUES
 //! - Field access (`addr.city`), chained access (`addr.geo.lat`), subscript

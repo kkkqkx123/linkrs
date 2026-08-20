@@ -137,7 +137,7 @@ impl IndexDataManagerImpl {
             space_id,
             index_id: plan.index_id,
         };
-        // P2: make any pending (unpublished) writes visible to this scan.
+        // make any pending (unpublished) writes visible to this scan.
         self.publish_pending_delta(identity)?;
         let owned_catalog = if catalog.is_none() {
             self.register_native_index(space_id, index)?;
@@ -193,7 +193,7 @@ impl IndexDataManagerImpl {
             space_id,
             index_id: plan.index_id,
         };
-        // P2: make any pending (unpublished) writes visible to this scan.
+        // make any pending (unpublished) writes visible to this scan.
         self.publish_pending_delta(identity)?;
         let owned_catalog = if catalog.is_none() {
             self.register_native_index(space_id, index)?;

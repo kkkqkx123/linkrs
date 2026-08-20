@@ -216,7 +216,7 @@ mod tests {
         assert!(vts.is_valid(0, 250));
     }
 
-    // ==================== P0 Priority Tests ====================
+    // ==================== Priority Tests ====================
 
     /// Test: Verify timestamp range boundaries for visibility
     #[test]

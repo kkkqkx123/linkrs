@@ -1641,7 +1641,7 @@ fn update_vertex_indexes(
             continue;
         }
         // Check unique constraint before inserting. The pending-aware lookup
-        // (P2) reads unpublished index deltas in-memory instead of forcing a
+        // reads unpublished index deltas in-memory instead of forcing a
         // generation publish per statement, which would defeat delta
         // accumulation during batch loads with unique indexes.
         if index.is_unique {

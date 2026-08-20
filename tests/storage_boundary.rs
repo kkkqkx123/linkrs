@@ -1,7 +1,6 @@
 //! Storage boundary end-to-end test.
 //!
-//! Verifies the storage-boundary behavior described in
-//! `docs/plan/residual_issues.md` §3: per-query storage is bound to a
+//! Verifies the storage-boundary behavior: per-query storage is bound to a
 //! snapshot context (read statements pin a fixed read timestamp), and the
 //! bound handle exposes the snapshot via `QueryStorage::snapshot_handle()`
 //! without the query competing on the global storage lock per `next()`.

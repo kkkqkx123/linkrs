@@ -177,7 +177,7 @@ fn cold_snapshot_node_edges_in_and_both() {
     assert_eq!(both[0].dst, VertexId::from_int64(2));
 }
 
-/// Phase B: the batched accessors must merge cold snapshots with the same
+/// The batched accessors must merge cold snapshots with the same
 /// dedup semantics as `get_node_edges`.
 #[test]
 fn cold_snapshot_batch_accessors_match_get_node_edges() {

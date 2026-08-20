@@ -173,7 +173,7 @@ fn test_limit_in_chain() {
     let chunk = limit.advance().unwrap();
     assert!(chunk.is_some());
     if let Some(mut chunk_data) = chunk {
-        // P2: Limit is selection-aware — materialize to observe the rows an
+        // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
         chunk_data.materialize_selection();
         assert_eq!(chunk_data.len(), 10);
@@ -275,7 +275,7 @@ fn test_pipeline_scan_limit() {
     let result = pipeline.advance().unwrap();
     assert!(result.is_some());
     if let Some(mut chunk) = result {
-        // P2: Limit is selection-aware — materialize to observe the rows an
+        // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
         chunk.materialize_selection();
         assert_eq!(chunk.len(), 5);
@@ -346,7 +346,7 @@ fn test_pipeline_scan_filter_limit() {
     let result = pipeline.advance().unwrap();
     assert!(result.is_some());
     if let Some(mut chunk) = result {
-        // P2: Limit is selection-aware — materialize to observe the rows an
+        // Limit is selection-aware — materialize to observe the rows an
         // API consumer would see (the engine does this at the root).
         chunk.materialize_selection();
         assert_eq!(chunk.len(), 8);
@@ -715,7 +715,7 @@ fn test_distinct_all_same() {
     distinct.close().unwrap();
 }
 
-// ── Storage-backed integration tests (R5) ──
+// ── Storage-backed integration tests ──
 
 #[cfg(test)]
 mod storage_backed {
@@ -820,7 +820,7 @@ mod storage_backed {
         assert_eq!(sorted, vec!["Alice", "Bob", "Charlie", "Diana"]);
     }
 
-    /// P2 differential test: selection propagation on/off.
+    /// Differential test: selection propagation on/off.
     ///
     /// The selection propagation feature allows chunks to be handed downstream
     /// with a selection vector attached, avoiding materialization at

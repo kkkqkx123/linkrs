@@ -54,7 +54,7 @@ impl ExpandOutputBuffer {
 
 /// Iterator over the visible rows of a chunk.
 ///
-/// When a selection vector is attached (P2), only the selected rows are
+/// When a selection vector is attached, only the selected rows are
 /// yielded, preserving the absolute upstream row order. The output carries
 /// `(row_index, &row)` so consumers that need the absolute index (e.g. for
 /// `get_variable` on a per-row basis) keep working identically.

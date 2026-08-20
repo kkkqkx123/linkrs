@@ -251,7 +251,7 @@ fn test_multiple_crash_recovery_cycles() {
 }
 
 /// Test that schema version history is rebuilt during recovery.
-/// This test verifies P1: schema changes recorded in WAL are used to rebuild version_history.
+/// This test verifies that schema changes recorded in WAL are used to rebuild version_history.
 #[test]
 fn test_schema_version_history_recovery() {
     let temp_dir = common::create_test_workdir();

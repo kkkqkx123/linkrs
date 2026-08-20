@@ -18,7 +18,7 @@ use crate::sync::sqlite_outbox::OutboxSnapshot;
 
 /// Combined checkpoint manifest that atomically references all snapshot components.
 ///
-/// This is the core data structure for Phase 3. It ensures that:
+/// This is the core data structure. It ensures that:
 /// 1. Storage snapshot, outbox snapshot, and index manifests are published together
 /// 2. WAL cleanup uses the common safe LSN from this manifest
 /// 3. Recovery can rebuild from any valid manifest

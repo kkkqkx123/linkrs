@@ -1,4 +1,4 @@
-//! Auto-commit batch window operations (P4/P6).
+//! Auto-commit batch window operations.
 //!
 //! Storage engines that support a shared [`AutoCommitBatchWindow`] implement
 //! this trait so batch loaders can acquire the auto-commit write gate and
@@ -23,7 +23,7 @@ pub trait AutoCommitBatchOps: Send + Sync {
     fn finalize_auto_commit_batch(&self, window: &AutoCommitBatchWindow) -> StorageResult<()>;
 }
 
-/// Group-commit operations on top of an [`AutoCommitBatchWindow`] (P0 C).
+/// Group-commit operations on top of an [`AutoCommitBatchWindow`].
 /// The window is shared with `AutoCommitBatchOps`; `bind_auto_commit_statement`
 /// is mode-aware: bound inside a group window it reuses the shared write
 /// timestamp and undo log, so no separate bind method is needed.

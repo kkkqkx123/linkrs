@@ -27,7 +27,7 @@ pub fn distance_l2(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
-/// Manhattan distance (phase A: rejected at collection creation; provided for
+/// Manhattan distance (rejected at collection creation; provided for
 /// completeness only).
 pub fn distance_l1(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum()

@@ -1,9 +1,8 @@
-//! Phase A W8 benchmark baseline (design §12).
+//! Benchmark baseline.
 //!
 //! Establishes the Tier 0 exact-scan baseline before any optimization work:
 //! scan latency/throughput vs. dataset size, SIMD vs naive ratio, filter
-//! selectivity impact, and WAL-backed upsert throughput. Results are recorded
-//! in `docs/vector/` for Phase B decisions.
+//! selectivity impact, and WAL-backed upsert throughput.
 //!
 //! Run: `cargo bench -p vector-search`
 

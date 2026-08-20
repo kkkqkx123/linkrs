@@ -319,7 +319,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             } else {
                 storage.clone()
             };
-            // P2: surface the snapshot pinned by the per-query bound storage.
+            // surface the snapshot pinned by the per-query bound storage.
             // Read-only statements bind a fixed read timestamp; DML binds its
             // write timestamp. Unbound raw storage reports None.
             context.bound_snapshot = dyn_storage.read().snapshot_handle();
@@ -345,11 +345,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 parking_lot::Mutex::new(crate::utils::Arena::new()),
             ));
         }
-        // Stats feedback loop (phase 1): share the engine's feedback history
+        // Stats feedback loop: share the engine's feedback history
         // with every execution so estimated-vs-actual operator feedback is
         // recorded after the query completes.
         context.feedback_history = Some(self.optimizer_engine.feedback_history());
-        // Columnar auto-detection (phase 2): share the engine's policy so the
+        // Columnar auto-detection: share the engine's policy so the
         // typed columnar layout adapts to the learned hit rate; each query
         // merges its columnar stats back at completion.
         context.columnar_policy = Some(self.optimizer_engine.columnar_policy());

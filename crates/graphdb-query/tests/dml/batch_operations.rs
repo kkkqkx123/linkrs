@@ -224,7 +224,7 @@ fn test_large_batch_insert() {
 
 // ==================== DML Shape Template AST Cache ====================
 
-/// P0 A: the shape-normalized DML template AST must be parsed at most once
+/// the shape-normalized DML template AST must be parsed at most once
 /// per distinct template, and the cached AST must not misalign statement
 /// parameters with column values.
 #[test]

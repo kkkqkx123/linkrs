@@ -1,8 +1,7 @@
-//! A2 traversal-path performance validation.
+//! Traversal-path performance validation.
 //!
 //! Measures the anchored 1-hop and unanchored 2-hop on a 100k-vertex x 3-edge
-//! dataset through the full pipeline.  Targets (see
-//! `docs/issue/traversal-query-pathology.md`):
+//! dataset through the full pipeline.  Targets:
 //!   anchored 1-hop  <= 100ms
 //!   unanchored 2-hop <= 2s
 //!

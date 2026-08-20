@@ -1,8 +1,8 @@
-//! Phase 3 (P3.1) storage read baseline: wide-table full/projected scan vs
+//! Storage read baseline: wide-table full/projected scan vs
 //! narrow-table random property access.
 //!
-//! Plain-main bench (harness = false) so results can be consumed directly by
-//! the Phase 3 validation report. Run with:
+//! Plain-main bench (harness = false) so results can be consumed directly.
+//! Run with:
 //!   cargo bench --bench storage_read_baseline
 
 use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
@@ -149,7 +149,7 @@ fn bench_random_access(
 }
 
 fn main() {
-    println!("== P3.1 storage read baseline ==");
+    println!("== storage read baseline ==");
 
     for (label, props, sizes) in [
         ("wide", &WIDE_PROPS[..], &[10_000u64, 100_000][..]),

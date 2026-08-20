@@ -1,6 +1,6 @@
 //! Selection vectors, index-based take, and slice operations
 //!
-//! # P2 selection propagation contract
+//! # Selection propagation contract
 //!
 //! Operators fall into two categories:
 //! - **Transparent**: `Filter`, `Project` (via `evaluate_expression_visible`),
@@ -31,7 +31,7 @@ impl DataChunk {
         self.selection.as_deref()
     }
 
-    /// P2 contract: pass the selection vector through to a selection-aware
+    /// Contract: pass the selection vector through to a selection-aware
     /// consumer without moving any rows. Returns the visible row indices in
     /// upstream order, or `None` when no selection is attached (all rows
     /// visible). Transparent operators call this instead of materializing.
@@ -39,7 +39,7 @@ impl DataChunk {
         self.selection()
     }
 
-    /// P2 contract: materialize any attached selection (opaque-operator
+    /// Contract: materialize any attached selection (opaque-operator
     /// boundary). Returns `true` when a selection was actually materialized.
     ///
     /// This is the same operation as [`Self::materialize_selection`]; the
@@ -84,7 +84,7 @@ impl DataChunk {
         did
     }
 
-    /// P2 observability: materialize and attribute the boundary to a named
+    /// Observability: materialize and attribute the boundary to a named
     /// operator (`materialize_selection` + per-operator counting).
     pub fn materialize_selection_by(&mut self, op: &'static str) -> bool {
         let did = self.materialize_selection_inner();

@@ -102,7 +102,7 @@ pub struct PlanCacheKey {
     /// Parameter type signature — prevents reuse when param types differ (M1.6).
     /// Does NOT include parameter values, only their declared types.
     param_type_signature: Option<u64>,
-    /// Index version at planning time — forces replan after index DDL (P2).
+    /// Index version at planning time — forces replan after index DDL.
     index_version: Option<u64>,
     optimizer_version: u64,
     planning_config_hash: u64,
@@ -467,7 +467,7 @@ impl QueryPlanCache {
     /// M1.6: param_type_signature is a hash of parameter *types* so that
     /// the same query with different param types gets a different cache key.
     ///
-    /// P2: index_version forces replan after index DDL (use the same value
+    /// index_version forces replan after index DDL (use the same value
     /// that was passed to `put_with_context` to ensure key matching).
     pub fn get_with_space(
         &self,
@@ -480,7 +480,7 @@ impl QueryPlanCache {
 
     /// Look up with space, schema version, AND index version.
     ///
-    /// P2: the index_version dimension ensures that a plan compiled with a
+    /// the index_version dimension ensures that a plan compiled with a
     /// certain index state is not reused after index DDL.
     pub fn get_with_full_space(
         &self,
@@ -594,7 +594,7 @@ impl QueryPlanCache {
     /// M1.6: `param_type_signature` is derived from the parameter type
     /// declarations (not values) and is included in the cache key.
     ///
-    /// P2: index_version is incorporated into the cache key to force replan
+    /// index_version is incorporated into the cache key to force replan
     /// after index DDL (CREATE/DROP index) even when schema_version is unchanged.
     ///
     /// M3: stores [`Arc<PhysicalPlan>`] — the immutable arena plan.
@@ -870,7 +870,7 @@ impl QueryPlanCache {
 
     /// Record execution with space context.
     ///
-    /// P2: index_version must match the value used during `put_with_context` to
+    /// index_version must match the value used during `put_with_context` to
     /// locate the cached plan; otherwise the keys will differ and the record
     /// will miss.
     ///
@@ -989,7 +989,7 @@ impl QueryPlanCache {
         self.stats.clone()
     }
 
-    /// Record a hit without a cache lookup, for the P6 Level 2 same-shape DML
+    /// Record a hit without a cache lookup, for the Level 2 same-shape DML
     /// memo that short-circuits before `get_with_context`. Keeps the hit rate
     /// accounting consistent with the regular lookup path.
     pub fn record_memo_hit(&self) {

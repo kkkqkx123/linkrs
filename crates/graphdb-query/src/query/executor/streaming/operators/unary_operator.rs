@@ -345,7 +345,7 @@ impl UnaryOperator {
                     let Some(mut chunk) = input.advance()? else {
                         return Ok(None);
                     };
-                    // P2: consume offset/limit directly on the visible rows.
+                    // consume offset/limit directly on the visible rows.
                     // The selection vector (if any) is trimmed in place and
                     // handed downstream, so the chunk stays compact across
                     // the boundary instead of materializing.
@@ -471,7 +471,7 @@ impl UnaryOperator {
                 if *current_row_index >= all_rows.len() && !*input_done {
                     match input.advance()? {
                         Some(mut chunk) => {
-                            // P2: boundary materialization.
+                            // boundary materialization.
                             chunk.materialize_selection_by("Unwind");
                             let col_names = chunk.col_names();
                             *col_index = col_names.iter().position(|c| c == unwind_column.as_str());
@@ -611,7 +611,7 @@ impl UnaryOperator {
                 loop {
                     match input.advance()? {
                         Some(mut chunk) => {
-                            // P2: boundary materialization.
+                            // boundary materialization.
                             chunk.materialize_selection_by("Sample");
                             let remaining = (*count - *consumed) as usize;
                             let take_count = chunk.rows.len().min(remaining);

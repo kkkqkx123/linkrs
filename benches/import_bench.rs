@@ -1,15 +1,8 @@
-//! B3: batch-import bottleneck attribution (G3).
+//! Batch-import bottleneck attribution.
 //!
 //! Splits `batch_insert_vertices` / `batch_insert_edges` time into a CPU-side
 //! component (schema validation + allocation + shard locks + CSR insertion)
-//! and an I/O-side component (WAL append + commit fsync), per the analysis
-//! document §三.3 B3:
-//!
-//! ```text
-//! 场景：batch_insert_vertices / batch_insert_edges，批次 10k~1M
-//! 测量：验证耗时 / 分配耗时 / shard 锁 / WAL append 分占比
-//! 验收：若 CPU 侧（验证+分配+锁）占比 < 40%，R2 放弃
-//! ```
+//! and an I/O-side component (WAL append + commit fsync):
 //!
 //! Method: the same batch is executed on an in-memory storage (no WAL, no
 //! fsync; measures the CPU side only) and on a persistent storage
@@ -202,7 +195,7 @@ fn main() {
     }
 
     println!(
-        "\nacceptance: CPU-side share < 40% -> R2 abandoned (see docs/archive/storage-parallelization-benchmark-verification.md)"
+        "\nresult: CPU-side share < 40% -> import parallelization not justified"
     );
 }
 

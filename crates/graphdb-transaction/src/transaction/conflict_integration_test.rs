@@ -1,4 +1,4 @@
-//! Integration tests for P4 row-level conflict detection
+//! Integration tests for row-level conflict detection
 //!
 //! Tests the interaction between write set tracking, conflict detection, and MVCC
 

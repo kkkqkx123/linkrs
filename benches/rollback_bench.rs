@@ -1,13 +1,7 @@
-//! B4: large-transaction rollback cost (G4).
+//! Large-transaction rollback cost.
 //!
 //! Measures commit vs abort (undo execution) time for a single explicit
-//! transaction that writes N edges, per the analysis document §三.3 B4:
-//!
-//! ```text
-//! 场景：单事务写入 100k~1M 边后 abort（显式事务路径，不受 gate 影响）
-//! 测量：commit 耗时 vs abort（undo 执行）耗时
-//! 验收：若 abort 耗时 < 2× 等价写入耗时，回滚无需分片化
-//! ```
+//! transaction that writes N edges:
 //!
 //! The explicit-transaction path binds a storage operation context with the
 //! transaction's write timestamp (no `AutoCommitWriteGate` involvement) and
@@ -195,7 +189,7 @@ fn main() {
         );
     }
     println!(
-        "\nacceptance: abort < 2x equivalent write time -> rollback sharding not needed (see docs/archive/storage-parallelization-benchmark-verification.md)"
+        "\nresult: abort < 2x equivalent write time -> rollback sharding not needed"
     );
 }
 

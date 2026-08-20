@@ -684,7 +684,6 @@ impl TimeTravelEdgeStore {
         ) {
             let edge_id = nbr.edge_id;
             self.mvcc.record_deletion(edge_id, ts);
-            self.mvcc.record_pending_deletion(edge_id, ts);
             // Invalidate the cached current snapshot: it still contains this
             // edge and is only rebuilt lazily on the next maintenance pass.
             self.snapshot_dirty = true;
@@ -1302,7 +1301,7 @@ impl TimeTravelEdgeStore {
         estimated
     }
 
-    // ── P0: Sparse vertex index methods ──
+    // ── Sparse vertex index methods ──
 
     /// Rebuild sparse vertex indices from scratch for both directions.
     /// Scans all segments to identify which vertices have edges in each segment.
@@ -1343,7 +1342,7 @@ impl TimeTravelEdgeStore {
         }
     }
 
-    // ── P0: Current snapshot methods ──
+    // ── Current snapshot methods ──
 
     /// Rebuild current snapshots from segments (eager rebuild).
     /// Called after freeze or merge operations when segments have changed.

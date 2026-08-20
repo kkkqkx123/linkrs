@@ -810,8 +810,8 @@ impl VectorSyncCoordinator {
                 );
 
                 if self.backend.is_local() {
-                    // Local backend: single WAL-backed commit per txn id
-                    // (commit protocol §4.6). Replay is idempotent, so a
+                    // Local backend: single WAL-backed commit per txn id.
+                    // Replay is idempotent, so a
                     // failed commit may be retried after crash recovery.
                     let txn_ops: Vec<TxnOp> = updates
                         .iter()

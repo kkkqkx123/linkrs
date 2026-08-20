@@ -1,4 +1,4 @@
-//! W7 acceptance: local vector engine startup e2e.
+//! Local vector engine startup end-to-end test.
 //!
 //! Boots a full GraphService with the built-in local vector engine
 //! (configured through `Config.vector`) and exercises the VectorApi

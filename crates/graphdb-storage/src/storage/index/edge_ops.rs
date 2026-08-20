@@ -109,7 +109,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                         }
                     }
                 }
-                // P2: also account for entries still awaiting generation publication.
+                // also account for entries still awaiting generation publication.
                 let pending_guard = self.pending_deltas.lock();
                 if let Some(pending) = pending_guard.get(&identity) {
                     let mut scan = crate::storage::index::index_data_manager::PendingExistingScan {

@@ -1,4 +1,4 @@
-//! Partitioned physical-plan assembly (P8 wiring).
+//! Partitioned physical-plan assembly.
 //!
 //! When a [`PartitionSpec`] is present and the logical root is a linear
 //! chain ending in a single tagged vertex scan, the builder duplicates the

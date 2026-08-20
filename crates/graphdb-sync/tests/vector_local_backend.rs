@@ -1,4 +1,4 @@
-//! Integration tests for the local vector backend commit path (phase A W6).
+//! Integration tests for the local vector backend commit path.
 //!
 //! Exercises `VectorSyncCoordinator` against a `VectorBackend::Local`:
 //! index creation, buffered change commits (WAL-backed `apply_txn`), search,

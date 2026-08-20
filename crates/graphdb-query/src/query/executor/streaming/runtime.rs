@@ -29,11 +29,10 @@ pub struct QueryIdentity {
     pub space_name: Option<String>,
 }
 
-/// Decision-gate constants for typed-column analysis (see
-/// `docs/plan/fallback-and-typed-column-analysis.md` §3).
+/// Constants for typed-column analysis.
 ///
 /// These are exported so that benchmark harnesses can emit machine-readable
-/// D1/D2 status lines that mirror the decision logic.
+/// status lines that mirror the selection logic.
 pub const D1_EVAL_THRESHOLD: u64 = 1_000_000;
 pub const D1_TYPED_RATE_THRESHOLD: f64 = 0.5;
 
@@ -113,10 +112,10 @@ pub struct ColumnarStats {
     pub selection_attached: AtomicU64,
     /// Chunks materialized at a selection boundary.
     pub selection_materialized: AtomicU64,
-    /// P2: evaluations served by the selection-aware visible-row fast path
+    /// evaluations served by the selection-aware visible-row fast path
     /// (selection vector consumed without materializing).
     pub selection_pushed: AtomicU64,
-    /// P2: per-operator materialization counters, indexed by the position of
+    /// per-operator materialization counters, indexed by the position of
     /// the label inside [`SELECTION_BOUNDARY_OPS`].  Lock-free on the hot
     /// path; only the snapshot iterates the array (no per-call Mutex).
     selection_materialized_by_op: [AtomicU64; N_BOUNDARY_OPS],
@@ -167,7 +166,7 @@ impl ColumnarStats {
         self.selection_materialized.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a chunk materialized at a named operator boundary (P2).
+    /// Record a chunk materialized at a named operator boundary.
     ///
     /// The hot path is lock-free: it bumps the global counter and, if `op`
     /// belongs to the closed [`SELECTION_BOUNDARY_OPS`] enumeration, the
@@ -180,13 +179,13 @@ impl ColumnarStats {
         }
     }
 
-    /// P2: record an evaluation served by the selection-aware visible-row
+    /// record an evaluation served by the selection-aware visible-row
     /// fast path (selection consumed in place, upstream chunk untouched).
     pub fn record_selection_pushed(&self) {
         self.selection_pushed.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// P2: materialization sites, attributed per operator.
+    /// materialization sites, attributed per operator.
     pub fn materialized_by_operator(&self) -> HashMap<&'static str, u64> {
         SELECTION_BOUNDARY_OPS
             .iter()
@@ -446,10 +445,9 @@ impl ProfileBoard {
 ///
 /// Surfaces how much of the evaluation work ran through the columnar batch
 /// fast path vs. row-wise fallback, and how often storage column blocks /
-/// selection vectors were used.  This is the data behind the typed-column
-/// decision gate: when `hit_rate` is high for typical workloads, a typed
-/// column representation becomes unnecessary; a low `typed_hit_rate` with
-/// sustained `columnar_misses` motivates revisiting it.
+/// selection vectors were used.  When `hit_rate` is high for typical
+/// workloads, a typed column representation becomes unnecessary; a low
+/// `typed_hit_rate` with sustained `columnar_misses` motivates revisiting it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ColumnarStatsSnapshot {
     pub columnar_hits: u64,
@@ -517,15 +515,15 @@ pub struct ProfileCollector {
     pub total_time_us: u64,
     pub start_time: Option<Instant>,
     pub end_time: Option<Instant>,
-    /// Wall-clock time spent in parallel partition execution (P8).
+    /// Wall-clock time spent in parallel partition execution.
     pub parallel_wall_time_us: u64,
-    /// Sum of per-worker execution time (may exceed wall time, P8).
+    /// Sum of per-worker execution time (may exceed wall time).
     pub parallel_work_time_us: u64,
-    /// Maximum number of P8 workers used by any coordinator in this query.
+    /// Maximum number of workers used by any coordinator in this query.
     pub parallel_workers: usize,
-    /// Peak number of chunks retained in P8 output queues.
+    /// Peak number of chunks retained in output queues.
     pub parallel_buffered_chunks_peak: usize,
-    /// Peak accounted bytes retained in P8 output queues.
+    /// Peak accounted bytes retained in output queues.
     pub parallel_buffered_bytes_peak: usize,
 }
 
@@ -554,7 +552,7 @@ impl ProfileCollector {
         self.operators.insert(key, profile);
     }
 
-    /// Return a snapshot of the P8 parallel profile fields for
+    /// Return a snapshot of the parallel profile fields for
     /// EXPLAIN / PROFILE output.
     pub fn parallel_profile(&self) -> (u64, u64, usize, usize, usize) {
         (
@@ -734,7 +732,7 @@ pub struct ExecutionRuntime {
     ///
     /// Injected by the materializer from the query bindings; when set, the
     /// execution instance records estimated-vs-actual operator feedback here
-    /// after execution completes (stats feedback loop, phase 1).
+    /// after execution completes (stats feedback loop).
     pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
 }
 

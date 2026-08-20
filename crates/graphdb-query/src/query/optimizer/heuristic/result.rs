@@ -61,7 +61,7 @@ pub struct TransformResult {
     pub erase_curr: bool,
     /// Should all related nodes be deleted?
     pub erase_all: bool,
-    /// New list of planned project milestones
+    /// New list of replacement plan nodes
     pub new_nodes: Vec<crate::query::planning::plan::PlanNodeEnum>,
     /// New dependencies
     pub new_dependencies: Vec<usize>,

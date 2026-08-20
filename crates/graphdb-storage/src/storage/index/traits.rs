@@ -38,7 +38,7 @@ pub trait VertexIndexOps: Send + Sync {
     ) -> Result<Vec<Value>, StorageError>;
 
     /// Look up an index value without forcing pending deltas into a new
-    /// generation (P2). Pending (unpublished) entries are merged in-memory as
+    /// generation. Pending (unpublished) entries are merged in-memory as
     /// the newest overlay so the result is identical to
     /// [`lookup_tag_index_mvcc`](Self::lookup_tag_index_mvcc) but without the
     /// generation churn. Used by the unique-constraint check on the write path,

@@ -6,8 +6,8 @@
 //! suitable for caching, EXPLAIN, and repeated instantiation without shared
 //! mutable state.
 //!
-//! Phase 2 pilot: Source, Filter, Project, Limit, Sort, HashJoin.
-//! Remaining operators will be migrated in follow-up phases.
+//! Currently covers: Source, Filter, Project, Limit, Sort, HashJoin.
+//! Remaining operators can be migrated incrementally.
 
 use std::sync::Arc;
 

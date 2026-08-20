@@ -79,8 +79,8 @@ fn test_optimizer_result_equivalence_with_content() {
         .with_schema_manager(schema_manager);
 
     // Test: MATCH query results should be identical with or without optimization
-    // Note: ORDER BY queries are excluded due to a known P0 bug where the optimizer
-    // incorrectly eliminates or corrupts Sort nodes. See docs/issue/optimizer_issues.md.
+    // Note: ORDER BY queries are excluded due to a known bug where the optimizer
+    // incorrectly eliminates or corrupts Sort nodes.
     // Note: String property comparison in WHERE may not work with vertex property expressions.
     let queries = vec![
         "MATCH (i:Item) RETURN i.name, i.price",

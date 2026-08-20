@@ -1,8 +1,7 @@
 //! `wal.bin` — append-only transaction log per collection.
 //!
 //! Each record is `[u32 len][postcard(WalTxn)]`. Appends are fsync'ed before
-//! the caller applies the transaction to memory (commit protocol in the plan
-//! §4.6). Replay is idempotent: upserts overwrite by point id, deletes of
+//! the caller applies the transaction to memory. Replay is idempotent: upserts overwrite by point id, deletes of
 //! missing points are no-ops, and `Compact` checkpoints only advance the water
 //! mark. A truncated trailing record (crash mid-append) is tolerated and
 //! treated as end of log.

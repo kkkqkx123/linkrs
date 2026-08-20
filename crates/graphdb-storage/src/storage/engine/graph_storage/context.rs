@@ -458,7 +458,7 @@ struct GraphStorageRuntime {
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
     /// Wall-clock time of the last write per edge label, for cold-tier idle checks
     last_edge_write: Arc<Mutex<HashMap<LabelId, std::time::Instant>>>,
-    /// Last index-GC pass time, for throttling opportunistic GC (P5).
+    /// Last index-GC pass time, for throttling opportunistic GC.
     last_index_gc: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
@@ -621,7 +621,7 @@ impl graphdb_transaction::transaction::TransactionMutationRecorder for AutoCommi
     fn record_table_modification(&self, _table_name: &str) {}
 }
 
-/// A shared auto-commit batch window (P4).
+/// A shared auto-commit batch window.
 pub struct AutoCommitBatchWindow {
     base_ctx: Arc<GraphStorageContext>,
     gate_lease: Arc<AutoCommitWriteLease>,
@@ -635,7 +635,7 @@ pub struct AutoCommitBatchWindow {
     registered_edge_snapshots: Mutex<Vec<(EdgeTableKey, Timestamp)>>,
     statement_count: AtomicU64,
     snapshot_rounds: AtomicU64,
-    /// Group mode (P0 C): statements share one write timestamp (first_ts),
+    /// Group mode: statements share one write timestamp (first_ts),
     /// one undo log, and one commit point; see `begin_auto_commit_group`.
     group: AtomicBool,
     /// Shared before-image undo log for group mode (one segment per statement).
@@ -975,7 +975,7 @@ pub struct GraphStorageContext {
     /// [`AutoCommitMutationRecorder`]).
     auto_commit_undo: Option<Arc<Mutex<UndoLogManager>>>,
     /// When `Some`, this context is bound inside an [`AutoCommitBatchWindow`]
-    /// (P4): MVCC snapshots and the write-gate lease are owned by the window
+    /// MVCC snapshots and the write-gate lease are owned by the window
     /// and shared across all statements of the batch. `finalize_operation`
     /// therefore skips per-statement snapshot unregistration and never
     /// releases the window's write gate.

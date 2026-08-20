@@ -8,8 +8,8 @@
 //! EXPLAIN's `CBO decisions:` list so they are observable.
 //!
 //! This phase only makes the decision visible; it never rewrites the
-//! plan. Injecting precomputed values into operator inputs is left to a
-//! later milestone, so execution semantics are unchanged.
+//! plan. Injecting precomputed values into operator inputs is left to
+//! future work, so execution semantics are unchanged.
 
 use std::collections::HashMap;
 use std::sync::Arc;

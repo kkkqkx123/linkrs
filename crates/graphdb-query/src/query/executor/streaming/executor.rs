@@ -562,7 +562,7 @@ impl StreamingExecutor {
         self.memory_tracker().map_or(0, |mt| mt.peak() as u64)
     }
 
-    /// Return the P8 parallel fallback reason from any operator in this
+    /// Return the parallel fallback reason from any operator in this
     /// tree that has a recorded reason, or `None`.
     pub fn parallel_fallback_reason(&self) -> Option<String> {
         match self {
@@ -1106,7 +1106,7 @@ mod tests {
         executor.open().unwrap();
         let mut total = 0;
         while let Some(mut chunk) = executor.advance().unwrap() {
-            // P2: Limit is selection-aware — materialize to count the rows
+            // Limit is selection-aware — materialize to count the rows
             // an API consumer would observe (engine does this at the root).
             chunk.materialize_selection();
             total += chunk.len();
@@ -1138,7 +1138,7 @@ mod tests {
         executor.open().expect("limit should open");
         let mut values = Vec::new();
         while let Some(mut chunk) = executor.advance().expect("limit should advance") {
-            // P2: materialize the selection to observe the rows an API
+            // materialize the selection to observe the rows an API
             // consumer would see (engine does this at the root).
             chunk.materialize_selection();
             values.extend(chunk.rows.into_iter().filter_map(|row| match row.first() {

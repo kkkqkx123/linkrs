@@ -329,18 +329,16 @@ fn bench_large_edge_density(c: &mut Criterion) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B1-B7 decision benchmark set (typed-column gate)
+// Columnar typed-column benchmark set
 //
-// Decision gate defined in `docs/plan/fallback-and-typed-column-analysis.md`
-// §3 (D1/D2/D3). Each group runs a real query through the query engine and
-// aggregates the runtime observability counters:
+// Each group runs a real query through the query engine and aggregates the
+// runtime observability counters:
 //   - ColumnarStats (hit_rate / typed_hit_rate / selection counters)
 //   - per-operator peak_memory_bytes, spill_count, spilled_bytes
 //
 // Every group emits one machine-readable line per benchmark:
 //   BENCHMARK_RESULT {"benchmark":"B1", ...}
-// Redirect stdout (or set COLUMNAR_BENCH_OUT) to collect the data rows that
-// back the decision record table in the analysis document.
+// Redirect stdout (or set COLUMNAR_BENCH_OUT) to collect the data rows.
 
 const BASE_DEC_VERTICES: u64 = 20_000;
 const DEC_EDGES_PER_VERTEX: usize = 3;
@@ -406,7 +404,7 @@ impl Accum {
             .fetch_add(collector.output_rows, Ordering::Relaxed);
     }
 
-    /// Emit one machine-readable JSON line for the decision record table.
+    /// Emit one machine-readable JSON line per benchmark run.
     fn emit(&self, benchmark: &str, name: &str) {
         let runs = self.runs.load(Ordering::Relaxed);
         if runs == 0 {
@@ -458,7 +456,7 @@ impl Accum {
             }
         }
 
-        // Emit D1_STATUS line (decision-gate observability).
+        // Emit a status line with columnar evaluation observability.
         let d1_holds = total > D1_EVAL_THRESHOLD && typed_hit_rate < D1_TYPED_RATE_THRESHOLD;
         let d1_status = serde_json::json!({
             "benchmark": benchmark,
@@ -473,7 +471,7 @@ impl Accum {
             serde_json::to_string(&d1_status).expect("json")
         );
 
-        // Emit D2_PROXY line (memory proxy for D2 decision gate).
+        // Emit a spill-proxy line with memory observability.
         let output_rows = self.output_rows.load(Ordering::Relaxed);
         let spill_count = self.spill_count.load(Ordering::Relaxed);
         let spill_rate = if output_rows > 0 {

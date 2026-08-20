@@ -940,7 +940,7 @@ mod tests {
             drop(bound);
         }
 
-        // P4: the whole batch registers MVCC snapshots exactly once.
+        // the whole batch registers MVCC snapshots exactly once.
         assert_eq!(window.statement_count(), 50);
         assert_eq!(window.snapshot_rounds(), 1);
 
@@ -1106,7 +1106,7 @@ mod tests {
         setup_space(&mut storage);
         setup_person_tag(&mut storage);
 
-        // Unique index on Person.name exercises the P2 pending-aware unique
+        // Unique index on Person.name exercises the pending-aware unique
         // check inside the batch window: the duplicate must be rejected while
         // the earlier inserts' deltas are still unpublished.
         let index = Index::new(IndexConfig {
@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // P0 C: group-commit window tests
+    // group-commit window tests
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1870,7 +1870,7 @@ mod tests {
         assert_eq!(in_edges.len(), 1);
     }
 
-    /// Phase B acceptance: the batched accessors must agree with
+    /// The batched accessors must agree with
     /// `get_node_edges` for out/in/both directions and edge-type filtering.
     #[test]
     fn test_batch_accessors_match_get_node_edges() {
@@ -2512,7 +2512,7 @@ mod tests {
 
     #[test]
     fn test_p9_phase3_cleanup_threshold_gc_integration() {
-        // Test that compaction uses cleanup_threshold from SnapshotTracker (P9 Phase 3)
+        // Test that compaction uses cleanup_threshold from SnapshotTracker 
         let (_, mut storage) = create_persistent_storage();
         let _space_id = setup_space(&mut storage);
         let _person_tag = setup_person_tag(&mut storage);
@@ -2637,7 +2637,7 @@ mod tests {
     fn test_compact_maintenance_propagates_vertex_remap_to_edge_tables() {
         // Regression: vertex compaction densifies internal IDs; the old-to-new
         // mapping must be propagated into edge CSR rows/neighbors or every
-        // edge referencing a surviving vertex breaks (P9 phase 3).
+        // edge referencing a surviving vertex breaks .
         let (_, mut storage) = create_persistent_storage();
         setup_space(&mut storage);
         setup_person_tag(&mut storage);

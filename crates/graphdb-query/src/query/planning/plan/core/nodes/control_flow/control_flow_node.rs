@@ -516,8 +516,7 @@ impl MemoryEstimatable for LoopNode {
 // Transaction Control Nodes
 // ============================================================================
 //
-// Kept inside the plan-node system on purpose (see P1-3 in
-// docs/plan/plan_node_refactoring_plan.md). Although transaction boundaries
+// Kept inside the plan-node system on purpose. Although transaction boundaries
 // are conceptually session-level concerns, these nodes:
 // 1. Are compiled into `TxnOperator` in the streaming executor
 //    (arena_builder/assembler/conversion.rs) and produce the structured

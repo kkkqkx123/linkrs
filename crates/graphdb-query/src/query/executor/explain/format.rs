@@ -16,7 +16,7 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
     if let Some(ref part) = plan_desc.partition_spec_description {
         output.push_str(&format!("Partitioning: {}\n", part));
     }
-    // P8 parallel configuration
+    // parallel configuration
     output.push_str(&format!(
         "Parallel Workers: requested={}",
         plan_desc.requested_workers,

@@ -141,7 +141,7 @@ pub struct PlanDescription {
     pub optimize_time_in_us: i64,
     pub partition_spec_description: Option<String>,
 
-    // ── P8 parallel execution profile (populated at runtime) ──
+    // ── parallel execution profile (populated at runtime) ──
     pub requested_workers: usize,
     pub actual_workers: usize,
     pub parallel_wall_time_us: u64,

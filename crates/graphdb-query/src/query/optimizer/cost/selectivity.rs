@@ -12,7 +12,7 @@ use crate::query::optimizer::stats::{RangeCondition, StatisticsManager};
 
 /// Build the normalized condition key for a predicate expression.
 ///
-/// The key is used by the statistics feedback loop (phase 2) to attach
+/// The key is used by the statistics feedback loop to attach
 /// estimated-vs-actual row ratios to a specific predicate. Literals and
 /// numbers are replaced with placeholders so that structurally identical
 /// predicates with different constants aggregate to the same key. When a
@@ -34,7 +34,7 @@ pub fn condition_key(space: Option<&str>, expr: &Expression) -> String {
 #[derive(Debug)]
 pub struct SelectivityEstimator {
     stats_manager: Arc<StatisticsManager>,
-    /// Optional feedback-driven correction source (phase 2 of the stats
+    /// Optional feedback-driven correction source (stats
     /// feedback loop). When present, `estimate_from_expression` prefers the
     /// corrected selectivity for a known condition key over the histogram /
     /// heuristic estimate and registers newly estimated conditions.

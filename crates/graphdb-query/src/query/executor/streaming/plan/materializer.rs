@@ -529,23 +529,23 @@ impl PhysicalPlanMaterializer {
             runtime.set_worker_pool(Some(pool));
         }
 
-        // Stats feedback loop (phase 1): inject the shared query feedback
+        // Stats feedback loop: inject the shared query feedback
         // history so the execution instance can record estimated-vs-actual
         // operator feedback after execution completes.
         runtime.feedback_history = bindings.feedback_history.clone();
 
-        // Columnar auto-detection (phase 2): inject the shared policy so the
+        // Columnar auto-detection: inject the shared policy so the
         // scan gates can adapt the typed columnar layout to learned hit rate,
         // and the per-query stats are merged back at query completion.
         runtime.set_columnar_policy(bindings.columnar_policy.clone());
 
-        // Phase 1: size state_arenas for partitioned execution so each
+        // Size state_arenas for partitioned execution so each
         // partition gets its own arena, eliminating contention on arena 0.
         if bindings.partition_count > 0 {
             runtime.set_partition_count(bindings.partition_count + 1);
         }
 
-        // Phase 3: wire bumpalo arena into the runtime for temporary allocations.
+        // Wire bumpalo arena into the runtime for temporary allocations.
         runtime.arena = bindings.arena.clone();
 
         Arc::new(runtime)

@@ -271,7 +271,7 @@ fn explain_analyze_reports_fallback_reason_without_partitioning_config() {
     );
 }
 
-/// P1: EXPLAIN assertion that the enrich scan slots rule widens the scan
+/// EXPLAIN assertion that the enrich scan slots rule widens the scan
 /// output with predicate columns.
 ///
 /// The `EnrichScanSlotsWithFilterPropsRule` merges predicate columns into the

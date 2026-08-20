@@ -2087,7 +2087,7 @@ mod tests {
         assert_eq!(restored.len(), 3);
     }
 
-    // ==================== P0 Priority Tests ====================
+    // ==================== Priority Tests ====================
 
     /// Test: Verify large property values (>256 bytes) are handled correctly
     #[test]
@@ -2188,7 +2188,7 @@ mod tests {
         assert_eq!(col.null_count(), 2);
     }
 
-    /// P3: the O(1) `null_count` counter must stay in sync with the null
+    /// the O(1) `null_count` counter must stay in sync with the null
     /// bitmap through set / re-set / resize operations.
     #[test]
     fn test_null_count_counter_tracks_bitmap() {
@@ -2268,7 +2268,7 @@ mod tests {
         assert_eq!(col.get(2), Some(Value::Int(30)));
     }
 
-    // ==================== P0 Priority Encoding Tests ====================
+    // ==================== Priority Encoding Tests ====================
 
     /// Test: Column with repetitive integer values (RLE compression eligible)
     #[test]

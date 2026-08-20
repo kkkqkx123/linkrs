@@ -60,7 +60,7 @@ pub struct QueryBindings {
     pub space_name: Option<String>,
     /// Storage client for this execution.
     pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-    /// Snapshot handle pinned by the bound storage (P2: storage boundary).
+    /// Snapshot handle pinned by the bound storage (storage boundary).
     ///
     /// Populated by the pipeline when the per-query storage is bound to a
     /// read/auto-commit operation context. `None` for unbound storage.
@@ -99,7 +99,7 @@ pub struct QueryBindings {
     /// Shared query feedback history for collecting execution statistics.
     ///
     /// When set, the execution instance records estimated-vs-actual operator
-    /// feedback here after execution completes (stats feedback loop, phase 1).
+    /// feedback here after execution completes (stats feedback loop).
     /// Injected by the pipeline from the optimizer engine.
     pub feedback_history: Option<Arc<QueryFeedbackHistory>>,
     /// Shared cross-query policy for the typed columnar chunk layout.
@@ -204,7 +204,7 @@ pub enum ResultSink {
 /// executions of the same plan produce separate `QueryExecutionInstance`
 /// values.
 ///
-/// M2.8: optionally holds a [`QueryGuard`] that unregisters the query
+/// Optionally holds a [`QueryGuard`] that unregisters the query
 /// from the [`QueryRegistry`] on drop, ensuring no leaked entries.
 pub struct QueryExecutionInstance {
     plan: Arc<PhysicalPlan>,
@@ -212,7 +212,7 @@ pub struct QueryExecutionInstance {
     runtime: Arc<ExecutionRuntime>,
     engine: Option<StreamingExecutionEngine>,
     sink: ResultSink,
-    /// M2.8: guard that unregisters from the query registry on drop.
+    /// Guard that unregisters from the query registry on drop.
     _registry_guard: Option<QueryGuard>,
 }
 
@@ -222,7 +222,7 @@ impl QueryExecutionInstance {
     /// Uses [`PhysicalPlanMaterializer`] to convert the arena plan into an
     /// operator tree, then wraps it with runtime, engine, and sink.
     ///
-    /// M2.8: when a [`QueryRegistry`] is provided, the query is registered
+    /// When a [`QueryRegistry`] is provided, the query is registered
     /// with a unique non-zero ID and the guard is stored in the instance.
     pub fn instantiate_plan(
         plan: Arc<PhysicalPlan>,
@@ -244,7 +244,7 @@ impl QueryExecutionInstance {
         // paths) still honor mark_killed here.
         runtime.set_cancel_token(bindings.cancel_token.clone().unwrap_or_default());
 
-        // Phase 4: register with the query registry (M2.8).
+        // Phase 4: register with the query registry.
         let registry_guard = registry.as_ref().map(|reg| {
             let session_id = bindings
                 .session_id
@@ -347,7 +347,7 @@ impl QueryExecutionInstance {
     /// physical operator specs as `estimated_cardinality`) with the runtime
     /// profile counters, and stores one [`QueryExecutionFeedback`] entry
     /// keyed by the plan fingerprint.  Filter operators additionally carry
-    /// the normalized predicate key (`condition_key`) so phase 2 of the
+    /// the normalized predicate key (`condition_key`) so the
     /// statistics feedback loop can correct the selectivity of the specific
     /// condition.
     fn collect_execution_feedback(&self) {
@@ -392,7 +392,7 @@ impl QueryExecutionInstance {
             if let Some(operator) = self.plan.operator(key.physical_operator_id) {
                 if let Some(estimated) = operator.estimated_cardinality {
                     // For filter operators, attach the normalized predicate
-                    // key so the feedback loop (phase 2) can correct the
+                    // key so the feedback loop can correct the
                     // selectivity of the specific condition; all other
                     // cardinality-estimated operators carry a shape key so
                     // the loop can correct their row counts.

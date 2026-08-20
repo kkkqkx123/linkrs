@@ -564,8 +564,7 @@ impl<S> QueryApi<S>
 where
     S: StorageClient + Clone + AutoCommitBatchOps + AutoCommitGroupOps + 'static,
 {
-    /// Execute a batch of auto-commit DML statements in group-commit windows
-    /// (P0 C). Semantics: see docs/plan/plan_dml_batch_load_optimization.md §4.1.
+    /// Execute a batch of auto-commit DML statements in group-commit windows.
     /// `group_size` is clamped to >= 1; each consecutive group of statements
     /// shares one write timestamp, one WAL fsync, and one commit point.
     /// Statement results are returned per statement, in order, exactly like

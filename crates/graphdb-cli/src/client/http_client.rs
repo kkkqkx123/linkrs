@@ -151,7 +151,7 @@ impl HttpClient {
     }
 
     /// Execute multiple auto-commit DML statements inside a single shared
-    /// auto-commit batch window on the server (P4/P6). Returns one
+    /// auto-commit batch window on the server. Returns one
     /// [`QueryResult`] per input statement, in order; failures are reported
     /// per statement (inline `error`) and do not abort the rest of the batch.
     pub async fn execute_query_batch(

@@ -213,7 +213,7 @@ impl GraphStorage {
         self
     }
 
-    /// P2: set the index delta-publish threshold (entries per generation).
+    /// set the index delta-publish threshold (entries per generation).
     ///
     /// A threshold of `1` disables delta accumulation, restoring per-statement
     /// generation publication (rollback path). The default is 512.
@@ -224,14 +224,14 @@ impl GraphStorage {
             .set_delta_publish_threshold(threshold);
     }
 
-    /// P5: number of staged-WAL entries held for in-flight transactions.
+    /// number of staged-WAL entries held for in-flight transactions.
     /// Auto-commit statements commit/remove their staged entries on write;
     /// an unbounded value indicates a lifecycle leak.
     pub fn staged_wal_len(&self) -> usize {
         self.ctx.staged_wal_len()
     }
 
-    /// P5: total number of retired index generations awaiting reclamation.
+    /// total number of retired index generations awaiting reclamation.
     pub fn retired_generation_count(&self) -> usize {
         self.ctx
             .index_data_manager()

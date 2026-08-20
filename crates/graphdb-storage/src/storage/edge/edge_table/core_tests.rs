@@ -379,7 +379,7 @@ fn test_reverse_index_consistency_parallel_edges() {
     assert_eq!(in_after.len(), 2);
 }
 
-// ==================== P0 Priority Tests ====================
+// ==================== Priority Tests ====================
 
 #[test]
 fn test_p0_segment_reverse_index_sync_on_delete() {
@@ -1166,7 +1166,10 @@ fn test_revert_delete_restores_properties() {
 
     let edge = table.get_edge(0, 1, 0, 250).unwrap();
     assert_eq!(
-        edge.properties.iter().find(|(k, _)| k == "weight").map(|(_, v)| v),
+        edge.properties
+            .iter()
+            .find(|(k, _)| k == "weight")
+            .map(|(_, v)| v),
         Some(&Value::Double(1.5))
     );
 }
@@ -1199,9 +1202,7 @@ fn test_auto_freeze_on_write_pressure() {
 
     assert_eq!(table.out_segments.len(), 0);
     for i in 0..10u64 {
-        table
-            .insert_edge(0, 1, i as i64, &[], 100 + i)
-            .unwrap();
+        table.insert_edge(0, 1, i as i64, &[], 100 + i).unwrap();
     }
 
     // The write path must have frozen the delta into segments automatically.
@@ -1229,8 +1230,8 @@ fn test_auto_gc_tombstones() {
     for i in 0..20u64 {
         table.delete_edge(0, 1, i as i64, 200).unwrap();
     }
-    // 20 deletions × 2 layers (pending + main) = 40 tombstones > threshold.
-    assert!(table.mvcc.total_tombstone_count() >= 20);
+    // 20 deletions recorded once each in the single authoritative table.
+    assert_eq!(table.mvcc.total_tombstone_count(), 20);
     assert!(table.mvcc.is_tombstoned(EdgeId(0), 200));
 
     // Release the snapshot: min_active_snapshot_ts becomes MAX, so the next

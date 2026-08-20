@@ -29,7 +29,7 @@ pub struct FulltextReceiver {
 }
 
 // FulltextReceiver keeps JSON because Tantivy commit payloads accept only UTF-8
-// strings; this intentional exception is documented in docs/archive.
+// strings; this intentional exception is documented.
 #[cfg(feature = "fulltext-search")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FulltextCommitState {

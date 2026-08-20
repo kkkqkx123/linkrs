@@ -374,7 +374,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             && plan_desc.requested_workers > 1
             && plan_desc.parallel_fallback_reason.is_empty()
         {
-            plan_desc.parallel_fallback_reason = "serial fallback (P8 not activated)".to_string();
+            plan_desc.parallel_fallback_reason = "serial fallback (parallelism not activated)".to_string();
         }
     }
 }

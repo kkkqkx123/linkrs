@@ -1,4 +1,4 @@
-//! Phase 2: Core Type and Expression Integration Testing
+//! Core Type and Expression Integration Testing
 //!
 //! Test Range.
 //! - core::value - value type conversions, comparisons, operations

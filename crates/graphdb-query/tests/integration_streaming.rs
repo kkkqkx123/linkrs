@@ -101,7 +101,7 @@ fn test_filter_then_limit_pipeline() {
     let chunk = pipeline.advance().unwrap();
     assert!(chunk.is_some());
     let mut chunk = chunk.unwrap();
-    // P2: Limit returns a compact chunk (selection vector). Materialize to
+    // Limit returns a compact chunk (selection vector). Materialize to
     // count the visible rows an API consumer would observe (the engine
     // materializes at the root).
     chunk.materialize_selection();

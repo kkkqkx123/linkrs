@@ -55,7 +55,7 @@ pub struct OperatorFeedback {
     /// Normalized predicate key for filter operators.
     ///
     /// Populated only for operators whose spec carries a predicate (e.g.
-    /// `UnarySpec::Filter`); used by the statistics feedback loop (phase 2)
+    /// `UnarySpec::Filter`); used by the statistics feedback loop
     /// to attach estimated-vs-actual row ratios to a specific predicate.
     pub condition_key: Option<String>,
     /// Normalized operator shape key (`"{space}:{Type}:{discriminator}"`).

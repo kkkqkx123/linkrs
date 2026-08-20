@@ -4,7 +4,7 @@
 //!
 //! Holds a single root executor and drives it via direct pull
 //! (`open → next → close`). The default remains serial. When explicitly
-//! configured, formal Gather nodes can use the bounded P8 coordinator for
+//! configured, formal Gather nodes can use the bounded coordinator for
 //! partition-local, parallel-safe child trees.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 /// direct pull: open() → loop next() → close().
 ///
 /// Partitioned roots retain their normal Gather semantics. Eligible local
-/// inputs may run through the bounded P8 coordinator when `max_workers > 1`;
+/// inputs may run through the bounded coordinator when `max_workers > 1`;
 /// all other trees retain the serial pull path.
 ///
 /// An optional [`ExecutionRuntime`] can be attached to enable cancellation,
@@ -43,10 +43,10 @@ pub struct StreamingExecutionEngine {
     /// Number of local trees currently owned by a Gather root. This remains
     /// meaningful after the legacy `partition_executors` vector is cleared.
     partition_count: usize,
-    /// Maximum worker threads for intra-query parallelism (P8).
+    /// Maximum worker threads for intra-query parallelism.
     /// 1 (default) means fully serial.
     max_workers: usize,
-    /// Per-partition output channel capacity for formal P8 Gather nodes.
+    /// Per-partition output channel capacity for formal Gather nodes.
     max_buffered_chunks: usize,
     runtime: Option<Arc<ExecutionRuntime>>,
     /// Allocator for synthetic node IDs (Gather, Start sources, etc.).
@@ -107,7 +107,7 @@ impl StreamingExecutionEngine {
         }
     }
 
-    /// Set the bounded output capacity used by P8 worker channels.
+    /// Set the bounded output capacity used by worker channels.
     pub fn set_max_buffered_chunks(&mut self, max_buffered_chunks: usize) {
         self.max_buffered_chunks = max_buffered_chunks.max(1);
         if let Some(rt) = &self.runtime {
@@ -542,7 +542,7 @@ impl StreamingExecutionEngine {
     /// # Partitioned Execution
     /// When partition executors are registered, partitions are executed
     /// sequentially and the collected chunks are wrapped in a stream.
-    /// Formal P8 parallelism runs through the Gather-based root.
+    /// Formal parallelism runs through the Gather-based root.
     pub fn execute(mut self) -> Result<ResultStream, QueryError> {
         if !self.partition_executors.is_empty() {
             let chunks = self.execute_collected()?;
@@ -616,7 +616,7 @@ impl StreamingExecutionEngine {
 
     /// Execute the legacy uncomposed partition list sequentially.
     ///
-    /// Formal P8 parallelism is intentionally attached to the Gather-based
+    /// Formal parallelism is intentionally attached to the Gather-based
     /// partitioned root. This compatibility helper has no Gather semantics
     /// and therefore remains serial.
     ///

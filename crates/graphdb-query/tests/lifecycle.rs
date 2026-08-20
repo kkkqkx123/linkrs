@@ -1,6 +1,6 @@
-//! Lifecycle assertion tests (review doc §8.3).
+//! Lifecycle assertion tests.
 //!
-//! Covers the query lifecycle contract that P0/P1 unified:
+//! Covers the query lifecycle contract:
 //! - query_id propagation (request-supplied id vs registry-allocated)
 //! - cancellation through all three paths (runtime token, registry, mark_killed)
 //!   including the registry-None (pure pipeline / embedded) path
@@ -63,7 +63,7 @@ fn bindings(query_id: u64, token: Option<CancelToken>, scope: TransactionScope) 
     QueryBindings::from_context(&ctx, scope)
 }
 
-// ── §8.3.1 query_id propagation ─────────────────────────────────────────────
+// ── ── query_id propagation ─────────────────────────────────────────────
 
 #[test]
 fn lifecycle_query_id_request_supplied_reaches_runtime() {
@@ -144,7 +144,7 @@ fn lifecycle_query_id_requested_id_already_active_allocates_fresh() {
     assert!(registry.active_queries().contains(&QueryId(qid)));
 }
 
-// ── §8.3.2 cancellation: single token across all three paths ────────────────
+// ── ── cancellation: single token across all three paths ────────────────
 
 #[test]
 fn lifecycle_cancel_token_marks_runtime_without_registry() {
@@ -254,7 +254,7 @@ fn lifecycle_registry_none_cancel_aborts_execution() {
     );
 }
 
-// ── §8.3.3 EXPLAIN ANALYZE / PROFILE share the caller's transaction scope ──
+// ── ── EXPLAIN ANALYZE / PROFILE share the caller's transaction scope ──
 
 #[test]
 fn lifecycle_diagnostic_scopes_instantiate_all_variants() {
@@ -279,7 +279,7 @@ fn lifecycle_diagnostic_scopes_instantiate_all_variants() {
     }
 }
 
-// ── §8.3.4 partition-plan cache hit/miss consistency ────────────────────────
+// ── ── partition-plan cache hit/miss consistency ────────────────────────
 
 fn make_partition_spec(
     ranges: &[(i64, i64)],
@@ -452,7 +452,7 @@ fn lifecycle_partition_cache_hit_returns_exact_compiled_instance() {
     let _ = original_ptr;
 }
 
-// ── §8.3.5 EXPLAIN / PROFILE output surfaces lifecycle metadata ─────────────
+// ── ── EXPLAIN / PROFILE output surfaces lifecycle metadata ─────────────
 
 #[test]
 fn lifecycle_explain_plan_description_round_trips_cbo_notes() {

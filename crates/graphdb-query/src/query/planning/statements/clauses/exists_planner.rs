@@ -1,4 +1,4 @@
-//! EXISTS / IN subquery planning for conjunctive WHERE positions (P1).
+//! EXISTS / IN subquery planning for conjunctive WHERE positions.
 //!
 //! `WHERE EXISTS / NOT EXISTS / IN / NOT IN (subquery)` conjuncts are
 //! planned as [`PatternApply`](crate::query::planning::plan::core::nodes::PatternApplyNode)
@@ -632,7 +632,7 @@ pub fn plan_subquery(
         extract_keys(&flat_conditions, &inner_vars)?;
     // Split residual conditions: subquery-local ones stay as a filter inside
     // the pattern plan; outer-correlated ones (no equi key) route to the
-    // P2 `CorrelatedApply` path.
+    // `CorrelatedApply` path.
     let (inner_residual, correlated_residual) = split_correlated(&residual_conditions, &inner_vars);
 
     // Build the base subquery plan. Index selection is disabled for the
@@ -997,7 +997,7 @@ fn extract_keys(
 /// Split residual conditions into subquery-local and outer-correlated parts.
 ///
 /// A condition is correlated when it references any variable not bound by the
-/// subquery patterns (`inner_vars`); those route to the P2 `CorrelatedApply`
+/// subquery patterns (`inner_vars`); those route to the `CorrelatedApply`
 /// path. The remaining conditions reference only subquery variables and stay
 /// as a subquery-local filter inside the pattern plan.
 fn split_correlated(

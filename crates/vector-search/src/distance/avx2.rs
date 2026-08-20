@@ -130,7 +130,7 @@ pub unsafe fn distance(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
         DistanceMetric::Cosine => distance_cosine(a, b),
         DistanceMetric::Manhattan => {
             // Intentionally scalar: Manhattan is rejected at collection
-            // creation (phase A), kept here only for completeness.
+            // creation, kept here only for completeness.
             let mut sum = 0.0f32;
             for j in 0..a.len() {
                 sum += (a[j] - b[j]).abs();

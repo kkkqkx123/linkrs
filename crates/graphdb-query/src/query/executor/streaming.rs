@@ -73,7 +73,7 @@ pub use spill::{
     SpillReader, SpillWriter, SpilledFile, SpilledRun,
 };
 
-// ── P2: New types ──
+// ── New types ──
 pub use instance::{QueryBindings, QueryExecutionInstance, ResultSink};
 pub use query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
 pub use state::{

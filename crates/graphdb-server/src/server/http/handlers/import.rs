@@ -1,7 +1,7 @@
 //! HTTP handler for data import operations
 //!
 //! Parses an uploaded file (CSV with header, JSON array, or JSONL) into DML
-//! statements and loads them through the group-commit batch window (P0 C):
+//! statements and loads them through the group-commit batch window:
 //! each `batch_size` group of statements shares one write timestamp, one WAL
 //! fsync, and one commit point, so a large import amortizes fsync across
 //! statements instead of syncing per row.

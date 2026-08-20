@@ -173,7 +173,7 @@ define_rewrite_rules! {
         PushProjectDownScanEdges(projection_pushdown::PushProjectDownScanEdgesRule),
         // Enriches scan `projected_properties` with residual filter
         // predicate columns so the columnar evaluator can serve WHERE
-        // clauses directly above scan sources (G1 closure).
+        // clauses directly above scan sources.
         EnrichScanSlotsWithFilterProps(slot_coverage::EnrichScanSlotsWithFilterPropsRule),
 
         // ==================== Rules for Pushing Limits Down ====================

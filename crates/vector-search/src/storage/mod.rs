@@ -244,7 +244,7 @@ impl CollectionStore {
         Ok(true)
     }
 
-    /// Apply a WAL-backed transaction (commit protocol §4.6):
+    /// Apply a WAL-backed transaction:
     ///
     /// 1. validate every op (no invalid data may be logged);
     /// 2. append the whole `WalTxn` to `wal.bin` + fsync;
@@ -468,8 +468,8 @@ impl CollectionStore {
     /// Physically remove tombstoned slots and rebuild all files with compacted
     /// slot numbering `0..live_count`.
     ///
-    /// Runs under the write lock (blocking searches, acceptable for the
-    /// single-node phase A). Procedure (§4.7):
+    /// Runs under the write lock (blocking searches, acceptable for a
+    /// single-node deployment). Procedure:
     /// 1. write `vectors_tmp.bin`/`keys_tmp.bin`/`payloads_tmp.bin`;
     /// 2. fsync each and rename over the live file (atomic swap);
     /// 3. rebuild mmap snapshots, `reverse` map and tombstone bitmap;
@@ -578,7 +578,7 @@ impl CollectionStore {
         Ok(live_count)
     }
 
-    /// Tier 0 exact scan (§6): parallel full scan with the SIMD distance
+    /// Tier 0 exact scan: parallel full scan with the SIMD distance
     /// kernel, post-filter on payload, score threshold, then top-K heap
     /// selection and offset/limit slicing.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {

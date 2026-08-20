@@ -1,7 +1,6 @@
-//! Decision-gate benchmarks for columnar accumulation (Phase B).
+//! Benchmarks for columnar accumulation.
 //!
-//! Measures the three gates defined in
-//! `docs/analysis/query/columnar_options_compare_analysis.md` §7:
+//! Measures the three accumulation paths:
 //!
 //! 1. `hash_join_build` — HashJoin build side: current row double-clone
 //!    (`build_side_hash` bucket + `all_right_rows`) vs columnar accumulation

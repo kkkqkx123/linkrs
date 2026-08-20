@@ -236,7 +236,7 @@ fn test_rename_and_remove_property() {
     assert!(props.iter().all(|(name, _)| name != "since"));
 }
 
-// ==================== P0 Priority Tests ====================
+// ==================== Priority Tests ====================
 
 /// Test: Verify property update for single property
 #[test]
@@ -573,7 +573,7 @@ fn test_merged_oldest_version() {
     );
 }
 
-/// P3: the O(1) `used_data_bytes` counter must match the sum of record
+/// the O(1) `used_data_bytes` counter must match the sum of record
 /// payloads after a sequence of insert / update / delete / compact.
 #[test]
 fn test_used_memory_counter_tracks_records() {

@@ -94,7 +94,7 @@ pub struct PhysicalPlanBuildContext {
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
-    // NOTE: capacity planning and spill config will be added in P2.
+    // NOTE: capacity planning and spill config is not yet wired.
 }
 
 impl PhysicalPlanBuildContext {

@@ -2,16 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the columnar fast paths (A1 column-block scan, etc.).
+/// Configuration for the columnar fast paths (column-block scan, etc.).
 ///
 /// These knobs only change *how* the row-based `DataChunk` is filled by scan
 /// sources; the output rows are bit-for-bit identical to the row-based path.
-/// They are off by default so production behavior is unchanged until a
-/// decision gate (see `docs/plan/fallback-and-typed-column-analysis.md`) is
-/// crossed.
+/// They are off by default so production behavior is unchanged until the
+/// typed-column fast path is enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct ColumnarConfig {
-    /// Enable the storage column-block scan path (A1).
+    /// Enable the storage column-block scan path.
     ///
     /// When enabled, storage sources stream column-major batches through the
     /// `next_column_batch` cursor API and build chunk typed columns directly

@@ -1,15 +1,8 @@
-//! B1: edge-table scan parallel speedup (G1).
+//! Edge-table scan parallel speedup.
 //!
 //! Measures `scan_edges_by_type` full-table scan speedup E(n) = T(1)/T(n) as a
 //! function of the number of (src,dst) edge partitions (N) and the rayon
-//! worker count (n), per the analysis document §三.3 B1:
-//!
-//! ```text
-//! 场景：单边类型 + N 个 (src,dst) 分区（N ∈ {1, 4, 16}），每分区 M 条边
-//! 测量：scan_edges_by_type 全量扫描 T(1)/T(N)，worker ∈ {1,2,4,8}
-//! 输出：E(n)、分区数 N 的扩展性曲线
-//! 验收：N ≥ 4 且边数 ≥ 1M 时 E(8) ≥ 3
-//! ```
+//! worker count (n):
 //!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench --bench edge_scan_speedup_bench
@@ -209,7 +202,7 @@ fn main() {
         }
     }
     println!(
-        "\nacceptance: N >= 4 and >= 1M edges -> E(8) >= 3 (see docs/archive/storage-parallelization-benchmark-verification.md)"
+        "\nresult: N >= 4 and >= 1M edges -> E(8) >= 3"
     );
 }
 

@@ -122,7 +122,7 @@ fn column_block_matches_row_path_e2e() {
     }
 }
 
-/// P1 differential test: enrich scan slots rule on/off.
+/// Differential test: enrich scan slots rule on/off.
 ///
 /// The `EnrichScanSlotsWithFilterPropsRule` widens the scan output layout
 /// with predicate columns so the columnar evaluator can serve WHERE clauses

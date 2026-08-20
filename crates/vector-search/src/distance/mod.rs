@@ -2,7 +2,7 @@
 //!
 //! The local engine ranks by an internal *distance* (smaller is nearer) and
 //! converts it to a Qdrant-compatible *score* for output, so downstream
-//! `score_threshold` semantics stay identical to the qdrant path (§5.1):
+//! `score_threshold` semantics stay identical to the qdrant path:
 //!
 //! | metric   | internal distance          | output score        |
 //! |----------|----------------------------|---------------------|
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_zero_vector_cosine_boundary() {
-        // Zero norm: distance 1, score 0 (design §4.3.1 zero-vector edge).
+        // Zero norm: distance 1, score 0 (zero-vector edge).
         let d = naive::distance(DistanceMetric::Cosine, &[0.0, 0.0], &[1.0, 2.0]);
         assert_close(d, 1.0);
         assert_close(to_score(DistanceMetric::Cosine, d), 0.0);

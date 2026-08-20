@@ -436,7 +436,7 @@ impl TestDb {
         self.query_api.execute(query, ctx)
     }
 
-    /// Execute a batch of auto-commit statements in one storage window (P6).
+    /// Execute a batch of auto-commit statements in one storage window.
     ///
     /// Statements must be plain auto-commit statements (no BEGIN/COMMIT/ROLLBACK
     /// /USE); each still commits and rolls back independently. The first failing
@@ -464,7 +464,7 @@ impl TestDb {
     }
 
     /// Execute a batch of auto-commit statements using group-commit windows
-    /// (P0 C). Each group of `group_size` statements shares one write timestamp
+    /// . Each group of `group_size` statements shares one write timestamp
     /// and one WAL fsync.
     pub fn execute_batch_grouped(
         &mut self,
@@ -603,7 +603,7 @@ pub fn assert_query_err<T: std::fmt::Debug>(result: CoreResult<T>, context: &str
 /// are statement separators.  Continuation lines (indented, or starting
 /// with `)`) are appended to the current statement.
 ///
-/// Consecutive `INSERT` statements are executed as one batch window (P6) so
+/// Consecutive `INSERT` statements are executed as one batch window so
 /// the auto-commit write gate and MVCC snapshot registrations are shared
 /// across the run; everything else (BEGIN/COMMIT/ROLLBACK, USE, DDL, reads)
 /// runs statement-by-statement via `execute_query`.
@@ -657,7 +657,7 @@ pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
 }
 
 /// Load a GQL file, executing consecutive INSERT statements via group-commit
-/// windows (P0 C). Non-INSERT statements execute individually.
+/// windows. Non-INSERT statements execute individually.
 pub fn load_gql_file_grouped(db: &mut TestDb, path: &str, group_size: usize) -> CoreResult<()> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         graphdb::api::core::CoreError::Internal(format!("Failed to read {}: {}", path, e))

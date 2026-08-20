@@ -173,8 +173,7 @@ pub enum PlanNodeEnum {
 
     // Transaction Control Nodes
     //
-    // Retained in PlanNodeEnum by design (see P1-3 in
-    // docs/plan/plan_node_refactoring_plan.md): the nodes participate in the
+    // Retained in PlanNodeEnum by design: the nodes participate in the
     // execution pipeline, not just session-level side effects.
     // - The streaming executor compiles them into `TxnOperator` via
     //   `TxnSpec` (arena_builder/assembler/conversion.rs), which validates

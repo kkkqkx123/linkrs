@@ -1,6 +1,6 @@
 //! Outbox Recovery
 //!
-//! Implements Phase 3 recovery: when the live SQLite outbox is lost, corrupted,
+//! Implements recovery when the live SQLite outbox is lost, corrupted,
 //! or rolled back, rebuild it from the most recent outbox snapshot and replay
 //! the remaining committed WAL intents.
 

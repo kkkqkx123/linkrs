@@ -1,17 +1,17 @@
 //! Necessity experiments for the columnar optimization family.
 //!
-//! Each benchmark group answers one question from
-//! `docs/plan/columnar-necessity-verification-design.md`:
+//! Each benchmark group answers one question about the columnar
+//! optimization family:
 //! - row_vs_column_filter: is a typed column layout faster than Vec<Value> for
-//!   single-column predicates? (Q1: typed columnar chunk)
+//!   single-column predicates? (typed columnar chunk)
 //! - wide_single_column_filter: does column pruning beat full-row scans on wide
-//!   tables (cache behavior)? (Q1 / Q6)
+//!   tables (cache behavior)?
 //! - null_bitmap: how does a validity bitmap compare to Option-style encoding
-//!   across null densities? (Q3)
+//!   across null densities?
 //! - autovectorization: scalar vs unrolled loops under `-C target-cpu=native`
-//!   (Q2: SIMD headroom probe)
+//!   (SIMD headroom probe)
 //! - selectivity_propagation: take_indices materialization vs index pass-through
-//!   across operator boundaries (Q4)
+//!   across operator boundaries
 //!
 //! Run twice for the SIMD probe:
 //!   cargo bench --bench columnar_necessity_bench

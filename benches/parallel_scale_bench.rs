@@ -1,4 +1,4 @@
-//! Phase 3 (P3.2) parallel speedup validation: end-to-end Cypher queries at
+//! Parallel speedup validation: end-to-end Cypher queries at
 //! 1/2/4/8 workers through the full pipeline (parse -> optimize -> partition
 //! -> execute -> profile).
 //!
@@ -319,7 +319,7 @@ fn measure(
 }
 
 fn main() {
-    println!("== P3.2 parallel speedup validation ==");
+    println!("== parallel speedup validation ==");
     println!("vertices={VERTEX_COUNT}, edges/vertex=3, iterations={ITERATIONS}");
     let storage = setup_data();
     println!(

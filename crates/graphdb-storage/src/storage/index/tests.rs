@@ -825,7 +825,7 @@ fn memory_limit_triggers_compaction() {
 fn retire_generations_reclaims_retired_checkpoint_dirs() {
     let directory = tempfile::tempdir().expect("tempdir");
     let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
-    // P2: force per-statement publication so each update below creates a
+    // force per-statement publication so each update below creates a
     // retired generation (the accumulation path is covered elsewhere).
     manager.set_delta_publish_threshold(1);
     let index = create_tag_index("name_idx", "Person");
@@ -886,7 +886,7 @@ fn retire_generations_reclaims_retired_checkpoint_dirs() {
     );
 }
 
-// --- P2: delta accumulation batches generation publication ---
+// --- delta accumulation batches generation publication ---
 
 #[test]
 fn delta_accumulation_batches_generation_publication() {
@@ -961,7 +961,7 @@ fn delta_accumulation_rollback_path_publishes_per_statement() {
     );
 }
 
-/// The pending-aware lookup (P2, no generation publish) must agree with the
+/// The pending-aware lookup (no generation publish) must agree with the
 /// publish-first lookup on live entries, tombstones, and overwrites while the
 /// delta is still buffered.
 #[test]

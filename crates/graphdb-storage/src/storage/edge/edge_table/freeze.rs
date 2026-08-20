@@ -7,9 +7,8 @@
 use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-use crate::core::types::{EdgeId, Timestamp};
+use crate::core::types::Timestamp;
 use crate::storage::edge::CsrVariant;
-use std::collections::HashMap;
 
 impl TimeTravelEdgeStore {
     /// Freeze CSR only (convert mutable delta to immutable segment).
@@ -25,10 +24,25 @@ impl TimeTravelEdgeStore {
         // segments store none and rely on tombstones for filtering, so
         // without this promotion the deletion history would be lost. Only the
         // out direction needs scanning (tombstones are global).
+        let mut has_deleted_delta_entries = false;
         for (_, nbr) in self.out_csr.iter_all() {
             if nbr.delete_ts != Timestamp::MAX {
+                has_deleted_delta_entries = true;
                 self.mvcc.record_deletion(nbr.edge_id, nbr.delete_ts);
             }
+        }
+
+        // Reclaim delta deletions that no active snapshot can observe before
+        // freezing: when a snapshot bounds the retention horizon
+        // (min_active_snapshot_ts < MAX), entries whose deletion predates it
+        // are physically removed from the delta (their tombstone is already
+        // recorded above) instead of being frozen into an immutable segment,
+        // where they would occupy space until a physical merge. Without an
+        // active snapshot every deleted entry is retained so time-travel
+        // before the deletion stays possible.
+        let cutoff = self.mvcc.get_min_active_snapshot_ts();
+        if cutoff < Timestamp::MAX && has_deleted_delta_entries {
+            self.compact_csr_only(ts, 0.0);
         }
 
         // Freeze out direction
@@ -38,8 +52,6 @@ impl TimeTravelEdgeStore {
             &mut self.out_segments,
             &mut self.out_free_space,
             ts,
-            &self.mvcc.pending_segment_deletions,
-            &self.mvcc.segment_tombstones,
         );
         let out_segments_after = self.out_segments.len();
 
@@ -50,12 +62,8 @@ impl TimeTravelEdgeStore {
             &mut self.in_segments,
             &mut self.in_free_space,
             ts,
-            &self.mvcc.pending_segment_deletions,
-            &self.mvcc.segment_tombstones,
         );
         let in_segments_after = self.in_segments.len();
-
-                self.mvcc.promote_pending_deletions();
 
         // Update indices incrementally for newly frozen segments
         // This is more efficient than full rebuild when only a few segments are added
@@ -101,8 +109,6 @@ impl TimeTravelEdgeStore {
         segments: &mut Vec<CsrSegment>,
         free_space: &mut super::free_space::SegmentFreeList,
         ts: Timestamp,
-        pending_deletions: &HashMap<EdgeId, Timestamp>,
-        segment_tombstones: &HashMap<EdgeId, Timestamp>,
     ) -> merge::FreezeDeltaResult {
         let entries: Vec<_> = delta
             .iter_all()
@@ -141,14 +147,14 @@ impl TimeTravelEdgeStore {
             .max()
             .unwrap_or(0);
 
-        // Count deletions belonging to THIS segment. The primary source is
-        // the inline delete_ts carried by entries that were logically
-        // deleted while still in the mutable delta: those deletions happened
-        // at freeze time and must be reflected in the segment's DeletionInfo.
-        // Matching against the pending/segment tombstone maps used to be the
-        // only source, but those maps record deletions of ALREADY frozen
-        // edges, so the intersection with delta entries was always empty and
-        // deleted_count stayed 0 (DeletionInfo was perpetually NoDeletes).
+        // Count deletions belonging to THIS segment. The source is the inline
+        // delete_ts carried by entries that were logically deleted while
+        // still in the mutable delta: those deletions happened at freeze
+        // time and must be reflected in the segment's DeletionInfo. Deletions
+        // of already-frozen edges never appear here, since `freeze_csr_only`
+        // promotes delta deletions to the global tombstone layer before
+        // freezing and an edge lives either in the delta or in a segment,
+        // never both.
         let mut deleted_count = 0u32;
         let (delete_ts_min, delete_ts_max) = entries
             .iter()
@@ -156,19 +162,6 @@ impl TimeTravelEdgeStore {
                 if nbr.delete_ts != Timestamp::MAX {
                     deleted_count += 1;
                     return Some(nbr.delete_ts);
-                }
-                // Defensive: replay/rollback paths may record a deletion
-                // through the tombstone layers instead of the inline flag.
-                // Normally empty for delta edges (an edge lives either in
-                // the delta or in a segment, never both), but kept so such
-                // deletions are not undercounted.
-                if let Some(&ts) = pending_deletions.get(&nbr.edge_id) {
-                    deleted_count += 1;
-                    return Some(ts);
-                }
-                if let Some(&ts) = segment_tombstones.get(&nbr.edge_id) {
-                    deleted_count += 1;
-                    return Some(ts);
                 }
                 None
             })
