@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::query::optimizer::cost::SelectivityEstimator;
+use crate::query::optimizer::cost_based::factorization as factor_cost;
 use crate::query::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -298,8 +299,61 @@ fn estimate_node_output_rows_impl(
         // ── Traversal / apply operators ──
         Expand(_) | ExpandAll(_) | Traverse(_) | BiExpand(_) | BiTraverse(_)
         | AppendVertices(_) => {
-            let raw = child_rows_of_impl(node, stats, selectivity, cardinality)
+            let flat = child_rows_of_impl(node, stats, selectivity, cardinality)
                 .saturating_mul(DEFAULT_NEIGHBORHOOD_FANOUT);
+            // Phase 4: factorized estimate. When the expand operates on a
+            // high-degree vertex, distinct groups << flat rows, so factorized
+            // row count is much smaller. We keep the minimum of flat and
+            // factorized (optimizer chooses the cheaper representation).
+            let ndv = match node {
+                Expand(n) => n
+                    .edge_types()
+                    .first()
+                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
+                ExpandAll(n) => n
+                    .edge_types()
+                    .first()
+                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
+                Traverse(n) => n
+                    .edge_types()
+                    .first()
+                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
+                BiExpand(n) => n
+                    .edge_types()
+                    .first()
+                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
+                BiTraverse(n) => n
+                    .edge_types()
+                    .first()
+                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
+                AppendVertices(n) => {
+                    factor_cost::ndv_from_stats(stats, Some(n.vertex_tag()), n.vertex_tag())
+                }
+                _ => None,
+            };
+            let avg_degree = match node {
+                Expand(n) => n
+                    .edge_types()
+                    .iter()
+                    .find_map(|et| stats.edge_stats(et).map(|s| s.avg_out_degree))
+                    .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT as f64),
+                ExpandAll(n) => n
+                    .edge_types()
+                    .iter()
+                    .find_map(|et| stats.edge_stats(et).map(|s| s.avg_out_degree))
+                    .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT as f64),
+                _ => DEFAULT_NEIGHBORHOOD_FANOUT as f64,
+            };
+            let estimate = factor_cost::estimate_factorization(flat, ndv, avg_degree, 2.0);
+            let factorized = estimate.factorized_rows;
+            // Use factorized when beneficial; otherwise flat remains the estimate.
+            let raw = if factorized < flat && factorized > 0 {
+                // factorized rows already include degree inflation, so we use
+                // the factorized count directly when it wins.
+                factorized
+            } else {
+                flat
+            };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         PatternApply(_) | Apply(_) | RollUpApply(_) => {

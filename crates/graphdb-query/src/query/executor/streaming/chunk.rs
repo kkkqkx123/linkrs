@@ -32,6 +32,7 @@
 mod columnar_batch;
 mod core;
 mod eval;
+mod factorized;
 mod kind;
 mod list_vector;
 mod policy;
@@ -47,6 +48,10 @@ mod tests;
 // Re-export public API
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
+pub use factorized::{
+    estimate_factorized_rows, should_factorize, FactorGroup, FactorizedTable, NodeLabelFilter,
+    SemiMask,
+};
 pub use list_vector::{ListVector, VectorizedBatch};
 pub use policy::ColumnarPolicy;
 pub use pool::RowPool;

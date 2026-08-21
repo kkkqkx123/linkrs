@@ -277,6 +277,7 @@ impl PhysicalPlanValidator {
                 | OperatorKindSpec::Ddl(_)
                 | OperatorKindSpec::Fulltext(_)
                 | OperatorKindSpec::Vector(_)
+                | OperatorKindSpec::Factorized(_)
                 | OperatorKindSpec::Apply(
                     crate::query::executor::streaming::operators::spec::ApplySpec::CorrelatedApply {
                         ..
@@ -680,7 +681,7 @@ impl PhysicalPlanValidator {
     /// that outlive individual `next()` calls.
     fn check_state_ownership(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
-            let is_blocking = matches!(&op.spec, OperatorKindSpec::Blocking(_));
+            let is_blocking = matches!(&op.spec, OperatorKindSpec::Blocking(_) | OperatorKindSpec::Factorized(crate::query::executor::streaming::operators::spec::FactorizedSpec::MultiplicityReducer { .. }));
             let is_exchange = matches!(&op.spec, OperatorKindSpec::Exchange(_));
 
             match op.state_ownership {

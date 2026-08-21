@@ -21,6 +21,7 @@ use super::super::operators::base::OperatorBase;
 use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::ddl_operator::DdlOperator;
 use super::super::operators::exchange_operator::ExchangeOperator;
+use super::super::operators::factorized_operator::FactorizedOperator;
 use super::super::operators::fulltext_operator::FulltextOperator;
 use super::super::operators::graph_operator::GraphOperator;
 use super::super::operators::join_operator::JoinOperator;
@@ -324,6 +325,11 @@ impl PhysicalPlanMaterializer {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let op = TxnOperator::from_spec(txn_spec, output_layout.clone());
                     StreamingExecutor::Txn(base, Box::new(child), op)
+                }
+                OperatorKindSpec::Factorized(factorized_spec) => {
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
+                    let op = FactorizedOperator::from_spec(factorized_spec, output_layout.clone());
+                    StreamingExecutor::Factorized(base, Box::new(child), op)
                 }
             };
 

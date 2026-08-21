@@ -103,6 +103,15 @@ impl PlanNodeEnum {
             PlanNodeEnum::PipeDeleteEdges(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
+            PlanNodeEnum::SemiMasker(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
+            PlanNodeEnum::MultiplicityReducer(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
+            PlanNodeEnum::NodeLabelFilter(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
 
             PlanNodeEnum::InnerJoin(node) => vec![
                 super::plan_node_traits::BinaryInputNode::left_input(node),

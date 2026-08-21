@@ -160,6 +160,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => "FulltextSearch",
             PlanNodeEnum::FulltextLookup(_) => "FulltextLookup",
             PlanNodeEnum::MatchFulltext(_) => "MatchFulltext",
+            PlanNodeEnum::SemiMasker(_) => "SemiMasker",
+            PlanNodeEnum::MultiplicityReducer(_) => "MultiplicityReducer",
+            PlanNodeEnum::NodeLabelFilter(_) => "NodeLabelFilter",
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => "VectorSearch",
             #[cfg(feature = "vector")]
@@ -324,6 +327,10 @@ impl PlanNodeEnum {
             | PlanNodeEnum::FulltextLookup(_)
             | PlanNodeEnum::MatchFulltext(_) => Cow::Borrowed(&[]),
 
+            PlanNodeEnum::SemiMasker(node) => Cow::Owned(vec![node.input()]),
+            PlanNodeEnum::MultiplicityReducer(node) => Cow::Owned(vec![node.input()]),
+            PlanNodeEnum::NodeLabelFilter(node) => Cow::Owned(vec![node.input()]),
+
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_)
             | PlanNodeEnum::VectorLookup(_)
@@ -384,6 +391,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::BFSShortest(node) => node.set_output_var(var),
             PlanNodeEnum::AllPaths(node) => node.set_output_var(var),
             PlanNodeEnum::ShortestPath(node) => node.set_output_var(var),
+            PlanNodeEnum::SemiMasker(node) => node.set_output_var(var),
+            PlanNodeEnum::MultiplicityReducer(node) => node.set_output_var(var),
+            PlanNodeEnum::NodeLabelFilter(node) => node.set_output_var(var),
             _ => {}
         }
     }

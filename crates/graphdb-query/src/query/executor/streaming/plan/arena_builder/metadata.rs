@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
-    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FactorizedSpec, FulltextSpec, GraphSpec,
+    JoinSpec, RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::super::slot::{combine_layouts, SlotLayout};
 use super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
@@ -385,6 +385,13 @@ pub(super) fn derive_physical_properties(spec: &OperatorKindSpec) -> PhysicalPro
             PhysicalProperties::single_streaming()
         }
         OperatorKindSpec::Txn(_) => PhysicalProperties::single_blocking(),
+        OperatorKindSpec::Factorized(spec) => match spec {
+            FactorizedSpec::SemiMasker { .. } => PhysicalProperties::single_streaming(),
+            FactorizedSpec::MultiplicityReducer { .. } => {
+                PhysicalProperties::single_blocking_with_budget()
+            }
+            FactorizedSpec::NodeLabelFilter { .. } => PhysicalProperties::single_streaming(),
+        },
     }
 }
 pub(super) fn capability_for_operator(spec: &OperatorKindSpec) -> CapabilitySet {
@@ -401,7 +408,8 @@ pub(super) fn capability_for_operator(spec: &OperatorKindSpec) -> CapabilitySet 
         | OperatorKindSpec::Ddl(_)
         | OperatorKindSpec::Fulltext(_)
         | OperatorKindSpec::Vector(_)
-        | OperatorKindSpec::Txn(_) => CapabilitySet::PARALLEL_FULL,
+        | OperatorKindSpec::Txn(_)
+        | OperatorKindSpec::Factorized(_) => CapabilitySet::PARALLEL_FULL,
     }
 }
 
@@ -618,6 +626,7 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             VectorSpec::VectorSearch { .. } | VectorSpec::VectorMatch { .. },
         ) => SlotLayout::from_names(&["id".to_string(), "score".to_string()]),
         OperatorKindSpec::Vector(VectorSpec::VectorLookup { .. }) => input,
+        OperatorKindSpec::Factorized(_) => input,
     }
 }
 
@@ -836,6 +845,14 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
         TxnSpec::RollbackToSavepoint { .. } => "RollbackToSavepoint",
         TxnSpec::Savepoint { .. } => "Savepoint",
         TxnSpec::ReleaseSavepoint { .. } => "ReleaseSavepoint",
+    }
+}
+
+pub(super) fn factorized_explain_name(spec: &FactorizedSpec) -> &'static str {
+    match spec {
+        FactorizedSpec::SemiMasker { .. } => "SemiMasker",
+        FactorizedSpec::MultiplicityReducer { .. } => "MultiplicityReducer",
+        FactorizedSpec::NodeLabelFilter { .. } => "NodeLabelFilter",
     }
 }
 

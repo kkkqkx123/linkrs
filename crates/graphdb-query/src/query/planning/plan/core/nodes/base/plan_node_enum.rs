@@ -43,6 +43,9 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+pub use crate::query::planning::plan::core::nodes::factorized::{
+    MultiplicityReducerNode, NodeLabelFilterNode, SemiMaskerNode,
+};
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
@@ -66,7 +69,7 @@ pub use crate::query::planning::plan::core::nodes::operation::sort_node::{
 pub use crate::query::planning::plan::core::nodes::traversal::path_algorithms::{
     AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
 };
-pub use crate::query::planning::plan::core::nodes::traversal::traversal_node::{
+use crate::query::planning::plan::core::nodes::traversal::traversal_node::{
     AppendVerticesNode, BiExpandNode, BiTraverseNode, ExpandAllNode, ExpandNode, TraverseNode,
 };
 // Re-export management sub-enums for external use
@@ -255,6 +258,11 @@ pub enum PlanNodeEnum {
     VectorLookup(VectorLookupNode),
     #[cfg(feature = "vector")]
     VectorMatch(VectorMatchNode),
+
+    // Factorized execution (Phase 4 OLAP)
+    SemiMasker(SemiMaskerNode),
+    MultiplicityReducer(MultiplicityReducerNode),
+    NodeLabelFilter(NodeLabelFilterNode),
 }
 
 impl Default for PlanNodeEnum {
@@ -351,6 +359,10 @@ crate::define_enum_is_methods! {
     (FulltextSearch, is_fulltext_search),
     (FulltextLookup, is_fulltext_lookup),
     (MatchFulltext, is_match_fulltext),
+    // Factorized (Phase 4)
+    (SemiMasker, is_semi_masker),
+    (MultiplicityReducer, is_multiplicity_reducer),
+    (NodeLabelFilter, is_node_label_filter),
     // Vector Search Nodes
 }
 
@@ -451,6 +463,10 @@ crate::define_enum_as_methods! {
     (FulltextSearch, as_fulltext_search, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup, FulltextLookupNode),
     (MatchFulltext, as_match_fulltext, MatchFulltextNode),
+    // Factorized (Phase 4)
+    (SemiMasker, as_semi_masker, SemiMaskerNode),
+    (MultiplicityReducer, as_multiplicity_reducer, MultiplicityReducerNode),
+    (NodeLabelFilter, as_node_label_filter, NodeLabelFilterNode),
     // Vector Search Nodes
 }
 
@@ -551,6 +567,10 @@ crate::define_enum_as_mut_methods! {
     (FulltextSearch, as_fulltext_search_mut, FulltextSearchNode),
     (FulltextLookup, as_fulltext_lookup_mut, FulltextLookupNode),
     (MatchFulltext, as_match_fulltext_mut, MatchFulltextNode),
+    // Factorized (Phase 4)
+    (SemiMasker, as_semi_masker_mut, SemiMaskerNode),
+    (MultiplicityReducer, as_multiplicity_reducer_mut, MultiplicityReducerNode),
+    (NodeLabelFilter, as_node_label_filter_mut, NodeLabelFilterNode),
     // Vector Search Nodes
 }
 
@@ -661,6 +681,10 @@ crate::define_all_plan_nodes! {
     (FulltextSearch, FulltextSearchNode, PlanNodeCategory::DataAccess, "FulltextSearch"),
     (FulltextLookup, FulltextLookupNode, PlanNodeCategory::DataAccess, "FulltextLookup"),
     (MatchFulltext, MatchFulltextNode, PlanNodeCategory::DataAccess, "MatchFulltext"),
+    // Factorized (Phase 4)
+    (SemiMasker, SemiMaskerNode, PlanNodeCategory::Operation, "SemiMasker"),
+    (MultiplicityReducer, MultiplicityReducerNode, PlanNodeCategory::Operation, "MultiplicityReducer"),
+    (NodeLabelFilter, NodeLabelFilterNode, PlanNodeCategory::Operation, "NodeLabelFilter"),
     // Vector Search Nodes
     #[cfg(feature = "vector")]
     (VectorSearch, VectorSearchNode, PlanNodeCategory::DataAccess, "VectorSearch"),
@@ -808,6 +832,10 @@ mod tests {
         "FulltextSearch",
         "FulltextLookup",
         "MatchFulltext",
+        // Factorized (Phase 4 OLAP) (3)
+        "SemiMasker",
+        "MultiplicityReducer",
+        "NodeLabelFilter",
     ];
 
     /// Same as above plus the three qdrant-gated vector nodes.
@@ -892,16 +920,19 @@ mod tests {
         "FulltextSearch",
         "FulltextLookup",
         "MatchFulltext",
+        "SemiMasker",
+        "MultiplicityReducer",
+        "NodeLabelFilter",
         "VectorSearch",
         "VectorLookup",
         "VectorMatch",
     ];
 
-    /// Default build: 79 variants. With `qdrant`: 82 variants.
+    /// Default build: 82 variants. With `qdrant`: 85 variants.
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 79;
-    #[cfg(feature = "vector")]
     const EXPECTED_VARIANT_COUNT: usize = 82;
+    #[cfg(feature = "vector")]
+    const EXPECTED_VARIANT_COUNT: usize = 85;
 
     #[test]
     fn variant_count_matches_documented_number() {

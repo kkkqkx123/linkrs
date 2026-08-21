@@ -96,6 +96,7 @@ pub mod limit_pushdown;
 pub mod merge;
 pub mod predicate_pushdown;
 pub mod projection_pushdown;
+pub mod semi_mask_pushdown;
 pub mod slot_coverage;
 
 // ==================== Exporting Core Types =====================
@@ -130,4 +131,5 @@ pub use limit_pushdown::*;
 pub use merge::*;
 pub use predicate_pushdown::*;
 pub use projection_pushdown::*;
+pub use semi_mask_pushdown::*;
 pub use slot_coverage::*;
