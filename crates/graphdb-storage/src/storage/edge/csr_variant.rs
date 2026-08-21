@@ -241,6 +241,103 @@ impl CsrVariant {
             bpe
         }
     }
+
+    // ── Phase 1 OLAP: density-adaptive CSR & zero-copy scan ──
+
+    /// Edge density = edge_count / vertex_capacity in the mutable delta.
+    /// Used for density-adaptive strategy selection (sparse vs dense).
+    pub fn density(&self) -> f32 {
+        let cap = self.vertex_capacity().max(1) as f32;
+        self.edge_count() as f32 / cap
+    }
+
+    /// Density category for adaptive CSR layout.
+    pub fn density_category(&self) -> DensityCategory {
+        let d = self.density();
+        if d < 0.05 {
+            DensityCategory::Sparse
+        } else if d < 0.5 {
+            DensityCategory::Medium
+        } else {
+            DensityCategory::Dense
+        }
+    }
+
+    /// Whether this CSR is dense enough to benefit from packed Arrow scan.
+    pub fn is_dense(&self) -> bool {
+        matches!(self.density_category(), DensityCategory::Dense)
+    }
+
+    /// Suggest the optimal `EdgeStrategy` for the current density.
+    /// Sparse graphs benefit from `Multiple` (per-vertex adjacency lists);
+    /// dense graphs benefit from `MultiSingle` or a future packed CSR.
+    pub fn suggested_strategy(&self) -> crate::core::types::EdgeStrategy {
+        match self.density_category() {
+            DensityCategory::Sparse => crate::core::types::EdgeStrategy::Multiple,
+            DensityCategory::Medium => crate::core::types::EdgeStrategy::Multiple,
+            DensityCategory::Dense => {
+                crate::core::types::EdgeStrategy::MultiSingle { max_edges: 64 }
+            }
+        }
+    }
+
+    /// Zero-copy Arrow slice for OLAP scans (Phase 1 stub).
+    /// Returns a borrowed view of the adjacency offsets for dense vertices,
+    /// avoiding per-edge allocation. Currently returns `None` for non-dense
+    /// strategies; future `PackedCSR` will provide contiguous Arrow arrays.
+    pub fn as_arrow_offsets(&self) -> Option<&[u64]> {
+        // Stub: dense packed CSR not yet materialized; dense vertices are
+        // still scanned via `iter_edges_of` which is allocation-free but not
+        // yet Arrow zero-copy. This hook is the integration point for Arrow.
+        None
+    }
+
+    /// Packed CSR info for density-adaptive re-distribution.
+    /// Reports current density, fragmentation, and packed size estimate.
+    pub fn packed_csr_info(&self) -> PackedCSRInfo {
+        let density = self.density();
+        let fragmentation = self.fragmentation_ratio();
+        let packed_bytes = (self.edge_count() as usize) * self.bytes_per_edge();
+        PackedCSRInfo {
+            density,
+            fragmentation,
+            packed_bytes,
+            vertex_capacity: self.vertex_capacity(),
+            edge_count: self.edge_count(),
+            is_dense: self.is_dense(),
+        }
+    }
+}
+
+/// Density category for adaptive CSR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DensityCategory {
+    Sparse,
+    Medium,
+    Dense,
+}
+
+/// Packed CSR info for density-adaptive re-distribution and Arrow scan.
+#[derive(Debug, Clone)]
+pub struct PackedCSRInfo {
+    pub density: f32,
+    pub fragmentation: f32,
+    pub packed_bytes: usize,
+    pub vertex_capacity: usize,
+    pub edge_count: u64,
+    pub is_dense: bool,
+}
+
+impl PackedCSRInfo {
+    /// Whether this CSR should be redistributed to packed layout.
+    pub fn needs_redistribution(&self) -> bool {
+        self.fragmentation > 0.3 || self.is_dense
+    }
+
+    /// Estimated bytes saved by packing (fragmentation * packed_bytes).
+    pub fn estimated_savings(&self) -> usize {
+        (self.fragmentation * self.packed_bytes as f32) as usize
+    }
 }
 
 impl CsrBase for CsrVariant {
@@ -359,12 +456,7 @@ impl MutableCsrTrait for CsrVariant {
         }
     }
 
-    fn delete_edge(
-        &mut self,
-        src_vid: u32,
-        edge_id: EdgeId,
-        ts: Timestamp,
-    ) -> StorageResult<bool> {
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         dispatch!(self, delete_edge(src_vid, edge_id, ts) -> Err(StorageError::invalid_operation(
             "no edges stored for this edge type".to_string()
         )))
@@ -590,10 +682,10 @@ mod tests {
             .is_err());
         assert_eq!(csr.edge_count(), 0);
 
-// None variant should reject all deletions
-assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
-assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
-assert!(!csr.revert_delete_by_offset(0, 0, 1));
+        // None variant should reject all deletions
+        assert!(csr.delete_edge(0, EdgeId(100), 1).is_err());
+        assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
+        assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
         // None variant should return None for get_edge
         assert!(csr.get_edge(0, VertexId::from_int64(1), 1).is_none());

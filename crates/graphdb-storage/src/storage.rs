@@ -20,8 +20,10 @@ pub(crate) mod macros;
 pub(crate) mod mvcc;
 
 pub use mvcc::SnapshotHandle;
+pub(crate) mod buffer_manager;
 pub(crate) mod naming;
 pub(crate) mod schema;
+pub mod striped_lock;
 pub(crate) mod thread_pool;
 
 mod batch_ops;
@@ -36,6 +38,7 @@ mod test_mock;
 
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
+pub use buffer_manager::{global_buffer_manager, BufferManager, MmapBufferManager, PageId};
 pub use client::{
     CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
     StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
@@ -68,6 +71,7 @@ pub use index::{
 };
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
+pub use striped_lock::{SharedStripedLock, StripedRwLock};
 pub use types::StoragePropertyDef;
 
 pub use crate::core::StorageError;
