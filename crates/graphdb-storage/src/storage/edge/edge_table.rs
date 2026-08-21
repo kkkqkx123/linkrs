@@ -261,7 +261,7 @@ impl EdgeStore {
         self.0.scan(ts)
     }
 
-    /// OLAP scan with column pruning (Phase 1).
+    /// OLAP scan with column pruning.
     pub fn scan_projected(&self, ts: Timestamp, projection: &[String]) -> Vec<super::EdgeRecord> {
         self.0.scan_projected(ts, projection)
     }

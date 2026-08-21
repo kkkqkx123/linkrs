@@ -242,7 +242,7 @@ impl CsrVariant {
         }
     }
 
-    // ── Phase 1 OLAP: density-adaptive CSR & zero-copy scan ──
+    // ── OLAP: density-adaptive CSR & zero-copy scan ──
 
     /// Edge density = edge_count / vertex_capacity in the mutable delta.
     /// Used for density-adaptive strategy selection (sparse vs dense).
@@ -281,15 +281,52 @@ impl CsrVariant {
         }
     }
 
-    /// Zero-copy Arrow slice for OLAP scans (Phase 1 stub).
+    /// Zero-copy Arrow slice for OLAP scans.
+    ///
     /// Returns a borrowed view of the adjacency offsets for dense vertices,
-    /// avoiding per-edge allocation. Currently returns `None` for non-dense
-    /// strategies; future `PackedCSR` will provide contiguous Arrow arrays.
-    pub fn as_arrow_offsets(&self) -> Option<&[u64]> {
-        // Stub: dense packed CSR not yet materialized; dense vertices are
-        // still scanned via `iter_edges_of` which is allocation-free but not
-        // yet Arrow zero-copy. This hook is the integration point for Arrow.
-        None
+    /// avoiding per-edge allocation. For `Multiple` CSR the slice is the
+    /// underlying `adj_offsets` (Int32 offsets compatible with Arrow
+    /// `ListArray`). Sparse or fragmented variants still fall back to
+    /// `iter_edges_of`.
+    pub fn as_arrow_offsets(&self) -> Option<&[u32]> {
+        match self {
+            CsrVariant::Multiple(csr) => Some(csr.as_arrow_offsets()),
+            CsrVariant::Single(_) | CsrVariant::MultiSingle(_) | CsrVariant::Labeled(_) => None,
+            CsrVariant::None { .. } => None,
+        }
+    }
+
+    /// Zero-copy degree slice (parallel to arrow offsets).
+    pub fn as_degree_slice(&self) -> Option<&[u32]> {
+        match self {
+            CsrVariant::Multiple(csr) => Some(csr.degrees_slice()),
+            _ => None,
+        }
+    }
+
+    /// Whether this CSR can be scanned via the Arrow zero-copy path.
+    ///
+    /// Dense graphs (`density >= 0.5`) or low-fragmentation sparse graphs
+    /// benefit from the contiguous offsets view. The morsel parallel Expand
+    /// operator prefers this path because it can dispatch morsels over
+    /// contiguous offset ranges without per-vertex hash lookups.
+    pub fn can_zero_copy_scan(&self) -> bool {
+        if matches!(self, CsrVariant::None { .. }) {
+            return false;
+        }
+        // Fragmented overflow-heavy vertices degrade contiguity.
+        if self.fragmentation_ratio() > 0.3 {
+            return false;
+        }
+        true
+    }
+
+    /// Zero-copy packed slices for Arrow `ListArray` construction.
+    pub fn as_packed_slices(&self) -> Option<(&[u32], &[Nbr])> {
+        match self {
+            CsrVariant::Multiple(csr) => Some(csr.as_packed_slices()),
+            _ => None,
+        }
     }
 
     /// Packed CSR info for density-adaptive re-distribution.

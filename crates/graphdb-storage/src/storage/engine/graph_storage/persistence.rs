@@ -475,7 +475,7 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     let stats = manager.recover_with_applier(ctx)?;
     ctx.restore_auto_transaction_id(stats.max_transaction_id);
 
-    // Phase 2: Replay deferred edge operations (two-phase recovery)
+    // Replay deferred edge operations (two-phase recovery)
     ctx.replay_deferred_edges()?;
 
     // Set the WAL writer's LSN to the last replayed position so that
@@ -531,7 +531,7 @@ pub(crate) fn recover_from_wal_with_config(
     let stats = manager.recover_with_applier(ctx)?;
     ctx.restore_auto_transaction_id(stats.max_transaction_id);
 
-    // Phase 2: Replay deferred edge operations (two-phase recovery)
+    // Replay deferred edge operations (two-phase recovery)
     ctx.replay_deferred_edges()?;
 
     // Set the WAL writer's LSN to the last replayed position so that

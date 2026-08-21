@@ -582,7 +582,7 @@ impl BlockingOperator {
                         }
 
                         for buf in &mut run_buffers {
-                            refill_run_buffer(buf, 1024)?;
+                            refill_run_buffer(buf, 2048)?;
                         }
 
                         st.merge_state = Some(MergeState {
@@ -628,7 +628,7 @@ impl BlockingOperator {
                                 buf.index += 1;
 
                                 if buf.index >= buf.rows.len() {
-                                    refill_run_buffer(buf, 1024)?;
+                                    refill_run_buffer(buf, 2048)?;
                                 }
                             }
                         }
@@ -643,7 +643,7 @@ impl BlockingOperator {
                         )))
                     }
                 } else if let Some(ref mut iter) = st.row_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
@@ -699,7 +699,7 @@ impl BlockingOperator {
 
                     // Output phase: drain result iterator
                     if let Some(ref mut iter) = state.result_iter {
-                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                         if chunk_rows.is_empty() {
                             state.result_iter = None;
                             if !state.has_spilled
@@ -789,7 +789,7 @@ impl BlockingOperator {
                                     .as_mut()
                                     .unwrap()
                                     .by_ref()
-                                    .take(1024)
+                                    .take(2048)
                                     .collect();
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
@@ -1058,7 +1058,7 @@ impl BlockingOperator {
                     }
 
                     let mut result_iter = result_rows.into_iter();
-                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
                     state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
                         state.output_complete = true;
@@ -1114,7 +1114,7 @@ impl BlockingOperator {
 
                     // Output phase: drain the result iterator.
                     if let Some(ref mut iter) = state.result_iter {
-                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                         if chunk_rows.is_empty() {
                             state.result_iter = None;
                             if !state.has_spilled
@@ -1173,7 +1173,7 @@ impl BlockingOperator {
                                     .as_mut()
                                     .unwrap()
                                     .by_ref()
-                                    .take(1024)
+                                    .take(2048)
                                     .collect();
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
@@ -1296,7 +1296,7 @@ impl BlockingOperator {
                     };
                     let result_rows = group_rows(std::mem::take(&mut state.all_rows), &col_names);
                     let mut result_iter = result_rows.into_iter();
-                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
                     state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
                         state.output_complete = true;
@@ -1344,7 +1344,7 @@ impl BlockingOperator {
 
                     // Output phase: drain the result iterator.
                     if let Some(ref mut iter) = state.result_iter {
-                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                         if chunk_rows.is_empty() {
                             state.result_iter = None;
                             if !state.has_spilled
@@ -1419,7 +1419,7 @@ impl BlockingOperator {
                                     .as_mut()
                                     .unwrap()
                                     .by_ref()
-                                    .take(1024)
+                                    .take(2048)
                                     .collect();
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
@@ -1559,7 +1559,7 @@ impl BlockingOperator {
                     }
 
                     let mut result_iter = result_rows.into_iter();
-                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
                     state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
                         state.output_complete = true;
@@ -1607,7 +1607,7 @@ impl BlockingOperator {
 
                     // Output phase: drain the result iterator.
                     if let Some(ref mut iter) = state.result_iter {
-                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                        let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                         if chunk_rows.is_empty() {
                             state.result_iter = None;
                             if !state.has_spilled
@@ -1682,7 +1682,7 @@ impl BlockingOperator {
                                     .as_mut()
                                     .unwrap()
                                     .by_ref()
-                                    .take(1024)
+                                    .take(2048)
                                     .collect();
                                 if !chunk_rows.is_empty() {
                                     return Ok(Some(DataChunk::new_with_layout(
@@ -1822,7 +1822,7 @@ impl BlockingOperator {
                     }
 
                     let mut result_iter = result_rows.into_iter();
-                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = result_iter.by_ref().take(2048).collect();
                     state.result_iter = Some(result_iter);
                     if chunk_rows.is_empty() {
                         state.output_complete = true;
@@ -1918,7 +1918,7 @@ impl BlockingOperator {
 
                 // Output phase: return pre-computed results
                 if let Some(ref mut iter) = state.output_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                     if chunk_rows.is_empty() {
                         state.output_iter = None;
                     } else {
@@ -1968,7 +1968,7 @@ impl BlockingOperator {
                                 .as_mut()
                                 .unwrap()
                                 .by_ref()
-                                .take(1024)
+                                .take(2048)
                                 .collect();
                             if !chunk_rows.is_empty() {
                                 return Ok(Some(DataChunk::new_with_layout(
@@ -2072,7 +2072,7 @@ impl BlockingOperator {
                     .as_mut()
                     .unwrap()
                     .by_ref()
-                    .take(1024)
+                    .take(2048)
                     .collect();
                 if chunk_rows.is_empty() {
                     Ok(None)
@@ -2388,7 +2388,7 @@ impl BlockingOperator {
                 }
 
                 if let Some(iter) = &mut state.result_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
@@ -2481,7 +2481,7 @@ impl BlockingOperator {
                 }
 
                 if let Some(iter) = &mut state.result_iter {
-                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(2048).collect();
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {

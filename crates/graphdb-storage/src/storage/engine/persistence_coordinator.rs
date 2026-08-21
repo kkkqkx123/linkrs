@@ -1028,10 +1028,9 @@ impl PersistenceCoordinator {
     /// Publish a combined checkpoint manifest that atomically references the
     /// storage snapshot, outbox snapshot (if provided), and index manifests.
     ///
-    /// This implements the Phase 3 requirement for atomic checkpoint manifest
-    /// publication. The manifest is written to a temporary file, synced, then
-    /// atomically renamed. Only after successful publication is WAL truncated
-    /// to the common safe LSN.
+    /// This implements atomic checkpoint manifest publication. The manifest is
+    /// written to a temporary file, synced, then atomically renamed. Only after
+    /// successful publication is WAL truncated to the common safe LSN.
     fn publish_checkpoint_manifest(
         &self,
         checkpoint: &crate::transaction::wal::Checkpoint,

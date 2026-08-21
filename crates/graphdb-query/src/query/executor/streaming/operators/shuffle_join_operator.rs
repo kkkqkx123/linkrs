@@ -14,7 +14,7 @@ use crate::query::executor::streaming::operators::source_operator::OperatorConfi
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-const CHUNK_SIZE: usize = 1024;
+const CHUNK_SIZE: usize = 2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashJoinKind {

@@ -1113,7 +1113,7 @@ impl SinkOperator {
     }
 }
 
-// ── COPY FROM helpers (Phase 2 parallel CSV) ────────────────────────────────
+// ── COPY FROM helpers (parallel CSV) ────────────────────────────────
 
 fn parse_copy_value(s: &str) -> Value {
     if s.is_empty() {

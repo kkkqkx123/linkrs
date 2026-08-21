@@ -1,7 +1,7 @@
 //! DataChunk: Basic unit of streaming execution
 //!
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
-//! Typical size: 1024 rows (~4MB)
+//! Typical size: 2048 rows (~8MB, OLAP vectorized batch)
 //!
 //! # Ownership & Memory Accounting Rules (M4)
 //!
@@ -33,6 +33,7 @@ mod columnar_batch;
 mod core;
 mod eval;
 mod kind;
+mod list_vector;
 mod policy;
 mod pool;
 mod schema;
@@ -46,11 +47,17 @@ mod tests;
 // Re-export public API
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
 pub use core::DataChunk;
+pub use list_vector::{ListVector, VectorizedBatch};
 pub use policy::ColumnarPolicy;
 pub use pool::RowPool;
 pub use schema::{ColumnInfo, Schema};
 pub use typed::{TypedColumn, TypedKind};
 pub use view::ChunkView;
+
+/// OLAP vectorized batch size.
+pub const VECTORIZED_BATCH_SIZE: usize = 2048;
+/// Alias for the default chunk size (kept in sync with `ExecutionContext::DEFAULT_CHUNK_SIZE`).
+pub const DEFAULT_CHUNK_SIZE: usize = VECTORIZED_BATCH_SIZE;
 
 // Runtime switches
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

@@ -1,4 +1,4 @@
-//! Buffer Manager (Phase 1 OLAP - vmcache style)
+//! Buffer Manager (OLAP - vmcache style)
 //!
 //! Provides a global page pool for CSR segments and column chunks, using
 //! `mmap` + `MADV_DONTNEED` for eviction and optimistic reads for OLAP scans.
@@ -6,9 +6,9 @@
 //! memory budget, preventing OLAP large scans from OOM and allowing concurrent
 //! read/write reuse of the same pages.
 //!
-//! Current status: Phase 1 stub with `BufferManager` trait and `MmapBufferManager`
+//! Current status: stub with `BufferManager` trait and `MmapBufferManager`
 //! skeleton. Full implementation (page table, clock eviction, optimistic
-//! seqlock reads) is Phase 1.5. The `GlobalBufferManager` below already
+//! seqlock reads) is ongoing. The `GlobalBufferManager` below already
 //! provides a process-wide singleton that tracks memory accounting and exposes
 //! the `BufferManager` interface for segment residency.
 
@@ -39,7 +39,7 @@ pub trait BufferManager: Send + Sync {
     fn pinned_bytes(&self) -> usize;
 }
 
-/// Simple in-memory buffer manager (Phase 1 stub).
+/// Simple in-memory buffer manager.
 ///
 /// Tracks pinned pages in a `HashMap` and enforces a soft memory limit via
 /// `evict`. Real implementation will use `mmap` + `madvise` and a clock

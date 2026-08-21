@@ -20,7 +20,7 @@ use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-const CHUNK_SIZE: usize = 1024;
+const CHUNK_SIZE: usize = 2048;
 
 /// Exchange operator.
 ///
@@ -271,7 +271,7 @@ impl ExchangeOperator {
                 hash_expressions,
                 col_names,
             } => {
-                // Phase 1: drain all children and partition into buckets.
+                // Drain all children and partition into buckets.
                 if *current_bucket == 0 && *current_row == 0 && buckets.iter().all(|b| b.is_empty())
                 {
                     drain_and_partition(
@@ -285,7 +285,7 @@ impl ExchangeOperator {
                     )?;
                 }
 
-                // Phase 2: emit rows bucket by bucket.
+                // Emit rows bucket by bucket.
                 while *current_bucket < *num_partitions {
                     if let Some(rt) = self.runtime.as_ref() {
                         rt.ensure_not_cancelled()?;
@@ -315,7 +315,7 @@ impl ExchangeOperator {
                 chunk_index,
                 row_index,
             } => {
-                // Phase 1: drain all children into chunks if not yet drained.
+                // Drain all children into chunks if not yet drained.
                 if buffered_chunks.is_empty() && *chunk_index == 0 && *row_index == 0 {
                     let count = input_count(children, &self.handle);
                     for i in 0..count {
@@ -336,7 +336,7 @@ impl ExchangeOperator {
                     return Ok(None);
                 }
 
-                // Phase 2: emit rows for the current consumer.
+                // Emit rows for the current consumer.
                 let mut result_rows = Vec::with_capacity(CHUNK_SIZE);
                 while *chunk_index < buffered_chunks.len() && result_rows.len() < CHUNK_SIZE {
                     if let Some(rt) = self.runtime.as_ref() {
@@ -407,7 +407,7 @@ impl ExchangeOperator {
                 position,
                 col_names,
             } => {
-                // Phase 1: drain all children if not yet drained.
+                // Drain all children if not yet drained.
                 if rows.is_empty() && *position == 0 {
                     let count = input_count(children, &self.handle);
                     for i in 0..count {

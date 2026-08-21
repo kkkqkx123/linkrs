@@ -970,7 +970,7 @@ impl TimeTravelEdgeStore {
         self.iter(ts).collect()
     }
 
-    // ── Phase 1 OLAP: column pruning + zone-map pruning + striped lock ──
+    // ── OLAP: column pruning + zone-map pruning + striped lock ──
 
     /// OLAP scan with column pruning: only `projection` columns are decoded
     /// (others are skipped), reducing IO 5-10x for wide edge tables. When

@@ -408,7 +408,7 @@ mod tests {
 
     fn test_config() -> OperatorConfig {
         OperatorConfig {
-            chunk_size: 1024,
+            chunk_size: 2048,
             partition_id: None,
             physical_operator_id: PhysicalOperatorId(0),
         }

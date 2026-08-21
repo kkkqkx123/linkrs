@@ -775,7 +775,7 @@ mod tests {
             bound_snapshot: None,
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
-            chunk_size: 1024,
+            chunk_size: 2048,
             max_buffered_chunks: 4,
             query_id: 1,
             cancel_token: None,
@@ -828,7 +828,7 @@ mod tests {
             Box::new(right),
             operator,
         );
-        executor.set_chunk_size(1024);
+        executor.set_chunk_size(2048);
         executor.set_runtime(Some(Arc::new(ExecutionRuntime::default_budget())));
         executor.open()?;
         let mut rows = Vec::new();

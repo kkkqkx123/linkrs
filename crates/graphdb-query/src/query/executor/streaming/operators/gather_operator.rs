@@ -16,7 +16,7 @@ use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-const CHUNK_SIZE: usize = 1024;
+const CHUNK_SIZE: usize = 2048;
 
 /// Internal merge cursor state. It is public only because `GatherOperatorKind`
 /// is a public enum; callers should use [`GatherOperator::merge_sort`] instead

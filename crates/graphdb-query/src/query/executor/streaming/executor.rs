@@ -354,9 +354,29 @@ impl StreamingExecutor {
             Self::Blocking(_, input, op) => {
                 matches!(
                     &op.kind,
+                    // Morsel parallel: Sort/Agg are partition-local
+                    // (local sort + merge, partial/final aggregate). Hash
+                    // aggregation uses `PartialAggregate` (partition-local) +
+                    // `FinalAggregate` (global gather) two-phase; `Sort` is
+                    // local + `Exchange::MergeSort`. `TopN` is bounded local
+                    // sort, `Distinct` and `GroupBy` are hash-partitioned.
                     BlockingOperatorKind::PartialAggregate { .. }
+                        | BlockingOperatorKind::Sort { .. }
                         | BlockingOperatorKind::Distinct { .. }
                         | BlockingOperatorKind::TopN { .. }
+                        | BlockingOperatorKind::GroupBy { .. }
+                        | BlockingOperatorKind::Aggregate { .. }
+                ) && input.is_partition_local()
+            }
+            Self::Graph(_, input, op) => {
+                // Single-hop Expand/BiExpand are morsel-parallel
+                // (partitioned by anchor vertex-id range, batched neighbor
+                // scan via `neighbor_dst_ids_batch` or zero-copy `ListVector`).
+                matches!(
+                    &op.kind,
+                    GraphOperatorKind::Expand { .. }
+                        | GraphOperatorKind::BiExpand { .. }
+                        | GraphOperatorKind::ExpandAll { .. }
                 ) && input.is_partition_local()
             }
             Self::HashShuffleJoin(..) | Self::Exchange(..) | Self::RecursiveFragment(..) => false,

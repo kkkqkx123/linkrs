@@ -6,7 +6,7 @@
 //!
 //! The optimizer is organized into two main optimization phases:
 //!
-//! ### Phase 1: Heuristic Optimization (`heuristic/`)
+//! ### Heuristic Optimization (`heuristic/`)
 //! Rule-based optimizations that always produce better or equivalent plans:
 //! - Predicate Pushdown
 //! - Projection Pushdown
@@ -14,7 +14,7 @@
 //! - Merge Operations
 //! - Limit Pushdown
 //!
-//! ### Phase 2: Cost-Based Optimization (`cost_based/`)
+//! ### Cost-Based Optimization (`cost_based/`)
 //! Statistics-driven optimizations that use cost models:
 //! - Join Order Optimization
 //! - Index Selection

@@ -454,7 +454,7 @@ impl StreamingExecutionEngine {
             }
         }
         self.runtime = Some(runtime);
-        // Phase 1 safety net: ensure arenas match partition count if the Arc
+        // Safety net: ensure arenas match partition count if the Arc
         // is still unique at this point (e.g. when called before any clones).
         self.ensure_partition_arenas();
     }

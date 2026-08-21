@@ -1,13 +1,13 @@
 //! Property Table for Edges
 //!
-//! Column-oriented MVCC storage for edge properties (Phase 1 OLAP enhancement).
+//! Column-oriented MVCC storage for edge properties.
 //!
-//! # Design Rationale (Phase 1: Columnar)
+//! # Design Rationale (Columnar)
 //!
 //! Prior row-oriented design (v3) stored edge properties as whole-row blobs.
 //! For OLAP workloads (full scans, multi-hop aggregates, GROUP BY) this forces
 //! reading all columns even when only 1-2 are needed, causing 5-10x IO waste.
-//! Phase 1 converts edge properties to columnar format, mirroring vertex
+//! This converts edge properties to columnar format, mirroring vertex
 //! `ColumnStore` (one `Column` per property, independent compression, zero-copy
 //! scans, column pruning, predicate pushdown).
 //!
@@ -67,7 +67,7 @@ use crate::storage::vertex::column_store::ColumnStore;
 /// Current on-disk layout version. Development builds keep a single format;
 /// version numbers only start to accumulate after the first release.
 /// v3: row-oriented MVCC blobs (legacy, still readable)
-/// v4: columnar (ColumnStore per property) + zone maps + per-column encodings (OLAP Phase 1)
+/// v4: columnar (ColumnStore per property) + zone maps + per-column encodings
 const PROPERTY_TABLE_VERSION: u8 = 4;
 const PROPERTY_TABLE_VERSION_V3: u8 = 3;
 
@@ -351,7 +351,7 @@ pub struct PropertyTable {
     /// single representative interval.
     version_chain_cap: usize,
 
-    // ── Phase 1 OLAP: columnar store + zone maps + fine-grained concurrency ──
+    // ── OLAP: columnar store + zone maps + fine-grained concurrency ──
     /// Columnar storage for OLAP scans: one `Column` per property, independent
     /// compression (ALP / bitpacking / dictionary / FSST / RLE), column pruning,
     /// and vectorized batch reads. Dual-written with `records` for migration
@@ -1911,7 +1911,7 @@ impl PropertyTable {
             encode_varint(off, &mut result);
         }
 
-        // ── Phase 1: zone maps (v4) ──
+        // ── zone maps (v4) ──
         // Persist per-column zone maps (chunk stats) for predicate pruning.
         // Columnar data itself is rebuilt from row records on load (dual-write
         // in-memory column store); persisting it separately would duplicate the
@@ -2161,7 +2161,7 @@ impl PropertyTable {
         // Rebuild property value index from loaded records
         self.value_index.rebuild(&self.schema, &self.records);
 
-        // ── Phase 1: load zone maps and rebuild columnar store ──
+        // ── load zone maps and rebuild columnar store ──
         // For v4, zone maps are persisted; for v3 (legacy) they are absent.
         self.column_store = ColumnStore::new();
         for prop in &self.schema {
@@ -2357,7 +2357,7 @@ impl PropertyTable {
         total += std::mem::size_of::<Self>();
         total += self.value_index.entry_count()
             * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
-        // Columnar store + zone maps (OLAP Phase 1).
+        // Columnar store + zone maps.
         total += self.column_store.memory_size();
         total += self
             .zone_maps

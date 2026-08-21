@@ -422,7 +422,7 @@ mod tests {
             bound_snapshot: None,
             memory_budget: MemoryBudget::new(1024 * 1024),
             max_workers: 1,
-            chunk_size: 1024,
+            chunk_size: 2048,
             max_buffered_chunks: 4,
             query_id: 1,
             cancel_token: None,

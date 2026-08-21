@@ -44,7 +44,7 @@ pub struct OperatorConfig {
 impl Default for OperatorConfig {
     fn default() -> Self {
         Self {
-            chunk_size: 1024,
+            chunk_size: 2048,
             partition_id: None,
             physical_operator_id: PhysicalOperatorId(0),
         }
@@ -327,7 +327,7 @@ impl SourceOperator {
             runtime: None,
             output_layout,
             config: OperatorConfig {
-                chunk_size: 1024,
+                chunk_size: 2048,
                 partition_id: None,
                 physical_operator_id: PhysicalOperatorId(0),
             },
@@ -341,7 +341,7 @@ impl SourceOperator {
             runtime: None,
             output_layout,
             config: OperatorConfig {
-                chunk_size: 1024,
+                chunk_size: 2048,
                 partition_id: None,
                 physical_operator_id: PhysicalOperatorId(0),
             },

@@ -697,7 +697,7 @@ mod tests {
             bound_snapshot: None,
             memory_budget: crate::query::executor::base::MemoryBudget::default_budget(),
             max_workers: 1,
-            chunk_size: 1024,
+            chunk_size: 2048,
             max_buffered_chunks: 4,
             query_id: 1,
             cancel_token: None,

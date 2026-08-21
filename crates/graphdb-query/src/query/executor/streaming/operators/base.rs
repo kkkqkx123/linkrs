@@ -111,7 +111,7 @@ impl OperatorBase {
             lifecycle: OperatorLifecycle::New,
             is_global: false,
             partition_id: None,
-            chunk_size: 1024,
+            chunk_size: 2048,
             physical_operator_id: PhysicalOperatorId(plan_node_id.unsigned_abs() as usize),
             output_layout: Arc::new(SlotLayout::new(Vec::new())),
             reset_used_fallback: false,

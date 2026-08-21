@@ -77,13 +77,13 @@ pub enum TypedColumn {
 
 /// Whether row `idx` is valid in `bitmap` (bit set = valid, bit clear = NULL).
 #[inline]
-pub(super) fn bitmap_is_valid(bitmap: &[u64], idx: usize) -> bool {
+pub(crate) fn bitmap_is_valid(bitmap: &[u64], idx: usize) -> bool {
     bitmap[idx / 64] & (1u64 << (idx % 64)) != 0
 }
 
 /// Set (`valid == true`) or clear the validity bit of row `idx`.
 #[inline]
-pub(super) fn bitmap_set_bit(bitmap: &mut [u64], idx: usize, valid: bool) {
+pub(crate) fn bitmap_set_bit(bitmap: &mut [u64], idx: usize, valid: bool) {
     if valid {
         bitmap[idx / 64] |= 1u64 << (idx % 64);
     } else {

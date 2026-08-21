@@ -212,7 +212,7 @@ fn test_multi_run_merge_correctness() {
         });
     }
     for buf in &mut run_buffers {
-        refill_run_buffer(buf, 1024).unwrap();
+        refill_run_buffer(buf, 2048).unwrap();
     }
 
     let mut merged: Vec<i64> = Vec::new();
@@ -227,7 +227,7 @@ fn test_multi_run_merge_correctness() {
                 }
                 buf.index += 1;
                 if buf.index >= buf.rows.len() {
-                    refill_run_buffer(buf, 1024).unwrap();
+                    refill_run_buffer(buf, 2048).unwrap();
                 }
             }
         }

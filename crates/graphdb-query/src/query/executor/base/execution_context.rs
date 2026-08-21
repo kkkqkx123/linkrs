@@ -80,7 +80,7 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
-    pub const DEFAULT_CHUNK_SIZE: usize = 1024;
+    pub const DEFAULT_CHUNK_SIZE: usize = 2048;
     pub const DEFAULT_MAX_BUFFERED_CHUNKS: usize = 10;
 
     pub fn new(expression_context: Arc<ExpressionAnalysisContext>) -> Self {

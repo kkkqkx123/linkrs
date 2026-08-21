@@ -50,11 +50,11 @@
 //! - `TraversalDirectionOptimizer`: Selects optimal traversal direction
 //! - `SubqueryUnnestingOptimizer`: Transforms correlated subqueries
 //!
-//! Heuristic rules are executed first (Phase 1), followed by cost-based optimization (Phase 2).
+//! Heuristic rules are executed first, followed by cost-based optimization.
 //!
 //! # Usage Examples
 //!
-//! Heuristic rules are applied through the batch optimizer (Phase 1):
+//! Heuristic rules are applied through the batch optimizer:
 //!
 //! ```rust,ignore
 //! use crate::query::optimizer::heuristic::batch::BatchOptimizer;

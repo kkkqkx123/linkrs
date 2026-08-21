@@ -1,4 +1,4 @@
-//! Striped RwLock for fine-grained concurrency (Phase 1 OLAP)
+//! Striped RwLock for fine-grained concurrency
 //!
 //! Provides `StripedRwLock<T>` which shards data into `N` stripes, each guarded
 //! by a `parking_lot::RwLock`. Different stripes can be read/written concurrently;

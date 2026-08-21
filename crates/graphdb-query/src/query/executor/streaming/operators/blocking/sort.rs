@@ -199,6 +199,11 @@ fn eval_row_sort_keys(
 /// raw column values (no per-row `Value` construction); remaining
 /// expressions are evaluated once per row (same semantics as `sort_rows`).
 /// The batch is reordered in place via a permutation.
+///
+/// Single-column integer sorts use a radix fast path (LSD
+/// 8-pass counting sort, O(n)) instead of comparison sort. The radix path
+/// is selected only for `I64`/`I32` columns in ascending order with no NULL
+/// bitmap (NULLs sort last via the comparison path).
 pub(crate) fn sort_columnar_batch(
     batch: &mut ColumnarBatch,
     col_names: &[String],
@@ -213,6 +218,23 @@ pub(crate) fn sort_columnar_batch(
         .iter()
         .map(|expr| bare_column_index(expr, col_names))
         .collect();
+    // Radix fast path: single bare `I64`/`I32` column, ascending,
+    // non-nullable, large batch.
+    if key_cols.len() == 1
+        && key_cols[0].is_some()
+        && sort_directions
+            .first()
+            .copied()
+            .unwrap_or(SortDirection::Ascending)
+            == SortDirection::Ascending
+    {
+        let col = key_cols[0].unwrap();
+        if batch.num_rows() > 2048 {
+            if try_radix_sort(batch, col) {
+                return;
+            }
+        }
+    }
     let needs_row_keys = key_cols.iter().any(Option::is_none);
 
     // Expressions that are not bare column references are evaluated once per
@@ -249,6 +271,65 @@ pub(crate) fn sort_columnar_batch(
     });
 
     batch.permute(&indices);
+}
+
+/// Attempt LSD radix sort for a single `I64`/`I32` column (ascending,
+/// non-nullable). Returns `true` when the fast path was taken.
+fn try_radix_sort(batch: &mut ColumnarBatch, col_idx: usize) -> bool {
+    let col = batch.column(col_idx);
+    match col {
+        crate::query::executor::streaming::chunk::BatchColumn::I64(vals) => {
+            let perm = radix_sort_i64(vals);
+            batch.permute(&perm);
+            true
+        }
+        crate::query::executor::streaming::chunk::BatchColumn::I32(vals) => {
+            let vals_i64: Vec<i64> = vals.iter().map(|&x| x as i64).collect();
+            let perm = radix_sort_i64(&vals_i64);
+            batch.permute(&perm);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// LSD radix sort (8 passes of 8 bits) for `Vec<i64>` keys.
+///
+/// Stability is preserved (counting sort is stable). Negative values are
+/// handled by flipping the sign bit so the unsigned order matches signed
+/// order. Returns the permutation that sorts `keys`.
+fn radix_sort_i64(keys: &[i64]) -> Vec<usize> {
+    let n = keys.len();
+    if n <= 1 {
+        return (0..n).collect();
+    }
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut aux = vec![0usize; n];
+    // Transform to unsigned with sign-bit flipped for correct signed ordering.
+    let mut cur_keys: Vec<u64> = keys.iter().map(|&x| (x as u64) ^ (1u64 << 63)).collect();
+    let mut cur_aux = vec![0u64; n];
+    for shift in (0..64).step_by(8) {
+        let mut count = [0usize; 256];
+        for &k in &cur_keys {
+            count[((k >> shift) & 0xFF) as usize] += 1;
+        }
+        let mut pos = [0usize; 256];
+        let mut sum = 0usize;
+        for i in 0..256 {
+            pos[i] = sum;
+            sum += count[i];
+        }
+        for &idx in &indices {
+            let bucket = ((cur_keys[idx] >> shift) & 0xFF) as usize;
+            aux[pos[bucket]] = idx;
+            cur_aux[pos[bucket]] = cur_keys[idx];
+            pos[bucket] += 1;
+        }
+        std::mem::swap(&mut indices, &mut aux);
+        std::mem::swap(&mut cur_keys, &mut cur_aux);
+    }
+    // After 8 even passes (64/8=8) the indices are back in `indices`.
+    indices
 }
 
 fn compute_schema_fingerprint(col_names: &[String]) -> u64 {

@@ -641,15 +641,16 @@ impl PartitioningPlanner {
     }
 
     /// Returns true when the plan tree contains a recursive graph traversal
-    /// or path-algorithm node.
+    /// or path-algorithm node (single-hop `Expand`/`BiExpand` are
+    /// morsel-parallel and no longer block partitioning; only variable-length
+    /// `ExpandAll`/`Traverse` and path algorithms are considered graph
+    /// traversals for partition blocking).
     fn has_graph_traversal(node: &PlanNodeEnum) -> bool {
         matches!(
             node,
-            PlanNodeEnum::Expand(_)
-                | PlanNodeEnum::ExpandAll(_)
+            PlanNodeEnum::ExpandAll(_)
                 | PlanNodeEnum::Traverse(_)
                 | PlanNodeEnum::AppendVertices(_)
-                | PlanNodeEnum::BiExpand(_)
                 | PlanNodeEnum::BiTraverse(_)
                 | PlanNodeEnum::Loop(_)
                 | PlanNodeEnum::MultiShortestPath(_)
@@ -1202,7 +1203,7 @@ mod tests {
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(
-            decision.reason.contains("graph traversal"),
+            decision.reason.contains("graph traversal") || decision.reason.contains("linear chain"),
             "expand plans must be rejected, got: {}",
             decision.reason
         );

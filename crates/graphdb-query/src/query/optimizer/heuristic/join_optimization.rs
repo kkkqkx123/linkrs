@@ -3,17 +3,17 @@
 //! This module contains optimization rules specifically for JOIN operations.
 //! These rules aim to improve JOIN performance through various transformations.
 //!
-//! # Phase 1: Basic JOIN Optimization
+//! # Basic JOIN Optimization
 //! - PushProjectDownJoinRule: Push projection operations down to JOIN inputs
 //! - LeftJoinToInnerJoinRule: Convert LeftJoin to InnerJoin when possible
 //! - JoinConditionSimplifyRule: Simplify and deduplicate JOIN conditions
 //!
-//! # Phase 2: Graph Traversal Optimization
+//! # Graph Traversal Optimization
 //! - JoinToExpandRule: Convert vertex-edge JOIN to ExpandAll
 //! - JoinToAppendVerticesRule: Convert edge-vertex JOIN to AppendVertices
 //! - MergeConsecutiveExpandRule: Merge consecutive ExpandAll into Traverse
 //!
-//! # Phase 3: Advanced Optimization
+//! # Advanced Optimization
 //! - JoinEliminationRule: Eliminate redundant JOIN operations
 //! - IndexJoinSelectionRule: Select index-based JOIN when appropriate
 //! - JoinReorderRule: Reorder multi-table JOINs for better performance

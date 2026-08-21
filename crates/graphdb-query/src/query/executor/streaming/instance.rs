@@ -230,13 +230,13 @@ impl QueryExecutionInstance {
         sink: ResultSink,
         registry: Option<Arc<QueryRegistry>>,
     ) -> Result<Self, QueryError> {
-        // Phase 1: validate the plan (structural + binding).
+        // Validate the plan (structural + binding).
         PhysicalPlanValidator::validate(&plan)?;
 
-        // Phase 2: materialize arena plan → executor tree via materializer.
+        // Materialize arena plan → executor tree via materializer.
         let (executor, runtime) = PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
 
-        // Phase 3: adopt the request-scoped cancellation token on the runtime
+        // Adopt the request-scoped cancellation token on the runtime
         // regardless of whether a registry is attached.  This is the
         // single-token convergence point: `QueryContext::mark_killed`, KILL
         // QUERY, and runtime cancel all flip the SAME underlying state, so
@@ -244,7 +244,7 @@ impl QueryExecutionInstance {
         // paths) still honor mark_killed here.
         runtime.set_cancel_token(bindings.cancel_token.clone().unwrap_or_default());
 
-        // Phase 4: register with the query registry.
+        // Register with the query registry.
         let registry_guard = registry.as_ref().map(|reg| {
             let session_id = bindings
                 .session_id
@@ -284,7 +284,7 @@ impl QueryExecutionInstance {
             QueryGuard::new(reg.clone(), qid)
         });
 
-        // Phase 5: set up the engine.
+        // Set up the engine.
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(bindings.max_workers);
         engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
