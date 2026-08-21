@@ -18,7 +18,7 @@ use crate::core::{StorageError, StorageResult};
 ///
 /// Tracks the deletion timestamp range and count for edges in the segment.
 /// This enables time-travel query optimizations and accurate MVCC semantics.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeletionInfo {
     /// No edges in this segment have been deleted
     NoDeletes,
@@ -173,6 +173,59 @@ impl SegmentVersion {
 /// Saves ~15% memory by storing edge_ids separately, with O(1) recovery lookup
 pub const SEPARATE_EDGE_ID_STORAGE_THRESHOLD: usize = 10_000;
 
+/// Default number of vertices per region for region-level recycling.
+pub const DEFAULT_REGION_VERTEX_COUNT: usize = 1024;
+/// Density watermark below which a region is considered sparse.
+pub const REGION_DENSITY_LOW_WATERMARK: f64 = 0.15;
+
+/// Per-region metadata for fine-grained recycling.
+///
+/// A region is a contiguous vertex-id interval `[vertex_start, vertex_end)` in
+/// the direction's vertex space (out: src, in: dst). Metadata is derived and
+/// rebuildable from the CSR + MVCC tombstones; it is cached for merge/compact
+/// decisions and persisted for faster reload.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionMeta {
+    pub region_id: u32,
+    pub vertex_start: u32,
+    pub vertex_end: u32,
+    pub edge_count: u32,
+    pub deleted_count: u32,
+    pub deletion_info: DeletionInfo,
+    pub estimated_bytes: usize,
+}
+
+impl RegionMeta {
+    pub fn deletion_ratio(&self) -> f64 {
+        if self.edge_count == 0 {
+            0.0
+        } else {
+            self.deleted_count as f64 / self.edge_count as f64
+        }
+    }
+
+    pub fn density(&self) -> f64 {
+        let width = (self.vertex_end - self.vertex_start) as f64;
+        if width <= 0.0 {
+            0.0
+        } else {
+            self.edge_count as f64 / width
+        }
+    }
+
+    pub fn needs_rebuild(&self, high_deletion_ratio: f64, low_density_threshold: f64) -> bool {
+        self.deletion_ratio() > high_deletion_ratio || self.density() < low_density_threshold
+    }
+}
+
+/// Result of a region-aware merge, for observability.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RegionMergeStats {
+    pub regions_rebuilt: usize,
+    pub regions_skipped: usize,
+    pub bytes_saved: usize,
+}
+
 pub struct CsrSegment {
     pub csr: RwLock<Csr>,
     /// Edge creation time range: [create_ts_min, create_ts_max]
@@ -188,6 +241,10 @@ pub struct CsrSegment {
     /// None: direct mode (edge_id in ImmutableNbr)
     /// Some(...): optimized mode (edge_id stored separately, 15% memory savings)
     pub edge_ids: Option<Vec<EdgeId>>,
+    /// Region-level metadata (logical slices, single Csr).
+    pub regions: Vec<RegionMeta>,
+    /// Vertex count per region (0 = disabled, fallback to segment-level).
+    pub region_vertex_count: usize,
     /// Residency state: whether CSR data is in memory or evicted to disk
     pub residency: RwLock<SegmentResidency>,
     /// Lock state for optimistic reads and write coordination
@@ -227,6 +284,8 @@ impl CsrSegment {
             version: SegmentVersion::new(),
             created_at_ts,
             edge_ids: None,
+            regions: Vec::new(),
+            region_vertex_count: 0,
             residency: RwLock::new(SegmentResidency::Resident),
             lock_state: SegmentLockState::new(),
             last_access_ts: AtomicU64::new(0),
@@ -407,6 +466,163 @@ impl CsrSegment {
     /// Consume the segment and return its CSR allocation to the free-space pool.
     pub(crate) fn into_csr(self) -> Csr {
         self.csr.into_inner()
+    }
+
+    /// Rebuild logical region metadata for this segment.
+    ///
+    /// When `region_vertex_count == 0` regions are disabled and cleared.
+    /// Otherwise `regions` is sized to `ceil(vertex_capacity / N)` and each
+    /// entry's `edge_count`/`deleted_count`/`deletion_info` is derived from
+    /// the CSR + MVCC tombstones. The method is idempotent and cheap for
+    /// small segments.
+    pub fn rebuild_regions(
+        &mut self,
+        region_vertex_count: usize,
+        mvcc_delete_ts: &dyn Fn(EdgeId) -> Option<Timestamp>,
+    ) {
+        if region_vertex_count == 0 {
+            self.regions.clear();
+            self.region_vertex_count = 0;
+            return;
+        }
+        self.region_vertex_count = region_vertex_count;
+        let csr = self.csr.read();
+        let vc = csr.vertex_capacity();
+        if vc == 0 {
+            self.regions.clear();
+            return;
+        }
+        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let mut metas = Vec::with_capacity(region_cnt);
+        for rid in 0..region_cnt {
+            let start = (rid * region_vertex_count) as u32;
+            let end = ((rid + 1) * region_vertex_count).min(vc) as u32;
+            metas.push(RegionMeta {
+                region_id: rid as u32,
+                vertex_start: start,
+                vertex_end: end,
+                edge_count: 0,
+                deleted_count: 0,
+                deletion_info: DeletionInfo::NoDeletes,
+                estimated_bytes: 0,
+            });
+        }
+        // First pass: edge counts per region
+        let mut edge_counts = vec![0u32; region_cnt];
+        let mut deleted_counts = vec![0u32; region_cnt];
+        let mut del_mins = vec![Timestamp::MAX; region_cnt];
+        let mut del_maxs = vec![0u64; region_cnt];
+        for (edge_pos, (src, nbr)) in csr.iter().enumerate() {
+            let src_u32 = src.as_int64().unwrap_or(0) as u32;
+            let rid = (src_u32 as usize / region_vertex_count).min(region_cnt - 1);
+            edge_counts[rid] += 1;
+            let eid = self.recover_edge_id(nbr, edge_pos);
+            if let Some(ts) = mvcc_delete_ts(eid) {
+                deleted_counts[rid] += 1;
+                del_mins[rid] = del_mins[rid].min(ts);
+                del_maxs[rid] = del_maxs[rid].max(ts);
+            }
+        }
+        for (i, meta) in metas.iter_mut().enumerate() {
+            meta.edge_count = edge_counts[i];
+            meta.deleted_count = deleted_counts[i];
+            meta.deletion_info =
+                DeletionInfo::with_count(del_mins[i], del_maxs[i], deleted_counts[i]);
+            // Estimate: edges * size_of ImmutableNbr + offsets slice
+            let width = (meta.vertex_end - meta.vertex_start) as usize;
+            meta.estimated_bytes = (meta.edge_count as usize)
+                * std::mem::size_of::<super::super::ImmutableNbr>()
+                + (width + 1) * std::mem::size_of::<u32>();
+        }
+        self.regions = metas;
+    }
+
+    /// Rebuild regions from inline delete info without MVCC (used at freeze time where inline deletes exist).
+    pub fn rebuild_regions_from_entries(
+        &mut self,
+        region_vertex_count: usize,
+        entries: &[(u32, super::super::Nbr)],
+    ) {
+        if region_vertex_count == 0 {
+            self.regions.clear();
+            self.region_vertex_count = 0;
+            return;
+        }
+        self.region_vertex_count = region_vertex_count;
+        let csr = self.csr.read();
+        let vc = csr.vertex_capacity();
+        if vc == 0 {
+            self.regions.clear();
+            return;
+        }
+        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let mut metas = Vec::with_capacity(region_cnt);
+        for rid in 0..region_cnt {
+            let start = (rid * region_vertex_count) as u32;
+            let end = ((rid + 1) * region_vertex_count).min(vc) as u32;
+            metas.push(RegionMeta {
+                region_id: rid as u32,
+                vertex_start: start,
+                vertex_end: end,
+                edge_count: 0,
+                deleted_count: 0,
+                deletion_info: DeletionInfo::NoDeletes,
+                estimated_bytes: 0,
+            });
+        }
+        let mut edge_counts = vec![0u32; region_cnt];
+        let mut deleted_counts = vec![0u32; region_cnt];
+        let mut del_mins = vec![Timestamp::MAX; region_cnt];
+        let mut del_maxs = vec![0u64; region_cnt];
+        for (src, nbr) in entries {
+            let rid = (*src as usize / region_vertex_count).min(region_cnt - 1);
+            edge_counts[rid] += 1;
+            if nbr.delete_ts != Timestamp::MAX {
+                deleted_counts[rid] += 1;
+                del_mins[rid] = del_mins[rid].min(nbr.delete_ts);
+                del_maxs[rid] = del_maxs[rid].max(nbr.delete_ts);
+            }
+        }
+        for (i, meta) in metas.iter_mut().enumerate() {
+            meta.edge_count = edge_counts[i];
+            meta.deleted_count = deleted_counts[i];
+            meta.deletion_info =
+                DeletionInfo::with_count(del_mins[i], del_maxs[i], deleted_counts[i]);
+            let width = (meta.vertex_end - meta.vertex_start) as usize;
+            meta.estimated_bytes = (meta.edge_count as usize)
+                * std::mem::size_of::<super::super::ImmutableNbr>()
+                + (width + 1) * std::mem::size_of::<u32>();
+        }
+        self.regions = metas;
+    }
+
+    pub fn region_deletion_ratio(&self, region_id: u32) -> f64 {
+        self.regions
+            .get(region_id as usize)
+            .map(|r| r.deletion_ratio())
+            .unwrap_or(0.0)
+    }
+
+    pub fn region_density(&self, region_id: u32) -> f64 {
+        self.regions
+            .get(region_id as usize)
+            .map(|r| r.density())
+            .unwrap_or(0.0)
+    }
+
+    pub fn needs_region_rebuild(
+        &self,
+        region_id: u32,
+        high_deletion_ratio: f64,
+        low_density_threshold: f64,
+    ) -> bool {
+        self.regions
+            .get(region_id as usize)
+            .is_some_and(|r| r.needs_rebuild(high_deletion_ratio, low_density_threshold))
+    }
+
+    pub fn total_regions(&self) -> usize {
+        self.regions.len()
     }
 }
 

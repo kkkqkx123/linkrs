@@ -44,6 +44,13 @@ pub struct EdgeTableConfig {
     /// Automatic maintenance: run freeze / GC / property compaction on the
     /// write path when the configured thresholds are exceeded.
     pub auto_maintenance: AutoMaintenanceConfig,
+
+    /// Region-level recycling: vertex count per region (0 = disabled).
+    pub region_vertex_count: usize,
+    /// Region high deletion ratio threshold (0.0-1.0) above which a region is considered dirty.
+    pub region_high_deletion_ratio: f64,
+    /// Region low density threshold below which a region is considered sparse.
+    pub region_low_density_threshold: f64,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -95,6 +102,9 @@ impl Default for EdgeTableConfig {
             // Keep only 5 newest segments, merge the rest (oldest 45 become 1)
             merge_keep_newest: 5,
             auto_maintenance: AutoMaintenanceConfig::default(),
+            region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
+            region_high_deletion_ratio: 0.20,
+            region_low_density_threshold: super::segment::REGION_DENSITY_LOW_WATERMARK,
         }
     }
 }

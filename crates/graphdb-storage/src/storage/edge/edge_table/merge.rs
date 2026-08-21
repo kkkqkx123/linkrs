@@ -145,6 +145,68 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
     }
 }
 
+/// Region-aware wrapper: same as `merge_selected_segments_with_deletion_filter_with_free_space`
+/// but also rebuilds `CsrSegment.regions` when `region_vertex_count > 0`.
+pub fn merge_selected_segments_region_aware_with_free_space(
+    segments: &mut Vec<CsrSegment>,
+    indices: Vec<usize>,
+    current_ts: Timestamp,
+    min_active_snapshot_ts: Option<Timestamp>,
+    edge_delete_ts: &dyn Fn(EdgeId) -> Option<Timestamp>,
+    free_space: &mut SegmentFreeList,
+    region_vertex_count: usize,
+) -> usize {
+    let merged = merge_selected_segments_with_deletion_filter_with_free_space(
+        segments,
+        indices,
+        current_ts,
+        min_active_snapshot_ts,
+        edge_delete_ts,
+        free_space,
+    );
+    if merged > 0 && region_vertex_count > 0 {
+        if let Some(seg) = segments.last_mut() {
+            seg.rebuild_regions(region_vertex_count, edge_delete_ts);
+        }
+    }
+    merged
+}
+
+/// Region-aware in-place physical merge: groups by time/size thresholds and
+/// merges each group with deletion filtering, rebuilding regions for the
+/// resulting segments.
+pub fn merge_in_place_region_aware_with_free_space(
+    segments: &mut Vec<CsrSegment>,
+    time_threshold: Timestamp,
+    size_threshold: usize,
+    min_active_snapshot_ts: Timestamp,
+    free_space: &mut SegmentFreeList,
+    edge_delete_ts: &dyn Fn(EdgeId) -> Option<Timestamp>,
+    region_vertex_count: usize,
+) -> DirectionMergeMetrics {
+    let metrics = merge_in_place_physical_with_free_space(
+        segments,
+        time_threshold,
+        size_threshold,
+        min_active_snapshot_ts,
+        free_space,
+        edge_delete_ts,
+    );
+    if region_vertex_count > 0 {
+        // Rebuild regions for segments produced by the physical merge.
+        // The physical merge appends new segments at the end; rebuild the
+        // tail portion that was just created. We conservative rebuild all
+        // segments to keep metadata consistent after groups merging.
+        for seg in segments.iter_mut() {
+            // Rebuild only if regions already enabled or if segment lacks them.
+            if seg.region_vertex_count != region_vertex_count || seg.regions.is_empty() {
+                seg.rebuild_regions(region_vertex_count, edge_delete_ts);
+            }
+        }
+    }
+    metrics
+}
+
 /// LSM-style tiered merge strategy
 ///
 /// Organizes segments into levels based on size and merges within/across levels:

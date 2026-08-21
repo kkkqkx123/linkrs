@@ -1,7 +1,7 @@
 //! Persistence operations: serialization and deserialization to/from disk.
 //!
 //! Handles flush (write) and load (read) operations with support for
-//! versioning, compression, and backward compatibility.
+//! versioning and compression.
 
 use super::super::{CsrBase, CsrVariant};
 use super::segment::{CsrSegment, DeletionInfo};
@@ -97,6 +97,30 @@ pub fn serialize_csr(
             buf.extend_from_slice(&edge_id_buffer);
         } else {
             buf.push(EDGE_ID_STORAGE_MODE_DIRECT);
+        }
+
+        // Region metadata
+        const REGION_MAGIC: u32 = 0x5245474E; // 'REGN'
+        buf.extend_from_slice(&REGION_MAGIC.to_le_bytes());
+        buf.extend_from_slice(&(segment.region_vertex_count as u64).to_le_bytes());
+        buf.extend_from_slice(&(segment.regions.len() as u64).to_le_bytes());
+        for r in &segment.regions {
+            buf.extend_from_slice(&r.region_id.to_le_bytes());
+            buf.extend_from_slice(&r.vertex_start.to_le_bytes());
+            buf.extend_from_slice(&r.vertex_end.to_le_bytes());
+            buf.extend_from_slice(&r.edge_count.to_le_bytes());
+            buf.extend_from_slice(&r.deleted_count.to_le_bytes());
+            let (del_min, del_max) = match r.deletion_info {
+                super::segment::DeletionInfo::NoDeletes => (Timestamp::MAX, 0u64),
+                super::segment::DeletionInfo::HasDeletes {
+                    min_ts,
+                    max_ts,
+                    deleted_count: _,
+                } => (min_ts, max_ts),
+            };
+            buf.extend_from_slice(&del_min.to_le_bytes());
+            buf.extend_from_slice(&del_max.to_le_bytes());
+            buf.extend_from_slice(&(r.estimated_bytes as u64).to_le_bytes());
         }
     }
 
@@ -313,6 +337,76 @@ pub fn load_csr(
                     )));
                 }
             }
+        }
+
+        // Region metadata
+        {
+            const REGION_MAGIC: u32 = 0x5245474E;
+            let mut magic_bytes = [0u8; 4];
+            cursor.read_exact(&mut magic_bytes)?;
+            if u32::from_le_bytes(magic_bytes) != REGION_MAGIC {
+                return Err(StorageError::deserialize_error(format!(
+                    "invalid region magic: expected {:#010x}, got {:#010x}",
+                    REGION_MAGIC,
+                    u32::from_le_bytes(magic_bytes)
+                )));
+            }
+            if cursor.len() < 16 {
+                return Err(StorageError::deserialize_error(
+                    "truncated region header".to_string(),
+                ));
+            }
+            let mut rvc_bytes = [0u8; 8];
+            cursor.read_exact(&mut rvc_bytes)?;
+            let region_vertex_count = u64::from_le_bytes(rvc_bytes) as usize;
+            let mut rlen_bytes = [0u8; 8];
+            cursor.read_exact(&mut rlen_bytes)?;
+            let region_len = u64::from_le_bytes(rlen_bytes) as usize;
+            let mut regions = Vec::with_capacity(region_len);
+            for _ in 0..region_len {
+                if cursor.len() < 4 + 4 + 4 + 4 + 4 + 8 + 8 + 8 {
+                    return Err(StorageError::deserialize_error(
+                        "truncated region entry".to_string(),
+                    ));
+                }
+                let mut rid_bytes = [0u8; 4];
+                cursor.read_exact(&mut rid_bytes)?;
+                let region_id = u32::from_le_bytes(rid_bytes);
+                let mut vs_bytes = [0u8; 4];
+                cursor.read_exact(&mut vs_bytes)?;
+                let vertex_start = u32::from_le_bytes(vs_bytes);
+                let mut ve_bytes = [0u8; 4];
+                cursor.read_exact(&mut ve_bytes)?;
+                let vertex_end = u32::from_le_bytes(ve_bytes);
+                let mut ec_bytes = [0u8; 4];
+                cursor.read_exact(&mut ec_bytes)?;
+                let edge_count = u32::from_le_bytes(ec_bytes);
+                let mut dc_bytes = [0u8; 4];
+                cursor.read_exact(&mut dc_bytes)?;
+                let deleted_count = u32::from_le_bytes(dc_bytes);
+                let mut del_min_bytes = [0u8; 8];
+                cursor.read_exact(&mut del_min_bytes)?;
+                let del_min = u64::from_le_bytes(del_min_bytes);
+                let mut del_max_bytes = [0u8; 8];
+                cursor.read_exact(&mut del_max_bytes)?;
+                let del_max = u64::from_le_bytes(del_max_bytes);
+                let mut eb_bytes = [0u8; 8];
+                cursor.read_exact(&mut eb_bytes)?;
+                let estimated_bytes = u64::from_le_bytes(eb_bytes) as usize;
+                let deletion_info =
+                    super::segment::DeletionInfo::with_count(del_min, del_max, deleted_count);
+                regions.push(super::segment::RegionMeta {
+                    region_id,
+                    vertex_start,
+                    vertex_end,
+                    edge_count,
+                    deleted_count,
+                    deletion_info,
+                    estimated_bytes,
+                });
+            }
+            segment.region_vertex_count = region_vertex_count;
+            segment.regions = regions;
         }
 
         segments.push(segment);

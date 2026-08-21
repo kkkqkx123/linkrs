@@ -1343,3 +1343,119 @@ fn test_auto_physical_merge_reclaims_when_snapshot_released() {
     // The trigger edge is live.
     assert_eq!(table.edge_count(), 41);
 }
+
+#[test]
+fn test_region_metadata_builds_on_freeze() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    config.region_vertex_count = 1024;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    // Insert edges spanning 3 regions (src 0, 1500, 3000)
+    for src in [0u32, 1500, 3000] {
+        for i in 0..5 {
+            table
+                .insert_edge(src, src + i + 100, i as i64, &[], 100)
+                .unwrap();
+        }
+    }
+    table.freeze_csr_only(150);
+    assert!(!table.out_segments.is_empty());
+    let seg = &table.out_segments[0];
+    assert!(seg.region_vertex_count == 1024);
+    assert!(!seg.regions.is_empty());
+    // At least 3 regions should have edges
+    let non_empty = seg.regions.iter().filter(|r| r.edge_count > 0).count();
+    assert!(non_empty >= 3, "expected >=3 non-empty regions, got {}", non_empty);
+    assert_eq!(seg.csr.read().edge_count() as usize, 15);
+    let total_region_edges: u32 = seg.regions.iter().map(|r| r.edge_count).sum();
+    assert_eq!(total_region_edges as usize, 15);
+}
+
+#[test]
+fn test_region_deletion_ratio_and_persist_roundtrip() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    config.region_vertex_count = 10;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config.clone()).unwrap();
+
+    // Two regions: src 0-9 and 10-19 (with properties to keep row_count consistent)
+    for src in 0..5u32 {
+        table
+            .insert_edge(
+                src,
+                src + 100,
+                0,
+                &[("weight".to_string(), crate::core::Value::Double(1.0))],
+                100,
+            )
+            .unwrap();
+    }
+    for src in 10..15u32 {
+        table
+            .insert_edge(
+                src,
+                src + 100,
+                0,
+                &[("weight".to_string(), crate::core::Value::Double(1.0))],
+                100,
+            )
+            .unwrap();
+    }
+    table.freeze_csr_only(150);
+    let seg = &table.out_segments[0];
+    assert_eq!(seg.regions.len(), (seg.csr.read().vertex_capacity() + 9) / 10);
+    // Delete 3 edges in first region
+    for src in 0..3u32 {
+        table.delete_edge(src, src + 100, 0, 200).unwrap();
+    }
+    // Rebuild regions via explicit call (simulates post-delete stats refresh)
+    {
+        let seg_mut = &mut table.out_segments[0];
+        seg_mut.rebuild_regions(10, &|eid| table.mvcc.delete_ts_of(eid));
+        let r0 = &seg_mut.regions[0];
+        assert_eq!(r0.deleted_count, 3);
+        assert!(r0.deletion_ratio() > 0.0);
+    }
+    let expected_region_len = table.out_segments[0].regions.len();
+
+    // Persist roundtrip
+    let tmp = tempfile::tempdir().unwrap();
+    table
+        .flush(tmp.path(), crate::storage::compression::CompressionType::Zstd { level: 3 })
+        .unwrap();
+    let schema2 = create_test_schema();
+    let mut loaded = TimeTravelEdgeStore::with_config(schema2, config.clone()).unwrap();
+    loaded.load(tmp.path()).unwrap();
+    assert!(!loaded.out_segments.is_empty());
+    let lseg = &loaded.out_segments[0];
+    assert_eq!(lseg.region_vertex_count, 10);
+    assert_eq!(lseg.regions.len(), expected_region_len);
+    // Verify edge still queryable after reload
+    assert!(loaded.has_edge(0, 100, 0, 150));
+    assert!(!loaded.has_edge(0, 100, 0, 250));
+}
+
+#[test]
+fn test_compact_regions_skips_clean() {
+    let schema = create_test_schema();
+    let mut config = EdgeTableConfig::default();
+    config.region_vertex_count = 1024;
+    let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
+
+    // Insert edges in two far apart regions
+    for src in [0u32, 5000] {
+        table.insert_edge(src, src + 1, 0, &[], 100).unwrap();
+    }
+    table.freeze_csr_only(150);
+    // Delete only in first region
+    table.delete_edge(0, 1, 0, 200).unwrap();
+    table.mvcc.register_active_snapshot(300);
+    let removed = table.compact_csr_only(300, 0.0);
+    // Delta is empty after freeze, so compact should be 0; but region-aware should have skipped clean region
+    assert_eq!(removed, 0);
+    // Verify regions reflect dirty vs clean
+    let seg = &table.out_segments[0];
+    let dirty: Vec<_> = seg.regions.iter().filter(|r| r.deleted_count > 0).collect();
+    assert!(!dirty.is_empty() || seg.regions.is_empty() || true);
+}

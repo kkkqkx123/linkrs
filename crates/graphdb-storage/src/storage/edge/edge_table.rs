@@ -687,26 +687,50 @@ impl core::TimeTravelEdgeStore {
         let start = Instant::now();
         let segments_before = self.out_segments.len() + self.in_segments.len();
 
+        let region_n = self.config.region_vertex_count;
         let (out_metrics, in_metrics) = if let Some(min_ts) = min_active_snapshot_ts {
             // Physical merge respects the time/size thresholds and drops only
             // edges no active snapshot can observe.
             let mvcc = &self.mvcc;
-            let out_metrics = merge::merge_in_place_physical_with_free_space(
-                &mut self.out_segments,
-                time_threshold,
-                size_threshold_bytes,
-                min_ts,
-                &mut self.out_free_space,
-                &|edge_id| mvcc.delete_ts_of(edge_id),
-            );
-            let in_metrics = merge::merge_in_place_physical_with_free_space(
-                &mut self.in_segments,
-                time_threshold,
-                size_threshold_bytes,
-                min_ts,
-                &mut self.in_free_space,
-                &|edge_id| mvcc.delete_ts_of(edge_id),
-            );
+            let (out_metrics, in_metrics) = if region_n > 0 {
+                let out_metrics = merge::merge_in_place_region_aware_with_free_space(
+                    &mut self.out_segments,
+                    time_threshold,
+                    size_threshold_bytes,
+                    min_ts,
+                    &mut self.out_free_space,
+                    &|edge_id| mvcc.delete_ts_of(edge_id),
+                    region_n,
+                );
+                let in_metrics = merge::merge_in_place_region_aware_with_free_space(
+                    &mut self.in_segments,
+                    time_threshold,
+                    size_threshold_bytes,
+                    min_ts,
+                    &mut self.in_free_space,
+                    &|edge_id| mvcc.delete_ts_of(edge_id),
+                    region_n,
+                );
+                (out_metrics, in_metrics)
+            } else {
+                let out_metrics = merge::merge_in_place_physical_with_free_space(
+                    &mut self.out_segments,
+                    time_threshold,
+                    size_threshold_bytes,
+                    min_ts,
+                    &mut self.out_free_space,
+                    &|edge_id| mvcc.delete_ts_of(edge_id),
+                );
+                let in_metrics = merge::merge_in_place_physical_with_free_space(
+                    &mut self.in_segments,
+                    time_threshold,
+                    size_threshold_bytes,
+                    min_ts,
+                    &mut self.in_free_space,
+                    &|edge_id| mvcc.delete_ts_of(edge_id),
+                );
+                (out_metrics, in_metrics)
+            };
             (out_metrics, in_metrics)
         } else {
             let out_metrics = merge::merge_in_place_with_free_space(
@@ -892,6 +916,21 @@ impl core::TimeTravelEdgeStore {
 
         let in_csr_path = path.join("in_csr.bin");
         persistence::load_csr(&in_csr_path, &mut self.in_csr, &mut self.in_segments)?;
+
+        // Rebuild region metadata for segments lacking it (old files without region block)
+        let region_n = self.config.region_vertex_count;
+        if region_n > 0 {
+            for seg in &mut self.out_segments {
+                if seg.regions.is_empty() {
+                    seg.rebuild_regions(region_n, &|eid| self.mvcc.delete_ts_of(eid));
+                }
+            }
+            for seg in &mut self.in_segments {
+                if seg.regions.is_empty() {
+                    seg.rebuild_regions(region_n, &|eid| self.mvcc.delete_ts_of(eid));
+                }
+            }
+        }
 
         let props_path = path.join("properties.bin");
         self.properties = persistence::load_properties(&props_path)?;

@@ -477,6 +477,24 @@ impl CsrVariant {
             _ => self.compact_with_ts(cutoff, reserve_ratio),
         }
     }
+
+    pub fn compact_regions_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        region_vertex_count: usize,
+    ) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.compact_regions_with_ts_reporting(
+                cutoff,
+                reserve_ratio,
+                on_edge_removed,
+                region_vertex_count,
+            ),
+            _ => self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed),
+        }
+    }
 }
 
 /// Iterator over CSR edges, supporting multiple implementation types

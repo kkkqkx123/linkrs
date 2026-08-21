@@ -929,6 +929,83 @@ impl MutableCsr {
         removed_count
     }
 
+    /// Region-aware compact: only triggers a full rebuild when at least one
+    /// region contains reclaimable deletions (`delete_ts < cutoff`). Clean
+    /// regions are still rebuilt together (single flat CSR) but the method
+    /// avoids work entirely when no region is dirty.
+    pub fn compact_regions_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        region_vertex_count: usize,
+    ) -> usize {
+        if region_vertex_count == 0 {
+            return self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed);
+        }
+        if cutoff == Timestamp::MAX {
+            return 0;
+        }
+        let vc = self.vertex_capacity();
+        if vc == 0 {
+            return 0;
+        }
+        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let mut dirty_regions = 0usize;
+        for rid in 0..region_cnt {
+            let start_v = rid * region_vertex_count;
+            let end_v = ((rid + 1) * region_vertex_count).min(vc);
+            let mut has_reclaimable = false;
+            for vid in start_v..end_v {
+                let degree = self.degrees[vid] as usize;
+                let off = self.adj_offsets[vid] as usize;
+                for i in 0..degree {
+                    let nbr = &self.nbr_list[off + i];
+                    if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                        has_reclaimable = true;
+                        break;
+                    }
+                }
+                if has_reclaimable {
+                    break;
+                }
+                if let Some(chunks) = self.overflow_chunks.get(&(vid as u32)) {
+                    for chunk in chunks {
+                        for nbr in chunk {
+                            if nbr.delete_ts != Timestamp::MAX && nbr.delete_ts < cutoff {
+                                has_reclaimable = true;
+                                break;
+                            }
+                        }
+                        if has_reclaimable {
+                            break;
+                        }
+                    }
+                }
+                if has_reclaimable {
+                    break;
+                }
+            }
+            if has_reclaimable {
+                dirty_regions += 1;
+            }
+        }
+        if dirty_regions == 0 {
+            log::debug!(
+                "MutableCsr region-aware compact skipped: no dirty region (regions={}, cutoff={})",
+                region_cnt,
+                cutoff
+            );
+            return 0;
+        }
+        log::debug!(
+            "MutableCsr region-aware compact: {}/{} regions dirty, rebuilding",
+            dirty_regions,
+            region_cnt
+        );
+        self.compact_with_ts_reporting(cutoff, reserve_ratio, on_edge_removed)
+    }
+
     /// Get used memory size (active edges only)
     pub fn used_memory_size(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
@@ -1230,6 +1307,22 @@ impl MutableCsrTrait for MutableCsr {
 
     fn compact_with_ts(&mut self, ts: Timestamp, reserve_ratio: f32) -> usize {
         MutableCsr::compact_with_ts(self, ts, reserve_ratio)
+    }
+
+    fn compact_regions_with_ts_reporting(
+        &mut self,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
+        region_vertex_count: usize,
+    ) -> usize {
+        MutableCsr::compact_regions_with_ts_reporting(
+            self,
+            cutoff,
+            reserve_ratio,
+            on_edge_removed,
+            region_vertex_count,
+        )
     }
 
     fn used_memory_size(&self) -> usize {
