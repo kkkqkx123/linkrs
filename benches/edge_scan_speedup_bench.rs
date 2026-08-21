@@ -201,9 +201,7 @@ fn main() {
             );
         }
     }
-    println!(
-        "\nresult: N >= 4 and >= 1M edges -> E(8) >= 3"
-    );
+    println!("\nresult: N >= 4 and >= 1M edges -> E(8) >= 3");
 }
 
 fn machine_name() -> String {

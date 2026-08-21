@@ -1366,7 +1366,11 @@ fn test_region_metadata_builds_on_freeze() {
     assert!(!seg.regions.is_empty());
     // At least 3 regions should have edges
     let non_empty = seg.regions.iter().filter(|r| r.edge_count > 0).count();
-    assert!(non_empty >= 3, "expected >=3 non-empty regions, got {}", non_empty);
+    assert!(
+        non_empty >= 3,
+        "expected >=3 non-empty regions, got {}",
+        non_empty
+    );
     assert_eq!(seg.csr.read().edge_count() as usize, 15);
     let total_region_edges: u32 = seg.regions.iter().map(|r| r.edge_count).sum();
     assert_eq!(total_region_edges as usize, 15);
@@ -1404,7 +1408,10 @@ fn test_region_deletion_ratio_and_persist_roundtrip() {
     }
     table.freeze_csr_only(150);
     let seg = &table.out_segments[0];
-    assert_eq!(seg.regions.len(), (seg.csr.read().vertex_capacity() + 9) / 10);
+    assert_eq!(
+        seg.regions.len(),
+        (seg.csr.read().vertex_capacity() + 9) / 10
+    );
     // Delete 3 edges in first region
     for src in 0..3u32 {
         table.delete_edge(src, src + 100, 0, 200).unwrap();
@@ -1422,7 +1429,10 @@ fn test_region_deletion_ratio_and_persist_roundtrip() {
     // Persist roundtrip
     let tmp = tempfile::tempdir().unwrap();
     table
-        .flush(tmp.path(), crate::storage::compression::CompressionType::Zstd { level: 3 })
+        .flush(
+            tmp.path(),
+            crate::storage::compression::CompressionType::Zstd { level: 3 },
+        )
         .unwrap();
     let schema2 = create_test_schema();
     let mut loaded = TimeTravelEdgeStore::with_config(schema2, config.clone()).unwrap();

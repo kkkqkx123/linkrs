@@ -1027,6 +1027,228 @@ impl DmlParser {
         })
     }
 
+    /// Parse COPY statement
+    /// Syntax:
+    ///   COPY VERTEX <tag> FROM 'path' [WITH (HEADER [true|false], DELIMITER ',' , BATCH_SIZE n)]
+    ///   COPY EDGE <edge_type> FROM 'path' [WITH ...]
+    ///   COPY <tag> FROM 'path' // defaults to VERTEX
+    pub fn parse_copy_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        use crate::query::parser::ast::stmt::{CopyStmt, CopyTarget};
+
+        let start_span = ctx.current_span();
+        ctx.expect_token(TokenKind::Copy)?;
+
+        // Parse optional VERTEX/EDGE keyword and target name
+        let target = if ctx.match_token(TokenKind::Vertex) {
+            let tag = ctx.expect_identifier()?;
+            CopyTarget::Vertex(tag)
+        } else if ctx.match_token(TokenKind::Edge) {
+            let edge = ctx.expect_identifier()?;
+            CopyTarget::Edge(edge)
+        } else if ctx.match_token(TokenKind::Tag) {
+            let tag = ctx.expect_identifier()?;
+            CopyTarget::Vertex(tag)
+        } else {
+            // Bare identifier defaults to vertex tag
+            let name = ctx.expect_identifier()?;
+            CopyTarget::Vertex(name)
+        };
+
+        ctx.expect_token(TokenKind::From)?;
+        let file_path = ctx.expect_string_literal()?;
+
+        // Defaults
+        let mut header = true;
+        let mut delimiter = ',';
+        let mut batch_size: Option<usize> = None;
+        let mut header_explicit = false;
+
+        // Helper to parse a single option
+        let parse_delimiter_value = |ctx: &mut ParseContext| -> Result<char, ParseError> {
+            // Allow '=' or 'EQ' style: consume optional '='
+            let _ = ctx.match_token(TokenKind::Assign);
+            let _ = ctx.match_token(TokenKind::Eq);
+            // Delimiter is typically a string literal like "," or ','
+            if let TokenKind::StringLiteral(s) = ctx.current_token().kind.clone() {
+                ctx.next_token();
+                Ok(s.chars().next().unwrap_or(','))
+            } else if let TokenKind::Identifier(s) = ctx.current_token().kind.clone() {
+                ctx.next_token();
+                Ok(s.chars().next().unwrap_or(','))
+            } else {
+                Err(ParseError::new(
+                    crate::query::parser::core::error::ParseErrorKind::UnexpectedToken,
+                    format!(
+                        "Expected delimiter string, found {:?}",
+                        ctx.current_token().kind
+                    ),
+                    ctx.current_position(),
+                ))
+            }
+        };
+
+        let parse_bool_value = |ctx: &mut ParseContext| -> Option<bool> {
+            match ctx.current_token().kind.clone() {
+                TokenKind::BooleanLiteral(b) => {
+                    ctx.next_token();
+                    Some(b)
+                }
+                TokenKind::Identifier(s) if s.eq_ignore_ascii_case("true") => {
+                    ctx.next_token();
+                    Some(true)
+                }
+                TokenKind::Identifier(s) if s.eq_ignore_ascii_case("false") => {
+                    ctx.next_token();
+                    Some(false)
+                }
+                _ => None,
+            }
+        };
+
+        // Consume optional WITH and parenthesized option list
+        // Support both `WITH HEADER` and `WITH (HEADER true, DELIMITER ',')`
+        let mut in_parens = false;
+        if ctx.match_token(TokenKind::With) {
+            if ctx.match_token(TokenKind::LParen) {
+                in_parens = true;
+            }
+        } else if ctx.match_token(TokenKind::LParen) {
+            in_parens = true;
+        }
+
+        loop {
+            // Skip commas
+            if ctx.match_token(TokenKind::Comma) {
+                continue;
+            }
+            // End of parens
+            if in_parens && ctx.match_token(TokenKind::RParen) {
+                break;
+            }
+            // Peek option keyword
+            if ctx.check_token(TokenKind::Header) || ctx.check_keyword("HEADER") {
+                // Consume HEADER
+                if ctx.match_token(TokenKind::Header) {
+                    // consumed
+                } else {
+                    let _ = ctx.consume_keyword("HEADER");
+                }
+                if let Some(b) = parse_bool_value(ctx) {
+                    header = b;
+                    header_explicit = true;
+                } else {
+                    header = true;
+                    header_explicit = true;
+                }
+                continue;
+            }
+            if ctx.check_token(TokenKind::Delimiter) || ctx.check_keyword("DELIMITER") {
+                if ctx.match_token(TokenKind::Delimiter) {
+                } else {
+                    let _ = ctx.consume_keyword("DELIMITER");
+                }
+                match parse_delimiter_value(ctx) {
+                    Ok(d) => delimiter = d,
+                    Err(e) => return Err(e),
+                }
+                continue;
+            }
+            if ctx.check_keyword("BATCH_SIZE") || ctx.check_keyword("BATCH") {
+                if ctx.check_keyword("BATCH_SIZE") {
+                    let _ = ctx.consume_keyword("BATCH_SIZE");
+                } else {
+                    let _ = ctx.consume_keyword("BATCH");
+                    // Allow `BATCH_SIZE` as two tokens? already handled
+                    if ctx.check_keyword("SIZE") {
+                        let _ = ctx.consume_keyword("SIZE");
+                    }
+                }
+                let _ = ctx.match_token(TokenKind::Assign);
+                let _ = ctx.match_token(TokenKind::Eq);
+                // Parse integer
+                let batch = ctx.expect_integer_literal()?;
+                if batch < 0 {
+                    return Err(ParseError::new(
+                        crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                        "BATCH_SIZE must be positive".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                batch_size = Some(batch as usize);
+                continue;
+            }
+            if ctx.check_keyword("CSV") || ctx.check_token(TokenKind::Csv) {
+                if ctx.match_token(TokenKind::Csv) {
+                } else {
+                    let _ = ctx.consume_keyword("CSV");
+                }
+                continue;
+            }
+            // Support `NO HEADER` -> header false
+            if ctx.check_token(TokenKind::No) || ctx.check_keyword("NO") {
+                let saved = ctx.current_token().clone();
+                ctx.next_token();
+                if ctx.check_token(TokenKind::Header) || ctx.check_keyword("HEADER") {
+                    if ctx.match_token(TokenKind::Header) {
+                    } else {
+                        let _ = ctx.consume_keyword("HEADER");
+                    }
+                    header = false;
+                    header_explicit = true;
+                    continue;
+                } else {
+                    // Not HEADER, put back by not consuming? Actually we already consumed NO, push error but allow continue
+                    // Treat as unknown, break
+                    let _ = saved;
+                    break;
+                }
+            }
+            // If we are inside parens and hit something else, maybe unknown option -> skip
+            if in_parens {
+                // If next is identifier that looks like option, consume one token and continue
+                if ctx.current_token().kind == TokenKind::Eof
+                    || ctx.current_token().kind == TokenKind::Semicolon
+                {
+                    break;
+                }
+                // Unknown token inside parens -> error?
+                // Instead of error, break to avoid infinite loop
+                // Check if it's a closing paren already handled, else break on unknown
+                break;
+            } else {
+                // Outside parens, options are optional; break when next token not an option
+                // Also allow WITH without parens: `WITH HEADER DELIMITER ','`
+                // So we need to check if next token could be option; if not, break
+                // If next token is WITH, DELIMITER, HEADER, etc, continue is handled above
+                // Otherwise check if next is WITH again
+                if ctx.check_token(TokenKind::With) {
+                    ctx.next_token();
+                    if ctx.match_token(TokenKind::LParen) {
+                        in_parens = true;
+                    }
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // If header was not explicitly set but we consumed WITH HEADER logic, default true already
+        // Normalize: if header_explicit false and we saw no header option, header remains true
+        let _ = header_explicit;
+
+        let end_span = ctx.current_span();
+        let span = ctx.merge_span(start_span.start, end_span.end);
+
+        Ok(Stmt::Copy(CopyStmt {
+            span,
+            target,
+            file_path,
+            header,
+            delimiter,
+            batch_size,
+        }))
+    }
+
     /// Parse property map: {prop1: value1, prop2: value2}
     fn parse_property_map(
         &mut self,

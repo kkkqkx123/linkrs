@@ -1268,12 +1268,7 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::insert_edge(self, src_vid, dst, edge_id, prop_offset, ts)
     }
 
-    fn delete_edge(
-        &mut self,
-        src_vid: u32,
-        edge_id: EdgeId,
-        ts: Timestamp,
-    ) -> StorageResult<bool> {
+    fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> StorageResult<bool> {
         MutableCsr::delete_edge(self, src_vid, edge_id, ts)
     }
 
@@ -1379,7 +1374,10 @@ mod tests {
         // Deleting the same edge at a different timestamp is a write-write
         // conflict, surfaced at the storage write path.
         let err = csr.delete_edge(0u32, EdgeId(100), 200).unwrap_err();
-        assert_eq!(err.kind(), crate::core::error::storage::StorageErrorKind::Conflict);
+        assert_eq!(
+            err.kind(),
+            crate::core::error::storage::StorageErrorKind::Conflict
+        );
 
         // The edge is still logically deleted at the original timestamp.
         assert_eq!(csr.edges_of(0u32, 50).len(), 1);

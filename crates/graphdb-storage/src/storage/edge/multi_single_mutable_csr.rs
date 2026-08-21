@@ -318,7 +318,9 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
                     if self.edges[base + i].delete_ts != ts {
                         return Err(StorageError::write_write_conflict(format!(
                             "edge {:?} already deleted at ts={}, attempted delete at ts={}",
-                            edge_id, self.edges[base + i].delete_ts, ts
+                            edge_id,
+                            self.edges[base + i].delete_ts,
+                            ts
                         )));
                     }
                     // Idempotent re-delete at the same timestamp.

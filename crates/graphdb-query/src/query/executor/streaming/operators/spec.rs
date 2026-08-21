@@ -401,6 +401,13 @@ pub enum GraphSpec {
 
 // ── Sink spec ────────────────────────────────────────────────────────────────
 
+/// Copy target type for COPY FROM
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyTarget {
+    Vertex(String),
+    Edge(String),
+}
+
 /// Immutable config for sink (data modification) operators.
 #[derive(Debug, Clone)]
 pub enum SinkSpec {
@@ -460,6 +467,14 @@ pub enum SinkSpec {
         space_name: String,
         tag_names: Vec<String>,
         vertex_ids: Option<Vec<Value>>,
+    },
+    CopyFrom {
+        space_name: String,
+        target: CopyTarget,
+        file_path: String,
+        header: bool,
+        delimiter: u8,
+        batch_size: usize,
     },
 }
 

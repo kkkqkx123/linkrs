@@ -10,6 +10,7 @@
 //! - UPDATE: Update vertices or edges
 
 pub mod assignment_planner;
+pub mod copy_planner;
 pub mod create_planner;
 pub mod delete_planner;
 pub mod insert_planner;

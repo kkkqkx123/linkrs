@@ -64,7 +64,10 @@ impl LocalVectorEngine {
         let root_dir = root_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&root_dir)?;
 
-        tracing::info!("vector distance kernel: {}", crate::distance::kernel::selected());
+        tracing::info!(
+            "vector distance kernel: {}",
+            crate::distance::kernel::selected()
+        );
 
         let mut collections = HashMap::new();
         for entry in std::fs::read_dir(&root_dir)? {

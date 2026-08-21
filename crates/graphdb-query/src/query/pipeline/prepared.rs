@@ -154,6 +154,7 @@ fn is_direct_dml_statement(stmt: &Stmt) -> bool {
     matches!(
         stmt,
         Stmt::Insert(_)
+            | Stmt::Copy(_)
             | Stmt::Delete(_)
             | Stmt::Update(_)
             | Stmt::Merge(_)
@@ -218,6 +219,7 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
         _ => !matches!(
             stmt,
             Stmt::Insert(_)
+                | Stmt::Copy(_)
                 | Stmt::Update(_)
                 | Stmt::Delete(_)
                 | Stmt::Set(_)

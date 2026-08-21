@@ -142,9 +142,7 @@ fn main() {
             share * 100.0
         );
     }
-    println!(
-        "\nresult: gate wait share < 5% at N=16 -> sharding not justified"
-    );
+    println!("\nresult: gate wait share < 5% at N=16 -> sharding not justified");
 }
 
 fn machine_name() -> String {

@@ -497,11 +497,7 @@ fn test_version_chain_bounded() {
 
     let row_idx = prop_offset_to_index(offset).unwrap();
     let chain_len = table.chain_records[row_idx].len();
-    assert!(
-        chain_len <= 4,
-        "chain length {} exceeds cap 4",
-        chain_len
-    );
+    assert!(chain_len <= 4, "chain length {} exceeds cap 4", chain_len);
     // The current (newest) value is always exact.
     assert_eq!(
         table

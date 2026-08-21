@@ -467,6 +467,7 @@ impl StreamingExecutor {
                 RecursiveFragmentOperatorKind::AllPaths { .. } => "RecursiveAllPaths",
             },
             Sink(_, _, op) => match &op.kind {
+                SinkOperatorKind::CopyFrom { .. } => "CopyFrom",
                 SinkOperatorKind::InsertVertices { .. } => "InsertVertices",
                 SinkOperatorKind::InsertEdges { .. } => "InsertEdges",
                 SinkOperatorKind::UpdateVertices { .. } => "UpdateVertices",

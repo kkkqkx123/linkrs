@@ -614,7 +614,8 @@ impl PartitioningPlanner {
     fn has_write_operation(node: &PlanNodeEnum) -> bool {
         matches!(
             node,
-            PlanNodeEnum::InsertVertices(_)
+            PlanNodeEnum::CopyFrom(_)
+                | PlanNodeEnum::InsertVertices(_)
                 | PlanNodeEnum::InsertEdges(_)
                 | PlanNodeEnum::DeleteVertices(_)
                 | PlanNodeEnum::DeleteEdges(_)

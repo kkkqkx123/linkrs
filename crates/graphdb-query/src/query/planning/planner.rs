@@ -22,6 +22,7 @@ use crate::query::planning::statements::ddl::maintain_planner::MaintainPlanner;
 use crate::query::planning::statements::ddl::use_planner::UsePlanner;
 use crate::query::planning::statements::ddl::user_management_planner::UserManagementPlanner;
 use crate::query::planning::statements::dml::assignment_planner::AssignmentPlanner;
+use crate::query::planning::statements::dml::copy_planner::CopyPlanner;
 use crate::query::planning::statements::dml::create_planner::CreatePlanner;
 use crate::query::planning::statements::dml::delete_planner::DeletePlanner;
 use crate::query::planning::statements::dml::insert_planner::InsertPlanner;
@@ -166,6 +167,7 @@ pub enum PlannerEnum {
     CreateData(CreatePlanner),
     Assignment(AssignmentPlanner),
     Insert(InsertPlanner),
+    Copy(CopyPlanner),
     Delete(DeletePlanner),
     Update(UpdatePlanner),
     Remove(RemovePlanner),
@@ -207,6 +209,7 @@ impl PlannerEnum {
                 }
             },
             Stmt::Insert(_) => Some(PlannerEnum::Insert(InsertPlanner::new())),
+            Stmt::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
             Stmt::Delete(_) => Some(PlannerEnum::Delete(DeletePlanner::new())),
             Stmt::Update(_) => Some(PlannerEnum::Update(UpdatePlanner::new())),
             Stmt::Remove(_) => Some(PlannerEnum::Remove(RemovePlanner::new())),
@@ -308,6 +311,7 @@ impl PlannerEnum {
             PlannerEnum::CreateData(planner) => planner.transform(validated, qctx),
             PlannerEnum::Assignment(planner) => planner.transform(validated, qctx),
             PlannerEnum::Insert(planner) => planner.transform(validated, qctx),
+            PlannerEnum::Copy(planner) => planner.transform(validated, qctx),
             PlannerEnum::Delete(planner) => planner.transform(validated, qctx),
             PlannerEnum::Update(planner) => planner.transform(validated, qctx),
             PlannerEnum::Remove(planner) => planner.transform(validated, qctx),
@@ -372,6 +376,7 @@ impl PlannerEnum {
             PlannerEnum::CreateData(_) => "CreateDataPlanner",
             PlannerEnum::Assignment(_) => "AssignmentPlanner",
             PlannerEnum::Insert(_) => "InsertPlanner",
+            PlannerEnum::Copy(_) => "CopyPlanner",
             PlannerEnum::Delete(_) => "DeletePlanner",
             PlannerEnum::Update(_) => "UpdatePlanner",
             PlannerEnum::Remove(_) => "RemovePlanner",
@@ -410,6 +415,7 @@ impl PlannerEnum {
             PlannerEnum::CreateData(planner) => planner.match_planner(stmt),
             PlannerEnum::Assignment(planner) => planner.match_planner(stmt),
             PlannerEnum::Insert(planner) => planner.match_planner(stmt),
+            PlannerEnum::Copy(planner) => planner.match_planner(stmt),
             PlannerEnum::Delete(planner) => planner.match_planner(stmt),
             PlannerEnum::Update(planner) => planner.match_planner(stmt),
             PlannerEnum::Remove(planner) => planner.match_planner(stmt),
@@ -464,6 +470,7 @@ impl PlannerEnum {
                 planner.plan_bound(bound, qctx, metadata, validated)
             }
             PlannerEnum::Insert(planner) => planner.plan_bound(bound, qctx, metadata, validated),
+            PlannerEnum::Copy(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Delete(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Update(planner) => planner.plan_bound(bound, qctx, metadata, validated),
             PlannerEnum::Remove(planner) => planner.plan_bound(bound, qctx, metadata, validated),
@@ -537,6 +544,9 @@ impl PlannerEnum {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::Insert(planner) => {
+                planner.transform_with_metadata(validated, qctx, metadata_context)
+            }
+            PlannerEnum::Copy(planner) => {
                 planner.transform_with_metadata(validated, qctx, metadata_context)
             }
             PlannerEnum::Delete(planner) => {

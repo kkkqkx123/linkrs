@@ -21,6 +21,7 @@ uuid.workspace = true
 regex.workspace = true
 rand.workspace = true
 rayon.workspace = true
+csv.workspace = true
 dashmap.workspace = true
 bitvec.workspace = true
 futures.workspace = true

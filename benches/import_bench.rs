@@ -194,9 +194,7 @@ fn main() {
         );
     }
 
-    println!(
-        "\nresult: CPU-side share < 40% -> import parallelization not justified"
-    );
+    println!("\nresult: CPU-side share < 40% -> import parallelization not justified");
 }
 
 fn machine_name() -> String {

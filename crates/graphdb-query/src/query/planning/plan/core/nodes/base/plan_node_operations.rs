@@ -141,6 +141,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowConfigs(_) => "ShowConfigs",
             PlanNodeEnum::ShowQueries(_) => "ShowQueries",
             PlanNodeEnum::ShowSessions(_) => "ShowSessions",
+            PlanNodeEnum::CopyFrom(_) => "CopyFrom",
             PlanNodeEnum::InsertVertices(_) => "InsertVertices",
             PlanNodeEnum::InsertEdges(_) => "InsertEdges",
             PlanNodeEnum::Remove(_) => "Remove",
@@ -257,6 +258,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowConfigs(_)
             | PlanNodeEnum::ShowQueries(_)
             | PlanNodeEnum::ShowSessions(_)
+            | PlanNodeEnum::CopyFrom(_)
             | PlanNodeEnum::InsertVertices(_)
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)

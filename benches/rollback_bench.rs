@@ -188,9 +188,7 @@ fn main() {
             commit_us as f64 / write_us as f64,
         );
     }
-    println!(
-        "\nresult: abort < 2x equivalent write time -> rollback sharding not needed"
-    );
+    println!("\nresult: abort < 2x equivalent write time -> rollback sharding not needed");
 }
 
 fn machine_name() -> String {

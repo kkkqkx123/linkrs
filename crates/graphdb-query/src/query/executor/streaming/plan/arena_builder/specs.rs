@@ -350,6 +350,18 @@ pub(super) fn build_standalone_write_source(
                 .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
+        PlanNodeEnum::CopyFrom(_) => {
+            // COPY is driven by file scan, not in-memory values: emit a single dummy row
+            use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+            let expr_context =
+                crate::core::types::expr::expression_context::ExpressionAnalysisContext::new();
+            let ctx = std::sync::Arc::new(expr_context);
+            let id = ctx.register_expression(ExpressionMeta::new(Expression::Literal(
+                crate::core::Value::Null(crate::core::value::NullType::Null),
+            )));
+            let dummy = ContextualExpression::new(id, ctx);
+            (vec![vec![dummy]], vec!["copy_dummy".to_string()])
+        }
         _ => {
             return Err(PlanBuildError::unsupported(
                 node.name(),
@@ -1445,6 +1457,31 @@ pub(super) fn build_update_edges_spec(
             .first()
             .map(|update| update.is_upsert)
             .unwrap_or(false),
+    })
+}
+
+pub(super) fn build_copy_from_spec(
+    node: &crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyFromNode,
+    exec_ctx: &ExecutionContext,
+) -> Result<SinkSpec, PlanBuildError> {
+    let target = match node.target() {
+        crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(tag) => {
+            crate::query::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone())
+        }
+        crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(edge) => {
+            crate::query::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone())
+        }
+    };
+    Ok(SinkSpec::CopyFrom {
+        space_name: exec_ctx
+            .space_name
+            .clone()
+            .unwrap_or_else(|| node.space_name().to_string()),
+        target,
+        file_path: node.file_path().to_string(),
+        header: node.header(),
+        delimiter: node.delimiter() as u8,
+        batch_size: node.batch_size(),
     })
 }
 

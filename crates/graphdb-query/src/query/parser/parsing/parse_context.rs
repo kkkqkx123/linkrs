@@ -17,6 +17,7 @@ const STATEMENT_SYNC_TOKENS: &[TokenKind] = &[
     TokenKind::Go,
     TokenKind::Fetch,
     TokenKind::Insert,
+    TokenKind::Copy,
     TokenKind::Delete,
     TokenKind::Update,
     TokenKind::Upsert,

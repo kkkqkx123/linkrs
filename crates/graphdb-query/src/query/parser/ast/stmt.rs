@@ -149,6 +149,7 @@ pub enum Stmt {
     Savepoint(SavepointStmt),
     ReleaseSavepoint(ReleaseSavepointStmt),
     AssignVariable(AssignVariableStmt),
+    Copy(CopyStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -219,6 +220,7 @@ crate::define_stmt_helpers! {
     Savepoint => Transaction,
     ReleaseSavepoint => Transaction,
     AssignVariable => Dql,
+    Copy => Dml,
 }
 
 impl Stmt {
@@ -307,6 +309,7 @@ impl Stmt {
             Stmt::Savepoint(_) => "SAVEPOINT",
             Stmt::ReleaseSavepoint(_) => "RELEASE SAVEPOINT",
             Stmt::AssignVariable(_) => "LET",
+            Stmt::Copy(_) => "COPY",
         }
     }
 
@@ -945,8 +948,19 @@ mod tests {
                 }),
                 Transaction,
             ),
+            (
+                Stmt::Copy(CopyStmt {
+                    span,
+                    target: CopyTarget::Vertex("t".to_string()),
+                    file_path: "f.csv".to_string(),
+                    header: true,
+                    delimiter: ',',
+                    batch_size: None,
+                }),
+                Dml,
+            ),
         ];
-        assert_eq!(cases.len(), 67, "Stmt has 67 variants; update this test");
+        assert_eq!(cases.len(), 68, "Stmt has 68 variants; update this test");
         for (stmt, expected) in cases {
             assert_eq!(
                 stmt.category(),

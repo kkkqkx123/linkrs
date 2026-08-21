@@ -144,3 +144,19 @@ pub struct RemoveStmt {
     pub span: Span,
     pub items: Vec<ContextualExpression>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyStmt {
+    pub span: Span,
+    pub target: CopyTarget,
+    pub file_path: String,
+    pub header: bool,
+    pub delimiter: char,
+    pub batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CopyTarget {
+    Vertex(String),
+    Edge(String),
+}

@@ -195,10 +195,7 @@ impl TimeTravelEdgeStore {
 
         // Collect valid offsets from out segments
         for segment in &self.out_segments {
-            let has_dirty_region = segment
-                .regions
-                .iter()
-                .any(|r| r.deleted_count > 0);
+            let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts
@@ -227,10 +224,7 @@ impl TimeTravelEdgeStore {
 
         // Collect valid offsets from in segments
         for segment in &self.in_segments {
-            let has_dirty_region = segment
-                .regions
-                .iter()
-                .any(|r| r.deleted_count > 0);
+            let has_dirty_region = segment.regions.iter().any(|r| r.deleted_count > 0);
             if has_dirty_region || segment.regions.is_empty() {
                 for (_, nbr) in segment.csr.read().iter() {
                     if nbr.timestamp <= ts

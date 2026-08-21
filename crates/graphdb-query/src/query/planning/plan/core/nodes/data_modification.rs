@@ -3,6 +3,7 @@
 //! Provides unified plan nodes for INSERT, UPDATE, DELETE operations.
 //! This module consolidates the previously separate delete, insert, and update modules.
 
+pub mod copy_nodes;
 pub mod delete_nodes;
 pub mod info;
 pub mod insert_nodes;
@@ -14,6 +15,7 @@ pub use info::{
     UpdateTargetType, VertexDeleteInfo, VertexInsertInfo, VertexUpdateInfo,
 };
 
+pub use copy_nodes::{CopyFromNode, CopyTarget};
 pub use delete_nodes::{
     DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode, PipeDeleteEdgesNode,
     PipeDeleteVerticesNode,

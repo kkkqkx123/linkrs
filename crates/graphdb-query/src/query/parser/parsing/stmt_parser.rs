@@ -37,6 +37,7 @@ impl StmtParser {
 
             // Data modification statements
             TokenKind::Insert => DmlParser::new().parse_insert_statement(ctx),
+            TokenKind::Copy => DmlParser::new().parse_copy_statement(ctx),
             TokenKind::Delete => DmlParser::new().parse_delete_statement(ctx),
             TokenKind::Update => Self::parse_update_statement_extended(ctx),
             TokenKind::Upsert => DmlParser::new().parse_upsert_statement(ctx),

@@ -50,9 +50,9 @@ use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::
 };
 use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::query::planning::plan::core::nodes::data_modification::{
-    DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode, InsertEdgesNode,
-    InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateEdgesNode, UpdateNode,
-    UpdateVerticesNode,
+    CopyFromNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
+    UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
@@ -252,6 +252,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_pass_through => PassThroughNode, PassThrough,
         visit_start => StartNode, Start,
         visit_index_scan => IndexScanNode, IndexScan,
+        visit_copy_from => CopyFromNode, CopyFrom,
         visit_insert_vertices => InsertVerticesNode, InsertVertices,
         visit_insert_edges => InsertEdgesNode, InsertEdges,
         visit_update => UpdateNode, Update,

@@ -3,6 +3,9 @@
 **No-backward-compatible**
 At present, the project is in the development stage and there is no need to specifically consider backward compatibility. It is important to maintain a reasonable architecture.
 
+**Document Reference Rule**
+Prohibit the use of any document structure identifiers (e.g., P1, P2-3, §4.1, phase3, G2, etc.) in code comments. Comments shall describe code intent only and shall not reference external document locations.
+
 ## Language
 
 Always use English in code, comments, logging, error info. Use Chinese in docs
