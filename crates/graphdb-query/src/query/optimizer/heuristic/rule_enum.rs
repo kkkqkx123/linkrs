@@ -151,6 +151,7 @@ define_rewrite_rules! {
         PushEFilterDown(predicate_pushdown::PushEFilterDownRule),
         PushVFilterDownScanVertices(predicate_pushdown::PushVFilterDownScanVerticesRule),
         PushFilterDownScanVertices(predicate_pushdown::PushFilterDownScanVerticesRule),
+        PushFilterDownScanEdges(predicate_pushdown::PushFilterDownScanEdgesRule),
         EliminateRedundantTagFilter(predicate_pushdown::EliminateRedundantTagFilterRule),
         PushFilterDownInnerJoin(predicate_pushdown::PushFilterDownInnerJoinRule),
         PushFilterDownLeftJoin(predicate_pushdown::PushFilterDownLeftJoinRule),
@@ -318,6 +319,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushFilterDownScanVertices(
             predicate_pushdown::PushFilterDownScanVerticesRule::new(),
         ));
+        registry.add(RewriteRule::PushFilterDownScanEdges(
+            predicate_pushdown::PushFilterDownScanEdgesRule::new(),
+        ));
         registry.add(RewriteRule::PushFilterDownInnerJoin(
             predicate_pushdown::PushFilterDownInnerJoinRule::new(),
         ));
@@ -422,7 +426,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 54);
+        assert_eq!(registry.len(), 55);
     }
 
     #[test]

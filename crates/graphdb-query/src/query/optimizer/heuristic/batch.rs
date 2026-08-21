@@ -545,6 +545,7 @@ impl BatchOptimizer {
             | PushEFilterDown(_)
             | PushVFilterDownScanVertices(_)
             | PushFilterDownScanVertices(_)
+            | PushFilterDownScanEdges(_)
             | EliminateRedundantTagFilter(_)
             | PushFilterDownInnerJoin(_)
             | PushFilterDownLeftJoin(_)

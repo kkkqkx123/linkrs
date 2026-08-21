@@ -122,19 +122,30 @@ pub struct JoinOrderOptimizer {
     dp_threshold: usize,
 }
 
-/// Subproblem solution (used in dynamic programming)
+/// Subproblem solution (used in dynamic programming).
+///
+/// Mirrors Ladybug's `SubplansTable` (`subplans_table.h`) entry: one
+/// optimal partial plan per connected subset, keyed by the subset mask.
+/// The DP stores the cheapest way to join exactly the tables in `table_set`,
+/// together with the partition that achieved it (`left_set` / `right_set`)
+/// so bushy trees can be reconstructed. Left-deep is a special case where
+/// `right_set` is a singleton.
 #[derive(Debug, Clone)]
 struct SubproblemSolution {
     /// The set of included tables (bitmask)
     pub table_set: u32,
-    /// The last table that was connected
+    /// The last table that was connected (for left-deep reconstruction)
     pub last_table: String,
-    /// Total cost
+    /// Total cost of the optimal subplan for this set
     pub total_cost: f64,
-    /// Of course! Please provide the text you would like to have translated.
+    /// Estimated output rows of the subplan
     pub output_rows: u64,
-    /// Connected tree (represented as a string)
+    /// Tree representation for debugging
     pub join_tree: String,
+    /// Partition that achieved this optimum (`0` for singletons / left-deep fallback)
+    pub left_set: u32,
+    /// Right partition mask
+    pub right_set: u32,
 }
 
 /// Results of the optimization of the connection sequence
@@ -230,52 +241,134 @@ impl JoinOrderOptimizer {
                 total_cost: 0.0,
                 output_rows: table.estimated_rows,
                 join_tree: table.id.clone(),
+                left_set: 0,
+                right_set: 0,
             };
             dp.insert(solution.table_set, solution);
         }
 
-        // Dynamic Programming: Constructing subsets from smallest to largest
+        // Map bit -> table index for quick lookup of table id / rows.
+        let bit_to_table: std::collections::HashMap<u32, &TableInfo> =
+            tables.iter().map(|t| (1u32 << t.bit_id, t)).collect();
+
+        // Dynamic Programming: Constructing subsets from smallest to largest.
+        // This is the bushy-capable DP: for each subset S, enumerate all proper
+        // non-empty bipartitions S = L ∪ R (Ladybug `SubplansTable`). The
+        // traditional left-deep restriction (R is a singleton) is a subset of
+        // this enumeration, so the optimum is at least as good. Costs are
+        // computed from the best subplans for L and R plus the join between them.
         for subset_size in 2..=n {
             for subset in self.generate_subsets(n, subset_size) {
                 let mut best_solution: Option<SubproblemSolution> = None;
 
-                // Try to decompose the subset into two non-empty subsets.
-                for table in tables {
-                    let table_bit = 1 << table.bit_id;
-                    if subset & table_bit == 0 {
-                        continue;
+                // Enumerate all proper non-empty subsets of `subset` as left side.
+                // Enumerate via submask iteration: sub = (subset-1) & subset loop.
+                // To halve work, only consider sub < complement (avoids symmetric duplicates).
+                let mut sub = (subset - 1) & subset;
+                while sub > 0 {
+                    let other = subset ^ sub;
+                    if other != 0 {
+                        // Enforce an ordering to avoid duplicate partitions (commutative).
+                        // Only visit each unordered pair once.
+                        let try_partition = sub < other || subset_size == 2;
+                        // Also allow left-deep partitions where `other` is singleton (always worthwhile).
+                        let is_left_deep_singleton =
+                            other.count_ones() == 1 || sub.count_ones() == 1;
+                        if try_partition || is_left_deep_singleton {
+                            if let (Some(left_sol), Some(right_sol)) =
+                                (dp.get(&sub), dp.get(&other))
+                            {
+                                let selectivity = self.estimate_selectivity_for_sets(
+                                    sub,
+                                    other,
+                                    &bit_to_table,
+                                    &condition_map,
+                                );
+                                let join_cost = self.cost_calculator.calculate_hash_join_cost(
+                                    left_sol.output_rows,
+                                    right_sol.output_rows,
+                                );
+                                // Output rows: cross product filtered by join selectivity.
+                                // For pure cross products (no predicate), selectivity is 1.0.
+                                let output_rows = ((left_sol.output_rows as f64
+                                    * right_sol.output_rows as f64
+                                    * selectivity)
+                                    as u64)
+                                    .max(1);
+                                let total_cost =
+                                    left_sol.total_cost + right_sol.total_cost + join_cost;
+
+                                // Choose the rightmost table's id as `last_table` for
+                                // compatibility with `reconstruct_order`'s walk (prefer larger side's last).
+                                let last_table = if sub.count_ones() >= other.count_ones() {
+                                    left_sol.last_table.clone()
+                                } else {
+                                    right_sol.last_table.clone()
+                                };
+                                let solution = SubproblemSolution {
+                                    table_set: subset,
+                                    last_table,
+                                    total_cost,
+                                    output_rows,
+                                    join_tree: format!(
+                                        "Join({}, {})",
+                                        left_sol.join_tree, right_sol.join_tree
+                                    ),
+                                    left_set: sub,
+                                    right_set: other,
+                                };
+                                if best_solution
+                                    .as_ref()
+                                    .is_none_or(|best| solution.total_cost < best.total_cost)
+                                {
+                                    best_solution = Some(solution);
+                                }
+                            }
+                        }
                     }
+                    sub = (sub - 1) & subset;
+                }
 
-                    let remaining = subset ^ table_bit;
-                    if remaining == 0 {
-                        continue;
-                    }
-
-                    // Find the optimal solution for the remaining part.
-                    if let Some(left_solution) = dp.get(&remaining) {
-                        // Calculating the connection cost
-                        let (join_cost, output_rows) = self.calculate_join_cost(
-                            left_solution.output_rows,
-                            table.estimated_rows,
-                            &table.id,
-                            &condition_map,
-                        );
-
-                        let total_cost = left_solution.total_cost + join_cost;
-
-                        let solution = SubproblemSolution {
-                            table_set: subset,
-                            last_table: table.id.clone(),
-                            total_cost,
-                            output_rows,
-                            join_tree: format!("Join({}, {})", left_solution.join_tree, table.id),
-                        };
-
-                        if best_solution
-                            .as_ref()
-                            .is_none_or(|best| solution.total_cost < best.total_cost)
-                        {
-                            best_solution = Some(solution);
+                // Fallback: also try the legacy left-deep single-table addition so
+                // singletons that were missed due to ordering are still considered.
+                // This path is only taken when the bipartition enumeration left
+                // `best_solution` empty (e.g. disconnected graph).
+                if best_solution.is_none() {
+                    for table in tables {
+                        let table_bit = 1 << table.bit_id;
+                        if subset & table_bit == 0 {
+                            continue;
+                        }
+                        let remaining = subset ^ table_bit;
+                        if remaining == 0 {
+                            continue;
+                        }
+                        if let Some(left_solution) = dp.get(&remaining) {
+                            let (join_cost, output_rows) = self.calculate_join_cost(
+                                left_solution.output_rows,
+                                table.estimated_rows,
+                                &table.id,
+                                &condition_map,
+                            );
+                            let total_cost = left_solution.total_cost + join_cost;
+                            let solution = SubproblemSolution {
+                                table_set: subset,
+                                last_table: table.id.clone(),
+                                total_cost,
+                                output_rows,
+                                join_tree: format!(
+                                    "Join({}, {})",
+                                    left_solution.join_tree, table.id
+                                ),
+                                left_set: remaining,
+                                right_set: table_bit,
+                            };
+                            if best_solution
+                                .as_ref()
+                                .is_none_or(|best| solution.total_cost < best.total_cost)
+                            {
+                                best_solution = Some(solution);
+                            }
                         }
                     }
                 }
@@ -301,10 +394,12 @@ impl JoinOrderOptimizer {
                 total_cost: f64::MAX,
                 output_rows: 0,
                 join_tree: "fallback".to_string(),
+                left_set: 0,
+                right_set: 0,
             });
 
-        // Reorganize the order of the connections.
-        let order = self.reconstruct_order(&best_solution, &dp, tables);
+        // Reorganize the order of the connections (bushy-aware reconstruction).
+        let order = self.reconstruct_order_bushy(&best_solution, &dp, tables);
         let algorithms = self.select_algorithms(&order, conditions, tables);
 
         JoinOrderResult {
@@ -443,7 +538,69 @@ impl JoinOrderOptimizer {
         }
     }
 
-    /// Calculating the connection cost
+    /// Estimate join selectivity between two table sets.
+    ///
+    /// Looks for the most selective predicate that connects the two sets
+    /// (Ladybug `SubplansTable` style). When multiple predicates cross the
+    /// cut, their selectivities are multiplied (correlation-agnostic). When no
+    /// predicate connects the sets, it is a cross product (`selectivity = 1.0`
+    /// — no row reduction, maximal cost).
+    fn estimate_selectivity_for_sets(
+        &self,
+        left_set: u32,
+        right_set: u32,
+        bit_to_table: &HashMap<u32, &TableInfo>,
+        condition_map: &HashMap<(String, String), f64>,
+    ) -> f64 {
+        // Map bit -> table id for quick lookup.
+        let table_id_for_bit =
+            |bit: u32| -> Option<String> { bit_to_table.get(&bit).map(|t| t.id.clone()) };
+        let left_ids: Vec<String> = {
+            let mut ids = Vec::new();
+            let mut mask = left_set;
+            while mask != 0 {
+                let bit = mask & mask.wrapping_neg();
+                if let Some(id) = table_id_for_bit(bit) {
+                    ids.push(id);
+                }
+                mask ^= bit;
+            }
+            ids
+        };
+        let right_ids: Vec<String> = {
+            let mut ids = Vec::new();
+            let mut mask = right_set;
+            while mask != 0 {
+                let bit = mask & mask.wrapping_neg();
+                if let Some(id) = table_id_for_bit(bit) {
+                    ids.push(id);
+                }
+                mask ^= bit;
+            }
+            ids
+        };
+        let mut crossing: Vec<f64> = Vec::new();
+        for l in &left_ids {
+            for r in &right_ids {
+                if let Some(sel) = condition_map.get(&(l.clone(), r.clone())) {
+                    crossing.push(*sel);
+                }
+            }
+        }
+        if crossing.is_empty() {
+            // No predicate between the two sets → cross product (no reduction).
+            1.0
+        } else {
+            // Product of crossing selectivities, clamped to avoid catastrophic under-estimation.
+            let mut prod = 1.0;
+            for s in crossing {
+                prod *= s;
+            }
+            prod.clamp(0.001, 1.0)
+        }
+    }
+
+    /// Calculating the connection cost for a single right table joining an existing left set
     fn calculate_join_cost(
         &self,
         left_rows: u64,
@@ -451,21 +608,25 @@ impl JoinOrderOptimizer {
         right_table: &str,
         condition_map: &HashMap<(String, String), f64>,
     ) -> (f64, u64) {
-        // Finding the connection for selectivity
+        // For the legacy left-deep path we find the condition that connects
+        // `right_table` to any table on the left (not just exact left == right).
         let selectivity = condition_map
             .iter()
-            .find(|((l, _), _)| l == right_table)
+            .filter(|((l, _), _)| l == right_table || l.as_str() == right_table)
             .map(|(_, s)| *s)
+            .next()
+            .or_else(|| {
+                condition_map
+                    .iter()
+                    .find(|((_, r), _)| r == right_table)
+                    .map(|(_, s)| *s)
+            })
             .unwrap_or(0.3);
 
-        // Count the number of output lines.
         let output_rows = ((left_rows as f64 * right_rows as f64 * selectivity) as u64).max(1);
-
-        // Calculate the connection cost (using a hash join).
         let cost = self
             .cost_calculator
             .calculate_hash_join_cost(left_rows, right_rows);
-
         (cost, output_rows)
     }
 
@@ -523,6 +684,8 @@ impl JoinOrderOptimizer {
     }
 
     /// Reorganize the order of the connections.
+    ///
+    /// Legacy left-deep reconstruction (kept for the greedy fallback path).
     fn reconstruct_order(
         &self,
         solution: &SubproblemSolution,
@@ -531,13 +694,9 @@ impl JoinOrderOptimizer {
     ) -> Vec<String> {
         let mut order = Vec::new();
         let mut current_set = solution.table_set;
-
-        // Reconstruct from the back to the front
         while current_set != 0 {
             if let Some(sol) = dp.get(&current_set) {
                 order.push(sol.last_table.clone());
-
-                // Find the corresponding table and clear the bit.
                 if let Some(table) = tables.iter().find(|t| t.id == sol.last_table) {
                     current_set &= !(1 << table.bit_id);
                 } else {
@@ -547,9 +706,91 @@ impl JoinOrderOptimizer {
                 break;
             }
         }
-
         order.reverse();
         order
+    }
+
+    /// Bushy-aware reconstruction.
+    ///
+    /// When the DP stored a bipartition (`left_set`/`right_set`), expands the
+    /// optimal bushy tree recursively and emits leaves in left-to-right order.
+    /// For pure left-deep entries (`left_set == 0`) falls back to the linear
+    /// walk. This keeps the `JoinOrderResult::order` compatible with the
+    /// existing left-deep `reconstruct_join_tree` while the *cost* reflects the
+    /// bushy optimum.
+    fn reconstruct_order_bushy(
+        &self,
+        solution: &SubproblemSolution,
+        dp: &HashMap<u32, SubproblemSolution>,
+        tables: &[TableInfo],
+    ) -> Vec<String> {
+        let mut order = Vec::new();
+        self.collect_order_recursive(solution.table_set, dp, tables, &mut order);
+        // Deduplicate while preserving order (paranoia for overlapping partitions).
+        let mut seen = std::collections::HashSet::new();
+        order.retain(|id| seen.insert(id.clone()));
+        // If the recursive walk missed tables (e.g. disconnected graph fallback),
+        // append them in bit order.
+        if order.len() != tables.len() {
+            for t in tables {
+                if !order.contains(&t.id) {
+                    order.push(t.id.clone());
+                }
+            }
+        }
+        order
+    }
+
+    fn collect_order_recursive(
+        &self,
+        mask: u32,
+        dp: &HashMap<u32, SubproblemSolution>,
+        tables: &[TableInfo],
+        out: &mut Vec<String>,
+    ) {
+        let Some(sol) = dp.get(&mask) else {
+            // Single-table mask that was never inserted (should not happen for leaves).
+            for t in tables {
+                if (1u32 << t.bit_id) == mask {
+                    out.push(t.id.clone());
+                    return;
+                }
+            }
+            return;
+        };
+        if sol.table_set.count_ones() == 1 {
+            out.push(sol.last_table.clone());
+            return;
+        }
+        if sol.left_set != 0 && sol.right_set != 0 {
+            // Bushy: emit left subtree then right subtree (left has cheaper cost due to DP tie-break).
+            self.collect_order_recursive(sol.left_set, dp, tables, out);
+            self.collect_order_recursive(sol.right_set, dp, tables, out);
+        } else if sol.left_set != 0 {
+            self.collect_order_recursive(sol.left_set, dp, tables, out);
+            // The right side is a singleton not in DP (should be `last_table`).
+            if !out.contains(&sol.last_table) {
+                out.push(sol.last_table.clone());
+            }
+        } else {
+            // Legacy left-deep fallback: walk via last_table.
+            let mut current_set = mask;
+            let mut tmp = Vec::new();
+            while current_set != 0 {
+                if let Some(s) = dp.get(&current_set) {
+                    tmp.push(s.last_table.clone());
+                    if let Some(table) = tables.iter().find(|t| t.id == s.last_table) {
+                        current_set &= !(1 << table.bit_id);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            tmp.reverse();
+            out.extend(tmp);
+        }
     }
 
     /// Select an algorithm for the determination of the connection order.

@@ -56,6 +56,44 @@ impl<'a> StatsView<'a> {
             None => None,
         }
     }
+
+    /// Property statistics for `property` under `tag_name` (or global), if any.
+    pub fn property_stats(
+        &self,
+        tag_name: Option<&str>,
+        property: &str,
+    ) -> Option<crate::query::optimizer::stats::PropertyStatistics> {
+        match self.space {
+            Some(space) => self.manager.get_property_stats(space, tag_name, property),
+            None => None,
+        }
+    }
+
+    /// Distinct-value count (NDV) for a property column, if collected.
+    pub fn property_ndv(&self, tag_name: Option<&str>, property: &str) -> Option<u64> {
+        self.property_stats(tag_name, property)
+            .map(|s| s.distinct_values)
+            .filter(|&n| n > 0)
+    }
+
+    /// Combined cardinality for a set of grouping properties.
+    pub fn combined_cardinality(
+        &self,
+        tag_name: Option<&str>,
+        properties: &[String],
+    ) -> Option<u64> {
+        match self.space {
+            Some(space) => self
+                .manager
+                .get_combined_cardinality(space, tag_name, properties),
+            None => None,
+        }
+    }
+
+    /// Reference to the underlying statistics manager.
+    pub fn manager(&self) -> &StatisticsManager {
+        self.manager
+    }
 }
 
 #[cfg(test)]

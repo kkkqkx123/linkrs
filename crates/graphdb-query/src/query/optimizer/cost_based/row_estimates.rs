@@ -144,10 +144,27 @@ fn estimate_node_output_rows_impl(
                 .tag()
                 .map(|tag| stats.vertex_count(tag))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            let raw = n
+            let mut raw = n
                 .limit()
                 .map(|limit| tag_rows.min(limit as u64))
                 .unwrap_or(tag_rows);
+            // Phase 5: if the scan carries a pushed column filter (predicate pushdown + columnar
+            // zone-map pre-filter), reduce the scan cardinality by the filter's selectivity.
+            // This lets CBO see the IO reduction from zone pruning / columnar evaluation.
+            if let Some(pred) = n.filter() {
+                if let Some(meta) = pred.expression() {
+                    let tag_for_selectivity = n.tag().map(|s| s.as_str());
+                    let sel = selectivity.estimate_from_expression(
+                        stats.space(),
+                        meta.inner(),
+                        tag_for_selectivity,
+                    );
+                    // Zone-map pruning factor is folded into the selectivity (column stats NDV).
+                    // We do not double-apply a separate zone factor here; the NDV-derived
+                    // selectivity already reflects chunk-level pruning.
+                    raw = (raw as f64 * sel).max(1.0) as u64;
+                }
+            }
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         ScanEdges(n) => {
@@ -155,10 +172,22 @@ fn estimate_node_output_rows_impl(
                 .edge_type()
                 .map(|edge_type| stats.edge_count(&edge_type))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            let raw = n
+            let mut raw = n
                 .limit()
                 .map(|limit| edge_rows.min(limit as u64))
                 .unwrap_or(edge_rows);
+            if let Some(pred) = n.filter() {
+                if let Some(meta) = pred.expression() {
+                    let edge_type_opt = n.edge_type();
+                    let edge_type_for_sel = edge_type_opt.as_deref();
+                    let sel = selectivity.estimate_from_expression(
+                        stats.space(),
+                        meta.inner(),
+                        edge_type_for_sel,
+                    );
+                    raw = (raw as f64 * sel).max(1.0) as u64;
+                }
+            }
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         GetVertices(n) => corrected_rows(
@@ -236,7 +265,22 @@ fn estimate_node_output_rows_impl(
             let raw = if n.group_keys().is_empty() {
                 1
             } else {
-                (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                // Phase 5: columnar NDV-aware group cardinality.
+                // Prefer joint NDV from `PropertyCombinationStats` (exact GROUP BY
+                // cardinality when sampled), else product of per-column NDVs.
+                // Fall back to the fixed selectivity heuristic only when no
+                // statistics are available. Capped by input rows.
+                let tag_for_ndv = first_tag_of_input(n.input());
+                let ndv = factor_cost::ndv_for_group_keys(
+                    stats,
+                    tag_for_ndv.as_deref(),
+                    &n.group_keys().iter().cloned().collect::<Vec<_>>(),
+                );
+                if let Some(distinct) = ndv {
+                    distinct.min(input_rows).max(1)
+                } else {
+                    (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                }
             };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
@@ -489,7 +533,14 @@ pub fn estimate_node_output_rows_logical(
             if n.group_keys.is_empty() {
                 1
             } else {
-                (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                let tag_for_ndv = first_tag_of_logical_input(n.input());
+                let ndv =
+                    factor_cost::ndv_for_group_keys(stats, tag_for_ndv.as_deref(), &n.group_keys);
+                if let Some(distinct) = ndv {
+                    distinct.min(input_rows).max(1)
+                } else {
+                    (input_rows as f64 * AGGREGATE_SELECTIVITY).max(1.0) as u64
+                }
             }
         }
 
