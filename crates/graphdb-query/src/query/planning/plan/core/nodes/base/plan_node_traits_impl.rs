@@ -86,9 +86,6 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => "fulltext_search",
             PlanNodeEnum::FulltextLookup(_) => "fulltext_lookup",
             PlanNodeEnum::MatchFulltext(_) => "match_fulltext",
-            PlanNodeEnum::SemiMasker(_) => "semi_masker",
-            PlanNodeEnum::MultiplicityReducer(_) => "multiplicity_reducer",
-            PlanNodeEnum::NodeLabelFilter(_) => "node_label_filter",
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => "vector_search",
             #[cfg(feature = "vector")]
@@ -179,9 +176,6 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => "Fulltext Search",
             PlanNodeEnum::FulltextLookup(_) => "Fulltext Lookup",
             PlanNodeEnum::MatchFulltext(_) => "Match Fulltext",
-            PlanNodeEnum::SemiMasker(_) => "Semi Masker",
-            PlanNodeEnum::MultiplicityReducer(_) => "Multiplicity Reducer",
-            PlanNodeEnum::NodeLabelFilter(_) => "Node Label Filter",
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => "Vector Search",
             #[cfg(feature = "vector")]
@@ -272,9 +266,6 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => NodeCategory::DataAccess,
             PlanNodeEnum::FulltextLookup(_) => NodeCategory::DataAccess,
             PlanNodeEnum::MatchFulltext(_) => NodeCategory::DataAccess,
-            PlanNodeEnum::SemiMasker(_) => NodeCategory::Filter,
-            PlanNodeEnum::MultiplicityReducer(_) => NodeCategory::Aggregate,
-            PlanNodeEnum::NodeLabelFilter(_) => NodeCategory::Filter,
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => NodeCategory::DataAccess,
             #[cfg(feature = "vector")]
@@ -367,9 +358,6 @@ impl NodeTypeMapping for PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(_) => Some("fulltext_search"),
             PlanNodeEnum::FulltextLookup(_) => Some("fulltext_lookup"),
             PlanNodeEnum::MatchFulltext(_) => Some("match_fulltext"),
-            PlanNodeEnum::SemiMasker(_) => Some("semi_masker"),
-            PlanNodeEnum::MultiplicityReducer(_) => Some("multiplicity_reducer"),
-            PlanNodeEnum::NodeLabelFilter(_) => Some("node_label_filter"),
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_) => Some("vector_search"),
             #[cfg(feature = "vector")]

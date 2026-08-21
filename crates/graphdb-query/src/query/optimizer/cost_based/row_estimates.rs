@@ -139,32 +139,20 @@ fn estimate_node_output_rows_impl(
 
     match node {
         // ── Leaf scans ──
+        // Scan-level filters are NOT discounted here: the `Filter` node that
+        // carries the same predicate sits directly above the scan and applies
+        // its selectivity exactly once. Discounting at both levels would
+        // square the selectivity. When storage-side chunk pruning (zone maps)
+        // lands, introduce an explicit IO-reduction factor here instead.
         ScanVertices(n) => {
             let tag_rows = n
                 .tag()
                 .map(|tag| stats.vertex_count(tag))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            let mut raw = n
+            let raw = n
                 .limit()
                 .map(|limit| tag_rows.min(limit as u64))
                 .unwrap_or(tag_rows);
-            // Phase 5: if the scan carries a pushed column filter (predicate pushdown + columnar
-            // zone-map pre-filter), reduce the scan cardinality by the filter's selectivity.
-            // This lets CBO see the IO reduction from zone pruning / columnar evaluation.
-            if let Some(pred) = n.filter() {
-                if let Some(meta) = pred.expression() {
-                    let tag_for_selectivity = n.tag().map(|s| s.as_str());
-                    let sel = selectivity.estimate_from_expression(
-                        stats.space(),
-                        meta.inner(),
-                        tag_for_selectivity,
-                    );
-                    // Zone-map pruning factor is folded into the selectivity (column stats NDV).
-                    // We do not double-apply a separate zone factor here; the NDV-derived
-                    // selectivity already reflects chunk-level pruning.
-                    raw = (raw as f64 * sel).max(1.0) as u64;
-                }
-            }
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         ScanEdges(n) => {
@@ -172,22 +160,10 @@ fn estimate_node_output_rows_impl(
                 .edge_type()
                 .map(|edge_type| stats.edge_count(&edge_type))
                 .unwrap_or(UNKNOWN_SCAN_ROWS);
-            let mut raw = n
+            let raw = n
                 .limit()
                 .map(|limit| edge_rows.min(limit as u64))
                 .unwrap_or(edge_rows);
-            if let Some(pred) = n.filter() {
-                if let Some(meta) = pred.expression() {
-                    let edge_type_opt = n.edge_type();
-                    let edge_type_for_sel = edge_type_opt.as_deref();
-                    let sel = selectivity.estimate_from_expression(
-                        stats.space(),
-                        meta.inner(),
-                        edge_type_for_sel,
-                    );
-                    raw = (raw as f64 * sel).max(1.0) as u64;
-                }
-            }
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         GetVertices(n) => corrected_rows(
@@ -265,16 +241,16 @@ fn estimate_node_output_rows_impl(
             let raw = if n.group_keys().is_empty() {
                 1
             } else {
-                // Phase 5: columnar NDV-aware group cardinality.
-                // Prefer joint NDV from `PropertyCombinationStats` (exact GROUP BY
-                // cardinality when sampled), else product of per-column NDVs.
-                // Fall back to the fixed selectivity heuristic only when no
-                // statistics are available. Capped by input rows.
+                // Columnar NDV-aware group cardinality: prefer joint NDV from
+                // `PropertyCombinationStats` (exact GROUP BY cardinality when
+                // sampled), else the product of per-column NDVs. Fall back to
+                // the fixed selectivity heuristic only when no statistics are
+                // available. Capped by input rows.
                 let tag_for_ndv = first_tag_of_input(n.input());
                 let ndv = factor_cost::ndv_for_group_keys(
                     stats,
                     tag_for_ndv.as_deref(),
-                    &n.group_keys().iter().cloned().collect::<Vec<_>>(),
+                    n.group_keys(),
                 );
                 if let Some(distinct) = ndv {
                     distinct.min(input_rows).max(1)
@@ -343,61 +319,12 @@ fn estimate_node_output_rows_impl(
         // ── Traversal / apply operators ──
         Expand(_) | ExpandAll(_) | Traverse(_) | BiExpand(_) | BiTraverse(_)
         | AppendVertices(_) => {
-            let flat = child_rows_of_impl(node, stats, selectivity, cardinality)
+            // Flat estimate: input rows times the average neighborhood fanout.
+            // No factorized discount is applied here — factorized execution is
+            // not wired into the executor, so claiming compressed row counts
+            // would misprice plans against the representation actually run.
+            let raw = child_rows_of_impl(node, stats, selectivity, cardinality)
                 .saturating_mul(DEFAULT_NEIGHBORHOOD_FANOUT);
-            // Phase 4: factorized estimate. When the expand operates on a
-            // high-degree vertex, distinct groups << flat rows, so factorized
-            // row count is much smaller. We keep the minimum of flat and
-            // factorized (optimizer chooses the cheaper representation).
-            let ndv = match node {
-                Expand(n) => n
-                    .edge_types()
-                    .first()
-                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
-                ExpandAll(n) => n
-                    .edge_types()
-                    .first()
-                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
-                Traverse(n) => n
-                    .edge_types()
-                    .first()
-                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
-                BiExpand(n) => n
-                    .edge_types()
-                    .first()
-                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
-                BiTraverse(n) => n
-                    .edge_types()
-                    .first()
-                    .and_then(|et| factor_cost::ndv_from_stats(stats, None, et)),
-                AppendVertices(n) => {
-                    factor_cost::ndv_from_stats(stats, Some(n.vertex_tag()), n.vertex_tag())
-                }
-                _ => None,
-            };
-            let avg_degree = match node {
-                Expand(n) => n
-                    .edge_types()
-                    .iter()
-                    .find_map(|et| stats.edge_stats(et).map(|s| s.avg_out_degree))
-                    .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT as f64),
-                ExpandAll(n) => n
-                    .edge_types()
-                    .iter()
-                    .find_map(|et| stats.edge_stats(et).map(|s| s.avg_out_degree))
-                    .unwrap_or(DEFAULT_NEIGHBORHOOD_FANOUT as f64),
-                _ => DEFAULT_NEIGHBORHOOD_FANOUT as f64,
-            };
-            let estimate = factor_cost::estimate_factorization(flat, ndv, avg_degree, 2.0);
-            let factorized = estimate.factorized_rows;
-            // Use factorized when beneficial; otherwise flat remains the estimate.
-            let raw = if factorized < flat && factorized > 0 {
-                // factorized rows already include degree inflation, so we use
-                // the factorized count directly when it wins.
-                factorized
-            } else {
-                flat
-            };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         PatternApply(_) | Apply(_) | RollUpApply(_) => {

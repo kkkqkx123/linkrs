@@ -95,6 +95,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             partition_range,
             col_names,
             projected_properties,
+            predicate,
             cursor,
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
@@ -114,6 +115,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                                 .map(|n| RequiredProperty::new(n.clone()))
                                 .collect()
                         }),
+                        predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                         ..ScanOptions::default()
                     },
                 )

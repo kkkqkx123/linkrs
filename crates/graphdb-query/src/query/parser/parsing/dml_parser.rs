@@ -1061,29 +1061,39 @@ impl DmlParser {
         let mut header = true;
         let mut delimiter = ',';
         let mut batch_size: Option<usize> = None;
-        let mut header_explicit = false;
 
-        // Helper to parse a single option
+        // Consume the option name token (dedicated keyword or bare identifier).
+        fn consume_option_name(ctx: &mut ParseContext, kind: TokenKind, name: &str) {
+            if !ctx.match_token(kind) {
+                let _ = ctx.consume_keyword(name);
+            }
+        }
+
+        // Consume an optional `=` / `EQ` between an option name and its value.
+        fn consume_optional_assign(ctx: &mut ParseContext) {
+            if !ctx.match_token(TokenKind::Assign) {
+                let _ = ctx.match_token(TokenKind::Eq);
+            }
+        }
+
         let parse_delimiter_value = |ctx: &mut ParseContext| -> Result<char, ParseError> {
-            // Allow '=' or 'EQ' style: consume optional '='
-            let _ = ctx.match_token(TokenKind::Assign);
-            let _ = ctx.match_token(TokenKind::Eq);
-            // Delimiter is typically a string literal like "," or ','
-            if let TokenKind::StringLiteral(s) = ctx.current_token().kind.clone() {
-                ctx.next_token();
-                Ok(s.chars().next().unwrap_or(','))
-            } else if let TokenKind::Identifier(s) = ctx.current_token().kind.clone() {
-                ctx.next_token();
-                Ok(s.chars().next().unwrap_or(','))
-            } else {
-                Err(ParseError::new(
+            consume_optional_assign(ctx);
+            match ctx.current_token().kind.clone() {
+                TokenKind::StringLiteral(s) | TokenKind::Identifier(s) => {
+                    ctx.next_token();
+                    s.chars().next().ok_or_else(|| {
+                        ParseError::new(
+                            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                            "DELIMITER must be a single character".to_string(),
+                            ctx.current_position(),
+                        )
+                    })
+                }
+                other => Err(ParseError::new(
                     crate::query::parser::core::error::ParseErrorKind::UnexpectedToken,
-                    format!(
-                        "Expected delimiter string, found {:?}",
-                        ctx.current_token().kind
-                    ),
+                    format!("Expected delimiter string, found {other:?}"),
                     ctx.current_position(),
-                ))
+                )),
             }
         };
 
@@ -1105,52 +1115,30 @@ impl DmlParser {
             }
         };
 
-        // Consume optional WITH and parenthesized option list
-        // Support both `WITH HEADER` and `WITH (HEADER true, DELIMITER ',')`
+        // Option list: `WITH (OPT v, OPT v)` / `WITH OPT OPT ...` / `(OPT, ...)`.
         let mut in_parens = false;
-        if ctx.match_token(TokenKind::With) {
-            if ctx.match_token(TokenKind::LParen) {
-                in_parens = true;
-            }
-        } else if ctx.match_token(TokenKind::LParen) {
+        if (ctx.match_token(TokenKind::With) || !ctx.check_token(TokenKind::With))
+            && ctx.match_token(TokenKind::LParen)
+        {
             in_parens = true;
         }
 
         loop {
-            // Skip commas
             if ctx.match_token(TokenKind::Comma) {
                 continue;
             }
-            // End of parens
             if in_parens && ctx.match_token(TokenKind::RParen) {
                 break;
             }
-            // Peek option keyword
+
             if ctx.check_token(TokenKind::Header) || ctx.check_keyword("HEADER") {
-                // Consume HEADER
-                if ctx.match_token(TokenKind::Header) {
-                    // consumed
-                } else {
-                    let _ = ctx.consume_keyword("HEADER");
-                }
-                if let Some(b) = parse_bool_value(ctx) {
-                    header = b;
-                    header_explicit = true;
-                } else {
-                    header = true;
-                    header_explicit = true;
-                }
+                consume_option_name(ctx, TokenKind::Header, "HEADER");
+                header = parse_bool_value(ctx).unwrap_or(true);
                 continue;
             }
             if ctx.check_token(TokenKind::Delimiter) || ctx.check_keyword("DELIMITER") {
-                if ctx.match_token(TokenKind::Delimiter) {
-                } else {
-                    let _ = ctx.consume_keyword("DELIMITER");
-                }
-                match parse_delimiter_value(ctx) {
-                    Ok(d) => delimiter = d,
-                    Err(e) => return Err(e),
-                }
+                consume_option_name(ctx, TokenKind::Delimiter, "DELIMITER");
+                delimiter = parse_delimiter_value(ctx)?;
                 continue;
             }
             if ctx.check_keyword("BATCH_SIZE") || ctx.check_keyword("BATCH") {
@@ -1158,14 +1146,9 @@ impl DmlParser {
                     let _ = ctx.consume_keyword("BATCH_SIZE");
                 } else {
                     let _ = ctx.consume_keyword("BATCH");
-                    // Allow `BATCH_SIZE` as two tokens? already handled
-                    if ctx.check_keyword("SIZE") {
-                        let _ = ctx.consume_keyword("SIZE");
-                    }
+                    let _ = ctx.consume_keyword("SIZE");
                 }
-                let _ = ctx.match_token(TokenKind::Assign);
-                let _ = ctx.match_token(TokenKind::Eq);
-                // Parse integer
+                consume_optional_assign(ctx);
                 let batch = ctx.expect_integer_literal()?;
                 if batch < 0 {
                     return Err(ParseError::new(
@@ -1177,64 +1160,41 @@ impl DmlParser {
                 batch_size = Some(batch as usize);
                 continue;
             }
-            if ctx.check_keyword("CSV") || ctx.check_token(TokenKind::Csv) {
-                if ctx.match_token(TokenKind::Csv) {
-                } else {
-                    let _ = ctx.consume_keyword("CSV");
+            if ctx.check_token(TokenKind::Csv) || ctx.check_keyword("CSV") {
+                consume_option_name(ctx, TokenKind::Csv, "CSV");
+                continue;
+            }
+            // `NO HEADER` is the explicit spelling of `HEADER false`.
+            if ctx.check_token(TokenKind::No) || ctx.check_keyword("NO") {
+                ctx.next_token();
+                if ctx.check_token(TokenKind::Header) || ctx.check_keyword("HEADER") {
+                    consume_option_name(ctx, TokenKind::Header, "HEADER");
+                    header = false;
+                    continue;
+                }
+                break;
+            }
+
+            if in_parens {
+                if matches!(
+                    ctx.current_token().kind,
+                    TokenKind::Eof | TokenKind::Semicolon
+                ) {
+                    break;
+                }
+                // Unknown option inside parens: stop consuming rather than
+                // guessing; the statement-level parser reports the leftover.
+                break;
+            }
+            // A second `WITH` continues the option list (`WITH a WITH b`).
+            if ctx.match_token(TokenKind::With) {
+                if ctx.match_token(TokenKind::LParen) {
+                    in_parens = true;
                 }
                 continue;
             }
-            // Support `NO HEADER` -> header false
-            if ctx.check_token(TokenKind::No) || ctx.check_keyword("NO") {
-                let saved = ctx.current_token().clone();
-                ctx.next_token();
-                if ctx.check_token(TokenKind::Header) || ctx.check_keyword("HEADER") {
-                    if ctx.match_token(TokenKind::Header) {
-                    } else {
-                        let _ = ctx.consume_keyword("HEADER");
-                    }
-                    header = false;
-                    header_explicit = true;
-                    continue;
-                } else {
-                    // Not HEADER, put back by not consuming? Actually we already consumed NO, push error but allow continue
-                    // Treat as unknown, break
-                    let _ = saved;
-                    break;
-                }
-            }
-            // If we are inside parens and hit something else, maybe unknown option -> skip
-            if in_parens {
-                // If next is identifier that looks like option, consume one token and continue
-                if ctx.current_token().kind == TokenKind::Eof
-                    || ctx.current_token().kind == TokenKind::Semicolon
-                {
-                    break;
-                }
-                // Unknown token inside parens -> error?
-                // Instead of error, break to avoid infinite loop
-                // Check if it's a closing paren already handled, else break on unknown
-                break;
-            } else {
-                // Outside parens, options are optional; break when next token not an option
-                // Also allow WITH without parens: `WITH HEADER DELIMITER ','`
-                // So we need to check if next token could be option; if not, break
-                // If next token is WITH, DELIMITER, HEADER, etc, continue is handled above
-                // Otherwise check if next is WITH again
-                if ctx.check_token(TokenKind::With) {
-                    ctx.next_token();
-                    if ctx.match_token(TokenKind::LParen) {
-                        in_parens = true;
-                    }
-                    continue;
-                }
-                break;
-            }
+            break;
         }
-
-        // If header was not explicitly set but we consumed WITH HEADER logic, default true already
-        // Normalize: if header_explicit false and we saw no header option, header remains true
-        let _ = header_explicit;
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);

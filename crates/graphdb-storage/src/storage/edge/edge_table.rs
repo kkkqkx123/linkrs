@@ -262,10 +262,12 @@ impl EdgeStore {
     }
 
     /// OLAP scan with column pruning.
+    #[allow(dead_code)]
     pub fn scan_projected(&self, ts: Timestamp, projection: &[String]) -> Vec<super::EdgeRecord> {
         self.0.scan_projected(ts, projection)
     }
 
+    #[allow(dead_code)]
     pub fn out_edges_projected(
         &self,
         src: u32,
@@ -275,6 +277,7 @@ impl EdgeStore {
         self.0.out_edges_projected(src, ts, projection)
     }
 
+    #[allow(dead_code)]
     pub fn prune_by_zone_map(
         &self,
         column: &str,
@@ -287,6 +290,7 @@ impl EdgeStore {
             .prune_by_zone_map(column, lower, upper, include_lower, include_upper)
     }
 
+    #[allow(dead_code)]
     pub fn zone_map_for_column(
         &self,
         column: &str,
@@ -294,6 +298,7 @@ impl EdgeStore {
         self.0.zone_map_for_column(column)
     }
 
+    #[allow(dead_code)]
     pub fn column_stats(
         &self,
         col_idx: usize,
@@ -301,6 +306,7 @@ impl EdgeStore {
         self.0.column_stats(col_idx)
     }
 
+    #[allow(dead_code)]
     pub fn apply_column_encoding(
         &mut self,
         col_name: &str,

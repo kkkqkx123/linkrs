@@ -229,10 +229,10 @@ pub(crate) fn sort_columnar_batch(
             == SortDirection::Ascending
     {
         let col = key_cols[0].unwrap();
-        if batch.num_rows() > 2048 {
-            if try_radix_sort(batch, col) {
-                return;
-            }
+        if batch.num_rows() > 2048
+            && try_radix_sort(batch, col)
+        {
+            return;
         }
     }
     let needs_row_keys = key_cols.iter().any(Option::is_none);

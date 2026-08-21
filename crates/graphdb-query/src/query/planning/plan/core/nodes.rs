@@ -2,7 +2,6 @@ pub mod access;
 pub mod base;
 pub mod control_flow;
 pub mod data_modification;
-pub mod factorized;
 pub mod graph_operations;
 pub mod join;
 pub mod management;
@@ -28,7 +27,6 @@ pub use data_modification::{
     UpdateEdgesNode, UpdateNode, UpdateTargetType, UpdateVerticesNode, VertexDeleteInfo,
     VertexInsertInfo, VertexUpdateInfo,
 };
-pub use factorized::{MultiplicityReducerNode, NodeLabelFilterNode, SemiMaskerNode};
 pub use graph_operations::{
     AggregateNode, ApplyKind, ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode,
     DedupNode, IntersectNode, MaterializeNode, MinusNode, PatternApplyNode, RemoveNode,

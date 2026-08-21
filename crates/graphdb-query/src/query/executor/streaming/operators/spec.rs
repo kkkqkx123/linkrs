@@ -106,6 +106,9 @@ pub enum SourceSpec {
         edge_type: Option<String>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Scan predicates pushed into the storage layer (pure pre-filter;
+        /// the original filter still runs on top).
+        predicate: Vec<ScanPredicate>,
         /// Optional source-id range restricting the scan to one partition.
         partition_range: Option<std::ops::Range<i64>>,
     },
@@ -295,45 +298,6 @@ pub enum BlockingSpec {
         group_by_expressions: Vec<Expression>,
         aggregate_functions: Vec<(AggregateFunction, Vec<Expression>)>,
         output_col_names: Vec<String>,
-    },
-}
-
-// ── Factorized spec (Phase 4 OLAP) ───────────────────────────────────────────
-
-/// Immutable config for factorized execution operators.
-///
-/// Ladybug `SEMI_MASKER` / `MULTIPLICITY_REDUCER` / `NODE_LABEL_FILTER`
-/// are factorized-specific: they operate on compressed groups rather than
-/// flat rows.  linkrs keeps the physical representation as `DataChunk` +
-/// `ListVector` but exposes the factorized operators as blocking specs so
-/// the optimizer can reason about compression ratio vs. row count.
-#[derive(Debug, Clone)]
-pub enum FactorizedSpec {
-    /// Semi-join mask pushed into an upstream Expand.
-    ///
-    /// `key_slot` identifies the join key column in the input chunk.
-    /// `mask_keys` is the distinct build-side key set (hashed at runtime
-    /// into a `SemiMask`).  Rows whose key is not in the mask are pruned
-    /// without being expanded (factorized pruning).
-    SemiMasker {
-        key_slot: usize,
-        /// Distinct keys from the downstream build side (planner snapshot).
-        mask_keys: Vec<Value>,
-        /// Whether to keep rows that match the mask (`true`) or reject them
-        /// (`false` for anti-semi).
-        keep_match: bool,
-    },
-    /// Collapses duplicate factor groups and sums multiplicities.
-    ///
-    /// Equivalent to `Dedup` but operates on factor groups: rows sharing
-    /// `group_key_slots` are merged into a single group with summed
-    /// multiplicity.  Used after factorized Expand to avoid materializing
-    /// intermediate Cartesian products.
-    MultiplicityReducer { group_key_slots: Vec<usize> },
-    /// Label pruning without row materialization (factorized `NODE_LABEL_FILTER`).
-    NodeLabelFilter {
-        label_slot: usize,
-        allowed_labels: Vec<String>,
     },
 }
 

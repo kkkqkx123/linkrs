@@ -196,6 +196,7 @@ pub struct RegionMeta {
 }
 
 impl RegionMeta {
+    #[allow(dead_code)]
     pub fn deletion_ratio(&self) -> f64 {
         if self.edge_count == 0 {
             0.0
@@ -204,6 +205,7 @@ impl RegionMeta {
         }
     }
 
+    #[allow(dead_code)]
     pub fn density(&self) -> f64 {
         let width = (self.vertex_end - self.vertex_start) as f64;
         if width <= 0.0 {
@@ -213,12 +215,14 @@ impl RegionMeta {
         }
     }
 
+    #[allow(dead_code)]
     pub fn needs_rebuild(&self, high_deletion_ratio: f64, low_density_threshold: f64) -> bool {
         self.deletion_ratio() > high_deletion_ratio || self.density() < low_density_threshold
     }
 }
 
 /// Result of a region-aware merge, for observability.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RegionMergeStats {
     pub regions_rebuilt: usize,
@@ -492,7 +496,7 @@ impl CsrSegment {
             self.regions.clear();
             return;
         }
-        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let region_cnt = vc.div_ceil(region_vertex_count);
         let mut metas = Vec::with_capacity(region_cnt);
         for rid in 0..region_cnt {
             let start = (rid * region_vertex_count) as u32;
@@ -555,7 +559,7 @@ impl CsrSegment {
             self.regions.clear();
             return;
         }
-        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let region_cnt = vc.div_ceil(region_vertex_count);
         let mut metas = Vec::with_capacity(region_cnt);
         for rid in 0..region_cnt {
             let start = (rid * region_vertex_count) as u32;
@@ -596,6 +600,7 @@ impl CsrSegment {
         self.regions = metas;
     }
 
+    #[allow(dead_code)]
     pub fn region_deletion_ratio(&self, region_id: u32) -> f64 {
         self.regions
             .get(region_id as usize)
@@ -603,6 +608,7 @@ impl CsrSegment {
             .unwrap_or(0.0)
     }
 
+    #[allow(dead_code)]
     pub fn region_density(&self, region_id: u32) -> f64 {
         self.regions
             .get(region_id as usize)
@@ -610,6 +616,7 @@ impl CsrSegment {
             .unwrap_or(0.0)
     }
 
+    #[allow(dead_code)]
     pub fn needs_region_rebuild(
         &self,
         region_id: u32,
@@ -621,6 +628,7 @@ impl CsrSegment {
             .is_some_and(|r| r.needs_rebuild(high_deletion_ratio, low_density_threshold))
     }
 
+    #[allow(dead_code)]
     pub fn total_regions(&self) -> usize {
         self.regions.len()
     }

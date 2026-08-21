@@ -102,6 +102,7 @@ pub trait MutableCsrTrait: CsrBase {
         0
     }
 
+    #[allow(dead_code)]
     fn compact_regions_with_ts_reporting(
         &mut self,
         cutoff: Timestamp,

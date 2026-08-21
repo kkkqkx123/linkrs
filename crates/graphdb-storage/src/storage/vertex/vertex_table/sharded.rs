@@ -166,6 +166,55 @@ impl ShardedVertexTable {
         encode_id(shard, local_id, self.num_shards)
     }
 
+    /// Zone-map pruning mask over `ids` (global internal ids).
+    ///
+    /// `mask[i] == false` means the row's zone-map chunk provably cannot
+    /// contain values matching any of `ranges`, so the id can be skipped
+    /// before decoding. Unknown columns, chunks without bounds, and
+    /// non-scalar types keep the id (conservative).
+    pub fn zone_prune_mask(
+        &self,
+        ids: &[u32],
+        ranges: &[crate::storage::cursor::PredicateRange],
+    ) -> Vec<bool> {
+        let mut mask = vec![true; ids.len()];
+        if ranges.is_empty() {
+            return mask;
+        }
+        // Group positions by shard so each shard is locked once per batch.
+        let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.num_shards];
+        for (pos, &id) in ids.iter().enumerate() {
+            let (shard, _) = decode_id(id, self.num_shards);
+            by_shard[shard].push(pos);
+        }
+        for (shard_idx, positions) in by_shard.iter().enumerate() {
+            if positions.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            for &pos in positions {
+                let (_, local_id) = decode_id(ids[pos], self.num_shards);
+                let chunk = local_id as usize / crate::storage::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
+                for range in ranges {
+                    let Some(bounds) = table.columns.zone_maps_for_column(&range.column) else {
+                        continue;
+                    };
+                    let Some(zb) = bounds.get(chunk) else {
+                        continue;
+                    };
+                    let (Some(min), Some(max)) = (&zb.min, &zb.max) else {
+                        continue;
+                    };
+                    if !range.overlaps(min, max) {
+                        mask[pos] = false;
+                        break;
+                    }
+                }
+            }
+        }
+        mask
+    }
+
     // ==================== Write Operations ====================
 
     pub fn insert(

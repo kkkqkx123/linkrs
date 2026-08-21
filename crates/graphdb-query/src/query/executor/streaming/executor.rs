@@ -24,7 +24,6 @@ use super::operators::blocking::BlockingOperatorKind;
 use super::operators::ddl_operator::DdlOperator;
 use super::operators::ddl_operator::DdlOperatorKind;
 use super::operators::exchange_operator::ExchangeOperator;
-use super::operators::factorized_operator::FactorizedOperator;
 use super::operators::fulltext_operator::FulltextOperator;
 use super::operators::fulltext_operator::FulltextOperatorKind;
 use super::operators::gather_operator::GatherOperator;
@@ -121,7 +120,6 @@ pub enum StreamingExecutor {
         Vec<StreamingExecutor>,
         HashShuffleJoinOperator,
     ),
-    Factorized(OperatorBase, Box<StreamingExecutor>, FactorizedOperator),
 }
 
 /// Dispatch `open` (all operators open their children themselves).
@@ -144,7 +142,6 @@ macro_rules! dispatch_open {
             Self::Gather(_, children, op) => op.open(children),
             Self::Exchange(_, children, op) => op.open(children),
             Self::HashShuffleJoin(_, left, right, op) => op.open(left, right),
-            Self::Factorized(_, input, op) => op.open(input),
         }
     };
 }
@@ -169,7 +166,6 @@ macro_rules! dispatch_next {
             Self::Gather(_, children, op) => op.next(children),
             Self::Exchange(_, children, op) => op.next(children),
             Self::HashShuffleJoin(_, left, right, op) => op.next(left, right),
-            Self::Factorized(_, input, op) => op.next(input),
         }
     };
 }
@@ -214,7 +210,6 @@ macro_rules! dispatch_stop {
             Self::Gather(_, _, op) => op.stop(),
             Self::Exchange(_, _, op) => op.stop(),
             Self::HashShuffleJoin(_, _, _, op) => op.stop(),
-            Self::Factorized(_, _, op) => op.stop(),
         }
     };
 }
@@ -239,7 +234,6 @@ macro_rules! dispatch_close {
             Self::Gather(_, _, op) => op.close(),
             Self::Exchange(_, _, op) => op.close(),
             Self::HashShuffleJoin(_, _, _, op) => op.close(),
-            Self::Factorized(_, _, op) => op.close(),
         }
     };
 }
@@ -272,7 +266,6 @@ impl StreamingExecutor {
             Self::Gather(_, _, op) => op.inject_context(runtime_ref, config),
             Self::Exchange(_, _, op) => op.inject_context(runtime_ref, config),
             Self::HashShuffleJoin(_, _, _, op) => op.inject_context(runtime_ref, config),
-            Self::Factorized(_, _, op) => op.inject_context(runtime_ref, config),
         }
         for child in self.children_mut() {
             child.inject_context(runtime.clone(), config);
@@ -551,15 +544,6 @@ impl StreamingExecutor {
                     "HashShuffleJoin(Left)"
                 }
             },
-            Factorized(_, _, op) => match &op.kind {
-                super::operators::factorized_operator::FactorizedOperatorKind::SemiMasker { .. } => "SemiMasker",
-                super::operators::factorized_operator::FactorizedOperatorKind::MultiplicityReducer { .. } => {
-                    "MultiplicityReducer"
-                }
-                super::operators::factorized_operator::FactorizedOperatorKind::NodeLabelFilter { .. } => {
-                    "NodeLabelFilter"
-                }
-            },
         }
     }
 
@@ -609,7 +593,6 @@ impl StreamingExecutor {
             Self::Unary(_, child, _)
             | Self::Blocking(_, child, _)
             | Self::Graph(_, child, _)
-            | Self::Factorized(_, child, _)
             | Self::RecursiveFragment(_, child, _)
             | Self::Sink(_, child, _)
             | Self::Ddl(_, child, _)
@@ -695,7 +678,6 @@ impl StreamingExecutor {
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
-            Self::Factorized(base, _, _) => base,
         }
     }
 
@@ -714,7 +696,6 @@ impl StreamingExecutor {
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
-            Self::Factorized(base, _, _) => base,
         }
     }
 
@@ -727,8 +708,7 @@ impl StreamingExecutor {
             | Self::Graph(_, input, _)
             | Self::RecursiveFragment(_, input, _)
             | Self::Sink(_, input, _)
-            | Self::Txn(_, input, _)
-            | Self::Factorized(_, input, _) => vec![input.as_mut()],
+            | Self::Txn(_, input, _) => vec![input.as_mut()],
             Self::Join(_, left, right, _)
             | Self::Set(_, left, right, _)
             | Self::Apply(_, left, right, _) => vec![left.as_mut(), right.as_mut()],
@@ -759,8 +739,7 @@ impl StreamingExecutor {
             | Self::Fulltext(..)
             | Self::Vector(..)
             | Self::Gather(..)
-            | Self::Exchange(..)
-            | Self::Factorized(..) => None,
+            | Self::Exchange(..) => None,
             Self::Blocking(_, _, op) => Some(op.memory_tracker()),
             Self::Join(_, _, _, op) => Some(op.memory_tracker()),
             Self::Set(_, _, _, op) => {
@@ -1039,8 +1018,7 @@ impl Spillable for StreamingExecutor {
             | Self::Txn(..)
             | Self::Gather(..)
             | Self::Exchange(..)
-            | Self::HashShuffleJoin(..)
-            | Self::Factorized(..) => {
+            | Self::HashShuffleJoin(..) => {
                 for child in self.children_mut() {
                     child.spill_to_disk()?;
                 }

@@ -902,11 +902,57 @@ pub struct Column {
     inner: ColumnInner,
     encoding: ColumnEncoding,
     stats: Option<ColumnStats>,
+    /// Per-chunk min/max bounds over written values, used by scans for
+    /// zone-map pruning. Bounds only ever widen after writes (deletes and
+    /// nulls leave them stale but conservative), so pruning stays correct
+    /// for any MVCC snapshot.
+    zone_maps: Vec<ZoneBounds>,
     /// Timestamp at which each row's current value became visible (0 means
     /// "current from the beginning", used for loaded/legacy rows).
     row_start_ts: Vec<Timestamp>,
     /// Per-row version chains (before-images), newest first.
     version_chains: Vec<Vec<VersionEntry>>,
+}
+
+/// Rows per zone-map chunk of a [`Column`].
+pub const ZONE_MAP_CHUNK_ROWS: usize = 1024;
+
+/// Compare two scalar values with the same semantics as pushed-predicate
+/// evaluation: exact `i64` for integer kinds, `f64` when a float is
+/// involved, otherwise `Value` ordering.
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn as_i64(value: &Value) -> Option<i64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as i64),
+            Value::Int(v) => Some(*v as i64),
+            Value::BigInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn as_f64(value: &Value) -> Option<f64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as f64),
+            Value::Int(v) => Some(*v as f64),
+            Value::BigInt(v) => Some(*v as f64),
+            Value::Float(v) => Some(*v as f64),
+            Value::Double(v) => Some(*v),
+            _ => None,
+        }
+    }
+    match (as_i64(a), as_i64(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        _ => match (as_f64(a), as_f64(b)) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => Value::cmp(a, b),
+        },
+    }
+}
+
+/// Conservative min/max bounds over the non-null values of one chunk.
+#[derive(Debug, Clone, Default)]
+pub struct ZoneBounds {
+    pub min: Option<Value>,
+    pub max: Option<Value>,
 }
 
 impl Column {
@@ -925,6 +971,7 @@ impl Column {
             inner,
             encoding: ColumnEncoding::None,
             stats: None,
+            zone_maps: Vec::new(),
             row_start_ts: Vec::new(),
             version_chains: Vec::new(),
         }
@@ -962,6 +1009,7 @@ impl Column {
                 if row_idx >= self.len() {
                     self.sync_row_count_from_encoding();
                 }
+                self.update_zone_maps(row_idx, value);
                 return Ok(());
             }
             // Encoded set failed (e.g., row_idx >= row_count during WAL replay).
@@ -985,6 +1033,7 @@ impl Column {
             self.inner_mut().set(row_idx, None)?;
         }
 
+        self.update_zone_maps(row_idx, value);
         Ok(())
     }
 
@@ -1136,6 +1185,7 @@ impl Column {
     pub fn clear(&mut self) {
         self.inner_mut().clear();
         self.encoding = ColumnEncoding::None;
+        self.zone_maps.clear();
         self.row_start_ts.clear();
         self.version_chains.clear();
     }
@@ -1236,6 +1286,53 @@ impl Column {
 
     pub fn set_stats(&mut self, stats: ColumnStats) {
         self.stats = Some(stats);
+        // Loaded data bypasses write_value, so the zone maps must be
+        // rebuilt from the persisted column contents.
+        self.rebuild_zone_maps();
+    }
+
+    /// Widen the chunk bounds covering `row_idx` with `value`.
+    ///
+    /// Bounds never shrink: a later update that removes a chunk's extreme
+    /// leaves stale-but-conservative bounds, which keeps pruning sound.
+    fn update_zone_maps(&mut self, row_idx: usize, value: Option<&Value>) {
+        let Some(v) = value else {
+            return;
+        };
+        if v.is_null() {
+            return;
+        }
+        let chunk = row_idx / ZONE_MAP_CHUNK_ROWS;
+        if chunk >= self.zone_maps.len() {
+            self.zone_maps.resize_with(chunk + 1, ZoneBounds::default);
+        }
+        let bounds = &mut self.zone_maps[chunk];
+        match &bounds.min {
+            Some(min) if compare_values(min, v) != std::cmp::Ordering::Greater => {}
+            _ => bounds.min = Some(v.clone()),
+        }
+        match &bounds.max {
+            Some(max) if compare_values(max, v) != std::cmp::Ordering::Less => {}
+            _ => bounds.max = Some(v.clone()),
+        }
+    }
+
+    /// Recompute all chunk bounds from the current column contents.
+    pub fn rebuild_zone_maps(&mut self) {
+        self.zone_maps.clear();
+        for row_idx in 0..self.len() {
+            let value = if self.encoding.is_encoded() {
+                self.encoding.get(row_idx)
+            } else {
+                self.inner().get(row_idx)
+            };
+            self.update_zone_maps(row_idx, value.as_ref());
+        }
+    }
+
+    /// Per-chunk min/max bounds (one entry per [`ZONE_MAP_CHUNK_ROWS`] rows).
+    pub fn zone_maps(&self) -> &[ZoneBounds] {
+        &self.zone_maps
     }
 
     /// Compute statistics for the bytes that this column will persist.
@@ -1521,6 +1618,14 @@ impl ColumnStore {
             columns: Vec::with_capacity(capacity),
             name_to_index: std::collections::HashMap::with_capacity(capacity),
         }
+    }
+
+    /// Per-chunk min/max bounds of one column, for zone-map pruning.
+    /// `None` when the column does not exist in this store.
+    pub fn zone_maps_for_column(&self, name: &str) -> Option<&[ZoneBounds]> {
+        self.name_to_index
+            .get(name)
+            .map(|&index| self.columns[index].zone_maps())
     }
 
     pub fn add_column(&mut self, name: String, data_type: DataType, nullable: bool) -> i32 {

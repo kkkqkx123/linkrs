@@ -605,6 +605,16 @@ impl crate::storage::AutoCommitBatchOps for GraphStorage {
     ) -> StorageResult<()> {
         GraphStorage::finalize_auto_commit_batch(self, window)
     }
+
+    fn bind_auto_commit_writer(
+        &self,
+        window: &Arc<context::AutoCommitBatchWindow>,
+    ) -> StorageResult<Box<dyn crate::storage::StorageWriter + '_>> {
+        let bound = window.bind_statement()?;
+        Ok(Box::new(GraphStorage {
+            ctx: Arc::new(bound),
+        }))
+    }
 }
 
 impl crate::storage::AutoCommitGroupOps for GraphStorage {
@@ -617,6 +627,10 @@ impl crate::storage::AutoCommitGroupOps for GraphStorage {
         window: &context::AutoCommitBatchWindow,
     ) -> StorageResult<()> {
         window.finalize_group()
+    }
+
+    fn rollback_auto_commit_group(&self, window: &context::AutoCommitBatchWindow) -> StorageResult<()> {
+        window.rollback_group()
     }
 }
 

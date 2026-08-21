@@ -180,16 +180,19 @@ impl MutableCsr {
     /// Returns a borrowed view of `adj_offsets` without allocation. Callers
     /// can reinterpret it as Arrow `Int32` offsets for zero-copy batch
     /// construction. The slice is valid for the lifetime of `&self`.
+    #[allow(dead_code)]
     pub fn as_arrow_offsets(&self) -> &[u32] {
         &self.adj_offsets
     }
 
     /// Zero-copy degree slice (parallel to `adj_offsets`).
+    #[allow(dead_code)]
     pub fn degrees_slice(&self) -> &[u32] {
         &self.degrees
     }
 
     /// Whether this CSR is dense enough to benefit from packed Arrow scan.
+    #[allow(dead_code)]
     pub fn is_dense_for_scan(&self, density_threshold: f32) -> bool {
         let cap = self.vertex_capacity().max(1) as f32;
         let density = self.edge_count() as f32 / cap;
@@ -198,6 +201,7 @@ impl MutableCsr {
 
     /// Packed zero-copy view: returns `(offsets, nbr_list)` slices for
     /// direct Arrow `ListArray` construction without per-edge allocation.
+    #[allow(dead_code)]
     pub fn as_packed_slices(&self) -> (&[u32], &[Nbr]) {
         (&self.adj_offsets, &self.nbr_list)
     }
@@ -977,7 +981,7 @@ impl MutableCsr {
         if vc == 0 {
             return 0;
         }
-        let region_cnt = (vc + region_vertex_count - 1) / region_vertex_count;
+        let region_cnt = vc.div_ceil(region_vertex_count);
         let mut dirty_regions = 0usize;
         for rid in 0..region_cnt {
             let start_v = rid * region_vertex_count;

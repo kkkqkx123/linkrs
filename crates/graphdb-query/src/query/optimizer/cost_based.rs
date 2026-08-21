@@ -46,7 +46,6 @@ pub mod join_order_rewriter;
 pub mod memory_budget;
 pub mod precomputation_wiring;
 pub mod row_estimates;
-pub mod subplans_table;
 pub mod subquery_unnesting;
 pub mod topn_optimization;
 pub mod topn_wiring;

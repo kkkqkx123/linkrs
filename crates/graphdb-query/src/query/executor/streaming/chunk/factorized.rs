@@ -211,7 +211,7 @@ impl FactorizedTable {
         }
 
         // Deterministic order: sort by key hash for reproducible tests
-        groups.sort_by(|a, b| values_hash(&a.keys).cmp(&values_hash(&b.keys)));
+        groups.sort_by_key(|a| values_hash(&a.keys));
 
         Self {
             layout,
@@ -366,7 +366,7 @@ impl FactorizedTable {
         }
         self.groups = merged.into_values().collect();
         self.groups
-            .sort_by(|a, b| values_hash(&a.keys).cmp(&values_hash(&b.keys)));
+            .sort_by_key(|a| values_hash(&a.keys));
         self.flat_row_count = self
             .groups
             .iter()

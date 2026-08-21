@@ -9,7 +9,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::types::EdgeDirection;
-use crate::storage::QueryStorage;
+use crate::core::vertex_edge_path::Vertex;
+use crate::storage::{QueryStorage, ScanOptions};
 
 use super::{EdgeTypeStatistics, StatisticsManager, TagStatistics};
 
@@ -27,6 +28,7 @@ pub struct CollectedSummary {
 }
 
 impl CollectedSummary {
+    #[allow(dead_code)]
     fn collected(tags: usize, edge_types: usize) -> Self {
         Self {
             tags,
@@ -139,18 +141,15 @@ impl StatisticsCollector {
         tag_name: &str,
         sample_limit: usize,
     ) -> Result<(f64, f64), String> {
-        let vertices = storage
-            .scan_vertices_by_tag(space, tag_name)
-            .map_err(|e| format!("Failed to scan vertices for tag '{}': {}", tag_name, e))?;
-
-        let sample_len = vertices.len().min(sample_limit);
+        let vertices = Self::sample_vertices_by_tag(storage, space, tag_name, sample_limit);
+        let sample_len = vertices.len();
         if sample_len == 0 {
             return Ok((0.0, 0.0));
         }
 
         let mut out_total: u64 = 0;
         let mut in_total: u64 = 0;
-        for vertex in vertices.iter().take(sample_len) {
+        for vertex in &vertices {
             let out = storage
                 .get_node_edges(space, &vertex.vid, EdgeDirection::Out)
                 .map_err(|e| {
@@ -173,6 +172,40 @@ impl StatisticsCollector {
             out_total as f64 / sample_len_f,
             in_total as f64 / sample_len_f,
         ))
+    }
+
+    /// Read at most `sample_limit` vertices of one tag without materializing
+    /// the whole table.
+    ///
+    /// Prefers the storage cursor path (tag restriction + limit give a true
+    /// early-exit scan); engines without cursor support fall back to a full
+    /// scan truncated to the window.
+    fn sample_vertices_by_tag(
+        storage: &dyn QueryStorage,
+        space: &str,
+        tag_name: &str,
+        sample_limit: usize,
+    ) -> Vec<Vertex> {
+        if sample_limit == 0 {
+            return Vec::new();
+        }
+        let mut options = ScanOptions::new();
+        options.tag = Some(tag_name.to_string());
+        options.limit = Some(sample_limit);
+        if let Ok(mut cursor) = storage.create_vertex_cursor(space, &options) {
+            let mut out: Vec<Vertex> = Vec::new();
+            while out.len() < sample_limit {
+                match cursor.next_batch(sample_limit - out.len()) {
+                    Ok(batch) if !batch.is_empty() => out.extend(batch),
+                    _ => break,
+                }
+            }
+            return out;
+        }
+        storage
+            .scan_vertices_by_tag(space, tag_name)
+            .map(|vertices| vertices.into_iter().take(sample_limit).collect())
+            .unwrap_or_default()
     }
 
     fn collect_edge_types(
@@ -248,10 +281,10 @@ impl StatisticsCollector {
 
     /// Collect per-property distinct-value (NDV) estimates from a sampled
     /// row window. Populates `PropertyStatistics` for both vertex tags and
-    /// edge types, enabling column-narrow CBO (selectivity = 1/NDV) and
-    /// zone-map pruning factors. Histograms are kept disabled for the
-    /// sampled path — runtime feedback (A2) compensates for skew — but a
-    /// 64-bucket histogram could be added here once sampling is proven stable.
+    /// edge types, enabling column-narrow CBO (selectivity = 1/NDV).
+    /// Histograms are left disabled on the sampled path; runtime execution
+    /// feedback compensates for skew. A bucketed histogram can be added here
+    /// once sampling is proven stable.
     fn collect_property_stats(
         manager: &StatisticsManager,
         storage: &dyn QueryStorage,
@@ -260,6 +293,22 @@ impl StatisticsCollector {
     ) -> Result<usize, String> {
         use crate::query::optimizer::stats::PropertyStatistics;
         use std::collections::HashSet;
+
+        // Stable distinct-count key for a value: type-tagged canonical form.
+        // (Debug formatting is not a stable cross-release contract.)
+        fn ndv_key(v: &crate::core::Value) -> String {
+            match v {
+                crate::core::Value::Null(_) => "n".to_string(),
+                crate::core::Value::Bool(b) => format!("b:{b}"),
+                crate::core::Value::Int(i) => format!("i:{i}"),
+                crate::core::Value::BigInt(i) => format!("l:{i}"),
+                crate::core::Value::Float(f) => format!("f:{:?}", f.to_bits()),
+                crate::core::Value::Double(d) => format!("d:{:?}", d.to_bits()),
+                crate::core::Value::String(s) => format!("s:{s}"),
+                crate::core::Value::FixedString(s) => format!("s:{s}"),
+                other => format!("o:{other:?}"),
+            }
+        }
 
         let mut collected = 0usize;
 
@@ -272,12 +321,9 @@ impl StatisticsCollector {
         })?;
         for tag_info in &tag_infos {
             let tag_name = &tag_info.tag_name;
-            // Sample a window of vertices for this tag.
-            let vertices = storage
-                .scan_vertices_by_tag(space, tag_name)
-                .unwrap_or_default();
-            let sample_len = vertices.len().min(sample_limit);
-            if sample_len == 0 || tag_info.properties.is_empty() {
+            // Sample a window of vertices for this tag (no full materialization).
+            let vertices = Self::sample_vertices_by_tag(storage, space, tag_name, sample_limit);
+            if vertices.is_empty() || tag_info.properties.is_empty() {
                 continue;
             }
             // Build NDV per property via exact distinct count on the sample.
@@ -286,23 +332,20 @@ impl StatisticsCollector {
             for prop in &tag_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), HashSet::new());
             }
-            for vertex in vertices.iter().take(sample_len) {
+            for vertex in &vertices {
                 // Vertex may carry properties in its Tag or in vertex-level map.
                 let tag_props = vertex
                     .get_tag(tag_name)
                     .map(|t| &t.properties)
                     .unwrap_or(&vertex.properties);
-                // Fallback: also probe tag_props map directly.
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = tag_props
                         .get(prop_name.as_str())
                         .or_else(|| vertex.properties.get(prop_name.as_str()))
                     {
-                        // Normalize value to a stable string key for distinct counting.
-                        bucket.insert(format!("{:?}", v));
-                    } else {
-                        // Missing property counts as null distinct (tracked but not NDV).
+                        bucket.insert(ndv_key(v));
                     }
+                    // Missing properties do not contribute to NDV.
                 }
             }
             for prop_def in &tag_info.properties {
@@ -317,21 +360,6 @@ impl StatisticsCollector {
                 let mut stat =
                     PropertyStatistics::new(prop_def.name.clone(), Some(tag_name.clone()));
                 stat.distinct_values = distinct.max(1);
-                // Heuristic: enable histogram only for high-cardinality string/numeric columns
-                // where per-value selectivity matters (> 50 distinct in sample).
-                if distinct > 50
-                    && matches!(
-                        prop_def.data_type,
-                        crate::core::DataType::String
-                            | crate::core::DataType::Int
-                            | crate::core::DataType::BigInt
-                            | crate::core::DataType::Double
-                    )
-                {
-                    // Histogram is intentionally left None in the sampled path;
-                    // feedback loop captures skew dynamically.
-                    stat.use_histogram = false;
-                }
                 manager.update_property_stats(space, stat);
                 collected += 1;
             }
@@ -346,11 +374,17 @@ impl StatisticsCollector {
         })?;
         for edge_info in &edge_infos {
             let edge_type = &edge_info.edge_type_name;
+            // Paginated read bounds the window; the full-scan fallback keeps
+            // cursorless engines working (truncated to the same window).
             let edges = storage
-                .scan_edges_by_type(space, edge_type)
+                .scan_edges_by_type_paginated(space, edge_type, 0, sample_limit)
+                .or_else(|_| {
+                    storage
+                        .scan_edges_by_type(space, edge_type)
+                        .map(|edges| edges.into_iter().take(sample_limit).collect())
+                })
                 .unwrap_or_default();
-            let sample_len = edges.len().min(sample_limit);
-            if sample_len == 0 || edge_info.properties.is_empty() {
+            if edges.is_empty() || edge_info.properties.is_empty() {
                 continue;
             }
             let mut distinct_per_prop: std::collections::HashMap<String, HashSet<String>> =
@@ -358,10 +392,10 @@ impl StatisticsCollector {
             for prop in &edge_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), HashSet::new());
             }
-            for edge in edges.iter().take(sample_len) {
+            for edge in &edges {
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = edge.get_property(prop_name.as_str()) {
-                        bucket.insert(format!("{:?}", v));
+                        bucket.insert(ndv_key(v));
                     }
                 }
             }

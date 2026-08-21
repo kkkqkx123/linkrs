@@ -31,9 +31,6 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
     ReleaseSavepointNode, RollbackNode, SavepointNode, SelectNode,
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
-pub use crate::query::planning::plan::core::nodes::factorized::{
-    MultiplicityReducerNode, NodeLabelFilterNode, SemiMaskerNode,
-};
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
@@ -202,12 +199,6 @@ pub trait PlanNodeVisitor {
         MatchFulltext, MatchFulltextNode, visit_match_fulltext;
     );
 
-    impl_visitor_methods!(
-        SemiMasker, SemiMaskerNode, visit_semi_masker;
-        MultiplicityReducer, MultiplicityReducerNode, visit_multiplicity_reducer;
-        NodeLabelFilter, NodeLabelFilterNode, visit_node_label_filter;
-    );
-
     #[cfg(feature = "vector")]
     impl_visitor_methods!(
         VectorSearch, VectorSearchNode, visit_vector_search;
@@ -304,9 +295,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::FulltextSearch(node) => visitor.visit_fulltext_search(node),
             PlanNodeEnum::FulltextLookup(node) => visitor.visit_fulltext_lookup(node),
             PlanNodeEnum::MatchFulltext(node) => visitor.visit_match_fulltext(node),
-            PlanNodeEnum::SemiMasker(node) => visitor.visit_semi_masker(node),
-            PlanNodeEnum::MultiplicityReducer(node) => visitor.visit_multiplicity_reducer(node),
-            PlanNodeEnum::NodeLabelFilter(node) => visitor.visit_node_label_filter(node),
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(node) => visitor.visit_vector_search(node),
             #[cfg(feature = "vector")]

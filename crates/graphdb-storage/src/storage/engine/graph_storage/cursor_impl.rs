@@ -291,6 +291,28 @@ impl GraphVertexCursor {
                     continue;
                 }
 
+                // Zone-map pruning over the offset-selected candidates: rows
+                // dropped here are exactly those the pushed predicates would
+                // reject after decoding, so skipping their decode is a pure
+                // optimization with identical results.
+                if !self.predicate.is_empty() {
+                    let ranges =
+                        crate::storage::cursor::ScanPredicate::merged_ranges(&self.predicate);
+                    let mask = table.zone_prune_mask(&run_internal, &ranges);
+                    if mask.iter().any(|&keep| !keep) {
+                        let mut kept_internal = Vec::with_capacity(run_rows);
+                        let mut kept_vids = Vec::with_capacity(run_rows);
+                        for (row, &keep) in mask.iter().enumerate() {
+                            if keep {
+                                kept_internal.push(run_internal[row]);
+                                kept_vids.push(run_vids[row]);
+                            }
+                        }
+                        run_internal = kept_internal;
+                        run_vids = kept_vids;
+                    }
+                }
+
                 let decoded = table.get_projected_columns(&run_internal, self.ts, &run_names);
 
                 // Merge the run into the batch's column union.
@@ -593,6 +615,12 @@ pub(crate) struct GraphEdgeCursor {
     emitted: usize,
     src_id_range: Option<Range<i64>>,
     projection: Option<Vec<String>>,
+    /// Conjunctive predicates evaluated on decoded properties before
+    /// offset/limit accounting; a pure pre-filter.
+    predicate: Vec<crate::storage::cursor::ScanPredicate>,
+    /// Property names referenced by `predicate`; they are decoded even when
+    /// absent from the projection so predicates can be evaluated.
+    predicate_columns: Vec<String>,
     exhausted: bool,
     ts: Timestamp,
     targets: Vec<TargetDef>,
@@ -634,6 +662,12 @@ impl GraphEdgeCursor {
                 .collect::<StorageResult<Vec<_>>>()?
         };
 
+        let predicate = options.predicate.clone().unwrap_or_default();
+        let mut predicate_columns: Vec<String> = Vec::new();
+        for pred in &predicate {
+            collect_predicate_columns(pred, &mut predicate_columns);
+        }
+
         Ok(Self {
             ctx,
             limit: options.limit,
@@ -644,6 +678,8 @@ impl GraphEdgeCursor {
                 .projection
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
+            predicate,
+            predicate_columns,
             exhausted: targets.is_empty(),
             ts,
             targets,
@@ -668,6 +704,8 @@ impl EdgeCursor for GraphEdgeCursor {
         let limit = self.limit;
         let src_id_range = &self.src_id_range;
         let projection = &self.projection;
+        let predicate = &self.predicate;
+        let predicate_columns = &self.predicate_columns;
         let targets = &self.targets;
         let target_idx = &mut self.target_idx;
         let table_idx = &mut self.table_idx;
@@ -717,6 +755,8 @@ impl EdgeCursor for GraphEdgeCursor {
                             ts,
                             src_id_range,
                             projection,
+                            predicate,
+                            predicate_columns,
                             limit,
                             emitted,
                             offset_remaining,
@@ -735,6 +775,8 @@ impl EdgeCursor for GraphEdgeCursor {
                                 ts,
                                 src_id_range,
                                 projection,
+                                predicate,
+                                predicate_columns,
                                 limit,
                                 emitted,
                                 offset_remaining,
@@ -773,6 +815,8 @@ struct ScanArgs<'a> {
     ts: Timestamp,
     src_id_range: &'a Option<Range<i64>>,
     projection: &'a Option<Vec<String>>,
+    predicate: &'a [crate::storage::cursor::ScanPredicate],
+    predicate_columns: &'a [String],
     limit: Option<usize>,
     emitted: &'a mut usize,
     offset_remaining: &'a mut usize,
@@ -817,18 +861,35 @@ fn scan_mutable(args: ScanArgs) {
             }
         }
 
+        // Decode once with predicate columns included so pushed predicates
+        // can be evaluated; matching rows are then trimmed back to the
+        // projection. Filtering happens before offset/limit accounting.
+        let mut properties = decode_edge_properties(
+            args.store,
+            nbr.prop_offset,
+            args.projection,
+            args.predicate_columns,
+        );
+        if !args
+            .predicate
+            .iter()
+            .all(|p| p.matches(properties.as_slice()))
+        {
+            continue;
+        }
+        trim_to_projection(&mut properties, args.projection);
+
         if *args.offset_remaining > 0 {
             *args.offset_remaining -= 1;
             continue;
         }
 
         let edge = build_edge_candidate(EdgeBuildArgs {
-            store: args.store,
             target: args.target,
             td: args.td,
             src_vid: &src_vid,
             nbr,
-            projection: args.projection,
+            props: properties,
         });
         args.batch.push(edge);
         *args.emitted += 1;
@@ -893,19 +954,35 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             edge.prop_offset,
             edge.timestamp,
         );
-        let edge = build_edge_candidate(EdgeBuildArgs {
-            store: args.store,
-            target: args.target,
-            td: args.td,
-            src_vid,
-            nbr,
-            projection: args.projection,
-        });
+
+        // Same decode-once / pre-filter discipline as the mutable scan.
+        let mut properties = decode_edge_properties(
+            args.store,
+            nbr.prop_offset,
+            args.projection,
+            args.predicate_columns,
+        );
+        if !args
+            .predicate
+            .iter()
+            .all(|p| p.matches(properties.as_slice()))
+        {
+            continue;
+        }
+        trim_to_projection(&mut properties, args.projection);
 
         if *args.offset_remaining > 0 {
             *args.offset_remaining -= 1;
             continue;
         }
+
+        let edge = build_edge_candidate(EdgeBuildArgs {
+            target: args.target,
+            td: args.td,
+            src_vid,
+            nbr,
+            props: properties,
+        });
 
         args.batch.push(edge);
         *args.emitted += 1;
@@ -932,12 +1009,11 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
 // ---------------------------------------------------------------------------
 
 struct EdgeBuildArgs<'a> {
-    store: &'a TimeTravelEdgeStore,
     target: &'a TargetDef,
     td: &'a TableDef,
     src_vid: &'a VertexId,
     nbr: Nbr,
-    projection: &'a Option<Vec<String>>,
+    props: Vec<(String, Value)>,
 }
 
 struct EdgeCandidate {
@@ -953,10 +1029,9 @@ struct EdgeCandidate {
 fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
     let src_internal = args.src_vid.as_int64().unwrap_or(0) as u32;
     let (dst_vid, rank) = decode_endpoint(args.nbr.neighbor);
-    let properties = properties_for(args.store, args.nbr.prop_offset, args.projection);
 
     let src_vid = VertexId::from_int64(src_internal as i64);
-    let props: HashMap<String, Value> = properties.into_iter().collect();
+    let props: HashMap<String, Value> = args.props.into_iter().collect();
     EdgeCandidate {
         edge_type_name: args.target.edge_type_name.clone(),
         src_label: args.td.tbl_src,
@@ -1009,10 +1084,13 @@ fn decode_endpoint(key: VertexId) -> (VertexId, i64) {
     )
 }
 
-fn properties_for(
+/// Decode edge properties keeping projected columns plus any extra columns
+/// required by pushed scan predicates.
+fn decode_edge_properties(
     store: &TimeTravelEdgeStore,
     prop_offset: u32,
     projection: &Option<Vec<String>>,
+    predicate_columns: &[String],
 ) -> Vec<(String, Value)> {
     if prop_offset == 0 {
         return Vec::new();
@@ -1025,15 +1103,40 @@ fn properties_for(
                 .into_iter()
                 .filter_map(|(k, v)| {
                     v.filter(|_| {
-                        projection
-                            .as_ref()
-                            .is_none_or(|names| names.iter().any(|name| name == &k))
+                        projection.as_ref().is_none_or(|names| {
+                            names.iter().any(|name| name == &k)
+                                || predicate_columns.iter().any(|name| name == &k)
+                        })
                     })
                     .map(|v| (k, v))
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Drop predicate-only columns so emitted rows carry projected properties.
+fn trim_to_projection(props: &mut Vec<(String, Value)>, projection: &Option<Vec<String>>) {
+    if let Some(names) = projection {
+        props.retain(|(k, _)| names.iter().any(|name| name == k));
+    }
+}
+
+/// Collect the property names a scan predicate references.
+fn collect_predicate_columns(pred: &crate::storage::cursor::ScanPredicate, out: &mut Vec<String>) {
+    use crate::storage::cursor::ScanPredicate as P;
+    match pred {
+        P::ColumnEqual { column, .. } => {
+            if !out.iter().any(|name| name == column) {
+                out.push(column.clone());
+            }
+        }
+        P::ColumnRange { column, .. } => {
+            if !out.iter().any(|name| name == column) {
+                out.push(column.clone());
+            }
+        }
+    }
 }
 
 fn resolve_vertex_id(
@@ -1133,6 +1236,7 @@ pub(crate) struct ColdEdgeCursor {
     ts: Timestamp,
     src_id_range: Option<Range<i64>>,
     projection: Option<Vec<String>>,
+    predicate: Vec<crate::storage::cursor::ScanPredicate>,
     src_cursor: usize,
     row_edges: Vec<Nbr>,
     row_idx: usize,
@@ -1173,6 +1277,7 @@ impl ColdEdgeCursor {
                 .projection
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
+            predicate: options.predicate.clone().unwrap_or_default(),
             src_cursor: 0,
             row_edges: Vec::new(),
             row_idx: 0,
@@ -1219,15 +1324,27 @@ impl EdgeCursor for ColdEdgeCursor {
             let (dst_vid, rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
             let dst_internal = dst_vid.as_int64().unwrap_or(0) as u32;
             let src_vid = VertexId::from_int64(src_internal as i64);
-            let mut props: HashMap<String, Value> = self
+            // Predicates are evaluated on the full property set before the
+            // projection narrows it (pure pre-filter).
+            let all_props: Vec<(String, Value)> = self
                 .snapshot
                 .nbr_to_edge_record(&nbr, src_vid, dst_vid)
-                .properties
-                .into_iter()
-                .collect();
-            if let Some(ref proj) = projection {
-                props.retain(|name, _| proj.iter().any(|p| p == name));
+                .properties;
+            if !self
+                .predicate
+                .iter()
+                .all(|p| p.matches(all_props.as_slice()))
+            {
+                continue;
             }
+            let props: HashMap<String, Value> = all_props
+                .into_iter()
+                .filter(|(name, _)| {
+                    projection
+                        .as_ref()
+                        .is_none_or(|proj| proj.iter().any(|p| p == name))
+                })
+                .collect();
 
             let src_ext = resolve_vertex_id(&self.ctx, src_internal, src_label, &src_vid, ts);
             let dst_ext = resolve_vertex_id(&self.ctx, dst_internal, dst_label, &dst_vid, ts);

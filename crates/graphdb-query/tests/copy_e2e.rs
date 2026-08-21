@@ -136,3 +136,23 @@ fn test_copy_delimiter_semicolon() {
         .assert_vertex_count("person", 2);
     drop(tmp);
 }
+
+#[test]
+fn test_copy_edge_missing_dst_column_errors() {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    // Header names a source column but no destination column: the import
+    // must fail instead of guessing which column is the destination.
+    writeln!(tmp, "src,since").unwrap();
+    writeln!(tmp, "1,2020").unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+    TestScenario::new()
+        .unwrap()
+        .setup_space("test")
+        .exec_ddl("CREATE TAG person(name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE knows(since: INT)")
+        .assert_success()
+        .query(&format!("COPY EDGE knows FROM '{}' WITH HEADER", path))
+        .assert_error();
+    drop(tmp);
+}

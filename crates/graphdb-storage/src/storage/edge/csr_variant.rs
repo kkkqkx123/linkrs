@@ -246,12 +246,14 @@ impl CsrVariant {
 
     /// Edge density = edge_count / vertex_capacity in the mutable delta.
     /// Used for density-adaptive strategy selection (sparse vs dense).
+    #[allow(dead_code)]
     pub fn density(&self) -> f32 {
         let cap = self.vertex_capacity().max(1) as f32;
         self.edge_count() as f32 / cap
     }
 
     /// Density category for adaptive CSR layout.
+    #[allow(dead_code)]
     pub fn density_category(&self) -> DensityCategory {
         let d = self.density();
         if d < 0.05 {
@@ -264,6 +266,7 @@ impl CsrVariant {
     }
 
     /// Whether this CSR is dense enough to benefit from packed Arrow scan.
+    #[allow(dead_code)]
     pub fn is_dense(&self) -> bool {
         matches!(self.density_category(), DensityCategory::Dense)
     }
@@ -271,6 +274,7 @@ impl CsrVariant {
     /// Suggest the optimal `EdgeStrategy` for the current density.
     /// Sparse graphs benefit from `Multiple` (per-vertex adjacency lists);
     /// dense graphs benefit from `MultiSingle` or a future packed CSR.
+    #[allow(dead_code)]
     pub fn suggested_strategy(&self) -> crate::core::types::EdgeStrategy {
         match self.density_category() {
             DensityCategory::Sparse => crate::core::types::EdgeStrategy::Multiple,
@@ -288,6 +292,7 @@ impl CsrVariant {
     /// underlying `adj_offsets` (Int32 offsets compatible with Arrow
     /// `ListArray`). Sparse or fragmented variants still fall back to
     /// `iter_edges_of`.
+    #[allow(dead_code)]
     pub fn as_arrow_offsets(&self) -> Option<&[u32]> {
         match self {
             CsrVariant::Multiple(csr) => Some(csr.as_arrow_offsets()),
@@ -297,6 +302,7 @@ impl CsrVariant {
     }
 
     /// Zero-copy degree slice (parallel to arrow offsets).
+    #[allow(dead_code)]
     pub fn as_degree_slice(&self) -> Option<&[u32]> {
         match self {
             CsrVariant::Multiple(csr) => Some(csr.degrees_slice()),
@@ -310,6 +316,7 @@ impl CsrVariant {
     /// benefit from the contiguous offsets view. The morsel parallel Expand
     /// operator prefers this path because it can dispatch morsels over
     /// contiguous offset ranges without per-vertex hash lookups.
+    #[allow(dead_code)]
     pub fn can_zero_copy_scan(&self) -> bool {
         if matches!(self, CsrVariant::None { .. }) {
             return false;
@@ -322,6 +329,7 @@ impl CsrVariant {
     }
 
     /// Zero-copy packed slices for Arrow `ListArray` construction.
+    #[allow(dead_code)]
     pub fn as_packed_slices(&self) -> Option<(&[u32], &[Nbr])> {
         match self {
             CsrVariant::Multiple(csr) => Some(csr.as_packed_slices()),
@@ -331,6 +339,7 @@ impl CsrVariant {
 
     /// Packed CSR info for density-adaptive re-distribution.
     /// Reports current density, fragmentation, and packed size estimate.
+    #[allow(dead_code)]
     pub fn packed_csr_info(&self) -> PackedCSRInfo {
         let density = self.density();
         let fragmentation = self.fragmentation_ratio();
@@ -347,6 +356,7 @@ impl CsrVariant {
 }
 
 /// Density category for adaptive CSR.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DensityCategory {
     Sparse,
@@ -355,6 +365,7 @@ pub enum DensityCategory {
 }
 
 /// Packed CSR info for density-adaptive re-distribution and Arrow scan.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PackedCSRInfo {
     pub density: f32,
@@ -367,11 +378,13 @@ pub struct PackedCSRInfo {
 
 impl PackedCSRInfo {
     /// Whether this CSR should be redistributed to packed layout.
+    #[allow(dead_code)]
     pub fn needs_redistribution(&self) -> bool {
         self.fragmentation > 0.3 || self.is_dense
     }
 
     /// Estimated bytes saved by packing (fragmentation * packed_bytes).
+    #[allow(dead_code)]
     pub fn estimated_savings(&self) -> usize {
         (self.fragmentation * self.packed_bytes as f32) as usize
     }

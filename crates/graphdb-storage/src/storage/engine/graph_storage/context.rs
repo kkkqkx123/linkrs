@@ -766,6 +766,29 @@ impl AutoCommitBatchWindow {
         Ok(())
     }
 
+    /// Roll back every statement bound to this group window: execute the
+    /// shared undo log against the base context, abort the shared write
+    /// timestamp, and release snapshots and the write gate.
+    ///
+    /// Only meaningful in group mode; batch windows have per-statement undo
+    /// logs owned by their bound statements.
+    pub fn rollback_group(&self) -> StorageResult<()> {
+        if let Some(undo) = &self.group_undo {
+            let mut manager = undo.lock();
+            let start_ts = self.first_ts.lock().unwrap_or(0);
+            manager
+                .execute_undo(&*self.base_ctx, start_ts)
+                .map_err(|e| StorageError::db_error(e.to_string()))?;
+            drop(manager);
+            if let Some(ts) = *self.first_ts.lock() {
+                self.base_ctx.abort_write_timestamp(ts);
+            }
+        }
+        self.unregister_snapshots();
+        self.gate_lease.release();
+        Ok(())
+    }
+
     fn unregister_snapshots(&self) {
         // Unregister every vertex snapshot registered lazily by the window's
         // statements. Each entry matches one registration (handle), so the

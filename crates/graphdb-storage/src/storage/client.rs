@@ -849,7 +849,14 @@ impl<T> CatalogStore for T where
 }
 
 /// Minimal combined capability required by the query crate.
-pub trait QueryStorage: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {
+pub trait QueryStorage:
+    GraphStore
+    + CatalogStore
+    + StorageAuthOps
+    + StorageAdmin
+    + crate::storage::AutoCommitBatchOps
+    + crate::storage::AutoCommitGroupOps
+{
     /// Snapshot handle bound to this storage handle, when the handle is
     /// bound to an operation context with a pinned read/write snapshot.
     ///
@@ -875,7 +882,15 @@ pub trait QueryStorage: GraphStore + CatalogStore + StorageAuthOps + StorageAdmi
         )
     }
 }
-impl<T> QueryStorage for T where T: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {}
+impl<T> QueryStorage for T where
+    T: GraphStore
+        + CatalogStore
+        + StorageAuthOps
+        + StorageAdmin
+        + crate::storage::AutoCommitBatchOps
+        + crate::storage::AutoCommitGroupOps
+{
+}
 
 /// Maintenance-only capabilities used by server initialization and administration.
 pub trait StorageMaintenance: StorageAdmin + StoragePersistenceOps + StorageGcOps {}
@@ -898,6 +913,8 @@ pub trait StorageClient:
     + StorageRecoveryOps
     + StorageGcOps
     + UndoTarget
+    + crate::storage::AutoCommitBatchOps
+    + crate::storage::AutoCommitGroupOps
     + Send
     + Sync
     + std::fmt::Debug
@@ -917,6 +934,8 @@ impl<T> StorageClient for T where
         + StorageRecoveryOps
         + StorageGcOps
         + UndoTarget
+        + crate::storage::AutoCommitBatchOps
+        + crate::storage::AutoCommitGroupOps
         + Send
         + Sync
         + std::fmt::Debug

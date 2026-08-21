@@ -52,7 +52,7 @@ impl ListVector {
         validity: Option<Vec<u64>>,
     ) -> Self {
         debug_assert!(
-            offsets.len() >= 1,
+            !offsets.is_empty(),
             "ListVector offsets must have at least one entry"
         );
         debug_assert_eq!(
@@ -204,9 +204,8 @@ impl ListVector {
         let last = *self.offsets.last().unwrap_or(&0);
         self.offsets.push(last + additional);
         let new_len = self.len();
-        if self.validity.is_some() {
+        if let Some(bm) = &mut self.validity {
             let len = new_len - 1;
-            let bm = self.validity.as_mut().unwrap();
             if len < bm.len() * 64 {
                 bm[len / 64] |= 1u64 << (len % 64);
             } else if len / 64 >= bm.len() {

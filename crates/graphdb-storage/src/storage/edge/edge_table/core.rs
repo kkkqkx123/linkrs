@@ -48,8 +48,10 @@ pub struct EdgeTableConfig {
     /// Region-level recycling: vertex count per region (0 = disabled).
     pub region_vertex_count: usize,
     /// Region high deletion ratio threshold (0.0-1.0) above which a region is considered dirty.
+    #[allow(dead_code)]
     pub region_high_deletion_ratio: f64,
     /// Region low density threshold below which a region is considered sparse.
+    #[allow(dead_code)]
     pub region_low_density_threshold: f64,
 }
 
@@ -976,6 +978,7 @@ impl TimeTravelEdgeStore {
     /// (others are skipped), reducing IO 5-10x for wide edge tables. When
     /// `projection` is empty, all columns are returned. This is the columnar
     /// fast path for `MATCH ()-[r:TYPE]->() RETURN r.prop` style queries.
+    #[allow(dead_code)]
     pub fn scan_projected(&self, ts: Timestamp, projection: &[String]) -> Vec<EdgeRecord> {
         if !self.is_open {
             return Vec::new();
@@ -998,6 +1001,7 @@ impl TimeTravelEdgeStore {
     /// which hits the `ColumnStore` per-column path instead of deserializing
     /// the whole row blob. Also benefits from zone-map pruning via
     /// `prune_by_zone_map` when a predicate range is supplied.
+    #[allow(dead_code)]
     pub fn out_edges_projected(
         &self,
         src: u32,
@@ -1040,6 +1044,7 @@ impl TimeTravelEdgeStore {
     /// Zone-map predicate pruning helper: given a column and value range,
     /// returns which `ZONE_MAP_CHUNK_SIZE` chunks may contain matching rows.
     /// Callers can skip scanning chunks where `pruned[i] == false`.
+    #[allow(dead_code)]
     pub fn prune_by_zone_map(
         &self,
         column: &str,
@@ -1053,6 +1058,7 @@ impl TimeTravelEdgeStore {
     }
 
     /// Expose per-column zone maps for optimizer CBO and ShowStats.
+    #[allow(dead_code)]
     pub fn zone_map_for_column(
         &self,
         column: &str,
@@ -1064,6 +1070,7 @@ impl TimeTravelEdgeStore {
 
     /// Per-column `ColumnStats` (global, aggregated from zone maps) for
     /// `ShowStats` and CBO cardinality estimation.
+    #[allow(dead_code)]
     pub fn column_stats(
         &self,
         col_idx: usize,
@@ -1073,6 +1080,7 @@ impl TimeTravelEdgeStore {
 
     /// Apply per-column compression encoding (ALP / bitpacking / dict / FSST / RLE)
     /// for OLAP IO reduction. Mirrors vertex `ColumnStore` encodings.
+    #[allow(dead_code)]
     pub fn apply_column_encoding(
         &mut self,
         col_name: &str,
@@ -1082,6 +1090,7 @@ impl TimeTravelEdgeStore {
     }
 
     /// Fine-grained stripe id for a property row (for striped locking).
+    #[allow(dead_code)]
     pub fn property_stripe_for_offset(&self, offset: u32) -> Option<usize> {
         let row_idx = crate::storage::edge::property_schema::prop_offset_to_index(offset)?;
         Some(self.properties.stripe_for_row(row_idx))
@@ -1643,7 +1652,7 @@ impl TimeTravelEdgeStore {
         {
             let min_ts = self.mvcc.get_min_active_snapshot_ts();
             if min_ts != self.last_gc_min_snapshot_ts
-                || (cfg.gc_min_serial > 0 && self.maintenance_serial % cfg.gc_min_serial == 0)
+                || (cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial))
             {
                 let cleaned = self.mvcc.gc_tombstones(min_ts);
                 self.last_gc_min_snapshot_ts = min_ts;

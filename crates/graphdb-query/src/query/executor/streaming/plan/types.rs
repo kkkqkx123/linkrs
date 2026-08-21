@@ -19,8 +19,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FactorizedSpec, FulltextSpec, GraphSpec,
-    JoinSpec, RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
@@ -434,7 +434,6 @@ pub enum OperatorKindSpec {
     Fulltext(FulltextSpec),
     Vector(VectorSpec),
     Txn(TxnSpec),
-    Factorized(FactorizedSpec),
 }
 
 // ── PhysicalPlan ────────────────────────────────────────────────────────────

@@ -38,7 +38,6 @@ mod test_mock;
 
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
-pub use buffer_manager::{global_buffer_manager, BufferManager, MmapBufferManager, PageId};
 pub use client::{
     CatalogStore, ColdSnapshotInfo, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps,
     StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
@@ -47,10 +46,10 @@ pub use client::{
     StorageSyncContextOps, StorageWriter,
 };
 pub use cursor::{
-    open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,
-    FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
-    PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget, VecEdgeCursor,
-    VecVertexCursor, VertexColumnBatch, VertexCursor,
+    open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch,
+    EdgeCursor, FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan,
+    PartitionSelector, PredicateRange, PropertyColumn, RequiredProperty, ScanOptions,
+    ScanPredicate, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};

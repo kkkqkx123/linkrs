@@ -1,8 +1,8 @@
 //! Recursive assembly of operators and fragment DAG edges.
 
 use super::super::super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FactorizedSpec, FulltextSpec, GraphSpec,
-    JoinSpec, RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::super::super::slot::SlotLayout;
 use super::super::super::properties::PhysicalProperties;
@@ -669,49 +669,8 @@ impl ArenaPlanAssembler {
         });
         Ok((fid, op_id))
     }
-
-    pub(crate) fn push_factorized_op(
-        operators: &mut Vec<PhysicalOperatorSpec>,
-        fragments: &mut Vec<FragmentSpec>,
-        op_alloc: &mut PhysicalOperatorIdAllocator,
-        frag_alloc: &mut ArenaFragmentAllocator,
-        child_fid: FragmentId,
-        node_id: i64,
-        spec: FactorizedSpec,
-    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
-        let op_id = op_alloc.allocate();
-        let fid = frag_alloc.allocate();
-        let explain_name = super::super::metadata::factorized_explain_name(&spec);
-        let kind = match &spec {
-            FactorizedSpec::MultiplicityReducer { .. } => FragmentKind::Blocking,
-            _ => FragmentKind::Streaming,
-        };
-        operators.push(PhysicalOperatorSpec {
-            operator_id: op_id,
-            logical_node_id: Some(LogicalNodeId(node_id)),
-            spec: OperatorKindSpec::Factorized(spec),
-            input_contract: InputContract::NoInput,
-            input_layout: None,
-            output_layout: SlotLayout::new(vec![]),
-            properties: PhysicalProperties::single_streaming(),
-            state_ownership: StateOwnership::TreeLocal,
-            estimated_cardinality: None,
-            choice_reason: None,
-            has_folded_expressions: false,
-            explain_name,
-        });
-        fragments.push(FragmentSpec {
-            id: fid,
-            kind,
-            operators: vec![op_id],
-            root_operator: op_id,
-            inputs: vec![child_fid],
-            output: None,
-            exchange_layout: None,
-        });
-        Ok((fid, op_id))
-    }
 }
+
 pub(crate) enum BinaryOperatorSpec {
     Join(JoinSpec),
     Set(SetSpec),

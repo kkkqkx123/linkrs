@@ -55,11 +55,11 @@ impl<T> StripedRwLock<T> {
     pub fn from_vec(values: Vec<T>) -> Self {
         let n = values.len().next_power_of_two().max(1);
         let stripes: Vec<RwLock<T>> = values.into_iter().map(RwLock::new).collect();
-        while stripes.len() < n {
-            // For non-Default T, this path requires caller to provide power-of-two count.
-            // We panic to surface misuse early.
-            panic!("StripedRwLock::from_vec requires power-of-two length");
-        }
+        assert_eq!(
+            stripes.len(),
+            n,
+            "StripedRwLock::from_vec requires power-of-two length"
+        );
         Self {
             stripes,
             stripe_mask: n - 1,

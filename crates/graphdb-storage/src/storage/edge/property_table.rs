@@ -4,10 +4,10 @@
 //!
 //! # Design Rationale (Columnar)
 //!
-//! Prior row-oriented design (v3) stored edge properties as whole-row blobs.
+//! The earlier row-oriented layout stored edge properties as whole-row blobs.
 //! For OLAP workloads (full scans, multi-hop aggregates, GROUP BY) this forces
 //! reading all columns even when only 1-2 are needed, causing 5-10x IO waste.
-//! This converts edge properties to columnar format, mirroring vertex
+//! The columnar format mirrors vertex
 //! `ColumnStore` (one `Column` per property, independent compression, zero-copy
 //! scans, column pruning, predicate pushdown).
 //!
@@ -64,12 +64,10 @@ use crate::storage::striped_lock::{SharedStripedLock, StripedRwLock};
 use crate::storage::types::PropertyId;
 use crate::storage::vertex::column_store::ColumnStore;
 
-/// Current on-disk layout version. Development builds keep a single format;
-/// version numbers only start to accumulate after the first release.
-/// v3: row-oriented MVCC blobs (legacy, still readable)
-/// v4: columnar (ColumnStore per property) + zone maps + per-column encodings
+/// Current on-disk layout version: columnar (ColumnStore per property) +
+/// zone maps + per-column encodings. The legacy row-oriented layout (v3) is
+/// no longer readable; files in that format must be re-imported.
 const PROPERTY_TABLE_VERSION: u8 = 4;
-const PROPERTY_TABLE_VERSION_V3: u8 = 3;
 
 /// Rows per zone-map chunk. Zone maps store min/max/ndv/null_count per chunk
 /// for predicate pushdown (skip chunks whose zone cannot contain the predicate).
@@ -84,6 +82,9 @@ pub use super::property_schema::{
     prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertyRecord,
     PropertySchema,
 };
+
+/// A single projected row: optional list of `(column_name, optional_value)` pairs.
+type ProjectedRow = Option<Vec<(String, Option<Value>)>>;
 
 /// Property value index for fast edge lookup by property value.
 ///
@@ -354,14 +355,13 @@ pub struct PropertyTable {
     // ── OLAP: columnar store + zone maps + fine-grained concurrency ──
     /// Columnar storage for OLAP scans: one `Column` per property, independent
     /// compression (ALP / bitpacking / dictionary / FSST / RLE), column pruning,
-    /// and vectorized batch reads. Dual-written with `records` for migration
-    /// compatibility; `dump` v4 persists this store, `load` rebuilds it from
-    /// row data when loading legacy v3 files.
+    /// and vectorized batch reads. Dual-written with `records`; `load`
+    /// rebuilds it from the persisted row data.
     column_store: ColumnStore,
 
     /// Per-column zone maps (one `ColumnStats` per `ZONE_MAP_CHUNK_SIZE` rows)
-    /// for predicate pushdown / segment pruning. Persisted in v4, rebuilt on
-    /// demand for v3 loads. Maps `column_name → Vec<chunk_stats>`.
+    /// for predicate pushdown / segment pruning, persisted with the table.
+    /// Maps `column_name → Vec<chunk_stats>`.
     zone_maps: HashMap<String, Vec<ColumnStats>>,
 
     /// Fine-grained stripe count for concurrent access. Writes lock only the
@@ -750,10 +750,10 @@ impl PropertyTable {
         }
     }
 
-    /// Rebuild all zone maps from scratch (used after bulk load / v3 migration).
+    /// Rebuild all zone maps from scratch (used after bulk load).
     pub fn rebuild_zone_maps(&mut self) {
         self.zone_maps.clear();
-        let total_chunks = (self.records.len() + ZONE_MAP_CHUNK_SIZE - 1) / ZONE_MAP_CHUNK_SIZE;
+        let total_chunks = self.records.len().div_ceil(ZONE_MAP_CHUNK_SIZE);
         if total_chunks == 0 {
             return;
         }
@@ -775,8 +775,8 @@ impl PropertyTable {
     }
 
     /// Rebuild the in-memory columnar store from the row-oriented records.
-    /// Used after compaction or v3 migration where the columnar store is not
-    /// persisted. Preserves current-value view; historical chains are rebuilt
+    /// Used after compaction where the columnar store is not persisted.
+    /// Preserves current-value view; historical chains are rebuilt
     /// from `chain_records` by the caller when needed.
     fn rebuild_column_store_internal(&mut self) {
         let mut new_cs = ColumnStore::new();
@@ -1573,24 +1573,13 @@ impl PropertyTable {
                 return values;
             }
         }
-        // Fallback: legacy row deserialization (v3 compatibility).
-        let mut values = Vec::with_capacity(self.records.len());
-        for record in &self.records {
-            match record {
-                Some(rec) => match self.deserialize_row(&rec.data) {
-                    Ok(row) => {
-                        if col_idx < row.len() {
-                            values.push(row[col_idx].1.clone());
-                        } else {
-                            values.push(None);
-                        }
-                    }
-                    Err(_) => values.push(None),
-                },
-                None => values.push(None),
-            }
-        }
-        values
+        // The columnar store is rebuilt on load and dual-written on write,
+        // so a missing column here means an internal invariant violation.
+        debug_assert!(
+            false,
+            "column_values: columnar store missing column '{col_name}'"
+        );
+        Vec::new()
     }
 
     pub fn compute_column_stats(
@@ -1716,7 +1705,7 @@ impl PropertyTable {
         offsets: &[u32],
         projection: &[String],
         query_ts: Option<Timestamp>,
-    ) -> Vec<Option<Vec<(String, Option<Value>)>>> {
+    ) -> Vec<ProjectedRow> {
         let ts = query_ts.unwrap_or(Timestamp::MAX);
         // Group by chunk for zone-map pruning opportunity.
         let mut out = Vec::with_capacity(offsets.len());
@@ -1980,13 +1969,17 @@ impl PropertyTable {
         })?;
         offset += 1;
 
-        if version != PROPERTY_TABLE_VERSION && version != PROPERTY_TABLE_VERSION_V3 {
+        if version != PROPERTY_TABLE_VERSION {
+            if version < PROPERTY_TABLE_VERSION {
+                return Err(StorageError::deserialize_error(format!(
+                    "PropertyTable data uses legacy layout version {version}, which is no \
+                     longer supported; re-import the data to upgrade to version {PROPERTY_TABLE_VERSION}"
+                )));
+            }
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported PropertyTable version: expected {} or {}, got {}",
-                PROPERTY_TABLE_VERSION, PROPERTY_TABLE_VERSION_V3, version
+                "Unsupported PropertyTable version: expected {PROPERTY_TABLE_VERSION}, got {version}"
             )));
         }
-        let is_v4 = version == PROPERTY_TABLE_VERSION;
 
         let schema_len = read_u32_le(data, &mut offset)? as usize;
 
@@ -2162,7 +2155,6 @@ impl PropertyTable {
         self.value_index.rebuild(&self.schema, &self.records);
 
         // ── load zone maps and rebuild columnar store ──
-        // For v4, zone maps are persisted; for v3 (legacy) they are absent.
         self.column_store = ColumnStore::new();
         for prop in &self.schema {
             self.column_store
@@ -2219,7 +2211,7 @@ impl PropertyTable {
         self.zone_maps.clear();
         self.stripe_count = PROPERTY_TABLE_STRIPES;
         self.stripe_locks = std::sync::Arc::new(StripedRwLock::new(self.stripe_count));
-        if is_v4 && offset < data.len() {
+        if offset < data.len() {
             // Zone maps
             if offset + 4 <= data.len() {
                 if let Ok(zm_len) = read_u32_le(data, &mut offset) {
@@ -2280,7 +2272,7 @@ impl PropertyTable {
                 self.rebuild_zone_maps();
             }
         } else {
-            // v3 legacy: rebuild zone maps from scratch.
+            // Fresh file with no zone-map section: rebuild from row records.
             self.rebuild_zone_maps();
             self.stripe_locks = std::sync::Arc::new(StripedRwLock::new(self.stripe_count));
         }
@@ -2882,23 +2874,32 @@ mod olap_phase1_tests {
     }
 
     #[test]
-    fn test_legacy_v3_still_loads() {
-        // Simulate v3 payload by manually constructing old version dump
-        // Use current dump but strip zone maps? Instead, create fresh table, dump, then load with v3 handling.
-        // Our load supports both v3 and v4, so this tests that v4 dump can be read as v4.
+    fn test_legacy_version_is_rejected() {
         let mut table = PropertyTable::new();
         table
             .add_property("x".to_string(), DataType::Int, false)
             .unwrap();
-        let offset = table
+        let _offset = table
             .insert(&[("x".to_string(), Value::Int(42))], 10)
             .unwrap();
         let data = table.dump();
-        // Mutate version byte to 3 to simulate legacy file (still has v4 extra bytes, but header says 3)
-        // For true legacy, we would need to truncate extra bytes, but we test that v4 loader handles v3
-        // by directly loading the same data (version 4) – should succeed.
+
+        // Layout: header (12 bytes) + checksum (4) + version byte. Mutate the
+        // version byte to a legacy value, fix up the checksum so it does not
+        // mask the version check, and assert loading fails with an explicit
+        // re-import hint instead of silently best-effort reading.
+        const CHECKSUM_POS: usize = crate::storage::persistence::HEADER_SIZE;
+        const VERSION_POS: usize = CHECKSUM_POS + 4;
+        let mut legacy = data.clone();
+        legacy[VERSION_POS] = 3;
+        let computed = crc32fast::hash(&legacy[CHECKSUM_POS + 4..]);
+        legacy[CHECKSUM_POS..CHECKSUM_POS + 4].copy_from_slice(&computed.to_le_bytes());
         let mut loaded = PropertyTable::new();
-        loaded.load(&data).unwrap();
-        assert_eq!(loaded.get(offset, None).unwrap()[0].1, Some(Value::Int(42)));
+        let err = loaded.load(&legacy).unwrap_err();
+        assert!(err.to_string().contains("no longer supported"));
+
+        // Current-version data still loads.
+        let mut current = PropertyTable::new();
+        current.load(&data).unwrap();
     }
 }

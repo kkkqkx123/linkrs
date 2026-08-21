@@ -19,6 +19,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 /// Page identifier (segment id + page index).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PageId {
     pub segment_id: u64,
@@ -26,6 +27,7 @@ pub struct PageId {
 }
 
 /// Buffer manager trait: pin / unpin pages for OLAP scans.
+#[allow(dead_code)]
 pub trait BufferManager: Send + Sync {
     /// Pin a page for reading; returns `None` if the page is not resident
     /// (caller should reload from spill).
@@ -45,7 +47,7 @@ pub trait BufferManager: Send + Sync {
 /// `evict`. Real implementation will use `mmap` + `madvise` and a clock
 /// algorithm for eviction, plus optimistic seqlock reads for lock-free OLAP
 /// scans (mirroring `CsrSegment::try_optimistic_read`).
-#[derive(Debug, Default)]
+#[allow(dead_code)]
 pub struct MmapBufferManager {
     pages: RwLock<HashMap<PageId, Vec<u8>>>,
     pinned: AtomicUsize,
@@ -53,6 +55,7 @@ pub struct MmapBufferManager {
 }
 
 impl MmapBufferManager {
+    #[allow(dead_code)]
     pub fn new(limit_bytes: usize) -> Self {
         Self {
             pages: RwLock::new(HashMap::new()),
@@ -61,10 +64,12 @@ impl MmapBufferManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_limit(&self, limit: usize) {
         self.limit_bytes.store(limit, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)]
     pub fn insert_page(&self, id: PageId, data: Vec<u8>) {
         let len = data.len();
         self.pages.write().insert(id, data);
@@ -111,9 +116,11 @@ impl BufferManager for MmapBufferManager {
 }
 
 /// Global singleton buffer manager for the process.
+#[allow(dead_code)]
 static GLOBAL_BUFFER_MANAGER: std::sync::OnceLock<Arc<MmapBufferManager>> =
     std::sync::OnceLock::new();
 
+#[allow(dead_code)]
 pub fn global_buffer_manager() -> Arc<MmapBufferManager> {
     GLOBAL_BUFFER_MANAGER
         .get_or_init(|| Arc::new(MmapBufferManager::new(512 * 1024 * 1024)))

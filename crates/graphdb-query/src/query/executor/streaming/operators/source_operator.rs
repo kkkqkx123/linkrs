@@ -103,6 +103,8 @@ pub enum SourceOperatorKind {
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Scan predicates pushed into the storage layer.
+        predicate: Vec<ScanPredicate>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     /// Fetch vertices by ID.
@@ -234,6 +236,7 @@ impl SourceOperator {
                 edge_type,
                 col_names,
                 projected_properties,
+                predicate,
                 partition_range,
             } => SourceOperatorKind::StorageScanEdges {
                 storage: storage.clone(),
@@ -243,6 +246,7 @@ impl SourceOperator {
                 partition_range: partition_range.clone(),
                 col_names: col_names.clone(),
                 projected_properties: projected_properties.clone(),
+                predicate: predicate.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::GetVertices {

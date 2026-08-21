@@ -107,12 +107,18 @@ pub(super) fn build_source_spec(
             let limit = scan_node
                 .limit()
                 .and_then(|v| (v >= 0).then_some(v as usize));
+            let projected_properties = scan_node.projected_properties().to_vec();
+            let predicate = crate::query::planning::scan_predicate::extract_scan_predicates(
+                scan_node.filter(),
+                &projected_properties,
+            );
             Ok(SourceSpec::StorageScanEdges {
                 space_name: exec_ctx.space_name.clone().unwrap_or_default(),
                 limit,
                 edge_type: scan_node.edge_type().map(|s| s.to_string()),
                 col_names: scan_node.col_names().to_vec(),
-                projected_properties: scan_node.projected_properties().to_vec(),
+                projected_properties,
+                predicate,
                 partition_range: None,
             })
         }
