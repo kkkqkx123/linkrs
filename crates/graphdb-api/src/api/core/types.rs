@@ -22,6 +22,10 @@ pub struct QueryRequest {
     pub session_variables: Option<HashMap<String, Value>>,
     /// Optional server-assigned query ID threaded to the execution runtime.
     pub query_id: Option<u64>,
+    /// Transaction isolation level for executions inside an explicit
+    /// transaction (injected by the API layer from `TransactionExecution`).
+    /// `None` = auto-commit statement-level snapshot semantics.
+    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
     /// Pre-parsed statement AST from the API-layer classification pass.
     ///
     /// When present, the query engine skips its own parse of the query text
@@ -41,6 +45,7 @@ impl Default for QueryRequest {
             parameters: None,
             session_variables: None,
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         }
     }

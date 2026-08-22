@@ -405,3 +405,27 @@ harness = false
 - [x] 每个基准都有清晰的性能目标
 - [x] 支持基线保存和对比
 - [x] Cargo.toml 配置完整
+
+---
+
+## OLAP 端到端基线（olap_e2e_bench）
+
+**记录日期**: 2026-08-22
+**环境**: 开发机（x86-64-v3），`cargo bench`（bench profile，优化构建）
+**数据**: BA 优先连接合成图（固定种子 `0x9E3779B97F4A7C15`），
+`OLAP_BENCH_SCALE=1` → 5,000 顶点 / 约 25,000 边（m=5）
+**说明**: 此为 P0 基线记录；后续各 OLAP 改进项合入前需对照本表，
+>5% 回退必须说明原因或回滚（见 docs/plan/olap_semi_completed_formalization_plan.md §9）。
+
+| 查询组 | 负载 | 基线中位耗时 |
+|--------|------|-------------|
+| olap_q1_two_hop_unanchored | 全图两跳计数 | ~439 ms |
+| olap_q2_two_hop_anchored | 锚点两跳计数 | ~1313 ms |
+| olap_q3_group_aggregate_topn | 展开 + 分组聚合 TopN | ~288 ms |
+| olap_q4_filtered_edge_scan | 边扫描范围谓词计数 | ~499 ms |
+| olap_q5_filtered_vertex_scan | 顶点扫描范围谓词计数 | ~73 ms |
+
+已知问题（基线即暴露，待后续立项）：
+- q2 锚点未下推：`id(a)==X` 未转化为种子点，执行代价不低于全图两跳；
+- q3/q4 的展开与边扫描在行存执行模型下逐行物化 Value，为下一阶段
+  执行层改进的主要候选。

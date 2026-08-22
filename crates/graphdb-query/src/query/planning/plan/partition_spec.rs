@@ -35,6 +35,32 @@ impl fmt::Display for PartitionSource {
     }
 }
 
+/// Distribution strategy of a partition layout.
+///
+/// `Range` splits the source id domain into contiguous slices (the only
+/// strategy that can restrict a storage scan directly). `Hash` aligns rows by
+/// `hash(key) % buckets` across partitions — used when the join/distribution
+/// key cannot be mapped onto the id domain; the scan input is still sliced
+/// into disjoint ranges so every row belongs to exactly one partition, and a
+/// hash exchange redistributes rows to their bucket. `RoundRobin` is reserved
+/// for exchange-level redistribution and is never produced for scans yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionStrategy {
+    Range,
+    Hash { key: String },
+    RoundRobin,
+}
+
+impl fmt::Display for PartitionStrategy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Range => write!(formatter, "range"),
+            Self::Hash { key } => write!(formatter, "hash(key='{key}')"),
+            Self::RoundRobin => write!(formatter, "round-robin"),
+        }
+    }
+}
+
 /// Physical partition layout selected for a plan.
 ///
 /// An absent layout means single-tree execution.  The planner must only set a
@@ -44,6 +70,11 @@ pub struct PartitionSpec {
     ranges: Vec<Range<i64>>,
     /// Data domain these ranges map onto.
     source: PartitionSource,
+    /// Distribution strategy over the partition set.
+    strategy: PartitionStrategy,
+    /// Number of partitions. Equals `ranges.len()` for `Range`; the bucket
+    /// count for hash/round-robin strategies.
+    partition_count: usize,
     /// Monotonically-increasing layout version.  When the underlying data
     /// layout changes this version lets the plan cache detect stale specs.
     layout_version: Option<u64>,
@@ -56,6 +87,10 @@ pub enum PartitionSpecError {
     Empty,
     EmptyRange { index: usize },
     UnorderedOrOverlapping { index: usize },
+    /// Bucket count below the minimum viable parallel degree (2).
+    TooFewBuckets,
+    /// A hash key must name the distribution column.
+    EmptyHashKey,
 }
 
 impl fmt::Display for PartitionSpecError {
@@ -75,6 +110,13 @@ impl fmt::Display for PartitionSpecError {
                 formatter,
                 "partition range at index {index} must be ordered and non-overlapping"
             ),
+            Self::TooFewBuckets => write!(
+                formatter,
+                "partition layout requires at least two buckets"
+            ),
+            Self::EmptyHashKey => {
+                write!(formatter, "hash partition key must not be empty")
+            }
         }
     }
 }
@@ -107,11 +149,77 @@ impl PartitionSpec {
             previous_end = Some(range.end);
         }
 
+        let partition_count = ranges.len();
         Ok(Self {
             ranges,
             source,
+            strategy: PartitionStrategy::Range,
+            partition_count,
             layout_version,
         })
+    }
+
+    /// Create a validated hash-partition layout.
+    ///
+    /// Rows are aligned by `hash(key) % buckets` across partitions. The
+    /// `ranges` slices still partition the scan input (every row belongs to
+    /// exactly one slice); a downstream hash exchange performs the actual
+    /// redistribution onto the bucket axis.
+    pub fn try_new_hash(
+        key: impl Into<String>,
+        ranges: Vec<Range<i64>>,
+        source: PartitionSource,
+        layout_version: Option<u64>,
+    ) -> Result<Self, PartitionSpecError> {
+        let key = key.into();
+        if key.is_empty() {
+            return Err(PartitionSpecError::EmptyHashKey);
+        }
+        Self::try_new_bucketed(
+            PartitionStrategy::Hash { key },
+            ranges,
+            source,
+            layout_version,
+        )
+    }
+
+    /// Create a validated round-robin partition layout.
+    ///
+    /// Reserved for exchange-level redistribution; the planner does not yet
+    /// emit round-robin layouts for scans.
+    pub fn try_new_round_robin(
+        ranges: Vec<Range<i64>>,
+        source: PartitionSource,
+        layout_version: Option<u64>,
+    ) -> Result<Self, PartitionSpecError> {
+        Self::try_new_bucketed(
+            PartitionStrategy::RoundRobin,
+            ranges,
+            source,
+            layout_version,
+        )
+    }
+
+    fn try_new_bucketed(
+        strategy: PartitionStrategy,
+        ranges: Vec<Range<i64>>,
+        source: PartitionSource,
+        layout_version: Option<u64>,
+    ) -> Result<Self, PartitionSpecError> {
+        // Reuse the range invariants: the slices must cover the scan input
+        // without overlap so no row is duplicated or lost before the
+        // redistribution exchange.
+        let spec = Self::try_new(ranges, source, layout_version)?;
+        Ok(Self {
+            strategy,
+            partition_count: spec.ranges.len(),
+            ..spec
+        })
+    }
+
+    /// The distribution strategy of this layout.
+    pub fn strategy(&self) -> &PartitionStrategy {
+        &self.strategy
     }
 
     pub fn ranges(&self) -> &[Range<i64>] {
@@ -119,7 +227,7 @@ impl PartitionSpec {
     }
 
     pub fn partition_count(&self) -> usize {
-        self.ranges.len()
+        self.partition_count
     }
 
     pub fn source(&self) -> &PartitionSource {
@@ -163,6 +271,42 @@ mod tests {
             .expect("valid spec");
         assert_eq!(spec.source(), &test_source());
         assert_eq!(spec.layout_version(), Some(42));
+        assert_eq!(spec.partition_count(), 2);
+        assert_eq!(spec.strategy(), &PartitionStrategy::Range);
+    }
+
+    #[test]
+    fn hash_spec_carries_key_and_bucket_count() {
+        let spec = PartitionSpec::try_new_hash("age", vec![0..50, 50..100], test_source(), Some(7))
+            .expect("valid hash spec");
+        assert_eq!(
+            spec.strategy(),
+            &PartitionStrategy::Hash {
+                key: "age".to_string()
+            }
+        );
+        assert_eq!(spec.partition_count(), 2);
+        assert_eq!(spec.layout_version(), Some(7));
+        // The scan input slices stay disjoint so no row is duplicated.
+        assert_eq!(spec.ranges().len(), 2);
+    }
+
+    #[test]
+    fn hash_spec_rejects_empty_key() {
+        assert_eq!(
+            PartitionSpec::try_new_hash("", vec![0..10], test_source(), None)
+                .map(|_| ())
+                .unwrap_err(),
+            PartitionSpecError::EmptyHashKey
+        );
+    }
+
+    #[test]
+    fn round_robin_spec_is_bucketed() {
+        let spec =
+            PartitionSpec::try_new_round_robin(vec![0..10, 10..20], test_source(), None)
+                .expect("valid round-robin spec");
+        assert_eq!(spec.strategy(), &PartitionStrategy::RoundRobin);
         assert_eq!(spec.partition_count(), 2);
     }
 }

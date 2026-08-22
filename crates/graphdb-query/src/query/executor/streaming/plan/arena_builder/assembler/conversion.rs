@@ -1213,6 +1213,26 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
+            PlanNodeEnum::CopyTo(copy_node) => {
+                let (child_fid, _) = Self::push_source_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    node.id(),
+                    build_standalone_write_source(node)?,
+                );
+                let spec = build_copy_to_spec(copy_node, exec_ctx)?;
+                Self::push_sink_op(
+                    operators,
+                    fragments,
+                    op_alloc,
+                    frag_alloc,
+                    child_fid,
+                    node.id(),
+                    spec,
+                )
+            }
 
             // ── DDL nodes ───────────────────────────────────────────────────────
             PlanNodeEnum::SpaceManage(sm_node) => {
@@ -1559,6 +1579,14 @@ pub(crate) fn build_subquery_runner_specs(
             id: subquery.id,
             plan: sub_plan,
             correlated: subquery.correlated,
+            group_join: subquery.group_join.clone().map(|gj| {
+                crate::query::executor::streaming::subquery::GroupJoinSpec {
+                    hash_keys: gj.hash_keys,
+                    key_columns: gj.key_columns,
+                    function: gj.function,
+                    distinct: gj.distinct,
+                }
+            }),
         });
     }
     Ok(specs)

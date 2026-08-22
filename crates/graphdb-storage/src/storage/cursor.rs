@@ -340,12 +340,7 @@ impl ScanPredicate {
                     upper,
                     include_upper,
                     ..
-                } => (
-                    lower.clone(),
-                    *include_lower,
-                    upper.clone(),
-                    *include_upper,
-                ),
+                } => (lower.clone(), *include_lower, upper.clone(), *include_upper),
             };
             let column = predicate.column().to_string();
             match ranges.iter_mut().find(|r| r.column == column) {

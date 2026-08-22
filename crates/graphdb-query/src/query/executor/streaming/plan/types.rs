@@ -503,6 +503,19 @@ impl PhysicalPlan {
     pub fn fragment_count(&self) -> usize {
         self.fragments.fragments().len()
     }
+
+    /// Whether the plan contains any write operator (DML sink or DDL).
+    ///
+    /// Used to reject statements that need writes before instantiation when
+    /// the transaction scope forbids them (read-only snapshot, etc.).
+    pub fn contains_write_operator(&self) -> bool {
+        self.operators.iter().any(|op| {
+            matches!(
+                op.spec,
+                OperatorKindSpec::Sink(_) | OperatorKindSpec::Ddl(_)
+            )
+        })
+    }
 }
 
 /// Build ID allocator that assigns monotonically increasing

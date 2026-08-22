@@ -22,23 +22,49 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
     desc.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
     desc.cbo_notes = plan.cbo_notes.clone();
     if let Some(spec) = plan.partition_spec() {
-        let ranges = spec
-            .ranges()
-            .iter()
-            .map(|r| format!("[{}..{})", r.start, r.end))
-            .collect::<Vec<_>>()
-            .join(", ");
         let version = spec
             .layout_version()
             .map(|v| format!(", layout_version={v}"))
             .unwrap_or_default();
-        desc.partition_spec_description = Some(format!(
-            "{} partitioned into {} ranges [{}]{}",
-            spec.source(),
-            spec.partition_count(),
-            ranges,
-            version
-        ));
+        desc.partition_spec_description = Some(match spec.strategy() {
+            crate::query::planning::plan::PartitionStrategy::Range => {
+                let ranges = spec
+                    .ranges()
+                    .iter()
+                    .map(|r| format!("[{}..{})", r.start, r.end))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{} partitioned into {} ranges [{}]{}",
+                    spec.source(),
+                    spec.partition_count(),
+                    ranges,
+                    version
+                )
+            }
+            crate::query::planning::plan::PartitionStrategy::Hash { key } => {
+                let key_desc = if key.is_empty() {
+                    String::new()
+                } else {
+                    format!(" by key '{key}'")
+                };
+                format!(
+                    "{} hash-partitioned into {} buckets{}{}",
+                    spec.source(),
+                    spec.partition_count(),
+                    key_desc,
+                    version
+                )
+            }
+            crate::query::planning::plan::PartitionStrategy::RoundRobin => {
+                format!(
+                    "{} round-robin partitioned into {} buckets{}",
+                    spec.source(),
+                    spec.partition_count(),
+                    version
+                )
+            }
+        });
     }
 
     // Build a reverse dependency map: operator_id → list of operator ids that depend on it.

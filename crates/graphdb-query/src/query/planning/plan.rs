@@ -8,7 +8,7 @@ pub mod validation;
 
 pub use core::PlanNodeEnum;
 pub use execution_plan::{ExecutionPlan, SubPlan};
-pub use partition_spec::{PartitionSource, PartitionSpec, PartitionSpecError};
+pub use partition_spec::{PartitionSource, PartitionSpec, PartitionSpecError, PartitionStrategy};
 
 pub use core::common::{EdgeProp, TagProp};
 pub use core::nodes::*;

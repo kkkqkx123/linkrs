@@ -279,6 +279,10 @@ name = "edge_scan_speedup_bench"
 harness = false
 
 [[bench]]
+name = "olap_e2e_bench"
+harness = false
+
+[[bench]]
 name = "write_gate_bench"
 harness = false
 

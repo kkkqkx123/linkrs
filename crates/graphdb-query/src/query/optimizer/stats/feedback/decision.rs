@@ -8,8 +8,16 @@ use std::collections::HashMap;
 
 use parking_lot::RwLock;
 
+use crate::query::optimizer::cost_based::subquery_unnesting::MAX_BOUNDED_SUBQUERY_ROWS;
+
 /// Minimum total runs before the empirical advice is allowed to vote.
 const MIN_DECISION_RUNS: u64 = 8;
+
+/// Average Apply-path rows below which the measured evidence suggests
+/// decorrelating even without Join-path measurements: a build side this
+/// small fits trivially in the hash table, so the unnested plan cannot
+/// regress much while it avoids per-row subquery re-execution.
+const APPLY_ROWS_UNNEST_HINT: f64 = MAX_BOUNDED_SUBQUERY_ROWS as f64;
 
 /// Advice derived from measured Apply / SemiJoin executions.
 #[derive(Debug, Clone, Default)]
@@ -118,9 +126,18 @@ impl DecisionFeedbackStore {
                     advice.prefer_keep = apply_cost <= join_cost;
                 }
                 (Some(_), None) => {
-                    // Only the kept path has been observed: keep is the
-                    // incumbent and there is no counter-evidence.
-                    advice.prefer_keep = true;
+                    // Only the kept path has been observed. When its measured
+                    // row volume is far below the bounded-subquery
+                    // threshold, mark a decorrelation suggestion so future
+                    // queries of this shape go straight to the join plan;
+                    // otherwise keep is the incumbent with no
+                    // counter-evidence.
+                    let avg_apply_rows = entry.apply_rows / entry.apply_runs as f64;
+                    if avg_apply_rows < APPLY_ROWS_UNNEST_HINT {
+                        advice.prefer_unnest = true;
+                    } else {
+                        advice.prefer_keep = true;
+                    }
                 }
                 _ => {}
             }
@@ -202,6 +219,32 @@ mod tests {
         }
         let advice = store.advice("s");
         assert!(!advice.prefer_unnest && !advice.prefer_keep);
+    }
+
+    #[test]
+    fn test_apply_only_low_rows_marks_decorrelation_hint() {
+        let store = DecisionFeedbackStore::new();
+        // Apply-only evidence with a small measured row volume: the hash
+        // build side is trivially small, so decorrelation is suggested even
+        // without Join-path measurements.
+        for _ in 0..10 {
+            store.record_apply_run("s", 50, 5_000);
+        }
+        let advice = store.advice("s");
+        assert!(advice.prefer_unnest);
+        assert!(!advice.prefer_keep);
+    }
+
+    #[test]
+    fn test_apply_only_large_rows_keeps_apply() {
+        let store = DecisionFeedbackStore::new();
+        // Apply-only evidence with a large row volume: keep is the incumbent.
+        for _ in 0..10 {
+            store.record_apply_run("s", 20_000, 5_000);
+        }
+        let advice = store.advice("s");
+        assert!(!advice.prefer_unnest);
+        assert!(advice.prefer_keep);
     }
 
     #[test]

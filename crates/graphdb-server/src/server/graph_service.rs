@@ -545,6 +545,7 @@ impl<
         // id is threaded through QueryRequestContext → ExecutionContext → runtime.
         let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
         let query_request = graphdb_api::api::core::QueryRequest {
+            isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
@@ -1187,6 +1188,7 @@ impl<
             None => Some(session.variables_snapshot()),
         };
         let query_request = graphdb_api::api::core::QueryRequest {
+            isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: session.is_auto_commit(),
@@ -1454,6 +1456,7 @@ where
         }
 
         let query_request = graphdb_api::api::core::QueryRequest {
+            isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: true,
@@ -1561,6 +1564,7 @@ where
         }
 
         let query_request = graphdb_api::api::core::QueryRequest {
+            isolation_level: None,
             space_id: session.space().map(|s| s.id),
             space_name: session.space().map(|s| s.name),
             auto_commit: true,

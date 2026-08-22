@@ -156,3 +156,58 @@ fn test_copy_edge_missing_dst_column_errors() {
         .assert_error();
     drop(tmp);
 }
+
+#[test]
+fn test_copy_to_export_roundtrip() {
+    let mut tmp_in = tempfile::NamedTempFile::new().unwrap();
+    writeln!(tmp_in, "vid,name,age").unwrap();
+    writeln!(tmp_in, "1,Alice,30").unwrap();
+    writeln!(tmp_in, "2,Bob,25").unwrap();
+    writeln!(tmp_in, "3,\"Car,ol\",28").unwrap();
+    let in_path = tmp_in.path().to_str().unwrap().to_string();
+
+    let out_path = tempfile::NamedTempFile::new()
+        .unwrap()
+        .into_temp_path()
+        .keep()
+        .unwrap();
+
+    TestScenario::new()
+        .unwrap()
+        .setup_space("test")
+        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .assert_success()
+        .query(&format!("COPY VERTEX person FROM '{in_path}' WITH HEADER"))
+        .assert_success();
+
+    // Export and verify file content.
+    TestScenario::new()
+        .unwrap()
+        .setup_space("test")
+        .exec_ddl("CREATE TAG person(name: STRING, age: INT)")
+        .assert_success()
+        .query(&format!("COPY VERTEX person FROM '{in_path}' WITH HEADER"))
+        .assert_success()
+        .query(&format!(
+            "COPY VERTEX person TO '{}' WITH HEADER",
+            out_path.to_str().unwrap()
+        ))
+        .assert_success();
+
+    let exported = std::fs::read_to_string(&out_path).expect("exported csv");
+    let lines: Vec<String> = exported.lines().map(|l| l.to_string()).collect();
+    assert!(
+        lines.contains(&"vid,name,age".to_string()),
+        "header missing: {lines:?}"
+    );
+    assert!(lines.contains(&"1,Alice,30".to_string()), "got: {lines:?}");
+    assert!(lines.contains(&"2,Bob,25".to_string()), "got: {lines:?}");
+    // Quoted cell survives the round trip.
+    assert!(
+        lines.iter().any(|l| l.contains("\"Car,ol\"")),
+        "quoted delimiter cell lost: {lines:?}"
+    );
+    assert_eq!(lines.len(), 4, "expected header + 3 rows: {lines:?}");
+
+    let _ = std::fs::remove_file(&out_path);
+}

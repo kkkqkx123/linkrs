@@ -77,6 +77,10 @@ pub struct ExecutionContext {
     /// Absent keys fall back to the default heuristic (hash join for valid
     /// equi keys).
     pub join_algorithms: HashMap<i64, JoinAlgorithm>,
+    /// Transaction isolation level for this execution, when running inside
+    /// an explicit transaction. Execution-time knob threaded from the
+    /// API layer through [`crate::query::QueryContext`]; `None` = auto-commit.
+    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
 }
 
 impl ExecutionContext {
@@ -110,6 +114,7 @@ impl ExecutionContext {
             feedback_history: None,
             columnar_policy: None,
             join_algorithms: HashMap::new(),
+            isolation_level: None,
         }
     }
 
@@ -143,6 +148,7 @@ impl ExecutionContext {
             feedback_history: None,
             columnar_policy: None,
             join_algorithms: HashMap::new(),
+            isolation_level: None,
         }
     }
 
@@ -175,6 +181,7 @@ impl ExecutionContext {
             feedback_history: None,
             columnar_policy: None,
             join_algorithms: HashMap::new(),
+            isolation_level: None,
         }
     }
 
@@ -217,6 +224,7 @@ impl ExecutionContext {
             feedback_history: None,
             columnar_policy: None,
             join_algorithms: HashMap::new(),
+            isolation_level: None,
         }
     }
 
@@ -294,6 +302,7 @@ impl Default for ExecutionContext {
             feedback_history: None,
             columnar_policy: None,
             join_algorithms: HashMap::new(),
+            isolation_level: None,
         }
     }
 }

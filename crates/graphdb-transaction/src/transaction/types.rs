@@ -1032,6 +1032,7 @@ pub struct TransactionExecution {
     read_only: bool,
     auto_commit: bool,
     rollback_only: bool,
+    isolation_level: IsolationLevel,
     owner: Option<String>,
     mutation_recorder: Option<Arc<dyn super::participant::TransactionMutationRecorder>>,
 }
@@ -1052,6 +1053,7 @@ impl TransactionExecution {
             read_only,
             auto_commit,
             rollback_only: false,
+            isolation_level: IsolationLevel::default(),
             owner,
             mutation_recorder: None,
         }
@@ -1079,6 +1081,16 @@ impl TransactionExecution {
 
     pub fn rollback_only(&self) -> bool {
         self.rollback_only
+    }
+
+    /// The isolation level of the originating transaction.
+    pub fn isolation_level(&self) -> IsolationLevel {
+        self.isolation_level
+    }
+
+    pub fn with_isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
+        self.isolation_level = isolation_level;
+        self
     }
 
     pub fn owner(&self) -> Option<&str> {

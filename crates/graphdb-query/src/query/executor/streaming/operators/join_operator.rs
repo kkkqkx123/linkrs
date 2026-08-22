@@ -272,6 +272,8 @@ pub enum JoinOperatorKind {
     },
     SemiJoin {
         join_condition: Option<Expression>,
+        // NOT EXISTS semantics: keep left rows with NO matching right row.
+        anti: bool,
         right_rows: Vec<Vec<Value>>,
         right_consumed: bool,
         memory_tracker: MemoryTracker,
@@ -418,8 +420,12 @@ impl JoinOperator {
                 right_col_names: Vec::new(),
                 output_done: false,
             },
-            super::spec::JoinSpec::SemiJoin { join_condition } => JoinOperatorKind::SemiJoin {
+            super::spec::JoinSpec::SemiJoin {
+                join_condition,
+                anti,
+            } => JoinOperatorKind::SemiJoin {
                 join_condition: join_condition.clone(),
+                anti: *anti,
                 right_rows: Vec::new(),
                 right_consumed: false,
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
@@ -623,12 +629,14 @@ impl JoinOperator {
             ),
             JoinOperatorKind::SemiJoin {
                 join_condition,
+                anti,
                 right_rows,
                 right_consumed,
                 memory_tracker,
                 right_col_names,
             } => cross_semi_join::next_semi_join(
                 join_condition,
+                *anti,
                 right_rows,
                 right_consumed,
                 memory_tracker,

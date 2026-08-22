@@ -75,6 +75,11 @@ pub struct QueryContext {
     /// transactions. `None` = auto-commit single statement (current-version
     /// reads).
     snapshot_ts: Option<Timestamp>,
+    /// Transaction isolation level injected by the API layer for queries
+    /// running inside an explicit transaction. `None` = auto-commit
+    /// statement-level snapshot semantics. Execution-time knob: the runtime
+    /// and operators can consult it instead of only the storage layer.
+    isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
     /// Optional arena allocator for temporary allocations during query execution
     arena: Option<Arena>,
 }
@@ -92,6 +97,7 @@ impl QueryContext {
             space_info: None,
             charset_info: None,
             snapshot_ts: None,
+            isolation_level: None,
             arena: None,
         }
     }
@@ -120,6 +126,7 @@ impl QueryContext {
         space_info: Option<SpaceInfo>,
         charset_info: Option<Box<CharsetInfo>>,
         snapshot_ts: Option<Timestamp>,
+        isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
         arena: Option<Arena>,
     ) -> Self {
         Self {
@@ -129,6 +136,7 @@ impl QueryContext {
             space_info,
             charset_info,
             snapshot_ts,
+            isolation_level,
             arena,
         }
     }
@@ -173,6 +181,12 @@ impl QueryContext {
     /// current version of the data.
     pub fn snapshot_ts(&self) -> Option<Timestamp> {
         self.snapshot_ts
+    }
+
+    /// The transaction isolation level for this execution, when running
+    /// inside an explicit transaction.
+    pub fn isolation_level(&self) -> Option<crate::core::types::TransactionIsolationLevel> {
+        self.isolation_level
     }
 
     /// Generate an ID.
@@ -241,6 +255,7 @@ impl QueryContext {
         self.space_info = None;
         self.charset_info = None;
         self.snapshot_ts = None;
+        self.isolation_level = None;
         if let Some(ref mut arena) = self.arena {
             arena.reset();
         }
@@ -275,6 +290,7 @@ impl std::fmt::Debug for QueryContext {
             .field("rctx", &self.rctx)
             .field("space_id", &self.space_id())
             .field("snapshot_ts", &self.snapshot_ts)
+            .field("isolation_level", &self.isolation_level)
             .field("killed", &self.is_killed())
             .field("has_arena", &self.arena.is_some())
             .finish()

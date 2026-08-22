@@ -912,12 +912,9 @@ impl PropertyTable {
         // Columnar sync: version every column named in `values`.
         for (name, value) in values {
             if self.has_property(name) {
-                let _ = self.column_store.set_property_versioned(
-                    row_idx,
-                    name,
-                    value.as_ref(),
-                    ts,
-                );
+                let _ = self
+                    .column_store
+                    .set_property_versioned(row_idx, name, value.as_ref(), ts);
             }
         }
         self.refresh_zone_map_for_row(row_idx);

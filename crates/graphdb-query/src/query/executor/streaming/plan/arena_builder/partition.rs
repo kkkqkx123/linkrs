@@ -37,7 +37,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
 use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
-use crate::query::planning::plan::PartitionSource;
+use crate::query::planning::plan::{PartitionSource, PartitionStrategy};
 
 /// A partitioned physical plan: operators, fragments, root fragment, root operator.
 type PartitionedPlan = (
@@ -81,6 +81,13 @@ pub(super) fn build_partitioned(
     // binary operator.
     if let Some(result) = build_partitioned_multi(node, spec, exec_ctx)? {
         return Ok(Some(result));
+    }
+
+    // Linear chains must be range-sliced: hash/round-robin layouts are only
+    // consumed by the multi-branch hash-exchange join above. Falling back
+    // here lets the serial builder run with a recorded reason.
+    if !matches!(spec.strategy(), PartitionStrategy::Range) {
+        return Ok(None);
     }
 
     let chain = match decompose(node) {
@@ -563,7 +570,8 @@ fn build_co_partitioned_join(
     // Guards: the join key must be the vertex-id partition key and both
     // branches must be partition-local scan chains (no global operators or
     // split aggregates, which need a full gather before they can run).
-    if !equality_join_keys_reference_vid(node) {
+    if !equality_join_keys_reference_vid(node) || !matches!(spec.strategy(), PartitionStrategy::Range)
+    {
         return Ok(None);
     }
     if !left_chain.global.is_empty()
@@ -653,8 +661,14 @@ fn build_hash_exchange_join(
 ) -> PartitionBuildResult {
     // Guards: join keys must be simple variables, and both branches must be
     // partition-local scan chains (no global operators or split aggregates).
+    // Range layouts slice the scan input by id ranges; Hash layouts declare a
+    // hash(key) distribution contract on top of the same disjoint slices.
     if !equality_join_keys_are_simple(hash_keys_of(node), probe_keys_of(node)) {
         return Ok(None);
+    }
+    match spec.strategy() {
+        PartitionStrategy::Range | PartitionStrategy::Hash { .. } => {}
+        PartitionStrategy::RoundRobin => return Ok(None),
     }
     if equality_join_keys_reference_vid(node) {
         return Ok(None);

@@ -1171,3 +1171,84 @@ fn columnar_batch_keeps_nullable_typed_columns() {
         std::cmp::Ordering::Greater
     );
 }
+
+#[test]
+fn columnar_and_row_paths_agree_fuzz() {
+    use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+    use crate::query::executor::streaming::context::BorrowedRowContext;
+
+    // Deterministic xorshift PRNG keeps failures reproducible.
+    let mut seed: u64 = 0x1234_5678_9ABC_DEF0;
+    let mut rand = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+
+    for case in 0..64u32 {
+        let n = 1 + (rand() % 48) as usize;
+        let layout = Arc::new(SlotLayout::from_names(&[
+            "p".to_string(),
+            "p.age".to_string(),
+            "p.score".to_string(),
+        ]));
+        let rows: Vec<Vec<Value>> = (0..n)
+            .map(|_| {
+                vec![
+                    Value::Vertex(Box::new(crate::core::Vertex::with_vid(
+                        VertexId::from_int64(rand() as i64),
+                    ))),
+                    Value::BigInt((rand() % 100) as i64),
+                    Value::Double(((rand() % 1000) as f64) / 10.0),
+                ]
+            })
+            .collect();
+
+        // Expression pool mixing comparisons, arithmetic, And/Or with
+        // randomized constants.
+        let c1 = (rand() % 100) as i64;
+        let c2 = ((rand() % 1000) as f64) / 10.0;
+        let age = || Expression::property(Expression::variable("p"), "age");
+        let score = || Expression::property(Expression::variable("p"), "score");
+        let lit_i = |v: i64| Expression::literal(Value::BigInt(v));
+        let lit_d = |v: f64| Expression::literal(Value::Double(v));
+        let bin = |l: Expression, op: BinaryOperator, r: Expression| Expression::binary(l, op, r);
+        let expressions = vec![
+            bin(age(), BinaryOperator::GreaterThan, lit_i(c1)),
+            bin(age(), BinaryOperator::LessThanOrEqual, lit_i(c1)),
+            bin(score(), BinaryOperator::LessThan, lit_d(c2)),
+            bin(score(), BinaryOperator::GreaterThanOrEqual, lit_d(c2)),
+            bin(
+                bin(age(), BinaryOperator::Add, lit_i(5)),
+                BinaryOperator::GreaterThan,
+                lit_i(c1 + 3),
+            ),
+            bin(
+                bin(age(), BinaryOperator::GreaterThan, lit_i(c1)),
+                BinaryOperator::And,
+                bin(score(), BinaryOperator::LessThan, lit_d(c2)),
+            ),
+            bin(
+                bin(age(), BinaryOperator::Equal, lit_i(c1)),
+                BinaryOperator::Or,
+                bin(score(), BinaryOperator::NotEqual, lit_d(c2)),
+            ),
+        ];
+
+        let mut chunk = DataChunk::new_with_layout(rows.clone(), layout.clone());
+        chunk.build_typed_columns(true);
+        for expr in &expressions {
+            let batched = chunk
+                .evaluate_expression(expr, None)
+                .unwrap_or_else(|e| panic!("case {case}: batch eval failed: {e}"));
+            assert_eq!(batched.len(), n, "case {case}: result length");
+            for (i, row) in rows.iter().enumerate() {
+                let mut ctx = BorrowedRowContext::new(row, layout.clone());
+                let reference = ExpressionEvaluator::evaluate(expr, &mut ctx)
+                    .unwrap_or_else(|e| panic!("case {case} row {i}: row eval failed: {e}"));
+                assert_eq!(batched[i], reference, "case {case} expr {:?} row {i}", expr);
+            }
+        }
+    }
+}

@@ -30,6 +30,10 @@ pub enum CancelReason {
     MemoryLimit,
     WorkerFailure,
     Shutdown,
+    /// A write operation hit a transaction conflict (write-write conflict or
+    /// a rollback-only transaction); remaining pipeline stages of the same
+    /// transaction are cancelled to avoid wasted computation.
+    TransactionConflict,
     Internal(String),
 }
 
@@ -42,6 +46,7 @@ impl std::fmt::Display for CancelReason {
             Self::MemoryLimit => write!(f, "memory limit exceeded"),
             Self::WorkerFailure => write!(f, "worker failure"),
             Self::Shutdown => write!(f, "system shutdown"),
+            Self::TransactionConflict => write!(f, "transaction conflict"),
             Self::Internal(msg) => write!(f, "{}", msg),
         }
     }

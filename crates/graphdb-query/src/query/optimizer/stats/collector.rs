@@ -59,9 +59,10 @@ impl CollectedSummary {
 
 /// Collects statistical information from storage into the [`StatisticsManager`].
 ///
-/// v1 scope: exact vertex/edge counts plus sampled average degrees. Property
-/// statistics are not collected (full scans are too expensive); runtime
-/// feedback (A2) compensates for them indirectly.
+/// Scope: exact vertex/edge counts, sampled average degrees, and per-property
+/// NDV plus min/max envelopes from the sampled row window. The envelope feeds
+/// range-predicate interpolation in `SelectivityEstimator`. Histograms are
+/// left disabled on the sampled path; runtime feedback compensates for skew.
 pub struct StatisticsCollector;
 
 impl StatisticsCollector {
@@ -326,11 +327,18 @@ impl StatisticsCollector {
             if vertices.is_empty() || tag_info.properties.is_empty() {
                 continue;
             }
-            // Build NDV per property via exact distinct count on the sample.
+            // Build NDV per property via exact distinct count on the sample;
+            // the same pass maintains the per-column min/max envelope.
             let mut distinct_per_prop: std::collections::HashMap<String, HashSet<String>> =
+                std::collections::HashMap::new();
+            let mut stats_per_prop: std::collections::HashMap<String, PropertyStatistics> =
                 std::collections::HashMap::new();
             for prop in &tag_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), HashSet::new());
+                stats_per_prop.insert(
+                    prop.name.clone(),
+                    PropertyStatistics::new(prop.name.clone(), Some(tag_name.clone())),
+                );
             }
             for vertex in &vertices {
                 // Vertex may carry properties in its Tag or in vertex-level map.
@@ -344,6 +352,9 @@ impl StatisticsCollector {
                         .or_else(|| vertex.properties.get(prop_name.as_str()))
                     {
                         bucket.insert(ndv_key(v));
+                        if let Some(stat) = stats_per_prop.get_mut(prop_name) {
+                            stat.observe_value(v);
+                        }
                     }
                     // Missing properties do not contribute to NDV.
                 }
@@ -357,8 +368,9 @@ impl StatisticsCollector {
                 if distinct == 0 {
                     continue;
                 }
-                let mut stat =
-                    PropertyStatistics::new(prop_def.name.clone(), Some(tag_name.clone()));
+                let mut stat = stats_per_prop.remove(&prop_def.name).unwrap_or_else(|| {
+                    PropertyStatistics::new(prop_def.name.clone(), Some(tag_name.clone()))
+                });
                 stat.distinct_values = distinct.max(1);
                 manager.update_property_stats(space, stat);
                 collected += 1;
@@ -389,13 +401,22 @@ impl StatisticsCollector {
             }
             let mut distinct_per_prop: std::collections::HashMap<String, HashSet<String>> =
                 std::collections::HashMap::new();
+            let mut stats_per_prop: std::collections::HashMap<String, PropertyStatistics> =
+                std::collections::HashMap::new();
             for prop in &edge_info.properties {
                 distinct_per_prop.insert(prop.name.clone(), HashSet::new());
+                stats_per_prop.insert(
+                    prop.name.clone(),
+                    PropertyStatistics::new(prop.name.clone(), Some(edge_type.clone())),
+                );
             }
             for edge in &edges {
                 for (prop_name, bucket) in distinct_per_prop.iter_mut() {
                     if let Some(v) = edge.get_property(prop_name.as_str()) {
                         bucket.insert(ndv_key(v));
+                        if let Some(stat) = stats_per_prop.get_mut(prop_name) {
+                            stat.observe_value(v);
+                        }
                     }
                 }
             }
@@ -407,8 +428,9 @@ impl StatisticsCollector {
                 if distinct == 0 {
                     continue;
                 }
-                let mut stat =
-                    PropertyStatistics::new(prop_def.name.clone(), Some(edge_type.clone()));
+                let mut stat = stats_per_prop.remove(&prop_def.name).unwrap_or_else(|| {
+                    PropertyStatistics::new(prop_def.name.clone(), Some(edge_type.clone()))
+                });
                 stat.distinct_values = distinct.max(1);
                 manager.update_property_stats(space, stat);
                 collected += 1;

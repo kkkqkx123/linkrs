@@ -31,6 +31,16 @@ pub enum SinkOperatorKind {
         rows_inserted: u64,
         summary_returned: bool,
     },
+    CopyTo {
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        space_name: String,
+        target: crate::query::executor::streaming::operators::spec::CopyTarget,
+        file_path: String,
+        header: bool,
+        delimiter: u8,
+        rows_exported: u64,
+        summary_returned: bool,
+    },
     InsertVertices {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
@@ -175,6 +185,20 @@ fn condition_matches(value: &Value) -> bool {
 /// When the row carries an `Edge` value (e.g. `MATCH ... DELETE EDGE e`), the
 /// endpoints are taken from the edge itself; otherwise both values are
 /// converted to vertex ids directly.
+///
+/// Whether a write-path error message indicates a transaction conflict
+/// (write-write conflict, rollback-only transaction).
+///
+/// Storage errors are flattened to strings at the operator boundary; the
+/// storage layer's typed `StorageErrorKind::Conflict` renders as "conflict"
+/// / "Write-write conflict", which this classifier recognizes.
+fn is_transaction_conflict_message(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("conflict")
+        || lowered.contains("rollback-only")
+        || lowered.contains("rollback_only")
+}
+
 fn resolve_edge_endpoints(src_val: &Value, dst_val: &Value) -> Option<(VertexId, VertexId)> {
     match (src_val, dst_val) {
         (Value::Edge(edge), _) => Some((edge.src, edge.dst)),
@@ -210,6 +234,22 @@ impl SinkOperator {
                 delimiter: *delimiter,
                 batch_size: *batch_size,
                 rows_inserted: 0,
+                summary_returned: false,
+            },
+            super::spec::SinkSpec::CopyTo {
+                space_name,
+                target,
+                file_path,
+                header,
+                delimiter,
+            } => SinkOperatorKind::CopyTo {
+                storage,
+                space_name: space_name.clone(),
+                target: target.clone(),
+                file_path: file_path.clone(),
+                header: *header,
+                delimiter: *delimiter,
+                rows_exported: 0,
                 summary_returned: false,
             },
             super::spec::SinkSpec::InsertVertices {
@@ -395,6 +435,7 @@ impl SinkOperator {
         self.check_write_permission()?;
         match &mut self.kind {
             SinkOperatorKind::CopyFrom { .. }
+            | SinkOperatorKind::CopyTo { .. }
             | SinkOperatorKind::InsertVertices { .. }
             | SinkOperatorKind::InsertEdges { .. }
             | SinkOperatorKind::UpdateVertices { .. }
@@ -411,6 +452,24 @@ impl SinkOperator {
     }
 
     pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+        let result = self.next_inner(input);
+        if let Err(error) = &result {
+            // Write-conflict linkage: a conflict-classified failure (write-write
+            // conflict, rollback-only transaction) cancels the remaining pipeline
+            // stages of the same transaction instead of letting them compute on.
+            if is_transaction_conflict_message(&error.to_string()) {
+                if let Some(rt) = self.runtime.as_ref() {
+                    rt.note_transaction_conflict();
+                }
+            }
+        }
+        result
+    }
+
+    fn next_inner(
+        &mut self,
+        input: &mut StreamingExecutor,
+    ) -> Result<Option<DataChunk>, QueryError> {
         match &mut self.kind {
             SinkOperatorKind::InsertVertices {
                 storage,
@@ -1097,6 +1156,51 @@ impl SinkOperator {
                     Arc::clone(&self.output_layout),
                     "copy_from",
                     *rows_inserted,
+                )))
+            }
+            SinkOperatorKind::CopyTo {
+                storage,
+                space_name,
+                target,
+                file_path,
+                header,
+                delimiter,
+                rows_exported,
+                summary_returned,
+                ..
+            } => {
+                if *summary_returned {
+                    return Ok(None);
+                }
+                // Drain input (dummy single row)
+                while let Some(mut chunk) = input.advance()? {
+                    chunk.materialize_selection_by("CopyTo");
+                    if let Some(rt) = self.runtime.as_ref() {
+                        rt.ensure_not_cancelled()?;
+                    }
+                }
+                if let Some(rt) = self.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
+                if let Some(storage_lock) = storage {
+                    let count = super::copy::execute_copy_to(
+                        storage_lock,
+                        space_name,
+                        target,
+                        file_path,
+                        *header,
+                        *delimiter,
+                    )?;
+                    *rows_exported = count;
+                } else {
+                    // Mock storage: nothing to scan.
+                    *rows_exported = 0;
+                }
+                *summary_returned = true;
+                Ok(Some(make_modify_result(
+                    Arc::clone(&self.output_layout),
+                    "copy_to",
+                    *rows_exported,
                 )))
             }
         }

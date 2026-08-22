@@ -213,6 +213,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let mut ctx = ctx;
         ctx.transaction_id = Some(execution.transaction_id());
         ctx.auto_commit = execution.auto_commit();
+        ctx.isolation_level = Some(execution.isolation_level());
         self.execute_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
     }
 
@@ -277,6 +278,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);
+        request_context.isolation_level = ctx.isolation_level;
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
@@ -347,6 +349,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         let mut ctx = ctx;
         ctx.transaction_id = Some(execution.transaction_id());
         ctx.auto_commit = execution.auto_commit();
+        ctx.isolation_level = Some(execution.isolation_level());
         self.execute_stream_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
     }
 
@@ -409,6 +412,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);
+        request_context.isolation_level = ctx.isolation_level;
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
@@ -465,6 +469,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             parameters: Some(params),
             session_variables: ctx.session_variables,
             query_id: ctx.query_id,
+            isolation_level: ctx.isolation_level,
             parsed_statement: ctx.parsed_statement,
         };
         self.execute(query, new_ctx)

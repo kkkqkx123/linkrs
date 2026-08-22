@@ -17,15 +17,18 @@ use std::sync::Arc;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::expr::ExpressionMeta;
-use crate::core::types::operators::{BinaryOperator, UnaryOperator};
+use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::core::types::{ContextualExpression, Expression};
 use crate::query::binder::validation::ValidationInfo;
+use crate::query::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::query::parser::ast::pattern::PatternUtils;
 use crate::query::planning::plan::core::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::control_flow::ArgumentNode;
+use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::PatternApplyNode;
+use crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode;
 use crate::query::planning::plan::core::nodes::join::CrossJoinNode;
 use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
@@ -33,6 +36,7 @@ use crate::query::planning::plan::logical::logical_nodes::control_flow::LogicalA
 use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalCorrelatedApplyNode;
 use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternApplyNode;
 use crate::query::planning::plan::logical::logical_nodes::join::LogicalCrossJoinNode;
+use crate::query::planning::plan::logical::logical_nodes::join::LogicalSemiJoinNode;
 use crate::query::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
 use crate::query::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::query::planning::plan::logical::LogicalNodeEnum;
@@ -75,6 +79,37 @@ pub struct PlannedSubquery {
     /// re-execution over an `Argument` frame) instead of a key-based
     /// `PatternApply`. This is a planning-time routing flag only.
     pub correlated: bool,
+    /// When set, the non-equi correlated subquery is decorrelated as a
+    /// Mark-Join (a `SemiJoin` carrying the correlated residual as its join
+    /// condition) instead of a per-row `CorrelatedApply`. The caller wraps
+    /// the join with [`wrap_mark_join`].
+    pub mark_join_condition: Option<ContextualExpression>,
+    /// When set, the correlated scalar aggregate subquery
+    /// (`RETURN agg(...) WHERE corr = outer.x`) is decorrelated as a
+    /// Group-Join: the right subtree pre-aggregates per probe key and the
+    /// runtime backfills the outer row by hash-key lookup.
+    pub group_join: Option<PlannedGroupJoin>,
+}
+
+/// Group-Join decorrelation info for a scalar aggregate correlated subquery.
+///
+/// The planned right subtree ends in `Project(probe keys) -> Aggregate`
+/// whose output rows are `[group_key..., agg_value]`; the runtime
+/// materializes them once into a `HashMap<Vec<Value>, Value>` keyed by the
+/// group key and answers per-row lookups with the outer-side
+/// [`PlannedGroupJoin::hash_keys`] expressions.
+#[derive(Debug, Clone)]
+pub struct PlannedGroupJoin {
+    /// Outer-side key expressions, evaluated against the hosting row's
+    /// layout (same convention as `PatternApply.hash_keys`).
+    pub hash_keys: Vec<Expression>,
+    /// Number of leading group-key columns in each materialized row; the
+    /// aggregated value follows at that index.
+    pub key_columns: usize,
+    /// The single aggregate function computed by the right subtree.
+    pub function: AggregateFunction,
+    /// DISTINCT flag of the aggregate.
+    pub distinct: bool,
 }
 
 /// Extracted keys and residual conditions of a subquery.
@@ -392,7 +427,6 @@ fn plan_scalar_subquery(
     for condition in &conditions {
         flat_conditions.push(extract_conjunctive_exists(condition, &mut nested_specs));
     }
-    let (inner_residual, correlated_residual) = split_correlated(&flat_conditions, &inner_vars);
 
     // A RETURN expression referencing outer columns also makes the subquery
     // correlated: the projection must see the outer frame through the
@@ -401,6 +435,35 @@ fn plan_scalar_subquery(
     let return_correlated = return_expr
         .as_ref()
         .is_some_and(|e| e.get_variables().iter().any(|v| !inner_vars.contains(v)));
+
+    // Scalar aggregate shape (`RETURN agg(arg)`): a Group-Join decorrelation
+    // candidate. Only filter-free single-argument aggregates whose argument
+    // references no outer variable and no nested subquery qualify.
+    let aggregate_return = match &return_expr {
+        Some(Expression::Aggregate {
+            func,
+            args,
+            distinct,
+            filter: None,
+        }) if args.len() == 1 && !contains_expression_subquery(&args[0]) => {
+            Some((*func, args[0].clone(), *distinct))
+        }
+        _ => None,
+    };
+
+    // When a scalar aggregate candidate is present, split the equi-key
+    // conjuncts out of the conditions so the correlated part reduces to
+    // pure hash/probe keys (the Group-Join precondition). Any other shape
+    // keeps the conditions untouched below.
+    let try_group_join =
+        aggregate_return.is_some() && nested_specs.is_empty() && !return_correlated;
+    let (hash_key_exprs, probe_key_exprs, residual_conditions) = if try_group_join {
+        extract_keys(&flat_conditions, &inner_vars)?
+    } else {
+        (Vec::new(), Vec::new(), flat_conditions)
+    };
+    let (inner_residual, correlated_residual) = split_correlated(&residual_conditions, &inner_vars);
+    let mut correlated_residual = correlated_residual;
 
     // Build the base subquery plan. Index selection is disabled for the
     // subquery: its tags are not part of the outer ValidationInfo, so scans
@@ -437,7 +500,9 @@ fn plan_scalar_subquery(
             .map(|root| root.col_names().to_vec())
             .unwrap_or_default();
         let planned = plan_subquery(nested, qctx, space_id, space_name, &nested_outer)?;
-        sub_plan = if planned.correlated {
+        sub_plan = if let Some(condition) = &planned.mark_join_condition {
+            wrap_mark_join(sub_plan, &planned, condition, nested.negated)?
+        } else if planned.correlated {
             wrap_correlated_apply(sub_plan, &planned, nested.negated)?
         } else {
             wrap_pattern_apply(sub_plan, &planned, nested.negated)?
@@ -462,6 +527,54 @@ fn plan_scalar_subquery(
         )?;
     }
 
+    // Scalar aggregate Group-Join decorrelation: when the correlated part
+    // reduced to pure equi keys and the right subtree is a simple
+    // single-table shape, pre-aggregate per probe key instead of
+    // re-executing the subquery per outer row. On any mismatch the
+    // extracted equality conjuncts are restored so the CorrelatedApply /
+    // plain-project fallback keeps every condition.
+    let mut group_join = None;
+    if let Some((func, agg_arg, distinct)) = aggregate_return.clone() {
+        let eligible = !hash_key_exprs.is_empty()
+            && correlated_residual.is_empty()
+            && sub_plan
+                .root()
+                .as_ref()
+                .is_some_and(SubqueryUnnestingOptimizer::is_mark_join_shape);
+        if eligible {
+            sub_plan = build_group_join_right_subtree(
+                sub_plan,
+                &probe_key_exprs,
+                func,
+                &agg_arg,
+                distinct,
+                &expr_context,
+            )?;
+            group_join = Some(PlannedGroupJoin {
+                hash_keys: hash_key_exprs,
+                key_columns: probe_key_exprs.len(),
+                function: func,
+                distinct,
+            });
+        } else if !hash_key_exprs.is_empty() {
+            let mut restored: Vec<Expression> = hash_key_exprs
+                .iter()
+                .zip(probe_key_exprs.iter())
+                .map(|(h, p)| Expression::binary(h.clone(), BinaryOperator::Equal, p.clone()))
+                .collect();
+            restored.extend(inner_residual.iter().cloned());
+            restored.extend(correlated_residual.iter().cloned());
+            let (inner_restored, correlated_restored) = split_correlated(&restored, &inner_vars);
+            if !inner_restored.is_empty() && !is_trivially_true(&and_join(&inner_restored)) {
+                sub_plan = wrap_filter(
+                    sub_plan,
+                    to_contextual(and_join(&inner_restored), &expr_context),
+                )?;
+            }
+            correlated_residual = correlated_restored;
+        }
+    }
+
     // When the subquery references outer columns (non-equi correlation),
     // re-root it as Filter -> CrossJoin(Argument, plan) so the runtime can
     // bind the outer row as the correlation frame and re-execute per row.
@@ -473,21 +586,25 @@ fn plan_scalar_subquery(
     // The RETURN expression (if any) becomes a top projection; expression-level
     // subqueries inside it are compiled recursively and attached to the
     // project node. EXISTS without a RETURN expression needs no projection —
-    // existence is decided by non-emptiness.
+    // existence is decided by non-emptiness. The Group-Join form already
+    // materialized the aggregate as the sub-plan root, so no projection is
+    // wrapped on top.
     if let Some(return_expr) = return_expr {
-        let (planned_return, return_subqueries) = plan_expression_subqueries(
-            return_expr,
-            qctx,
-            space_id,
-            space_name,
-            outer_col_names,
-            id_alloc,
-        )?;
-        sub_plan = wrap_project_with_subqueries(
-            sub_plan,
-            to_contextual(planned_return, &expr_context),
-            return_subqueries,
-        )?;
+        if group_join.is_none() {
+            let (planned_return, return_subqueries) = plan_expression_subqueries(
+                return_expr,
+                qctx,
+                space_id,
+                space_name,
+                outer_col_names,
+                id_alloc,
+            )?;
+            sub_plan = wrap_project_with_subqueries(
+                sub_plan,
+                to_contextual(planned_return, &expr_context),
+                return_subqueries,
+            )?;
+        }
     }
 
     Ok(PlannedSubquery {
@@ -496,6 +613,62 @@ fn plan_scalar_subquery(
         hash_keys: Vec::new(),
         probe_keys: Vec::new(),
         correlated,
+        mark_join_condition: None,
+        group_join,
+    })
+}
+
+/// Whether `expr` contains an expression-level EXISTS / IN anywhere.
+fn contains_expression_subquery(expr: &Expression) -> bool {
+    match expr {
+        Expression::Exists { .. } | Expression::In { .. } => true,
+        _ => expr
+            .children()
+            .iter()
+            .any(|c| contains_expression_subquery(c)),
+    }
+}
+
+/// Re-root the scalar aggregate right subtree as a Group-Join build side:
+/// `Aggregate(group_by = probe keys, agg) -> Project(probe keys) -> plan`.
+///
+/// The probe key expressions are projected into dedicated `__gj_key_N`
+/// columns first so the aggregate can group by name regardless of the
+/// pattern plan's output layout. The aggregate output rows are
+/// `[group_key..., agg_value]` positionally, which is what the runtime
+/// Group-Join table build consumes.
+fn build_group_join_right_subtree(
+    sub_plan: SubPlan,
+    probe_keys: &[Expression],
+    agg_func: AggregateFunction,
+    agg_arg: &Expression,
+    distinct: bool,
+    context: &Arc<ExpressionAnalysisContext>,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = sub_plan.root().clone().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The subquery plan has no root node".to_string())
+    })?;
+
+    let key_names: Vec<String> = (0..probe_keys.len())
+        .map(|i| format!("__gj_key_{i}"))
+        .collect();
+    let columns: Vec<crate::core::YieldColumn> = probe_keys
+        .iter()
+        .zip(&key_names)
+        .map(|(expr, name)| {
+            crate::core::YieldColumn::new(to_contextual(expr.clone(), context), name.clone())
+        })
+        .collect();
+    let project = ProjectNode::new(input_node, columns)?;
+
+    let mut aggregate = AggregateNode::new(project.into_enum(), key_names.clone(), vec![agg_func])?;
+    aggregate.set_aggregation_args(vec![vec![agg_arg.clone()]]);
+    aggregate.set_aggregation_distinct(vec![distinct]);
+
+    Ok(SubPlan {
+        root: Some(aggregate.into_enum()),
+        tail: sub_plan.tail,
+        logical_root: None,
     })
 }
 
@@ -672,7 +845,9 @@ pub fn plan_subquery(
             .map(|root| root.col_names().to_vec())
             .unwrap_or_default();
         let planned = plan_subquery(nested, qctx, space_id, space_name, &nested_outer)?;
-        sub_plan = if planned.correlated {
+        sub_plan = if let Some(condition) = &planned.mark_join_condition {
+            wrap_mark_join(sub_plan, &planned, condition, nested.negated)?
+        } else if planned.correlated {
             wrap_correlated_apply(sub_plan, &planned, nested.negated)?
         } else {
             wrap_pattern_apply(sub_plan, &planned, nested.negated)?
@@ -697,27 +872,46 @@ pub fn plan_subquery(
         .collect();
 
     // When a residual condition references outer variables (non-equi
-    // correlation), the subquery cannot be decorrelated via hash/probe keys.
-    // Re-root the right subtree as Filter -> CrossJoin(Argument, plan) so the
-    // CorrelatedApply operator can bind the outer row as the correlation frame
-    // and re-execute the subtree per row. For IN, the synthesized equality is
-    // folded into the correlated filter so existence equals the IN test.
+    // correlation), prefer the Mark-Join form: decorrelate into a SemiJoin
+    // carrying the correlated residual as its join condition when the
+    // subquery has a simple single-table shape. Only shapes that cannot be
+    // decorrelated this way fall back to the per-row CorrelatedApply
+    // (Filter -> CrossJoin(Argument, plan) re-executed per outer row).
     let correlated = !correlated_residual.is_empty();
+    let mut mark_join_condition = None;
     if correlated {
-        let mut correlated_conditions = correlated_residual;
-        if let Some(equality) = in_equality {
-            correlated_conditions.push(equality);
+        let mark_joinable = sub_plan.root().as_ref().is_some_and(|root| {
+            SubqueryUnnestingOptimizer::is_mark_join_shape(root)
+                && !SubqueryUnnestingOptimizer::contains_aggregation(root)
+        });
+        if mark_joinable {
+            let mut conditions = correlated_residual;
+            if let Some(equality) = in_equality {
+                conditions.push(equality);
+            }
+            mark_join_condition = Some(to_contextual(and_join(&conditions), &expr_context));
+        } else {
+            let mut correlated_conditions = correlated_residual;
+            if let Some(equality) = in_equality {
+                correlated_conditions.push(equality);
+            }
+            sub_plan =
+                build_correlated_right_subtree(sub_plan, &correlated_conditions, outer_col_names)?;
         }
-        sub_plan =
-            build_correlated_right_subtree(sub_plan, &correlated_conditions, outer_col_names)?;
     }
 
     Ok(PlannedSubquery {
         id: spec.body.id,
         plan: Box::new(sub_plan),
+        // The Mark-Join form keeps the extracted equi keys (mixed shapes);
+        // the CorrelatedApply fallback clears them.
         hash_keys: if correlated { Vec::new() } else { hash_keys },
         probe_keys: if correlated { Vec::new() } else { probe_keys },
-        correlated,
+        // `correlated` marks the per-row CorrelatedApply routing; the
+        // Mark-Join form is not a CorrelatedApply.
+        correlated: correlated && mark_join_condition.is_none(),
+        mark_join_condition,
+        group_join: None,
     })
 }
 
@@ -814,6 +1008,58 @@ pub fn wrap_correlated_apply(
     })
 }
 
+/// Wrap `left` with a Mark-Join (`SemiJoin` carrying the correlated residual
+/// as its join condition) over the planned subquery.
+///
+/// The Mark-Join decorrelates a non-equi correlated EXISTS/IN: the right
+/// side is the plain subquery plan (executed once, not per outer row), the
+/// residual condition is evaluated over the combined left+right row, and
+/// anti (NOT EXISTS) keeps left rows with no matching right row.
+pub fn wrap_mark_join(
+    left: SubPlan,
+    planned: &PlannedSubquery,
+    condition: &ContextualExpression,
+    anti: bool,
+) -> Result<SubPlan, PlannerError> {
+    let left_root = left.root().clone().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+    })?;
+    let right_root = planned.plan.root().clone().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The subquery plan has no root node".to_string())
+    })?;
+
+    let join = SemiJoinNode::new_with_condition(
+        left_root,
+        right_root,
+        planned.hash_keys.clone(),
+        planned.probe_keys.clone(),
+        condition.clone(),
+        anti,
+    )?;
+
+    let logical_root = match (left.logical_root(), planned.plan.logical_root()) {
+        (Some(left_logical), Some(right_logical)) => {
+            Some(LogicalNodeEnum::SemiJoin(LogicalSemiJoinNode {
+                id: next_node_id(),
+                left: Box::new(left_logical.clone()),
+                right: Box::new(right_logical.clone()),
+                hash_keys: planned.hash_keys.clone(),
+                probe_keys: planned.probe_keys.clone(),
+                deps: vec![left_logical.clone(), right_logical.clone()],
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            }))
+        }
+        _ => None,
+    };
+
+    Ok(SubPlan {
+        root: Some(join.into_enum()),
+        tail: left.tail,
+        logical_root,
+    })
+}
 /// Re-root the subquery plan as the correlated right subtree:
 /// `Filter(correlated) -> CrossJoin(Argument(col_names = outer), plan)`.
 ///
@@ -1197,9 +1443,8 @@ mod tests {
     }
 
     #[test]
-    fn plans_correlated_exists_as_correlated_apply() {
+    fn plans_correlated_exists_as_mark_join() {
         use crate::core::types::expr::SubqueryBody;
-        use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         let spec = ExistsSpec {
             body: SubqueryBody {
@@ -1231,12 +1476,242 @@ mod tests {
         let planned = plan_subquery(&spec, &qctx, 1, "default", &outer_col_names)
             .expect("correlated subquery should plan");
 
-        assert!(
-            planned.correlated,
-            "non-equi correlation routes to CorrelatedApply"
-        );
+        // A simple single-table subquery with a non-equi correlated residual
+        // routes to the Mark-Join form (SemiJoin with a residual condition),
+        // not the per-row CorrelatedApply.
+        assert!(!planned.correlated, "Mark-Join is not a CorrelatedApply");
         assert!(planned.hash_keys.is_empty());
         assert!(planned.probe_keys.is_empty());
+        let condition = planned
+            .mark_join_condition
+            .as_ref()
+            .expect("non-equi residual becomes the Mark-Join condition")
+            .get_expression()
+            .expect("condition registered");
+        // The condition references the outer variable `t` (left side) and the
+        // inner variable `p` (right side).
+        let cond_vars: HashSet<String> = condition.get_variables().into_iter().collect();
+        assert!(
+            cond_vars.contains("t"),
+            "Mark-Join condition must reference the outer variable, got vars {:?}",
+            cond_vars
+        );
+        assert!(
+            cond_vars.contains("p"),
+            "Mark-Join condition must reference the inner variable, got vars {:?}",
+            cond_vars
+        );
+    }
+
+    // ── scalar aggregate Group-Join planning ────────────────────
+
+    fn test_qctx() -> Arc<QueryContext> {
+        Arc::new(crate::query::QueryContext::new(Arc::new(
+            crate::query::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )))
+    }
+
+    #[test]
+    fn plans_correlated_scalar_aggregate_as_group_join() {
+        use crate::core::types::expr::SubqueryBody;
+        use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+
+        // `t.city IN { (p:person) WHERE p.city = t.city RETURN max(p.age) }`
+        // at an expression position: the correlated part reduces to an equi
+        // key and the right subtree is a simple single-table shape, so the
+        // subquery decorrelates into a Group-Join build side (Aggregate over
+        // the probe key).
+        let body = SubqueryBody {
+            patterns: vec!["(p:person)".to_string()],
+            where_clause: Some(Box::new(eq(prop("p", "city"), prop("t", "city")))),
+            return_expr: Some(Box::new(Expression::Aggregate {
+                func: crate::core::types::operators::AggregateFunction::Max,
+                args: vec![prop("p", "age")],
+                distinct: false,
+                filter: None,
+            })),
+            id: 0,
+        };
+        let expr = Expression::in_subquery(prop("t", "city"), body, false);
+
+        let mut id_alloc = SubqueryIdAllocator::new();
+        let (_, planned) = plan_expression_subqueries(
+            expr,
+            &test_qctx(),
+            1,
+            "default",
+            &["t".to_string()],
+            &mut id_alloc,
+        )
+        .expect("scalar aggregate subquery should plan");
+        assert_eq!(planned.len(), 1);
+        let planned = &planned[0];
+
+        let gj = planned.group_join.as_ref().expect("Group-Join planned");
+        assert!(!planned.correlated, "Group-Join is not a CorrelatedApply");
+        assert!(planned.mark_join_condition.is_none());
+        assert_eq!(gj.key_columns, 1);
+        assert_eq!(
+            gj.function,
+            crate::core::types::operators::AggregateFunction::Max
+        );
+        assert!(!gj.distinct);
+        // The outer-side hash key references the outer variable `t`.
+        assert_eq!(gj.hash_keys.len(), 1);
+        assert_eq!(gj.hash_keys[0].get_variables(), vec!["t".to_string()]);
+
+        // Right subtree root = Aggregate -> Project -> pattern plan.
+        let root = planned.plan.root().as_ref().expect("right subtree root");
+        let PlanNodeEnum::Aggregate(aggregate) = root else {
+            panic!("expected Aggregate root, got {}", root.type_name());
+        };
+        assert_eq!(aggregate.group_keys(), &["__gj_key_0".to_string()]);
+        assert_eq!(aggregate.aggregation_functions().len(), 1);
+        assert_eq!(
+            aggregate.aggregation_args()[0],
+            vec![prop("p", "age")],
+            "aggregate argument preserved"
+        );
+    }
+
+    #[test]
+    fn non_equi_scalar_aggregate_keeps_correlated_apply_fallback() {
+        use crate::core::types::expr::SubqueryBody;
+        use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+
+        // Non-equi correlation cannot reduce to equi keys: the extracted-key
+        // attempt is restored and the per-row CorrelatedApply fallback kept.
+        let body = SubqueryBody {
+            patterns: vec!["(p:person)".to_string()],
+            where_clause: Some(Box::new(Expression::binary(
+                prop("p", "age"),
+                BinaryOperator::GreaterThan,
+                prop("t", "age"),
+            ))),
+            return_expr: Some(Box::new(Expression::Aggregate {
+                func: crate::core::types::operators::AggregateFunction::Count,
+                args: vec![Expression::Literal(Value::string("*"))],
+                distinct: false,
+                filter: None,
+            })),
+            id: 0,
+        };
+        let expr = Expression::exists(body);
+
+        let mut id_alloc = SubqueryIdAllocator::new();
+        let (_, planned) = plan_expression_subqueries(
+            expr,
+            &test_qctx(),
+            1,
+            "default",
+            &["t".to_string()],
+            &mut id_alloc,
+        )
+        .expect("non-equi aggregate subquery should plan");
+        assert_eq!(planned.len(), 1);
+        let planned = &planned[0];
+        assert!(planned.group_join.is_none(), "fallback to CorrelatedApply");
+        assert!(planned.correlated, "CorrelatedApply routing flag set");
+        // The correlated condition survived the restore: the right subtree is
+        // Project(return) -> Filter -> CrossJoin(Argument, plan).
+        let root = planned.plan.root().as_ref().expect("right subtree root");
+        assert_eq!(root.type_name(), "Project", "RETURN projection on top");
+        let PlanNodeEnum::Project(project) = root else {
+            panic!("expected Project root");
+        };
+        let input = project.dependencies().first().expect("project input");
+        assert_eq!(input.type_name(), "Filter", "correlated filter below");
+    }
+
+    #[test]
+    fn filtered_aggregate_return_skips_group_join() {
+        use crate::core::types::expr::SubqueryBody;
+
+        // An aggregate with a FILTER clause is outside the Group-Join shape:
+        // the RETURN expression keeps its plain projection.
+        let body = SubqueryBody {
+            patterns: vec!["(p:person)".to_string()],
+            where_clause: None,
+            return_expr: Some(Box::new(Expression::Aggregate {
+                func: crate::core::types::operators::AggregateFunction::Count,
+                args: vec![prop("p", "age")],
+                distinct: false,
+                filter: Some(Box::new(Expression::binary(
+                    prop("p", "age"),
+                    BinaryOperator::GreaterThan,
+                    Expression::literal(30),
+                ))),
+            })),
+            id: 0,
+        };
+        let expr = Expression::exists(body);
+
+        let mut id_alloc = SubqueryIdAllocator::new();
+        let (_, planned) = plan_expression_subqueries(
+            expr,
+            &test_qctx(),
+            1,
+            "default",
+            &["t".to_string()],
+            &mut id_alloc,
+        )
+        .expect("filtered aggregate subquery should plan");
+        assert_eq!(planned.len(), 1);
+        assert!(planned[0].group_join.is_none());
+        let root = planned[0].plan.root().as_ref().expect("right subtree root");
+        assert_eq!(root.type_name(), "Project", "plain RETURN projection");
+    }
+
+    #[test]
+    fn plans_complex_correlated_exists_as_correlated_apply() {
+        use crate::core::types::expr::SubqueryBody;
+        use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+
+        // A multi-pattern (cross-joined) correlated subquery is not a simple
+        // single-table shape, so it keeps the per-row CorrelatedApply
+        // fallback instead of the Mark-Join form.
+        let spec = ExistsSpec {
+            body: SubqueryBody {
+                patterns: vec!["(p:person)".to_string(), "(q:person)".to_string()],
+                where_clause: Some(Box::new(Expression::binary(
+                    prop("p", "age"),
+                    BinaryOperator::GreaterThan,
+                    prop("t", "age"),
+                ))),
+                return_expr: None,
+                id: 0,
+            },
+            negated: false,
+            left_expr: None,
+        };
+
+        let qctx = Arc::new(crate::query::QueryContext::new(Arc::new(
+            crate::query::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )));
+
+        let outer_col_names = vec!["t".to_string(), "t.name".to_string()];
+        let planned = plan_subquery(&spec, &qctx, 1, "default", &outer_col_names)
+            .expect("correlated subquery should plan");
+
+        assert!(
+            planned.correlated,
+            "cross-joined subquery routes to CorrelatedApply"
+        );
+        assert!(planned.mark_join_condition.is_none());
 
         // Right subtree root = Filter over CrossJoin(Argument, pattern plan).
         let root = planned
@@ -1262,26 +1737,16 @@ mod tests {
             !matches!(cross_node.right_input(), PlanNodeEnum::Argument(_)),
             "right input of the cross join is the subquery pattern plan"
         );
-        // The correlated Filter references the outer variable `t`.
-        let correlated_cond = filter_node
-            .condition()
-            .get_expression()
-            .expect("correlated condition registered");
-        let cond_vars: HashSet<String> = correlated_cond.get_variables().into_iter().collect();
-        assert!(
-            cond_vars.contains("t"),
-            "correlated filter must reference the outer variable, got vars {:?}",
-            cond_vars
-        );
     }
 
     #[test]
-    fn nested_correlated_exists_wraps_inner_correlated_apply() {
+    fn nested_correlated_exists_wraps_inner_mark_join() {
         use crate::core::types::expr::SubqueryBody;
         use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         // Outer EXISTS over `(p:person)` whose WHERE contains a nested EXISTS
-        // correlated against `p` (`q.age > p.age`).
+        // correlated against `p` (`q.age > p.age`). The nested subquery is a
+        // simple single-table shape, so it becomes a Mark-Join (SemiJoin).
         let inner_body = SubqueryBody {
             patterns: vec!["(q:person)".to_string()],
             where_clause: Some(Box::new(Expression::binary(
@@ -1320,20 +1785,20 @@ mod tests {
             .expect("outer EXISTS should plan");
         // The outer subquery itself references no outer variables.
         assert!(!planned.correlated);
-        // The nested correlated EXISTS wraps the subquery base plan.
+        // The nested correlated EXISTS wraps the subquery base plan as a
+        // Mark-Join (SemiJoin with a residual condition).
         assert!(
             matches!(
                 planned.plan.root().as_ref(),
-                Some(PlanNodeEnum::CorrelatedApply(_))
+                Some(PlanNodeEnum::SemiJoin(_))
             ),
-            "nested correlated EXISTS must be planned as a CorrelatedApply"
+            "nested correlated EXISTS must be planned as a Mark-Join SemiJoin"
         );
     }
 
     #[test]
-    fn in_with_correlated_where_keeps_synthesized_equality_in_filter() {
+    fn in_with_correlated_where_keeps_synthesized_equality_in_mark_join_condition() {
         use crate::core::types::expr::SubqueryBody;
-        use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
         let spec = ExistsSpec {
             body: SubqueryBody {
@@ -1363,17 +1828,16 @@ mod tests {
 
         let planned = plan_subquery(&spec, &qctx, 1, "default", &["t".to_string()])
             .expect("correlated IN should plan");
-        assert!(planned.correlated);
-        // The correlated Filter condition must include the synthesized
+        // Simple single-table shape: the correlated IN routes to Mark-Join.
+        assert!(!planned.correlated);
+        // The Mark-Join condition must include the synthesized
         // `t.age = p.age` equality (IN semantics) alongside `p.age > t.age`.
-        let root = planned.plan.root().as_ref().expect("right subtree root");
-        let PlanNodeEnum::Filter(filter_node) = root else {
-            panic!("expected Filter root, got {}", root.type_name());
-        };
-        let condition = filter_node
-            .condition()
+        let condition = planned
+            .mark_join_condition
+            .as_ref()
+            .expect("Mark-Join condition registered")
             .get_expression()
-            .expect("correlated condition registered");
+            .expect("condition resolved");
         let conjuncts = {
             let mut out = Vec::new();
             collect_and_conjuncts(&condition, &mut out);
@@ -1382,7 +1846,7 @@ mod tests {
         assert_eq!(conjuncts.len(), 2);
         assert!(
             conjuncts.contains(&eq(prop("t", "age"), prop("p", "age"))),
-            "IN synthesized equality joins the correlated filter"
+            "IN synthesized equality joins the Mark-Join condition"
         );
     }
 

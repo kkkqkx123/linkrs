@@ -900,6 +900,21 @@ impl ExecutionRuntime {
         self.cancel_token_v2.lock().clone()
     }
 
+    /// Propagate a write-conflict failure of the current transaction.
+    ///
+    /// Called by write operators when a storage access fails with a
+    /// conflict-classified error (write-write conflict, rollback-only). The
+    /// session controller is marked rollback-only so a later COMMIT is
+    /// rejected, and the shared cancellation token is cancelled with the
+    /// typed [`CancelReason::TransactionConflict`] reason — terminating any
+    /// pipeline stages of the same transaction that have not started yet.
+    pub fn note_transaction_conflict(&self) {
+        if let Some(controller) = self.session_controller() {
+            controller.mark_rollback_only();
+        }
+        self.cancel_with_reason(CancelReason::TransactionConflict);
+    }
+
     /// Adopt an externally-owned cancellation token.
     ///
     /// Called at instantiation so the runtime, the query registry, and the

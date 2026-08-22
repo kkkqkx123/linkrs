@@ -201,6 +201,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let exec_ctx = self.build_execution_context(&query_context);
+        validate_snapshot_consistency(&query_context, &exec_ctx)?;
+        reject_writes_outside_transaction_scope(&physical_plan, &transaction_scope)?;
         let is_command_scope = matches!(transaction_scope, TransactionScope::CommandScope);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
@@ -260,6 +262,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         transaction_scope: TransactionScope,
     ) -> DBResult<StreamingQueryResult> {
         let exec_ctx = self.build_execution_context(&query_context);
+        validate_snapshot_consistency(&query_context, &exec_ctx)?;
+        reject_writes_outside_transaction_scope(&physical_plan, &transaction_scope)?;
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
         bindings.query_text = Some(query_context.request_context().query.clone());
@@ -340,6 +344,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             context.query_id = query_id;
         }
         context.cancel_token = Some(query_context.cancel_token());
+        context.isolation_level = query_context.isolation_level();
         if query_context.has_arena() {
             context.arena = Some(Arc::new(
                 parking_lot::Mutex::new(crate::utils::Arena::new()),
@@ -355,4 +360,56 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         context.columnar_policy = Some(self.optimizer_engine.columnar_policy());
         context
     }
+}
+
+/// Validate that the query context and the bound storage agree on the MVCC
+/// snapshot for explicit-transaction reads.
+///
+/// All storage access of one execution instance must observe a single
+/// snapshot (blocking-operator rescans, CTE reuse, correlated-apply
+/// re-execution included). This check centralizes the invariant at runtime
+/// construction instead of trusting every operator to pin the same timestamp.
+fn validate_snapshot_consistency(
+    query_context: &QueryContext,
+    exec_ctx: &ExecutionContext,
+) -> DBResult<()> {
+    let Some(snapshot_ts) = query_context.snapshot_ts() else {
+        return Ok(());
+    };
+    match exec_ctx.bound_snapshot {
+        Some(handle) if handle.ts != snapshot_ts => {
+            Err(DBError::from(QueryError::execution(format!(
+                "snapshot consistency violation: query context pins ts {snapshot_ts} \
+                 but bound storage reads ts {}",
+                handle.ts
+            ))))
+        }
+        Some(_) => Ok(()),
+        None => {
+            log::debug!(
+                "bound storage did not expose a snapshot handle for pinned ts {snapshot_ts}; \
+                 skipping consistency validation"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Reject plans that contain write operators when the transaction scope
+/// forbids writes (read-only snapshot, finished scope, etc.).
+///
+/// The sink operator keeps its runtime `check_write_permission` as a backstop;
+/// this check fails the statement right after physical compilation, before any
+/// pipeline stage starts executing.
+fn reject_writes_outside_transaction_scope(
+    plan: &PhysicalPlan,
+    transaction_scope: &TransactionScope,
+) -> DBResult<()> {
+    if !transaction_scope.allows_write() && plan.contains_write_operator() {
+        return Err(DBError::from(QueryError::execution(
+            "write operations are not allowed in the current read-only transaction scope"
+                .to_string(),
+        )));
+    }
+    Ok(())
 }

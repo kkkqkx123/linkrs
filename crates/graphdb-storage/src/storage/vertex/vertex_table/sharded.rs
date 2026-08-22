@@ -194,7 +194,8 @@ impl ShardedVertexTable {
             let table = self.shards[shard_idx].read();
             for &pos in positions {
                 let (_, local_id) = decode_id(ids[pos], self.num_shards);
-                let chunk = local_id as usize / crate::storage::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
+                let chunk =
+                    local_id as usize / crate::storage::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
                 for range in ranges {
                     let Some(bounds) = table.columns.zone_maps_for_column(&range.column) else {
                         continue;

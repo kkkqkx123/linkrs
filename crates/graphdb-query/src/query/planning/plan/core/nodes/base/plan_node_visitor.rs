@@ -2,7 +2,7 @@
 
 use super::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::data_modification::{
-    CopyFromNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
@@ -171,6 +171,7 @@ pub trait PlanNodeVisitor {
 
     impl_visitor_methods!(
         CopyFrom, CopyFromNode, visit_copy_from;
+        CopyTo, CopyToNode, visit_copy_to;
         InsertVertices, InsertVerticesNode, visit_insert_vertices;
         InsertEdges, InsertEdgesNode, visit_insert_edges;
     );
@@ -280,6 +281,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowQueries(node) => visitor.visit_show_queries(node),
             PlanNodeEnum::ShowSessions(node) => visitor.visit_show_sessions(node),
             PlanNodeEnum::CopyFrom(node) => visitor.visit_copy_from(node),
+            PlanNodeEnum::CopyTo(node) => visitor.visit_copy_to(node),
             PlanNodeEnum::InsertVertices(node) => visitor.visit_insert_vertices(node),
             PlanNodeEnum::InsertEdges(node) => visitor.visit_insert_edges(node),
             PlanNodeEnum::DeleteVertices(node) => visitor.visit_delete_vertices(node),

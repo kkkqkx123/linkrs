@@ -349,6 +349,12 @@ impl DataChunk {
         if !use_columnar || !super::typed_columns_enabled() || self.typed_columns.is_some() {
             return 0;
         }
+        // Global memory pressure: skip building new acceleration caches and
+        // stay on the plain row path (see `memory_watermark` degradation
+        // contract).
+        if !graphdb_storage::storage::memory_watermark::pressure().allows_columnar() {
+            return 0;
+        }
         let num_cols = self.num_columns();
         if self.rows.is_empty() || num_cols == 0 {
             return 0;

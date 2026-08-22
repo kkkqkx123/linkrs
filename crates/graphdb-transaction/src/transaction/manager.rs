@@ -601,6 +601,7 @@ impl TransactionManager {
             context.owner(),
         )
         .with_rollback_only(context.is_rollback_only())
+        .with_isolation_level(context.isolation_level)
         .with_mutation_recorder(recorder))
     }
 

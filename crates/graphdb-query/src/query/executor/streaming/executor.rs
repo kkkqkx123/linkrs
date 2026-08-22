@@ -371,7 +371,7 @@ impl StreamingExecutor {
             Self::Graph(_, input, op) => {
                 // Single-hop Expand/BiExpand are morsel-parallel
                 // (partitioned by anchor vertex-id range, batched neighbor
-                // scan via `neighbor_dst_ids_batch` or zero-copy `ListVector`).
+                // scan via `neighbor_dst_ids_batch`).
                 matches!(
                     &op.kind,
                     GraphOperatorKind::Expand { .. }
@@ -488,6 +488,7 @@ impl StreamingExecutor {
             },
             Sink(_, _, op) => match &op.kind {
                 SinkOperatorKind::CopyFrom { .. } => "CopyFrom",
+                SinkOperatorKind::CopyTo { .. } => "CopyTo",
                 SinkOperatorKind::InsertVertices { .. } => "InsertVertices",
                 SinkOperatorKind::InsertEdges { .. } => "InsertEdges",
                 SinkOperatorKind::UpdateVertices { .. } => "UpdateVertices",

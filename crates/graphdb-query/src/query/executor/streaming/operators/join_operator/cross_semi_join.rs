@@ -94,10 +94,11 @@ pub(super) fn next_cross_join(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn next_semi_join(
     join_condition: &mut Option<Expression>,
+    anti: bool,
     right_rows: &mut Vec<Vec<Value>>,
     right_consumed: &mut bool,
     memory_tracker: &mut MemoryTracker,
-    _right_col_names: &mut Vec<String>,
+    right_col_names: &mut Vec<String>,
     left: &mut StreamingExecutor,
     right: &mut StreamingExecutor,
     runtime: &Option<Arc<ExecutionRuntime>>,
@@ -108,6 +109,9 @@ pub(super) fn next_semi_join(
             chunk.materialize_selection_by("CrossSemiJoin");
             if let Some(rt) = runtime.as_ref() {
                 rt.ensure_not_cancelled()?;
+            }
+            if right_col_names.is_empty() {
+                *right_col_names = chunk.col_names();
             }
             for row in chunk.rows {
                 memory_tracker.try_reserve_row(&row)?;
@@ -123,14 +127,19 @@ pub(super) fn next_semi_join(
         let mut result_rows = Vec::new();
 
         for left_row in &left_chunk.rows {
+            // Semi join: keep the left row when ANY right row satisfies the
+            // condition. Anti join (NOT EXISTS): keep the left row when NO
+            // right row satisfies it (empty right side always matches anti).
+            let mut matched = false;
             for right_row in right_rows.iter() {
                 let condition_satisfied = if let Some(condition) = join_condition {
                     let mut combined_row = left_row.clone();
                     combined_row.extend(right_row.clone());
                     let mut combined_col_names = left_col_names.clone();
-                    for i in 0..right_row.len() {
-                        combined_col_names.push(format!("right_{}", i));
-                    }
+                    // Use the real right column names so the Mark-Join
+                    // residual condition can reference right-side variables
+                    // (e.g. `t.age`) instead of synthetic slots.
+                    combined_col_names.extend(right_col_names.clone());
                     let mut context = ValueRowContext::from_names(combined_row, combined_col_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(Value::Bool(b)) => b,
@@ -141,9 +150,12 @@ pub(super) fn next_semi_join(
                 };
 
                 if condition_satisfied {
-                    result_rows.push(left_row.clone());
+                    matched = true;
                     break;
                 }
+            }
+            if matched != anti {
+                result_rows.push(left_row.clone());
             }
         }
 

@@ -3,6 +3,9 @@ use std::sync::Arc;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
+use crate::query::executor::expression::evaluator::compiled::{
+    compiled_eval_enabled, CompiledExpr,
+};
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{selection_propagation_enabled, DataChunk};
 use crate::query::executor::streaming::executor::StreamingExecutor;
@@ -15,6 +18,11 @@ use crate::query::executor::streaming::subquery::{EvalEnv, SubqueryExecutor};
 #[derive(Debug, Default)]
 pub struct UnaryOperatorState {
     pub env: EvalEnv,
+    /// Lazily-compiled Filter predicate (compiled on the first chunk whose
+    /// layout binds the expression's slots; reused for all later chunks).
+    pub compiled_predicate: Option<CompiledExpr>,
+    /// Lazily-compiled Project output expressions, one per output column.
+    pub compiled_project: Option<Vec<CompiledExpr>>,
 }
 
 #[derive(Debug)]
@@ -215,6 +223,84 @@ impl UnaryOperator {
         Ok(())
     }
 
+    /// Evaluate the filter predicate, preferring the compiled closure tree.
+    ///
+    /// The predicate is compiled once against the first chunk's layout and
+    /// reused for all later chunks. When the compiled path is disabled
+    /// (rollback switch) or compilation/evaluation fails, the scalar chunk
+    /// path is used so semantics stay identical.
+    fn evaluate_filter_predicate(
+        chunk: &mut DataChunk,
+        predicate: &Expression,
+        state: &mut UnaryOperatorState,
+    ) -> Result<Vec<Value>, QueryError> {
+        if compiled_eval_enabled() {
+            if state.compiled_predicate.is_none() {
+                let layout = chunk.get_layout();
+                state.compiled_predicate = Some(CompiledExpr::compile(predicate, &layout));
+            }
+            if let Some(compiled) = &state.compiled_predicate {
+                let layout = chunk.get_layout();
+                let len = chunk.rows.len();
+                match compiled.evaluate_batch(&chunk.rows, layout, Some(&state.env)) {
+                    Ok(col) => return Ok(col.into_values(len)),
+                    Err(_) => {
+                        // Compiled evaluation failed; fall back to the scalar
+                        // path so the runtime error text stays identical.
+                    }
+                }
+            }
+        }
+        chunk
+            .evaluate_expression(predicate, Some(&state.env))
+            .map_err(|e| {
+                QueryError::execution(format!("Filter predicate evaluation failed: {}", e))
+            })
+    }
+
+    /// Evaluate the project output expressions, preferring the compiled
+    /// closure tree over the scalar chunk path.
+    fn evaluate_project_expressions(
+        chunk: &mut DataChunk,
+        output_expressions: &[Expression],
+        state: &mut UnaryOperatorState,
+    ) -> Result<Vec<Vec<Value>>, QueryError> {
+        if compiled_eval_enabled() {
+            if state.compiled_project.is_none() {
+                let layout = chunk.get_layout();
+                state.compiled_project = Some(
+                    output_expressions
+                        .iter()
+                        .map(|e| CompiledExpr::compile(e, &layout))
+                        .collect(),
+                );
+            }
+            if let Some(compiled) = &state.compiled_project {
+                let layout = chunk.get_layout();
+                let len = chunk.rows.len();
+                let mut columns = Vec::with_capacity(compiled.len());
+                let mut ok = true;
+                for expr in compiled {
+                    match expr.evaluate_batch(&chunk.rows, layout.clone(), Some(&state.env)) {
+                        Ok(col) => columns.push(col.into_values(len)),
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    return Ok(columns);
+                }
+            }
+        }
+        chunk
+            .evaluate_expressions(output_expressions, Some(&state.env))
+            .map_err(|e| {
+                QueryError::execution(format!("Project expression evaluation failed: {}", e))
+            })
+    }
+
     pub fn next(&mut self, input: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
         let Self {
             kind,
@@ -226,14 +312,8 @@ impl UnaryOperator {
             UnaryOperatorKind::Filter { predicate, state } => loop {
                 match input.advance()? {
                     Some(mut chunk) => {
-                        let results = chunk
-                            .evaluate_expression(predicate, Some(&state.env))
-                            .map_err(|e| {
-                                QueryError::execution(format!(
-                                    "Filter predicate evaluation failed: {}",
-                                    e
-                                ))
-                            })?;
+                        let results =
+                            Self::evaluate_filter_predicate(&mut chunk, predicate, state)?;
                         // Build a selection vector restricted to the
                         // currently-visible rows (a nested filter keeps the
                         // absolute row indices).
@@ -313,14 +393,8 @@ impl UnaryOperator {
                         }
                         continue;
                     }
-                    let columns = chunk
-                        .evaluate_expressions(output_expressions, Some(&state.env))
-                        .map_err(|e| {
-                            QueryError::execution(format!(
-                                "Project expression evaluation failed: {}",
-                                e
-                            ))
-                        })?;
+                    let columns =
+                        Self::evaluate_project_expressions(&mut chunk, output_expressions, state)?;
                     if !columns.is_empty() && !columns[0].is_empty() {
                         return Ok(Some(DataChunk::from_columns(
                             columns,

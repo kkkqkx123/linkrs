@@ -501,8 +501,14 @@ pub struct WriteGateStats {
 
 /// Serializes auto-commit DML statements.
 struct AutoCommitWriteGate {
-    locked: AtomicBool,
-    mutex: Mutex<()>,
+    /// Gate state, guarded by `mutex`: the holder thread and its lease depth.
+    ///
+    /// The gate is **re-entrant per thread**: a statement-level auto-commit
+    /// binding holds the gate while the statement executes, and nested gated
+    /// operations on the same thread (e.g. `COPY FROM` opening its group
+    /// window inside that statement) must not self-deadlock. Nested leases
+    /// only bump the depth; the gate frees when the outermost lease releases.
+    state: Mutex<Option<(std::thread::ThreadId, u64)>>,
     condvar: parking_lot::Condvar,
     /// Cumulative admission counters (see [`WriteGateStats`]).
     acquisitions: AtomicU64,
@@ -512,8 +518,7 @@ struct AutoCommitWriteGate {
 impl AutoCommitWriteGate {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            locked: AtomicBool::new(false),
-            mutex: Mutex::new(()),
+            state: Mutex::new(None),
             condvar: parking_lot::Condvar::new(),
             acquisitions: AtomicU64::new(0),
             wait_nanos: AtomicU64::new(0),
@@ -522,10 +527,24 @@ impl AutoCommitWriteGate {
 
     fn acquire(self: &Arc<Self>) -> Arc<AutoCommitWriteLease> {
         let start = std::time::Instant::now();
-        let mut guard = self.mutex.lock();
-        while self.locked.swap(true, Ordering::Acquire) {
+        let current = std::thread::current().id();
+        let mut guard = self.state.lock();
+        // Re-entrant admission: the holder re-acquiring bumps the depth.
+        if let Some((holder, depth)) = guard.as_mut() {
+            if *holder == current {
+                *depth += 1;
+                drop(guard);
+                self.acquisitions.fetch_add(1, Ordering::Relaxed);
+                return Arc::new(AutoCommitWriteLease {
+                    gate: self.clone(),
+                    held: AtomicBool::new(true),
+                });
+            }
+        }
+        while guard.is_some() {
             self.condvar.wait(&mut guard);
         }
+        *guard = Some((current, 1));
         drop(guard);
         self.acquisitions.fetch_add(1, Ordering::Relaxed);
         self.wait_nanos
@@ -544,8 +563,16 @@ impl AutoCommitWriteGate {
     }
 
     fn release(&self) {
-        self.locked.store(false, Ordering::Release);
-        self.condvar.notify_one();
+        let mut guard = self.state.lock();
+        match guard.as_mut() {
+            Some((_, depth)) if *depth > 1 => *depth -= 1,
+            Some(_) => {
+                *guard = None;
+                drop(guard);
+                self.condvar.notify_one();
+            }
+            None => {}
+        }
     }
 }
 
@@ -1219,6 +1246,42 @@ mod tests {
         // The gate must accept a new writer after release.
         let next = gate.acquire();
         drop(next);
+    }
+
+    #[test]
+    fn test_auto_commit_write_gate_is_reentrant_per_thread() {
+        // Regression: a statement-level auto-commit binding holds the gate
+        // while a nested gated operation on the same thread (COPY FROM group
+        // window) acquires it again. Non-reentrant admission self-deadlocked.
+        let gate = AutoCommitWriteGate::new();
+        let outer = gate.acquire();
+        {
+            // Same-thread re-acquisition must not block.
+            let inner = gate.acquire();
+            let innermost = gate.acquire();
+            drop(inner);
+            drop(innermost);
+        }
+        // Depth still 1 after the nested leases dropped: another thread must
+        // stay excluded until `outer` releases.
+        let spawned = thread::spawn({
+            let gate = gate.clone();
+            move || {
+                let lease = gate.acquire();
+                drop(lease);
+                true
+            }
+        });
+        thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !spawned.is_finished(),
+            "gate admitted a second holder while leased"
+        );
+        drop(outer);
+        assert!(
+            spawned.join().unwrap(),
+            "waiter must acquire after outer release"
+        );
     }
 
     #[test]

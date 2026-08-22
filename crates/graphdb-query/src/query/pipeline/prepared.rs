@@ -3,6 +3,7 @@ use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
 use crate::core::types::Timestamp;
 use crate::core::types::TransactionId;
+use crate::core::types::TransactionIsolationLevel;
 use crate::query::binder::BoundStatement;
 use crate::query::executor::base::ExecutionResult;
 use crate::query::executor::streaming::instance::ResultSink;
@@ -687,9 +688,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_info: Option<&SpaceInfo>,
     ) -> Arc<QueryContext> {
         let snapshot_ts = snapshot_ts_for_request(&rctx);
+        let isolation_level = isolation_level_for_request(&rctx);
         let mut builder = QueryContext::builder(rctx);
         if let Some(ts) = snapshot_ts {
             builder = builder.with_snapshot_ts(ts);
+        }
+        if let Some(level) = isolation_level {
+            builder = builder.with_isolation_level(level);
         }
         let mut query_context = builder.build();
         if let Some(space) = space_info {
@@ -916,6 +921,26 @@ fn snapshot_ts_for_request(rctx: &QueryRequestContext) -> Option<Timestamp> {
     rctx.operation_context
         .as_ref()
         .map(|context| context.read_timestamp)
+}
+
+/// Derive the transaction isolation level for a request.
+///
+/// The API layer injects the level for queries inside an explicit transaction
+/// (from `TransactionExecution`). When it was not injected but the request is
+/// still a non-auto-commit transaction statement, fall back to the
+/// transaction manager's default (`RepeatableRead`). Auto-commit statements
+/// keep `None` (statement-level snapshot semantics).
+fn isolation_level_for_request(rctx: &QueryRequestContext) -> Option<TransactionIsolationLevel> {
+    if rctx.auto_commit {
+        return None;
+    }
+    rctx.isolation_level.or_else(|| {
+        if rctx.transaction_id.is_some() {
+            Some(TransactionIsolationLevel::default())
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]

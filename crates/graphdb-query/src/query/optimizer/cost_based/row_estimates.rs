@@ -247,11 +247,8 @@ fn estimate_node_output_rows_impl(
                 // the fixed selectivity heuristic only when no statistics are
                 // available. Capped by input rows.
                 let tag_for_ndv = first_tag_of_input(n.input());
-                let ndv = factor_cost::ndv_for_group_keys(
-                    stats,
-                    tag_for_ndv.as_deref(),
-                    n.group_keys(),
-                );
+                let ndv =
+                    factor_cost::ndv_for_group_keys(stats, tag_for_ndv.as_deref(), n.group_keys());
                 if let Some(distinct) = ndv {
                     distinct.min(input_rows).max(1)
                 } else {

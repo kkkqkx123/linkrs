@@ -304,6 +304,7 @@ pub fn build_query_request_context(
 
     QueryRequestContext {
         session_id: Some(session.id()),
+        isolation_level: None,
         user_name: Some(session.user()),
         space_name: session.space_name(),
         query,

@@ -333,6 +333,9 @@ pub enum JoinSpec {
     CrossJoin,
     SemiJoin {
         join_condition: Option<Expression>,
+        // Whether this is a NOT EXISTS (anti) semi join: keep left rows
+        // with NO matching right row.
+        anti: bool,
     },
     HashJoin {
         join_condition: Option<Expression>,
@@ -478,6 +481,13 @@ pub enum SinkSpec {
         header: bool,
         delimiter: u8,
         batch_size: usize,
+    },
+    CopyTo {
+        space_name: String,
+        target: CopyTarget,
+        file_path: String,
+        header: bool,
+        delimiter: u8,
     },
 }
 

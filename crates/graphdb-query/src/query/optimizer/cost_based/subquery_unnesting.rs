@@ -15,13 +15,16 @@
 //! ## Applicable Conditions
 //!
 //! 1. The right input for PatternApply is a simple query (single-table
-//!    scan + equality filtering, optionally wrapped in a constant Limit).
+//!    scan — optionally a simple two-table inner join tree — wrapped in
+//!    equality or disjunctive-equality filtering, optionally wrapped in a
+//!    constant Limit).
 //! 2. The filtering conditions are deterministic (excluding rand(), now(),
 //!    etc.)
 //! 3. The complexity of the expressions should be less than 50 (avoid using
 //!    complex expressions).
 //! 4. The subquery estimates that the number of rows is less than 1000
-//!    (based on statistical information).
+//!    (based on statistical information; the stat-free heuristic gate uses
+//!    the constant [`MAX_BOUNDED_SUBQUERY_ROWS`] limit cap instead).
 //!
 //! ## Usage Examples
 //!
@@ -174,8 +177,10 @@ impl SubqueryUnnestingOptimizer {
             };
         }
 
-        // 3. Checking subqueries for simplicity (shape)
-        if !Self::is_simple_subquery_shape(pattern_apply.right_input()) {
+        // 3. Checking subqueries for simplicity (shape). The static
+        // constant-limit cap is waived here: the CBO row estimate in step 4
+        // bounds the subquery size with statistics instead.
+        if !Self::is_simple_subquery_shape_with_row_bound(pattern_apply.right_input(), i64::MAX) {
             return UnnestDecision::KeepPatternApply {
                 reason: KeepReason::TooComplex,
             };
@@ -244,11 +249,23 @@ impl SubqueryUnnestingOptimizer {
     }
 
     /// Check whether the subquery has a decorrelatable shape: a scan of a
-    /// single table (vertex/edge/index) wrapped in equality filters and
-    /// projections, optionally capped by a constant Limit.
+    /// single table (vertex/edge/index) — optionally a simple two-table
+    /// inner-join tree — wrapped in equality / disjunctive-equality filters
+    /// and projections, capped by a constant `Limit` within
+    /// [`MAX_BOUNDED_SUBQUERY_ROWS`].
     ///
     /// Shared with the heuristic decorrelation rule (stat-free shape gate).
     pub fn is_simple_subquery_shape(node: &PlanNodeEnum) -> bool {
+        Self::is_simple_subquery_shape_with_row_bound(node, MAX_BOUNDED_SUBQUERY_ROWS)
+    }
+
+    /// Shape gate with a configurable constant row bound.
+    ///
+    /// The stat-free heuristic rule passes [`MAX_BOUNDED_SUBQUERY_ROWS`];
+    /// the cost-based decision (`should_unnest`) passes `i64::MAX` and lets
+    /// the CBO row estimate (step 4 of the decision) bound the subquery
+    /// size instead of the static limit cap.
+    pub fn is_simple_subquery_shape_with_row_bound(node: &PlanNodeEnum, max_rows: i64) -> bool {
         match node {
             // Single table scans
             PlanNodeEnum::ScanVertices(_)
@@ -260,11 +277,14 @@ impl SubqueryUnnestingOptimizer {
             // are rejected.
             PlanNodeEnum::Limit(n) => {
                 let count = n.count();
-                (0..=MAX_BOUNDED_SUBQUERY_ROWS).contains(&count)
-                    && Self::is_simple_subquery_shape(SingleInputNode::input(n))
+                (0..=max_rows).contains(&count)
+                    && Self::is_simple_subquery_shape_with_row_bound(
+                        SingleInputNode::input(n),
+                        max_rows,
+                    )
             }
 
-            // Simple filtration
+            // Simple filtration (equalities or disjunctions thereof).
             PlanNodeEnum::Filter(n) => {
                 let condition = n.condition();
                 if let Some(expr_meta) = condition.expression() {
@@ -272,11 +292,56 @@ impl SubqueryUnnestingOptimizer {
                         return false;
                     }
                 }
-                Self::is_simple_subquery_shape(SingleInputNode::input(n))
+                Self::is_simple_subquery_shape_with_row_bound(SingleInputNode::input(n), max_rows)
             }
 
             // Simple projection
-            PlanNodeEnum::Project(n) => Self::is_simple_subquery_shape(SingleInputNode::input(n)),
+            PlanNodeEnum::Project(n) => {
+                Self::is_simple_subquery_shape_with_row_bound(SingleInputNode::input(n), max_rows)
+            }
+
+            // Simple two-table inner join tree: both sides must be simple
+            // shapes themselves; deeper join trees are accepted by
+            // recursion only while every level stays a two-input inner join
+            // over simple inputs.
+            PlanNodeEnum::InnerJoin(n) => {
+                Self::is_simple_subquery_shape_with_row_bound(n.left_input(), max_rows)
+                    && Self::is_simple_subquery_shape_with_row_bound(n.right_input(), max_rows)
+            }
+
+            // Not supported in other cases
+            _ => false,
+        }
+    }
+
+    /// Check whether the subquery has a Mark-Join decorrelatable shape.
+    ///
+    /// The Mark-Join path keeps the subquery plan as the join's right side
+    /// and moves the correlated residual into the join condition, so the
+    /// right side only needs to be a single-table scan wrapped in arbitrary
+    /// (subquery-local) filters and projections, optionally capped by a
+    /// constant `Limit`. Unlike [`Self::is_simple_subquery_shape`] the inner
+    /// filter conditions may be non-equality: they stay as residual filters
+    /// on the materialized right side rather than becoming equi keys.
+    pub fn is_mark_join_shape(node: &PlanNodeEnum) -> bool {
+        match node {
+            // Single table scans
+            PlanNodeEnum::ScanVertices(_)
+            | PlanNodeEnum::ScanEdges(_)
+            | PlanNodeEnum::IndexScan(_) => true,
+
+            // Constant-limit cap keeps the subquery bounded.
+            PlanNodeEnum::Limit(n) => {
+                let count = n.count();
+                (0..=MAX_BOUNDED_SUBQUERY_ROWS).contains(&count)
+                    && Self::is_mark_join_shape(SingleInputNode::input(n))
+            }
+
+            // Any deterministic subquery-local filter is fine.
+            PlanNodeEnum::Filter(n) => Self::is_mark_join_shape(SingleInputNode::input(n)),
+
+            // Simple projection
+            PlanNodeEnum::Project(n) => Self::is_mark_join_shape(SingleInputNode::input(n)),
 
             // Not supported in other cases
             _ => false,
@@ -309,7 +374,9 @@ impl SubqueryUnnestingOptimizer {
         }
     }
 
-    /// Check whether the condition is a simple equality comparison.
+    /// Check whether the condition is a simple equality comparison, an AND
+    /// chain of such comparisons, or a disjunction (OR) of them — i.e. the
+    /// correlated condition is expressible as a DNF of equality conjuncts.
     fn is_simple_equality_condition(expr: &Expression) -> bool {
         match expr {
             Expression::Binary { op, left, right } => match op {
@@ -317,7 +384,7 @@ impl SubqueryUnnestingOptimizer {
                     Self::is_simple_expression(left.as_ref())
                         && Self::is_simple_expression(right.as_ref())
                 }
-                BinaryOperator::And => {
+                BinaryOperator::And | BinaryOperator::Or => {
                     Self::is_simple_equality_condition(left.as_ref())
                         && Self::is_simple_equality_condition(right.as_ref())
                 }
@@ -522,6 +589,123 @@ mod tests {
         assert!(SubqueryUnnestingOptimizer::contains_aggregation(
             &PlanNodeEnum::Aggregate(aggregate)
         ));
+    }
+
+    #[test]
+    fn test_shape_accepts_disjunctive_equality_filter() {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::ContextualExpression;
+        let condition = {
+            let ctx = Arc::new(ExpressionAnalysisContext::new());
+            let prop = |name: &str| Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: name.to_string(),
+            };
+            let expr = Expression::Binary {
+                left: Box::new(Expression::Binary {
+                    left: Box::new(prop("city")),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+                }),
+                op: BinaryOperator::Or,
+                right: Box::new(Expression::Binary {
+                    left: Box::new(prop("age")),
+                    op: BinaryOperator::Equal,
+                    right: Box::new(Expression::Literal(crate::core::Value::Int(2))),
+                }),
+            };
+            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            ContextualExpression::new(id, ctx)
+        };
+        // OR of equalities is accepted by the relaxed gate.
+        let or_filter = PlanNodeEnum::Filter(
+            FilterNode::new(test_scan(), condition.clone()).expect("filter should build"),
+        );
+        assert!(SubqueryUnnestingOptimizer::is_simple_subquery_shape(
+            &or_filter
+        ));
+
+        // OR containing a non-equality comparison is still rejected.
+        let range_condition = {
+            let ctx = Arc::new(ExpressionAnalysisContext::new());
+            let expr = Expression::Binary {
+                left: Box::new(Expression::Property {
+                    object: Box::new(Expression::Variable("n".to_string())),
+                    property: "age".to_string(),
+                }),
+                op: BinaryOperator::GreaterThan,
+                right: Box::new(Expression::Literal(crate::core::Value::Int(30))),
+            };
+            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            ContextualExpression::new(id, ctx)
+        };
+        let range_filter = PlanNodeEnum::Filter(
+            FilterNode::new(test_scan(), range_condition).expect("filter should build"),
+        );
+        assert!(!SubqueryUnnestingOptimizer::is_simple_subquery_shape(
+            &range_filter
+        ));
+    }
+
+    #[test]
+    fn test_shape_accepts_two_table_inner_join() {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+        use crate::core::types::ContextualExpression;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+        let key = || {
+            let ctx = Arc::new(ExpressionAnalysisContext::new());
+            let expr = Expression::Binary {
+                left: Box::new(Expression::Property {
+                    object: Box::new(Expression::Variable("a".to_string())),
+                    property: "id".to_string(),
+                }),
+                op: BinaryOperator::Equal,
+                right: Box::new(Expression::Property {
+                    object: Box::new(Expression::Variable("b".to_string())),
+                    property: "id".to_string(),
+                }),
+            };
+            let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+            ContextualExpression::new(id, ctx)
+        };
+        let join = PlanNodeEnum::InnerJoin(
+            InnerJoinNode::new(test_scan(), test_scan(), vec![key()], vec![key()])
+                .expect("inner join should build"),
+        );
+        assert!(SubqueryUnnestingOptimizer::is_simple_subquery_shape(&join));
+
+        // A join over a non-simple side (aggregation) stays rejected.
+        use crate::query::planning::plan::core::nodes::AggregateNode;
+        let agg_side = PlanNodeEnum::Aggregate(
+            AggregateNode::new(test_scan(), vec![], vec![]).expect("aggregate should build"),
+        );
+        let bad_join = PlanNodeEnum::InnerJoin(
+            InnerJoinNode::new(agg_side, test_scan(), vec![key()], vec![key()])
+                .expect("inner join should build"),
+        );
+        assert!(!SubqueryUnnestingOptimizer::is_simple_subquery_shape(
+            &bad_join
+        ));
+    }
+
+    #[test]
+    fn test_row_bound_is_configurable_for_cbo() {
+        // A large constant limit exceeds the stat-free heuristic bound but is
+        // admitted by the CBO path (the row estimate bounds it instead).
+        let large = PlanNodeEnum::Limit(
+            crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode::new(
+                test_scan(),
+                0,
+                5000,
+            )
+            .expect("limit should build"),
+        );
+        assert!(!SubqueryUnnestingOptimizer::is_simple_subquery_shape(
+            &large
+        ));
+        assert!(
+            SubqueryUnnestingOptimizer::is_simple_subquery_shape_with_row_bound(&large, i64::MAX)
+        );
     }
 
     #[test]

@@ -356,8 +356,9 @@ pub(super) fn build_standalone_write_source(
                 .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
-        PlanNodeEnum::CopyFrom(_) => {
-            // COPY is driven by file scan, not in-memory values: emit a single dummy row
+        PlanNodeEnum::CopyFrom(_) | PlanNodeEnum::CopyTo(_) => {
+            // COPY is driven by file scan (FROM) or storage scan (TO), not
+            // in-memory values: emit a single dummy row
             use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
             let expr_context =
                 crate::core::types::expr::expression_context::ExpressionAnalysisContext::new();
@@ -1044,13 +1045,24 @@ pub(super) fn build_full_outer_join_spec(
 pub(super) fn build_semi_join_spec(
     node: &crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode,
 ) -> Result<JoinSpec, PlanBuildError> {
-    build_join_with_condition(
-        node.hash_keys(),
-        node.probe_keys(),
-        JoinSpec::SemiJoin {
-            join_condition: None,
-        },
-    )
+    // Merge the equi condition derived from the hash/probe keys with the
+    // Mark-Join residual condition (non-equi correlation) so both survive
+    // into the physical operator.
+    let mut join_condition = equi_condition_from_keys(node.hash_keys(), node.probe_keys())?;
+    if let Some(residual) = node.join_condition().and_then(|c| c.get_expression()) {
+        join_condition = Some(match join_condition {
+            Some(equi) => Expression::Binary {
+                left: Box::new(equi),
+                op: crate::core::types::operators::BinaryOperator::And,
+                right: Box::new(residual),
+            },
+            None => residual,
+        });
+    }
+    Ok(JoinSpec::SemiJoin {
+        join_condition,
+        anti: node.is_anti(),
+    })
 }
 
 /// Build an equi-condition from the hash/probe key pairs.
@@ -1172,8 +1184,9 @@ fn build_join_with_condition(
         JoinSpec::FullOuterJoin { .. } => Ok(JoinSpec::FullOuterJoin {
             join_condition: Some(condition),
         }),
-        JoinSpec::SemiJoin { .. } => Ok(JoinSpec::SemiJoin {
+        JoinSpec::SemiJoin { anti, .. } => Ok(JoinSpec::SemiJoin {
             join_condition: Some(condition),
+            anti,
         }),
         _ => Ok(default),
     }
@@ -1488,6 +1501,30 @@ pub(super) fn build_copy_from_spec(
         header: node.header(),
         delimiter: node.delimiter() as u8,
         batch_size: node.batch_size(),
+    })
+}
+
+pub(super) fn build_copy_to_spec(
+    node: &crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyToNode,
+    exec_ctx: &ExecutionContext,
+) -> Result<SinkSpec, PlanBuildError> {
+    let target = match node.target() {
+        crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Vertex(tag) => {
+            crate::query::executor::streaming::operators::spec::CopyTarget::Vertex(tag.clone())
+        }
+        crate::query::planning::plan::core::nodes::data_modification::copy_nodes::CopyTarget::Edge(edge) => {
+            crate::query::executor::streaming::operators::spec::CopyTarget::Edge(edge.clone())
+        }
+    };
+    Ok(SinkSpec::CopyTo {
+        space_name: exec_ctx
+            .space_name
+            .clone()
+            .unwrap_or_else(|| node.space_name().to_string()),
+        target,
+        file_path: node.file_path().to_string(),
+        header: node.header(),
+        delimiter: node.delimiter() as u8,
     })
 }
 

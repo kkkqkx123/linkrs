@@ -1033,7 +1033,7 @@ impl DmlParser {
     ///   COPY EDGE <edge_type> FROM 'path' [WITH ...]
     ///   COPY <tag> FROM 'path' // defaults to VERTEX
     pub fn parse_copy_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        use crate::query::parser::ast::stmt::{CopyStmt, CopyTarget};
+        use crate::query::parser::ast::stmt::{CopyDirection, CopyStmt, CopyTarget};
 
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Copy)?;
@@ -1054,7 +1054,12 @@ impl DmlParser {
             CopyTarget::Vertex(name)
         };
 
-        ctx.expect_token(TokenKind::From)?;
+        let direction = if ctx.match_token(TokenKind::To) {
+            CopyDirection::To
+        } else {
+            ctx.expect_token(TokenKind::From)?;
+            CopyDirection::From
+        };
         let file_path = ctx.expect_string_literal()?;
 
         // Defaults
@@ -1202,6 +1207,7 @@ impl DmlParser {
         Ok(Stmt::Copy(CopyStmt {
             span,
             target,
+            direction,
             file_path,
             header,
             delimiter,

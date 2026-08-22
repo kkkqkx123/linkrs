@@ -19,6 +19,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowQueries(_)
             | PlanNodeEnum::ShowSessions(_)
             | PlanNodeEnum::CopyFrom(_)
+            | PlanNodeEnum::CopyTo(_)
             | PlanNodeEnum::InsertVertices(_)
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)

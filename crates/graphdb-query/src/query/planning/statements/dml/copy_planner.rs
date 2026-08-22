@@ -4,10 +4,12 @@
 
 use std::sync::Arc;
 
-use crate::query::parser::ast::{CopyStmt, CopyTarget as AstCopyTarget, Stmt};
+use crate::query::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::ArgumentNode;
-use crate::query::planning::plan::core::nodes::{CopyFromNode, CopyTarget as PlanCopyTarget};
+use crate::query::planning::plan::core::nodes::{
+    CopyFromNode, CopyTarget as PlanCopyTarget, CopyToNode,
+};
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
@@ -48,13 +50,6 @@ impl Planner for CopyPlanner {
             AstCopyTarget::Edge(edge) => PlanCopyTarget::Edge(edge),
         };
 
-        // Validate file path is not empty
-        if copy_stmt.file_path.trim().is_empty() {
-            return Err(PlannerError::PlanGenerationFailed(
-                "COPY file path must not be empty".to_string(),
-            ));
-        }
-
         let batch_size = copy_stmt.batch_size.unwrap_or(1000);
         if batch_size == 0 {
             return Err(PlannerError::PlanGenerationFailed(
@@ -62,22 +57,45 @@ impl Planner for CopyPlanner {
             ));
         }
 
-        let node = CopyFromNode::new(
-            next_node_id(),
-            space_name,
-            target,
-            copy_stmt.file_path,
-            copy_stmt.header,
-            copy_stmt.delimiter,
-            batch_size,
-        );
+        // Validate file path is not empty (both directions).
+        if copy_stmt.file_path.trim().is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "COPY file path must not be empty".to_string(),
+            ));
+        }
 
-        let arg_node = ArgumentNode::new(next_node_id(), "copy_args");
-        let sub_plan = SubPlan::new(
-            Some(PlanNodeEnum::CopyFrom(node)),
-            Some(PlanNodeEnum::Argument(arg_node)),
-        );
-        Ok(sub_plan)
+        let arg_node = || ArgumentNode::new(next_node_id(), "copy_args");
+        match copy_stmt.direction {
+            CopyDirection::From => {
+                let node = CopyFromNode::new(
+                    next_node_id(),
+                    space_name,
+                    target,
+                    copy_stmt.file_path,
+                    copy_stmt.header,
+                    copy_stmt.delimiter,
+                    batch_size,
+                );
+                Ok(SubPlan::new(
+                    Some(PlanNodeEnum::CopyFrom(node)),
+                    Some(PlanNodeEnum::Argument(arg_node())),
+                ))
+            }
+            CopyDirection::To => {
+                let node = CopyToNode::new(
+                    next_node_id(),
+                    space_name,
+                    target,
+                    copy_stmt.file_path,
+                    copy_stmt.header,
+                    copy_stmt.delimiter,
+                );
+                Ok(SubPlan::new(
+                    Some(PlanNodeEnum::CopyTo(node)),
+                    Some(PlanNodeEnum::Argument(arg_node())),
+                ))
+            }
+        }
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
@@ -103,6 +121,7 @@ mod tests {
         let stmt = Stmt::Copy(CopyStmt {
             span: Span::default(),
             target,
+            direction: CopyDirection::From,
             file_path: "data.csv".to_string(),
             header: true,
             delimiter: ',',

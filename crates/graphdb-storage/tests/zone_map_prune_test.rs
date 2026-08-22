@@ -135,7 +135,10 @@ fn update_widening_bounds_keeps_results_correct() {
                 .collect(),
         )],
     );
-    storage.write().update_vertex(SPACE, updated).expect("update vertex");
+    storage
+        .write()
+        .update_vertex(SPACE, updated)
+        .expect("update vertex");
 
     // A query whose range covers the new extreme must still find it, and a
     // query below the old max must be unaffected.

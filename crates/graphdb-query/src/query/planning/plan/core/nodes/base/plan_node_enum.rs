@@ -11,7 +11,7 @@
 
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::data_modification::{
-    CopyFromNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
+    CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode,
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
     UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
 };
@@ -223,6 +223,7 @@ pub enum PlanNodeEnum {
 
     // Management Node – Data
     CopyFrom(CopyFromNode),
+    CopyTo(CopyToNode),
     InsertVertices(InsertVerticesNode),
     InsertEdges(InsertEdgesNode),
     DeleteVertices(DeleteVerticesNode),
@@ -331,6 +332,7 @@ crate::define_enum_is_methods! {
     (VectorManage, is_vector_manage),
     // Management Node – Data
     (CopyFrom, is_copy_from),
+    (CopyTo, is_copy_to),
     (InsertVertices, is_insert_vertices),
     (InsertEdges, is_insert_edges),
     (DeleteVertices, is_delete_vertices),
@@ -431,6 +433,7 @@ crate::define_enum_as_methods! {
     (VectorManage, as_vector_manage, VectorManageNode),
     // Management Node – Data
     (CopyFrom, as_copy_from, CopyFromNode),
+    (CopyTo, as_copy_to, CopyToNode),
     (InsertVertices, as_insert_vertices, InsertVerticesNode),
     (InsertEdges, as_insert_edges, InsertEdgesNode),
     (DeleteVertices, as_delete_vertices, DeleteVerticesNode),
@@ -531,6 +534,7 @@ crate::define_enum_as_mut_methods! {
     (VectorManage, as_vector_manage_mut, VectorManageNode),
     // Management Node – Data
     (CopyFrom, as_copy_from_mut, CopyFromNode),
+    (CopyTo, as_copy_to_mut, CopyToNode),
     (InsertVertices, as_insert_vertices_mut, InsertVerticesNode),
     (InsertEdges, as_insert_edges_mut, InsertEdgesNode),
     (DeleteVertices, as_delete_vertices_mut, DeleteVerticesNode),
@@ -641,6 +645,7 @@ crate::define_all_plan_nodes! {
     (VectorManage, VectorManageNode, PlanNodeCategory::Management, "VectorManage"),
     // Management Node – Data
     (CopyFrom, CopyFromNode, PlanNodeCategory::Management, "CopyFrom"),
+    (CopyTo, CopyToNode, PlanNodeCategory::Management, "CopyTo"),
     (InsertVertices, InsertVerticesNode, PlanNodeCategory::Management, "InsertVertices"),
     (InsertEdges, InsertEdgesNode, PlanNodeCategory::Management, "InsertEdges"),
     (DeleteVertices, DeleteVerticesNode, PlanNodeCategory::Management, "DeleteVertices"),
@@ -683,6 +688,7 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::FulltextManage(_)
                 | PlanNodeEnum::VectorManage(_)
                 | PlanNodeEnum::CopyFrom(_)
+                | PlanNodeEnum::CopyTo(_)
                 | PlanNodeEnum::InsertVertices(_)
                 | PlanNodeEnum::InsertEdges(_)
                 | PlanNodeEnum::DeleteVertices(_)
@@ -789,6 +795,7 @@ mod tests {
         "FulltextManage",
         "VectorManage",
         "CopyFrom",
+        "CopyTo",
         "InsertVertices",
         "InsertEdges",
         "DeleteVertices",
@@ -874,6 +881,7 @@ mod tests {
         "FulltextManage",
         "VectorManage",
         "CopyFrom",
+        "CopyTo",
         "InsertVertices",
         "InsertEdges",
         "DeleteVertices",
@@ -897,11 +905,11 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 79 variants. With `qdrant`: 82 variants.
+    /// Default build: 80 variants. With `qdrant`: 83 variants.
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 79;
+    const EXPECTED_VARIANT_COUNT: usize = 80;
     #[cfg(feature = "vector")]
-    const EXPECTED_VARIANT_COUNT: usize = 82;
+    const EXPECTED_VARIANT_COUNT: usize = 83;
 
     #[test]
     fn variant_count_matches_documented_number() {

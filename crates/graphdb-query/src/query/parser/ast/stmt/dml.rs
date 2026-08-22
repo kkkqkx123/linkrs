@@ -149,10 +149,20 @@ pub struct RemoveStmt {
 pub struct CopyStmt {
     pub span: Span,
     pub target: CopyTarget,
+    /// Import (`FROM`) or export (`TO`) direction.
+    pub direction: CopyDirection,
     pub file_path: String,
     pub header: bool,
     pub delimiter: char,
     pub batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyDirection {
+    /// `COPY ... FROM 'file'`: bulk import.
+    From,
+    /// `COPY ... TO 'file'`: bulk export.
+    To,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -17,6 +17,7 @@ pub(crate) mod encoding;
 pub(crate) mod engine;
 pub(crate) mod index;
 pub(crate) mod macros;
+pub mod memory_watermark;
 pub(crate) mod mvcc;
 
 pub use mvcc::SnapshotHandle;

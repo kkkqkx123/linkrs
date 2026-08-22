@@ -198,6 +198,65 @@ impl SelectivityEstimator {
         selectivity.min(0.8)
     }
 
+    /// Range-comparison selectivity from the sampled min/max envelope.
+    ///
+    /// Linear interpolation over `[min, max]` assuming uniform distribution:
+    /// `prop > bound` covers `(max - bound) / (max - min)` of the range.
+    /// Falls back to the fixed heuristics when no envelope is available.
+    fn estimate_ordered_comparison(
+        &self,
+        space: Option<&str>,
+        tag_name: Option<&str>,
+        property_name: &str,
+        bound: Option<f64>,
+        greater_than: bool,
+    ) -> f64 {
+        let Some(bound) = bound else {
+            return if greater_than {
+                self.estimate_greater_than_selectivity(None)
+            } else {
+                self.estimate_less_than_selectivity(None)
+            };
+        };
+        let Some(stats) = space.and_then(|s| {
+            self.stats_manager
+                .get_property_stats(s, tag_name, property_name)
+        }) else {
+            return if greater_than {
+                self.estimate_greater_than_selectivity(Some(bound))
+            } else {
+                self.estimate_less_than_selectivity(Some(bound))
+            };
+        };
+        let (Some(min), Some(max)) = (
+            stats.min_value.as_ref().and_then(numeric_as_f64),
+            stats.max_value.as_ref().and_then(numeric_as_f64),
+        ) else {
+            return if greater_than {
+                self.estimate_greater_than_selectivity(Some(bound))
+            } else {
+                self.estimate_less_than_selectivity(Some(bound))
+            };
+        };
+        let span = max - min;
+        if !span.is_finite() || span <= 0.0 {
+            // Single-valued column: the comparison either keeps everything or
+            // almost nothing.
+            let keeps_all = if greater_than {
+                bound < min
+            } else {
+                bound > max
+            };
+            return if keeps_all { 0.95 } else { 0.01 };
+        }
+        let fraction = if greater_than {
+            (max - bound) / span
+        } else {
+            (bound - min) / span
+        };
+        fraction.clamp(0.001, 0.999).min(0.8)
+    }
+
     /// Estimated to be less than conditional selectivity
     ///
     /// If there is statistical information available, the calculations are based on histograms.
@@ -358,20 +417,38 @@ impl SelectivityEstimator {
             }
             BinaryOperator::LessThan => {
                 let value = self.extract_numeric_value(right);
-                self.estimate_less_than_selectivity(value)
+                if let Some(prop) = self.extract_property_name(left) {
+                    self.estimate_ordered_comparison(space, tag_name, &prop, value, false)
+                } else {
+                    self.estimate_less_than_selectivity(value)
+                }
             }
             BinaryOperator::LessThanOrEqual => {
                 let value = self.extract_numeric_value(right);
-                self.estimate_less_than_selectivity(value).clamp(0.01, 0.9)
+                if let Some(prop) = self.extract_property_name(left) {
+                    self.estimate_ordered_comparison(space, tag_name, &prop, value, false)
+                        .clamp(0.01, 0.9)
+                } else {
+                    self.estimate_less_than_selectivity(value).clamp(0.01, 0.9)
+                }
             }
             BinaryOperator::GreaterThan => {
                 let value = self.extract_numeric_value(right);
-                self.estimate_greater_than_selectivity(value)
+                if let Some(prop) = self.extract_property_name(left) {
+                    self.estimate_ordered_comparison(space, tag_name, &prop, value, true)
+                } else {
+                    self.estimate_greater_than_selectivity(value)
+                }
             }
             BinaryOperator::GreaterThanOrEqual => {
                 let value = self.extract_numeric_value(right);
-                self.estimate_greater_than_selectivity(value)
-                    .clamp(0.01, 0.9)
+                if let Some(prop) = self.extract_property_name(left) {
+                    self.estimate_ordered_comparison(space, tag_name, &prop, value, true)
+                        .clamp(0.01, 0.9)
+                } else {
+                    self.estimate_greater_than_selectivity(value)
+                        .clamp(0.01, 0.9)
+                }
             }
             BinaryOperator::And => {
                 let left_sel = self.estimate_from_expression(space, left, tag_name);
@@ -452,14 +529,7 @@ impl SelectivityEstimator {
     /// Extract the numerical values from the expression.
     fn extract_numeric_value(&self, expr: &Expression) -> Option<f64> {
         match expr {
-            Expression::Literal(value) => match value {
-                crate::core::value::Value::SmallInt(i) => Some(*i as f64),
-                crate::core::value::Value::Int(i) => Some(*i as f64),
-                crate::core::value::Value::BigInt(i) => Some(*i as f64),
-                crate::core::value::Value::Float(f) => Some((*f).into()),
-                crate::core::value::Value::Double(f) => Some(*f),
-                _ => None,
-            },
+            Expression::Literal(value) => numeric_as_f64(value),
             _ => None,
         }
     }
@@ -481,11 +551,91 @@ impl SelectivityEstimator {
     }
 }
 
+/// Numeric projection shared by expression literals and stored min/max
+/// envelope values.
+fn numeric_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::SmallInt(i) => Some(*i as f64),
+        Value::Int(i) => Some(*i as f64),
+        Value::BigInt(i) => Some(*i as f64),
+        Value::Float(f) => Some((*f).into()),
+        Value::Double(f) => Some(*f),
+        _ => None,
+    }
+}
+
 impl Clone for SelectivityEstimator {
     fn clone(&self) -> Self {
         Self {
             stats_manager: self.stats_manager.clone(),
             feedback: self.feedback.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::optimizer::stats::PropertyStatistics;
+
+    fn estimator_with_envelope(
+        space: &str,
+        tag: &str,
+        prop: &str,
+        min: i32,
+        max: i32,
+    ) -> SelectivityEstimator {
+        let manager = Arc::new(StatisticsManager::new());
+        let mut stat = PropertyStatistics::new(prop.to_string(), Some(tag.to_string()));
+        stat.observe_value(&Value::Int(min));
+        stat.observe_value(&Value::Int(max));
+        manager.update_property_stats(space, stat);
+        SelectivityEstimator::new(manager)
+    }
+
+    fn comparison_expr(prop: &str, bound: i64, op: BinaryOperator) -> Expression {
+        Expression::Binary {
+            op,
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("n".to_string())),
+                property: prop.to_string(),
+            }),
+            right: Box::new(Expression::Literal(Value::BigInt(bound))),
+        }
+    }
+
+    #[test]
+    fn greater_than_interpolates_over_envelope() {
+        let est = estimator_with_envelope("s", "person", "age", 0, 100);
+        // age > 80 covers 20% of [0, 100].
+        let sel = est.estimate_from_expression(
+            Some("s"),
+            &comparison_expr("age", 80, BinaryOperator::GreaterThan),
+            Some("person"),
+        );
+        assert!((sel - 0.2).abs() < 0.01, "sel={sel}");
+    }
+
+    #[test]
+    fn less_than_beyond_max_is_nearly_total() {
+        let est = estimator_with_envelope("s", "person", "age", 0, 100);
+        let sel = est.estimate_from_expression(
+            Some("s"),
+            &comparison_expr("age", 500, BinaryOperator::LessThan),
+            Some("person"),
+        );
+        assert!(sel > 0.7, "sel={sel}");
+    }
+
+    #[test]
+    fn missing_envelope_falls_back_to_heuristic() {
+        let manager = Arc::new(StatisticsManager::new());
+        let est = SelectivityEstimator::new(manager.clone());
+        let sel = est.estimate_from_expression(
+            Some("s"),
+            &comparison_expr("unknown", 10, BinaryOperator::GreaterThan),
+            Some("person"),
+        );
+        assert!((sel - defaults::COMPARISON).abs() < 1e-9, "sel={sel}");
     }
 }

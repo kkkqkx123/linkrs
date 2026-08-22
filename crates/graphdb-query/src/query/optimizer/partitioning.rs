@@ -10,7 +10,7 @@ use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
-use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum};
+use crate::query::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum};
 
 /// Static configuration for partition selection. The default is disabled so
 /// introducing the optimizer cannot change query results without an explicit
@@ -97,6 +97,7 @@ impl PartitioningPlanner {
     fn layout_signature_with_layout(
         &self,
         source: &PartitionSource,
+        strategy: &PartitionStrategy,
         layout: &PartitioningLayoutInfo,
     ) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -118,13 +119,20 @@ impl PartitioningPlanner {
         self.config.max_partitions.hash(&mut hasher);
         self.config.max_workers.hash(&mut hasher);
         source.to_string().hash(&mut hasher);
+        // The distribution strategy participates in the signature so a
+        // strategy switch invalidates cached plans that embed the old spec.
+        strategy.to_string().hash(&mut hasher);
         hasher.finish()
     }
 
     /// Config-only layout signature (no storage layout information).
     #[cfg(test)]
     fn layout_signature(&self, source: &PartitionSource) -> u64 {
-        self.layout_signature_with_layout(source, &PartitioningLayoutInfo::default())
+        self.layout_signature_with_layout(
+            source,
+            &PartitionStrategy::Range,
+            &PartitioningLayoutInfo::default(),
+        )
     }
 
     /// Decide using only the static configuration (config-range fallback).
@@ -214,7 +222,8 @@ impl PartitioningPlanner {
             let source = PartitionSource::VertexId {
                 tag: tag.to_string(),
             };
-            let layout_version = self.layout_signature_with_layout(&source, layout);
+            let layout_version =
+                self.layout_signature_with_layout(&source, &PartitionStrategy::Range, layout);
             match PartitionSpec::try_new(
                 ranges,
                 source,
@@ -306,16 +315,92 @@ impl PartitioningPlanner {
         let source = PartitionSource::VertexId {
             tag: representative,
         };
-        let layout_version = self.layout_signature_with_layout(&source, layout);
-        match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
-            Ok(spec) => PartitioningDecision {
-                partition_spec: Some(spec),
-                reason: format!(
-                    "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
-                ),
-            },
+
+        // Q4: classify the join key domain. Keys that reference the
+        // vertex-id partition key are co-partitionable by id ranges
+        // (Range). Any other simple variable key cannot be mapped onto the
+        // id domain, so the plan declares a hash distribution contract and
+        // the physical builder aligns rows via its RepartitionHash exchange.
+        let strategy = Self::multi_scan_join_strategy(root);
+
+        let layout_version = self.layout_signature_with_layout(&source, &strategy, layout);
+        let build = |strategy: &PartitionStrategy| match strategy {
+            PartitionStrategy::Range => {
+                PartitionSpec::try_new(ranges.clone(), source.clone(), Some(layout_version))
+                    .map(|spec| PartitioningDecision {
+                        partition_spec: Some(spec),
+                        reason: format!(
+                            "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
+                        ),
+                    })
+            }
+            PartitionStrategy::Hash { key } => {
+                PartitionSpec::try_new_hash(
+                    key.clone(),
+                    ranges.clone(),
+                    source.clone(),
+                    Some(layout_version),
+                )
+                .map(|spec| PartitioningDecision {
+                    partition_spec: Some(spec),
+                    reason: format!(
+                        "hash-partitioned {kind} '{left_tag}'/'{right_tag}' by key '{key}' \
+                         into {desired} buckets"
+                    ),
+                })
+            }
+            PartitionStrategy::RoundRobin => unreachable!(
+                "multi-scan decisions never emit round-robin layouts"
+            ),
+        };
+        match build(&strategy) {
+            Ok(decision) => decision,
             Err(error) => Self::fallback(format!("invalid configured partition layout: {error}")),
         }
+    }
+
+    /// Distribution strategy for a multi-scan plan root.
+    ///
+    /// Equality joins whose keys all reference the vertex-id partition key
+    /// keep the range co-partitioning layout; joins on any other simple
+    /// variable key get a `Hash { key }` layout keyed by the first hash-key
+    /// variable.
+    fn multi_scan_join_strategy(root: &PlanNodeEnum) -> PartitionStrategy {
+        const DEFAULT_KEY: &str = "vid";
+        let PlanNodeEnum::InnerJoin(join) = root else {
+            return PartitionStrategy::Range;
+        };
+        if !Self::equality_join_keys_are_simple(join.hash_keys(), join.probe_keys()) {
+            return PartitionStrategy::Range;
+        }
+        if Self::keys_reference_vid(join.hash_keys()) && Self::keys_reference_vid(join.probe_keys())
+        {
+            return PartitionStrategy::Range;
+        }
+        let key = join
+            .hash_keys()
+            .first()
+            .and_then(|k| k.expression())
+            .and_then(|meta| match meta.inner() {
+                crate::core::types::expr::Expression::Variable(name) => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| DEFAULT_KEY.to_string());
+        PartitionStrategy::Hash { key }
+    }
+
+    /// Whether every key expression references the vertex-id partition key.
+    fn keys_reference_vid(keys: &[crate::core::types::expr::contextual::ContextualExpression]) -> bool {
+        !keys.is_empty()
+            && keys.iter().all(|key| {
+                key.expression().is_some_and(|meta| {
+                    matches!(
+                        meta.inner(),
+                        crate::core::types::expr::Expression::Variable(name)
+                            if name == "vid" || name.ends_with(".vid")
+                    )
+                })
+            })
     }
 
     /// Choose a partition layout for an anchored bounded traversal (E4):
@@ -391,7 +476,8 @@ impl PartitioningPlanner {
         let source = PartitionSource::VertexId {
             tag: tag.to_string(),
         };
-        let layout_version = self.layout_signature_with_layout(&source, layout);
+        let layout_version =
+            self.layout_signature_with_layout(&source, &PartitionStrategy::Range, layout);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => Some(PartitioningDecision {
                 partition_spec: Some(spec),
@@ -564,7 +650,8 @@ impl PartitioningPlanner {
         let source = PartitionSource::EdgeId {
             edge_type: edge_type.to_string(),
         };
-        let layout_version = self.layout_signature_with_layout(&source, layout);
+        let layout_version =
+            self.layout_signature_with_layout(&source, &PartitionStrategy::Range, layout);
         match PartitionSpec::try_new(ranges, source, Some(layout_version)) {
             Ok(spec) => {
                 let description = spec.source().to_string();
@@ -615,6 +702,7 @@ impl PartitioningPlanner {
         matches!(
             node,
             PlanNodeEnum::CopyFrom(_)
+                | PlanNodeEnum::CopyTo(_)
                 | PlanNodeEnum::InsertVertices(_)
                 | PlanNodeEnum::InsertEdges(_)
                 | PlanNodeEnum::DeleteVertices(_)
@@ -1155,6 +1243,55 @@ mod tests {
         let decision = make_planner().decide(&plan, &view_of(&stats));
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("not a union/cross-join"));
+    }
+
+    #[test]
+    fn non_vid_join_key_selects_hash_partition_layout() {
+        use crate::core::types::expr::contextual::ContextualExpression;
+        use crate::core::types::expr::ExpressionMeta;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+
+        // Q4: a join on a property variable cannot map onto the vertex-id
+        // domain, so the plan declares a hash distribution by that key.
+        let stats = make_stats();
+        let mut left_scan = ScanVerticesNode::new(1, "space");
+        left_scan.set_tag("person");
+        let mut right_scan = ScanVerticesNode::new(2, "space");
+        right_scan.set_tag("person");
+
+        let expr_ctx = Arc::new(crate::core::types::expr::ExpressionAnalysisContext::new());
+        let make_key = |name: &str| {
+            let expr = crate::core::types::Expression::variable(name);
+            let id = expr_ctx.register_expression(ExpressionMeta::new(expr));
+            ContextualExpression::new(id, expr_ctx.clone())
+        };
+
+        let join = InnerJoinNode::new(
+            PlanNodeEnum::ScanVertices(left_scan),
+            PlanNodeEnum::ScanVertices(right_scan),
+            vec![make_key("a.name")],
+            vec![make_key("b.name")],
+        )
+        .expect("join plan should build");
+        let plan = PlanNodeEnum::InnerJoin(join);
+
+        let decision = make_planner().decide(&plan, &view_of(&stats));
+        let spec = decision
+            .partition_spec
+            .as_ref()
+            .expect("non-vid equality join should hash-partition");
+        assert_eq!(
+            spec.strategy(),
+            &PartitionStrategy::Hash {
+                key: "a.name".to_string()
+            },
+            "hash strategy keyed by the join key variable"
+        );
+        assert!(spec.partition_count() >= 2);
+        // The scan input stays sliced into disjoint ranges so no row is
+        // duplicated before the hash exchange redistributes rows.
+        assert_eq!(spec.ranges().len(), spec.partition_count());
+        assert!(decision.reason.contains("hash-partitioned"));
     }
 
     #[test]

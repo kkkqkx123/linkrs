@@ -43,6 +43,10 @@ pub struct QueryRequestContext {
     pub transaction_id: Option<crate::core::types::TransactionId>,
     pub auto_commit: bool,
     pub read_only: bool,
+    /// Transaction isolation level injected by the API layer for queries
+    /// running inside an explicit transaction. `None` = auto-commit
+    /// statement-level snapshot semantics.
+    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
     pub operation_context: Option<StorageOperationContext>,
     pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Pre-parsed statement AST supplied by the API layer.
@@ -70,6 +74,7 @@ impl QueryRequestContext {
             transaction_id: None,
             auto_commit: true,
             read_only: false,
+            isolation_level: None,
             operation_context: None,
             operation_storage: None,
             parsed_statement: None,

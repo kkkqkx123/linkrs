@@ -175,37 +175,6 @@ impl MutableCsr {
         self.edge_count.load(Ordering::Relaxed)
     }
 
-    /// Zero-copy Arrow offsets slice for OLAP scans.
-    ///
-    /// Returns a borrowed view of `adj_offsets` without allocation. Callers
-    /// can reinterpret it as Arrow `Int32` offsets for zero-copy batch
-    /// construction. The slice is valid for the lifetime of `&self`.
-    #[allow(dead_code)]
-    pub fn as_arrow_offsets(&self) -> &[u32] {
-        &self.adj_offsets
-    }
-
-    /// Zero-copy degree slice (parallel to `adj_offsets`).
-    #[allow(dead_code)]
-    pub fn degrees_slice(&self) -> &[u32] {
-        &self.degrees
-    }
-
-    /// Whether this CSR is dense enough to benefit from packed Arrow scan.
-    #[allow(dead_code)]
-    pub fn is_dense_for_scan(&self, density_threshold: f32) -> bool {
-        let cap = self.vertex_capacity().max(1) as f32;
-        let density = self.edge_count() as f32 / cap;
-        density >= density_threshold
-    }
-
-    /// Packed zero-copy view: returns `(offsets, nbr_list)` slices for
-    /// direct Arrow `ListArray` construction without per-edge allocation.
-    #[allow(dead_code)]
-    pub fn as_packed_slices(&self) -> (&[u32], &[Nbr]) {
-        (&self.adj_offsets, &self.nbr_list)
-    }
-
     /// Resize vertex capacity (requires exclusive access)
     pub fn resize(&mut self, new_vertex_capacity: usize) {
         if new_vertex_capacity <= self.vertex_capacity() {

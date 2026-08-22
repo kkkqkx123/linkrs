@@ -317,6 +317,10 @@ define_join_node! {
         anti: bool,
         // Whether constant folding replaced part of the join keys.
         has_folded_expressions: bool,
+        // Optional residual condition for non-equi correlation (Mark-Join
+        // form): evaluated over the combined left+right row, keeping the
+        // left row when any right row satisfies it.
+        join_condition: Option<ContextualExpression>,
     }
     enum: SemiJoin
 }
@@ -359,14 +363,35 @@ impl SemiJoinNode {
             deps,
             anti,
             has_folded_expressions: false,
+            join_condition: None,
             output_var: None,
             col_names,
             column_types: vec![],
         })
     }
 
+    /// Create a Mark-Join style semi join carrying a residual non-equi
+    /// condition evaluated over the combined left+right row.
+    pub fn new_with_condition(
+        left: crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
+        right: crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
+        hash_keys: Vec<ContextualExpression>,
+        probe_keys: Vec<ContextualExpression>,
+        join_condition: ContextualExpression,
+        anti: bool,
+    ) -> Result<Self, crate::query::planning::planner::PlannerError> {
+        let mut node = Self::new(left, right, hash_keys, probe_keys, anti)?;
+        node.join_condition = Some(join_condition);
+        Ok(node)
+    }
+
     pub fn is_anti(&self) -> bool {
         self.anti
+    }
+
+    /// The residual non-equi join condition, if any.
+    pub fn join_condition(&self) -> Option<&ContextualExpression> {
+        self.join_condition.as_ref()
     }
 
     /// Whether constant folding replaced part of the join keys.

@@ -47,6 +47,7 @@ pub struct QueryContextBuilder {
     space_info: Option<SpaceInfo>,
     charset_info: Option<Box<CharsetInfo>>,
     snapshot_ts: Option<Timestamp>,
+    isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
     arena: Option<Arena>,
 }
 
@@ -59,6 +60,7 @@ impl QueryContextBuilder {
             space_info: None,
             charset_info: None,
             snapshot_ts: None,
+            isolation_level: None,
             arena: None,
         }
     }
@@ -74,6 +76,7 @@ impl QueryContextBuilder {
             space_info: space.map(SpaceInfo::from),
             charset_info: None,
             snapshot_ts: None,
+            isolation_level: None,
             arena: None,
         }
     }
@@ -124,6 +127,21 @@ impl QueryContextBuilder {
         self.snapshot_ts
     }
 
+    /// Set the transaction isolation level for an execution inside an
+    /// explicit transaction. Absent for auto-commit statements.
+    pub fn with_isolation_level(
+        mut self,
+        isolation_level: crate::core::types::TransactionIsolationLevel,
+    ) -> Self {
+        self.isolation_level = Some(isolation_level);
+        self
+    }
+
+    /// The configured transaction isolation level (if any).
+    pub fn isolation_level(&self) -> Option<crate::core::types::TransactionIsolationLevel> {
+        self.isolation_level
+    }
+
     /// Build the QueryContext.
     ///
     /// # Panics
@@ -140,6 +158,7 @@ impl QueryContextBuilder {
             self.space_info,
             self.charset_info,
             self.snapshot_ts,
+            self.isolation_level,
             self.arena,
         )
     }

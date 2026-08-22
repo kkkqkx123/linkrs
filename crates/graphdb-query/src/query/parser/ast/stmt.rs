@@ -952,6 +952,7 @@ mod tests {
                 Stmt::Copy(CopyStmt {
                     span,
                     target: CopyTarget::Vertex("t".to_string()),
+                    direction: CopyDirection::From,
                     file_path: "f.csv".to_string(),
                     header: true,
                     delimiter: ',',

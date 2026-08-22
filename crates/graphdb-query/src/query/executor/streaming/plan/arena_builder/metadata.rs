@@ -762,6 +762,7 @@ pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &
 pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
     match spec {
         SinkSpec::CopyFrom { .. } => "CopyFrom",
+        SinkSpec::CopyTo { .. } => "CopyTo",
         SinkSpec::InsertVertices { .. } => "InsertVertices",
         SinkSpec::InsertEdges { .. } => "InsertEdges",
         SinkSpec::UpdateVertices { .. } => "UpdateVertices",
