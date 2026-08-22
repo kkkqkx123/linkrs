@@ -306,6 +306,16 @@ impl GraphStorage {
         self.ctx.trigger_background_maintenance()
     }
 
+    /// Set the operator retention floor for edge reclamation on all
+    /// partitions (`0` disables). This is the reclamation exit for the
+    /// no-snapshot steady state: deletions at or before `ts` become
+    /// reclaimable by the regular maintenance pipeline. Registered snapshots
+    /// always take precedence over the floor.
+    /// Mainly for tests and explicit operator invocation.
+    pub fn set_edge_retention_floor(&self, ts: Timestamp) -> StorageResult<()> {
+        self.ctx.set_edge_retention_floor(ts)
+    }
+
     // ── Cold Snapshot API ──
 
     /// Export a cold snapshot file for one edge type at timestamp `ts`.
@@ -629,7 +639,10 @@ impl crate::storage::AutoCommitGroupOps for GraphStorage {
         window.finalize_group()
     }
 
-    fn rollback_auto_commit_group(&self, window: &context::AutoCommitBatchWindow) -> StorageResult<()> {
+    fn rollback_auto_commit_group(
+        &self,
+        window: &context::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
         window.rollback_group()
     }
 }

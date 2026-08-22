@@ -28,7 +28,6 @@ pub mod snapshot;
 pub mod stats;
 
 // Re-export commonly used types
-pub use compaction::CompactionMode;
 pub use core::UpdateEdgePropertyByOffsetParams;
 pub use segment::CsrSegment;
 pub use snapshot::ExportedEdgeSnapshot;
@@ -328,13 +327,14 @@ impl EdgeStore {
         self.0.freeze_csr_only(ts)
     }
 
-    pub fn compact_and_freeze(
-        &mut self,
-        ts: Timestamp,
-        config: &CompactConfig,
-        mode: CompactionMode,
-    ) -> usize {
-        self.0.compact_and_freeze(ts, config, mode)
+    pub fn compact_and_freeze(&mut self, ts: Timestamp, config: &CompactConfig) -> usize {
+        self.0.compact_and_freeze(ts, config)
+    }
+
+    /// Set the operator retention floor for reclamation without active
+    /// snapshots (`0` disables). See `MVCCManager::effective_retention_bound`.
+    pub fn set_retention_floor(&mut self, floor: Timestamp) {
+        self.0.mvcc.set_retention_floor(floor);
     }
 
     pub fn compact_properties(&mut self, ts: Timestamp) {
@@ -478,10 +478,14 @@ impl EdgeStore {
 impl core::TimeTravelEdgeStore {
     pub fn register_snapshot(&mut self, ts: Timestamp) {
         self.mvcc.register_active_snapshot(ts);
+        self.properties
+            .set_retention_horizon(self.mvcc.min_active_snapshot_ts);
     }
 
     pub fn unregister_snapshot(&mut self, ts: Timestamp) {
         self.mvcc.unregister_active_snapshot(ts);
+        self.properties
+            .set_retention_horizon(self.mvcc.min_active_snapshot_ts);
     }
 
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
@@ -962,6 +966,8 @@ impl core::TimeTravelEdgeStore {
         self.next_edge_id = next_edge_id;
         self.mvcc.tombstones = tombstones;
         self.mvcc.min_active_snapshot_ts = min_snapshot_ts;
+        self.properties
+            .set_retention_horizon(self.mvcc.min_active_snapshot_ts);
         self.out_free_space.clear();
         self.in_free_space.clear();
 

@@ -1187,8 +1187,16 @@ fn test_compact_reclaims_deleted_edge_properties() {
     assert!(table.delete_edge(0, 1, 0, 200).unwrap());
     assert_eq!(table.properties.row_count(), 1);
 
-    // compact_properties reclaims the orphaned, marked-deleted property row.
+    // Unbounded history (no active snapshot and no retention floor): the
+    // orphaned property row must survive so time-travel reads before the
+    // deletion still observe the edge's payload.
     table.compact_properties(300);
+    assert_eq!(table.properties.row_count(), 1);
+
+    // Once a retention bound covers the deletion point (bound >= 200), the
+    // slot reclamation pass frees the marked-deleted row.
+    table.mvcc.set_retention_floor(250);
+    table.compact_properties(400);
     assert_eq!(table.properties.row_count(), 0);
 }
 
@@ -1468,4 +1476,102 @@ fn test_compact_regions_skips_clean() {
     let seg = &table.out_segments[0];
     let dirty: Vec<_> = seg.regions.iter().filter(|r| r.deleted_count > 0).collect();
     assert!(!dirty.is_empty() || seg.regions.is_empty() || true);
+}
+
+/// Undo of a frozen-segment deletion: the delete recorded an MVCC tombstone
+/// plus a property-row mark; the revert must remove both and make the edge
+/// visible again with its original properties.
+#[test]
+fn test_revert_delete_segment_edge() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    table
+        .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .unwrap();
+    // Move the edge into a frozen segment.
+    table.freeze_csr_only(150);
+    assert_eq!(table.delta_edge_count(), 0);
+
+    // Delete via the segment path (tombstone + property mark, no CSR entry).
+    assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+    assert!(!table.has_edge(0, 1, 0, 300));
+    assert_eq!(table.mvcc.total_tombstone_count(), 1);
+
+    // Undo the deletion: the offsets are irrelevant on this path.
+    assert!(table
+        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 250)
+        .unwrap());
+    assert!(table.has_edge(0, 1, 0, 300));
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
+    let restored = table.get_edge(0, 1, 0, 300).unwrap();
+    assert_eq!(
+        restored.properties,
+        vec![("weight".to_string(), Value::Double(2.5))]
+    );
+
+    // A revert at a timestamp before the deletion must not resurrect the edge.
+    assert!(table.delete_edge(0, 1, 0, 400).unwrap());
+    assert!(!table
+        .revert_delete_edge_by_offset(0, 1, 0, 0, 0, 350)
+        .unwrap());
+    assert!(!table.has_edge(0, 1, 0, 500));
+}
+
+/// Without any retention bound (no snapshots, no floor) the unified pipeline
+/// must keep every deleted edge: unbounded time-travel is preserved.
+#[test]
+fn test_compact_and_freeze_unbounded_keeps_history() {
+    let schema = create_test_schema();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+    // Two freeze batches so a merge group with >1 segment exists; the merge
+    // only combines multi-segment groups.
+    for batch in 0..2u32 {
+        for i in 0..3u32 {
+            let src = batch * 10 + i;
+            table
+                .insert_edge(src, src + 10, 0, &[], 100 + i as Timestamp)
+                .unwrap();
+        }
+        table.freeze_csr_only(150);
+    }
+    for batch in 0..2u32 {
+        for i in 0..3u32 {
+            let src = batch * 10 + i;
+            assert!(table.delete_edge(src, src + 10, 0, 300).unwrap());
+        }
+    }
+
+    let config = CompactConfig::default().enable_segment_merge(1000);
+    let removed = table.compact_and_freeze(500, &config);
+    let _ = removed;
+    // Nothing was reclaimed and history is intact. The in-place merge may
+    // have collapsed the two segments into one — every entry survives.
+    assert!(!table.out_segments.is_empty());
+    assert!(table.has_edge(0, 10, 0, 200));
+    assert!(!table.has_edge(0, 10, 0, 400));
+
+    // Add one more dead segment so a multi-segment merge group exists.
+    for i in 0..3u32 {
+        table
+            .insert_edge(20 + i, 30 + i, 0, &[], 200 + i as Timestamp)
+            .unwrap();
+    }
+    table.freeze_csr_only(250);
+    for i in 0..3u32 {
+        assert!(table.delete_edge(20 + i, 30 + i, 0, 350).unwrap());
+    }
+
+    // Setting an operator retention floor unlocks reclamation through the
+    // same pipeline: deletions at or before the floor are purged.
+    table.mvcc.set_retention_floor(500);
+    let _ = table.compact_and_freeze(600, &config);
+
+    assert!(
+        table.out_segments.is_empty(),
+        "retention floor must unlock physical reclamation, {} segment(s) remain",
+        table.out_segments.len()
+    );
+    assert_eq!(table.mvcc.total_tombstone_count(), 0);
 }

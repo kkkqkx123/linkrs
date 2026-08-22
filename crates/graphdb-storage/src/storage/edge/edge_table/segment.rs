@@ -175,8 +175,6 @@ pub const SEPARATE_EDGE_ID_STORAGE_THRESHOLD: usize = 10_000;
 
 /// Default number of vertices per region for region-level recycling.
 pub const DEFAULT_REGION_VERTEX_COUNT: usize = 1024;
-/// Density watermark below which a region is considered sparse.
-pub const REGION_DENSITY_LOW_WATERMARK: f64 = 0.15;
 
 /// Per-region metadata for fine-grained recycling.
 ///

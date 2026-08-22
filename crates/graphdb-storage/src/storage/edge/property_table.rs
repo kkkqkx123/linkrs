@@ -44,8 +44,6 @@
 //! - `prefetch_batch()`: CPU cache locality for bulk reads
 //! - `get_batch()`: Sorted access pattern for sequential cache hits
 //! - Zone maps per 1024-row chunk: prune chunks via min/max before scanning
-//! - Striped locks: per-chunk `RwLock` stripes for fine-grained concurrency (OLAP
-//!   scans hold shared locks on chunks, writes lock only affected chunk)
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
@@ -60,7 +58,6 @@ use crate::storage::encoding::EncodingType;
 use crate::storage::mvcc::TieredTombstoneManager;
 use crate::storage::naming::NameIndexer;
 use crate::storage::persistence::{read_header, read_u32_le, read_u64_le, section, write_header};
-use crate::storage::striped_lock::{SharedStripedLock, StripedRwLock};
 use crate::storage::types::PropertyId;
 use crate::storage::vertex::column_store::ColumnStore;
 
@@ -72,11 +69,6 @@ const PROPERTY_TABLE_VERSION: u8 = 4;
 /// Rows per zone-map chunk. Zone maps store min/max/ndv/null_count per chunk
 /// for predicate pushdown (skip chunks whose zone cannot contain the predicate).
 pub const ZONE_MAP_CHUNK_SIZE: usize = 1024;
-
-/// Number of stripes for fine-grained property-table concurrency.
-/// Writes lock only the stripe covering the affected row chunk; OLAP readers
-/// hold shared locks per stripe, so scans of disjoint chunks do not contend.
-const PROPERTY_TABLE_STRIPES: usize = 16;
 
 pub use super::property_schema::{
     prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertyRecord,
@@ -315,10 +307,11 @@ pub struct PropertyTable {
     schema: Vec<PropertySchema>,
     name_indexer: NameIndexer,
     records: Vec<Option<PropertyRecord>>, // row_index → current (newest) PropertyRecord with timestamps
-    /// Before-image version chain per row, newest first.
+    /// Before-image version chain per row, oldest first.
     ///
     /// Each entry is an older version of the row's property data, superseded
-    /// by the current record. The version is visible on
+    /// by the current record. Entries are appended in supersede order, so the
+    /// first entry is the oldest surviving version. The version is visible on
     /// `[create_ts, delete_ts)`, and its `delete_ts` equals the timestamp at
     /// which the successor version took over. `get_at_ts` resolves snapshot
     /// reads by scanning the current record first, then the chain; obsolete
@@ -352,6 +345,15 @@ pub struct PropertyTable {
     /// single representative interval.
     version_chain_cap: usize,
 
+    /// Lower bound of timestamps still observable by active snapshots.
+    ///
+    /// Folding must not destroy versions inside `[retention_horizon, +∞)`:
+    /// an entry whose visibility interval ends at or after this bound may
+    /// still be observed by some active snapshot. Defaults to `Timestamp::MAX`
+    /// ("nothing pinned"), which keeps folding fully aggressive; the edge
+    /// store refreshes it whenever the set of active snapshots changes.
+    retention_horizon: Timestamp,
+
     // ── OLAP: columnar store + zone maps + fine-grained concurrency ──
     /// Columnar storage for OLAP scans: one `Column` per property, independent
     /// compression (ALP / bitpacking / dictionary / FSST / RLE), column pruning,
@@ -363,23 +365,10 @@ pub struct PropertyTable {
     /// for predicate pushdown / segment pruning, persisted with the table.
     /// Maps `column_name → Vec<chunk_stats>`.
     zone_maps: HashMap<String, Vec<ColumnStats>>,
-
-    /// Fine-grained stripe count for concurrent access. Writes lock only the
-    /// stripe covering the target row (`row_idx % PROPERTY_TABLE_STRIPES`);
-    /// readers of disjoint stripes do not contend. MVCC version chains allow
-    /// snapshot reads (`get_at_ts`) without holding the stripe lock for the
-    /// whole scan.
-    stripe_count: usize,
-    /// Striped locks for per-chunk concurrency (OLAP scans hold shared locks
-    /// per stripe, writes exclusive only on affected stripe). Wrapped in Arc
-    /// so `Clone` (needed for `EdgeStore` snapshots) shares the same lock
-    /// domain rather than duplicating it.
-    #[allow(dead_code)]
-    stripe_locks: SharedStripedLock<()>,
 }
 
 /// Default upper bound on the per-row before-image version chain length.
-const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
+pub const DEFAULT_VERSION_CHAIN_CAP: usize = 64;
 
 impl Clone for PropertyTable {
     fn clone(&self) -> Self {
@@ -395,10 +384,9 @@ impl Clone for PropertyTable {
             value_index: self.value_index.clone(),
             used_data_bytes: self.used_data_bytes,
             version_chain_cap: self.version_chain_cap,
+            retention_horizon: self.retention_horizon,
             column_store: self.column_store.clone(),
             zone_maps: self.zone_maps.clone(),
-            stripe_count: self.stripe_count,
-            stripe_locks: std::sync::Arc::new(StripedRwLock::new(self.stripe_count)),
         }
     }
 }
@@ -417,10 +405,9 @@ impl PropertyTable {
             value_index: PropertyValueIndex::new(),
             used_data_bytes: 0,
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
+            retention_horizon: Timestamp::MAX,
             column_store: ColumnStore::new(),
             zone_maps: HashMap::new(),
-            stripe_count: PROPERTY_TABLE_STRIPES,
-            stripe_locks: std::sync::Arc::new(StripedRwLock::new(PROPERTY_TABLE_STRIPES)),
         }
     }
 
@@ -437,20 +424,28 @@ impl PropertyTable {
             value_index: PropertyValueIndex::new(),
             used_data_bytes: 0,
             version_chain_cap: DEFAULT_VERSION_CHAIN_CAP,
+            retention_horizon: Timestamp::MAX,
             column_store: ColumnStore::with_capacity(capacity),
             zone_maps: HashMap::new(),
-            stripe_count: PROPERTY_TABLE_STRIPES,
-            stripe_locks: std::sync::Arc::new(StripedRwLock::new(PROPERTY_TABLE_STRIPES)),
         }
     }
 
     /// Set the upper bound on the per-row before-image version chain length.
     ///
-    /// A value of `0` disables the bound (unbounded history, pre-F10
-    /// behaviour). When the chain exceeds the bound, the oldest before-images
-    /// are folded together; see [`PropertyTable::fold_oldest_versions`].
+    /// A value of `0` disables the bound (unbounded history). When the chain
+    /// exceeds the bound, the oldest before-images are folded together; see
+    /// [`PropertyTable::fold_oldest_versions`].
     pub fn set_version_chain_cap(&mut self, cap: usize) {
         self.version_chain_cap = cap;
+    }
+
+    /// Refresh the oldest timestamp still observable by active snapshots.
+    ///
+    /// Called by the edge store whenever the active-snapshot set changes.
+    /// Version-chain folding must preserve every entry whose visibility
+    /// interval reaches into `[retention_horizon, +∞)`.
+    pub fn set_retention_horizon(&mut self, horizon: Timestamp) {
+        self.retention_horizon = horizon;
     }
 
     pub fn add_property(
@@ -763,49 +758,6 @@ impl PropertyTable {
         }
     }
 
-    /// Fine-grained stripe id for a row (for striped locking).
-    #[inline]
-    pub fn stripe_for_row(&self, row_idx: usize) -> usize {
-        row_idx % self.stripe_count
-    }
-
-    /// Number of stripes (for diagnostics / testing).
-    pub fn stripe_count(&self) -> usize {
-        self.stripe_count
-    }
-
-    /// Rebuild the in-memory columnar store from the row-oriented records.
-    /// Used after compaction where the columnar store is not persisted.
-    /// Preserves current-value view; historical chains are rebuilt
-    /// from `chain_records` by the caller when needed.
-    fn rebuild_column_store_internal(&mut self) {
-        let mut new_cs = ColumnStore::new();
-        for prop in &self.schema {
-            new_cs.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
-        }
-        if !self.records.is_empty() {
-            new_cs.resize(self.records.len());
-            for (row_idx, record_opt) in self.records.iter().enumerate() {
-                if let Some(rec) = record_opt {
-                    if rec.delete_ts.is_some() {
-                        continue;
-                    }
-                    if let Ok(props) = self.deserialize_row(&rec.data) {
-                        for (name, opt_val) in props {
-                            let _ = new_cs.set_property_versioned(
-                                row_idx,
-                                &name,
-                                opt_val.as_ref(),
-                                rec.create_ts,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        self.column_store = new_cs;
-    }
-
     pub fn insert(
         &mut self,
         values: &[(String, Value)],
@@ -868,36 +820,26 @@ impl PropertyTable {
         Ok(offset)
     }
 
+    /// Update one or more properties of a row in place, creating a new
+    /// version at `ts`. The row keeps its offset: the previous record becomes
+    /// a before-image in the version chain (subject to snapshot-aware
+    /// folding), so external references (CSR `prop_offset` pointers) remain
+    /// valid across updates.
+    ///
+    /// Column names not present in the schema are ignored by row
+    /// serialization; use `add_property` first to extend the schema.
     pub fn update(
         &mut self,
         offset: u32,
         values: &[(String, Value)],
         ts: Timestamp,
-    ) -> StorageResult<u32> {
-        // Remove old values from index
-        if let Some(old_props) = self.get(offset, None) {
-            self.value_index.remove_record(&old_props, offset);
-        }
-
-        // Get current record data BEFORE marking as deleted
+    ) -> StorageResult<()> {
         let merged_values = self.get_for_update(offset, values)?;
-
-        // Mark old record as deleted
-        let row_idx =
-            prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
-        if row_idx >= self.records.len() {
-            return Err(StorageError::invalid_offset(offset));
-        }
-
-        if let Some(record) = &mut self.records[row_idx] {
-            if record.delete_ts.is_none() {
-                record.delete_ts = Some(ts);
-                self.tombstones_manager.add_tombstone(offset, ts);
-            }
-        }
-
-        // Insert new record with merged values
-        self.insert(&merged_values, ts)
+        let merged: Vec<(String, Option<Value>)> = merged_values
+            .into_iter()
+            .map(|(name, value)| (name, Some(value)))
+            .collect();
+        self.write_versioned_row(offset, &merged, ts)
     }
 
     fn get_for_update(
@@ -927,6 +869,63 @@ impl PropertyTable {
         }
 
         Ok(result)
+    }
+
+    /// Shared slow path for in-place versioned writes: reject conflicting
+    /// writes, supersede the current record into the before-image chain, and
+    /// install a new record built from `values` at the same offset. Keeps the
+    /// value index, columnar store, and zone maps consistent with the new
+    /// version.
+    fn write_versioned_row(
+        &mut self,
+        offset: u32,
+        values: &[(String, Option<Value>)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let row_idx =
+            prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
+        if row_idx >= self.records.len() {
+            return Err(StorageError::invalid_offset(offset));
+        }
+
+        // Storage-layer write-write conflict detection: reject a write whose
+        // timestamp would overlap a newer existing version or a tombstoned
+        // row, before any side effect on indexes or records.
+        self.check_write_conflict(row_idx, offset, ts)?;
+
+        // Remove old values from the index before overwriting the record.
+        if let Some(old_props) = self.get(offset, None) {
+            self.value_index.remove_record(&old_props, offset);
+        }
+
+        let new_record = self.serialize_row_with_nulls(values)?;
+
+        // MVCC: supersede the current version. The old row becomes a
+        // before-image (visible on `[create_ts, ts)`) and the new row takes
+        // over from `ts` onward, preserving historical snapshots.
+        self.supersede_current(row_idx, offset, ts);
+
+        let new_record_obj = PropertyRecord::new(new_record, ts);
+        self.used_data_bytes += new_record_obj.data.len();
+        self.records[row_idx] = Some(new_record_obj);
+
+        // Columnar sync: version every column named in `values`.
+        for (name, value) in values {
+            if self.has_property(name) {
+                let _ = self.column_store.set_property_versioned(
+                    row_idx,
+                    name,
+                    value.as_ref(),
+                    ts,
+                );
+            }
+        }
+        self.refresh_zone_map_for_row(row_idx);
+
+        // Re-index with new values
+        self.value_index.index_record(values, offset);
+
+        Ok(())
     }
 
     pub fn get(
@@ -1124,9 +1123,18 @@ impl PropertyTable {
         if cap == 0 {
             return;
         }
+        let horizon = self.retention_horizon;
         let chain = &mut self.chain_records[row_idx];
         while chain.len() > cap {
             if chain.len() < 2 {
+                break;
+            }
+            // Never fold an entry that an active snapshot may still observe:
+            // its visibility interval must end before the retention horizon.
+            let can_fold = chain[1]
+                .delete_ts
+                .is_none_or(|delete_ts| delete_ts <= horizon);
+            if !can_fold {
                 break;
             }
             // Merge the two oldest entries into one: keep the older data,
@@ -1156,13 +1164,6 @@ impl PropertyTable {
             return Err(StorageError::column_not_found(name.to_string()));
         }
 
-        // Storage-layer write-write conflict detection: reject a write whose
-        // timestamp would overlap a newer existing version or a tombstoned row.
-        self.check_write_conflict(row_idx, offset, ts)?;
-
-        // Get old property value for index maintenance
-        let old_props = self.get(offset, None);
-
         // Fast path: for fixed-size schemas, do direct byte manipulation
         let col_idx = self
             .schema
@@ -1172,7 +1173,7 @@ impl PropertyTable {
 
         if self.is_schema_fixed_size() && col_idx < self.column_byte_offsets.len() {
             // Remove old value from index before updating
-            if let Some(ref props) = old_props {
+            if let Some(ref props) = self.get(offset, None) {
                 self.value_index.remove_record(props, offset);
             }
             let result = self.set_property_fixed_size(row_idx, offset, col_idx, value.clone(), ts);
@@ -1188,39 +1189,24 @@ impl PropertyTable {
             return result;
         }
 
-        // Slow path: full deserialize → merge → serialize cycle
+        // Slow path: full deserialize → merge → serialize cycle via the
+        // shared in-place versioned-write helper. Untouched columns must be
+        // carried over: row serialization writes NULL for absent names.
+        let old_props = self.get(offset, None);
         let mut merged_values: Vec<(String, Option<Value>)> = Vec::new();
-        if let Some(props) = old_props {
-            for (n, v) in props {
-                if n == name {
-                    merged_values.push((n, value.clone()));
-                } else {
-                    merged_values.push((n, v));
+        match old_props {
+            Some(props) => {
+                for (n, v) in props {
+                    if n == name {
+                        merged_values.push((n, value.clone()));
+                    } else {
+                        merged_values.push((n, v));
+                    }
                 }
             }
+            None => merged_values.push((name.to_string(), value)),
         }
-
-        let new_record = self.serialize_row_with_nulls(&merged_values)?;
-
-        // MVCC: supersede the current version. The old row becomes a
-        // before-image (visible on `[create_ts, ts)`) and the new row takes
-        // over from `ts` onward, preserving historical snapshots.
-        self.supersede_current(row_idx, offset, ts);
-
-        let new_record_obj = PropertyRecord::new(new_record, ts);
-        self.used_data_bytes += new_record_obj.data.len();
-        self.records[row_idx] = Some(new_record_obj);
-
-        // Columnar sync
-        let _ = self
-            .column_store
-            .set_property_versioned(row_idx, name, value.as_ref(), ts);
-        self.refresh_zone_map_for_row(row_idx);
-
-        // Re-index with new values
-        self.value_index.index_record(&merged_values, offset);
-
-        Ok(())
+        self.write_versioned_row(offset, &merged_values, ts)
     }
 
     /// Fast path: update a single property value via direct byte manipulation.
@@ -1419,6 +1405,14 @@ impl PropertyTable {
     /// (it still owns the row); fully-deleted rows are reclaimed through
     /// [`PropertyTable::gc_tombstones`].
     pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        // An unbounded horizon (`MAX`) means nothing pins history — but it is
+        // not a real timestamp: treating it as one would reclaim every
+        // before-image, including history arbitrary-ts time-travel reads may
+        // still request. Without a bound (no active snapshot and no retention
+        // floor) nothing is reclaimable.
+        if min_active_snapshot_ts == Timestamp::MAX {
+            return 0;
+        }
         let mut removed = 0usize;
         let mut reclaimed_bytes = 0usize;
         for chain in &mut self.chain_records {
@@ -1446,15 +1440,6 @@ impl PropertyTable {
         self.tombstones_manager
             .gc_batch(min_active_snapshot_ts, batch_size);
         self.tombstones_manager.gc(min_active_snapshot_ts);
-
-        // Read tombstone-layer health for scheduler diagnostics.
-        let _cold_count = self.tombstones_manager.cold_len();
-        let _hot_at_capacity = self.tombstones_manager.is_hot_layer_near_capacity();
-        let _max_hot_size = self.tombstones_manager.hot_max_size();
-        // Probe a tombstone check to keep the query path exercised.
-        let _probe = self
-            .tombstones_manager
-            .is_tombstoned(0u32, min_active_snapshot_ts);
 
         // Remove records that are fully tombstoned and older than min_active_snapshot_ts
         let mut reclaimed = 0u32;
@@ -1868,7 +1853,7 @@ impl PropertyTable {
             }
         }
 
-        // Store per-row before-image version chains (newest first), matching
+        // Store per-row before-image version chains (oldest first), matching
         // the record encoding: marker / create_ts / delete_ts marker / data.
         for chain in &self.chain_records {
             result.extend_from_slice(&(chain.len() as u32).to_le_bytes());
@@ -1918,8 +1903,6 @@ impl PropertyTable {
                 result.extend_from_slice(&meta_buf);
             }
         }
-        // Stripe count for fine-grained concurrency (persisted for diagnostics).
-        result.extend_from_slice(&(self.stripe_count as u32).to_le_bytes());
 
         let checksum = crc32fast::hash(&result[checksum_pos + 4..]);
         result[checksum_pos..checksum_pos + 4].copy_from_slice(&checksum.to_le_bytes());
@@ -2092,7 +2075,7 @@ impl PropertyTable {
             }
         }
 
-        // Load before-image version chains, newest first.
+        // Load before-image version chains, oldest first.
         self.chain_records.clear();
         for _ in 0..self.records.len() {
             let chain_len = read_u32_le(data, &mut offset)? as usize;
@@ -2209,8 +2192,6 @@ impl PropertyTable {
         }
 
         self.zone_maps.clear();
-        self.stripe_count = PROPERTY_TABLE_STRIPES;
-        self.stripe_locks = std::sync::Arc::new(StripedRwLock::new(self.stripe_count));
         if offset < data.len() {
             // Zone maps
             if offset + 4 <= data.len() {
@@ -2258,15 +2239,6 @@ impl PropertyTable {
                     }
                 }
             }
-            if offset + 4 <= data.len() {
-                if let Ok(sc) = read_u32_le(data, &mut offset) {
-                    self.stripe_count = sc as usize;
-                    if self.stripe_count == 0 {
-                        self.stripe_count = PROPERTY_TABLE_STRIPES;
-                    }
-                    self.stripe_locks = std::sync::Arc::new(StripedRwLock::new(self.stripe_count));
-                }
-            }
             // If zone maps were empty (e.g., fresh v4 file with no data), rebuild.
             if self.zone_maps.is_empty() && !self.records.is_empty() {
                 self.rebuild_zone_maps();
@@ -2274,7 +2246,6 @@ impl PropertyTable {
         } else {
             // Fresh file with no zone-map section: rebuild from row records.
             self.rebuild_zone_maps();
-            self.stripe_locks = std::sync::Arc::new(StripedRwLock::new(self.stripe_count));
         }
 
         Ok(())
@@ -2296,46 +2267,70 @@ impl PropertyTable {
         self.value_index.lookup(name, None)
     }
 
-    pub fn compact(&mut self, valid_offsets: &HashSet<u32>) {
-        let mut new_records = Vec::new();
-        let mut new_chains: Vec<Vec<PropertyRecord>> = Vec::new();
-        let mut offset_mapping = std::collections::HashMap::new();
-
-        for (old_idx, record_opt) in self.records.iter().enumerate() {
-            let old_offset = prop_index_to_offset(old_idx);
-            if valid_offsets.contains(&old_offset) {
-                if let Some(record) = record_opt {
-                    offset_mapping.insert(old_offset, prop_index_to_offset(new_records.len()));
-                    new_records.push(Some(record.clone()));
-                } else {
-                    new_records.push(None);
-                }
-                new_chains.push(self.chain_records.get(old_idx).cloned().unwrap_or_default());
+    /// Reclaim property slots whose rows are physically dead: tombstoned,
+    /// no longer referenced by any live edge (`offset ∉ valid_offsets`), and
+    /// deleted at or before the retention bound. Cleared slots return to the
+    /// free list for reuse by future inserts.
+    ///
+    /// Live rows never move: offsets are stable, so external references
+    /// (CSR `prop_offset` pointers) stay valid without any relocation
+    /// mapping. An unbounded retention bound ([`Timestamp::MAX`]) is not a
+    /// real timestamp — nothing is reclaimable, preserving time-travel
+    /// history.
+    ///
+    /// Returns the number of reclaimed rows.
+    pub fn reclaim_slots(
+        &mut self,
+        valid_offsets: &HashSet<u32>,
+        retention_bound: Timestamp,
+    ) -> usize {
+        if retention_bound == Timestamp::MAX {
+            return 0;
+        }
+        let mut reclaimed = 0usize;
+        for idx in 0..self.records.len() {
+            let offset = prop_index_to_offset(idx);
+            if valid_offsets.contains(&offset) {
+                continue;
             }
+            let Some(record) = self.records[idx].as_ref() else {
+                continue;
+            };
+            // Live rows (no deletion mark) are never reclaimed here: they may
+            // still be referenced by edges outside the collected set of valid
+            // offsets.
+            let Some(delete_ts) = record.delete_ts else {
+                continue;
+            };
+            if delete_ts > retention_bound {
+                continue;
+            }
+
+            let props = deserialize_row_raw(&self.schema, &record.data);
+            self.value_index.remove_record(&props, offset);
+            self.tombstones_manager.remove(offset);
+            self.used_data_bytes = self.used_data_bytes.saturating_sub(record.data.len());
+            // The row's full version history dies with its slot; this is safe
+            // because `delete_ts <= retention_bound` means no active snapshot
+            // can observe any version of the row.
+            if let Some(chain) = self.chain_records.get_mut(idx) {
+                for entry in chain.drain(..) {
+                    self.used_data_bytes = self.used_data_bytes.saturating_sub(entry.data.len());
+                }
+            }
+            self.records[idx] = None;
+            self.free_list.push(offset);
+            self.row_count = self.row_count.saturating_sub(1);
+            reclaimed += 1;
         }
 
-        self.records = new_records;
-        self.chain_records = new_chains;
-        self.row_count = self.records.iter().filter(|r| r.is_some()).count();
-        self.free_list.clear();
-        self.resync_used_data_bytes();
-
-        // Rebuild tombstone manager with new offsets
-        self.tombstones_manager = TieredTombstoneManager::new(10_000);
-        for (old_idx, record_opt) in self.records.iter().enumerate() {
-            if let Some(record) = record_opt {
-                if let Some(delete_ts) = record.delete_ts {
-                    let new_offset = prop_index_to_offset(old_idx);
-                    self.tombstones_manager.add_tombstone(new_offset, delete_ts);
-                }
-            }
+        if reclaimed > 0 {
+            // Zone maps must exclude the cleared rows; the columnar store
+            // keeps cell values until the slot is reused (same policy as
+            // physical delete).
+            self.rebuild_zone_maps();
         }
-
-        // Rebuild property value index
-        self.value_index.rebuild(&self.schema, &self.records);
-        // Rebuild columnar store and zone maps for OLAP.
-        self.rebuild_column_store_internal();
-        self.rebuild_zone_maps();
+        reclaimed
     }
 
     pub fn used_memory_size(&self) -> usize {
@@ -2358,25 +2353,6 @@ impl PropertyTable {
             .sum::<usize>();
         total += self.zone_maps.len() * std::mem::size_of::<String>();
         total
-    }
-
-    /// Recompute `used_data_bytes` from the current records (used after
-    /// compaction / rebuilds that replace the records array wholesale).
-    ///
-    /// Includes retained before-image chains, which are live memory too.
-    fn resync_used_data_bytes(&mut self) {
-        self.used_data_bytes = self
-            .records
-            .iter()
-            .flatten()
-            .map(|record| record.data.len())
-            .sum::<usize>()
-            + self
-                .chain_records
-                .iter()
-                .flatten()
-                .map(|entry| entry.data.len())
-                .sum::<usize>();
     }
 
     /// Calculate compaction statistics for the property table
@@ -2415,64 +2391,6 @@ impl PropertyTable {
                 })
             })
             .collect()
-    }
-
-    /// Compact the property table by removing deleted records and rebuilding arrays
-    ///
-    /// This operation:
-    /// 1. Filters out deleted/tombstoned records not in valid_offsets
-    /// 2. Rebuilds the records array sequentially
-    /// 3. Generates offset mappings (old_offset -> new_offset)
-    /// 4. Clears the free list and tombstones
-    ///
-    /// Returns a HashMap mapping old offsets to new offsets for any external
-    /// callers that need to update their references.
-    pub fn compact_with_relocation(&mut self, valid_offsets: &HashSet<u32>) -> HashMap<u32, u32> {
-        let mut new_records = Vec::new();
-        let mut new_chains: Vec<Vec<PropertyRecord>> = Vec::new();
-        let mut offset_mapping = HashMap::new();
-
-        // Collect live records and build mapping based on valid_offsets
-        for (old_idx, record_opt) in self.records.iter().enumerate() {
-            let old_offset = prop_index_to_offset(old_idx);
-            if valid_offsets.contains(&old_offset) {
-                if let Some(record) = record_opt {
-                    let new_offset = prop_index_to_offset(new_records.len());
-                    offset_mapping.insert(old_offset, new_offset);
-                    new_records.push(Some(record.clone()));
-                } else {
-                    new_records.push(None);
-                }
-                new_chains.push(self.chain_records.get(old_idx).cloned().unwrap_or_default());
-            }
-        }
-
-        // Update row count
-        self.row_count = new_records.iter().filter(|r| r.is_some()).count();
-
-        // Clear and rebuild arrays
-        self.records = new_records;
-        self.chain_records = new_chains;
-        self.free_list.clear();
-        self.resync_used_data_bytes();
-
-        // Rebuild tombstone manager with new offsets
-        self.tombstones_manager = TieredTombstoneManager::new(10_000);
-        for (idx, record_opt) in self.records.iter().enumerate() {
-            if let Some(record) = record_opt {
-                if let Some(delete_ts) = record.delete_ts {
-                    let new_offset = prop_index_to_offset(idx);
-                    self.tombstones_manager.add_tombstone(new_offset, delete_ts);
-                }
-            }
-        }
-
-        // Rebuild property value index with new offsets
-        self.value_index.rebuild(&self.schema, &self.records);
-        self.rebuild_column_store_internal();
-        self.rebuild_zone_maps();
-
-        offset_mapping
     }
 
     /// Get the byte size of a fixed-size data type in the serialized row format.
@@ -2821,7 +2739,7 @@ mod olap_phase1_tests {
     }
 
     #[test]
-    fn test_column_encoding_and_striped_locks() {
+    fn test_column_encoding() {
         let mut table = PropertyTable::new();
         table
             .add_property("status".to_string(), DataType::Int, false)
@@ -2834,17 +2752,6 @@ mod olap_phase1_tests {
         // Apply RLE encoding (good for repetitive values)
         let res = table.apply_column_encoding("status", EncodingType::Rle);
         assert!(res.is_ok());
-
-        // Striped locks: different rows map to different stripes
-        let s0 = table.stripe_for_row(0);
-        let s1 = table.stripe_for_row(1);
-        assert!(s0 < table.stripe_count());
-        assert!(s1 < table.stripe_count());
-        // Try striped lock access
-        {
-            let _g = table.stripe_locks.read_by_index(s0);
-            assert!(table.stripe_locks.try_read(&s0).is_some() || true);
-        }
     }
 
     #[test]
@@ -2854,7 +2761,7 @@ mod olap_phase1_tests {
             .add_property("weight".to_string(), DataType::Double, false)
             .unwrap();
         let offset = table
-            .insert(&[("weight".to_string(), Value::Double(3.14))], 100)
+            .insert(&[("weight".to_string(), Value::Double(2.5))], 100)
             .unwrap();
         table.rebuild_zone_maps();
         let data = table.dump();
@@ -2862,7 +2769,7 @@ mod olap_phase1_tests {
         loaded.load(&data).unwrap();
         assert_eq!(
             loaded.get(offset, None).unwrap()[0].1,
-            Some(Value::Double(3.14))
+            Some(Value::Double(2.5))
         );
         // Zone maps survive roundtrip
         assert!(loaded.zone_map_for_column("weight").is_some());
@@ -2870,7 +2777,7 @@ mod olap_phase1_tests {
         let proj = loaded
             .get_projected(offset, &["weight".to_string()], None)
             .unwrap();
-        assert_eq!(proj[0].1, Some(Value::Double(3.14)));
+        assert_eq!(proj[0].1, Some(Value::Double(2.5)));
     }
 
     #[test]

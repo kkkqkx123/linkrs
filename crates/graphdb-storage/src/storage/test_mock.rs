@@ -589,6 +589,59 @@ impl StorageGcOps for MockStorage {
     fn stop_index_gc(&self) {}
 }
 
+// The mock has no auto-commit batch/group window; the stubs exist so the
+// `QueryStorage` blanket impl (required by snapshot tests and the sync
+// wrapper's generic bounds) applies to `MockStorage`.
+impl crate::storage::AutoCommitBatchOps for MockStorage {
+    fn begin_auto_commit_batch(
+        &self,
+    ) -> StorageResult<Arc<crate::storage::engine::graph_storage::AutoCommitBatchWindow>> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        _window: &Arc<crate::storage::engine::graph_storage::AutoCommitBatchWindow>,
+    ) -> StorageResult<Self>
+    where
+        Self: Sized,
+    {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+
+    fn finalize_auto_commit_batch(
+        &self,
+        _window: &crate::storage::engine::graph_storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+}
+
+impl crate::storage::AutoCommitGroupOps for MockStorage {
+    fn begin_auto_commit_group(
+        &self,
+    ) -> StorageResult<Arc<crate::storage::engine::graph_storage::AutoCommitBatchWindow>> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support group commit",
+        ))
+    }
+
+    fn finalize_auto_commit_group(
+        &self,
+        _window: &crate::storage::engine::graph_storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support group commit",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;

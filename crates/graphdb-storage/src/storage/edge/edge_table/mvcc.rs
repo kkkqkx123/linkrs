@@ -35,6 +35,14 @@ pub struct MVCCManager {
     pub min_active_snapshot_ts: Timestamp,
     /// Active snapshot timestamps and their reference count
     pub active_snapshots: HashMap<Timestamp, usize>,
+    /// Operator-set retention floor for reclamation without active snapshots.
+    ///
+    /// `0` disables the floor (the default): history is kept until a snapshot
+    /// bounds it. A positive value acts as an explicit reclamation exit for
+    /// the no-snapshot steady state: deletions at or before this timestamp
+    /// become reclaimable exactly as if a snapshot existed at that point.
+    /// Runtime-only (not persisted); see [`Self::effective_retention_bound`].
+    pub retention_floor: Timestamp,
     cold_gc_cursor: usize,
 }
 
@@ -55,7 +63,30 @@ impl MVCCManager {
             cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
             min_active_snapshot_ts: Timestamp::MAX,
             active_snapshots: HashMap::new(),
+            retention_floor: 0,
             cold_gc_cursor: 0,
+        }
+    }
+
+    /// Set the operator retention floor (`0` disables).
+    ///
+    /// The floor only takes effect when no active snapshot pins history;
+    /// registered snapshots always win (see [`Self::effective_retention_bound`]).
+    pub fn set_retention_floor(&mut self, floor: Timestamp) {
+        self.retention_floor = floor;
+    }
+
+    /// Oldest timestamp whose newer deletions are reclaimable.
+    ///
+    /// With active snapshots this is their minimum (deletions older than the
+    /// oldest snapshot cannot be observed by anyone). Without snapshots the
+    /// raw bound is `MAX` ("nothing pinned") which would block reclamation
+    /// forever; an operator-set retention floor then provides the bound.
+    pub fn effective_retention_bound(&self) -> Timestamp {
+        if self.min_active_snapshot_ts == Timestamp::MAX && self.retention_floor > 0 {
+            self.retention_floor
+        } else {
+            self.min_active_snapshot_ts
         }
     }
 
@@ -153,9 +184,10 @@ impl MVCCManager {
         }
 
         // Tombstones is the single authoritative table; no mirrored layers
-        // remain to GC after the tombstone unification.
-
-        self.min_active_snapshot_ts = min_active_snapshot_ts;
+        // remain to GC after the tombstone unification. `min_active_snapshot_ts`
+        // is maintained exclusively by snapshot register/unregister and the
+        // persistence load path — never from a GC argument, which may be an
+        // effective bound (e.g. retention floor) rather than the real minimum.
 
         // If hot layer is too large, move old entries to cold layer
         // Cold layer is kept sorted by EdgeId for efficient binary search
@@ -280,10 +312,6 @@ impl MVCCManager {
     /// This is the earliest timestamp at which any snapshot is currently active.
     /// All tombstones with delete_ts < this value can be safely garbage collected.
     /// Uses the cached value for O(1) access.
-    pub fn get_min_active_snapshot_ts(&self) -> Timestamp {
-        self.min_active_snapshot_ts
-    }
-
     /// Earliest deletion timestamp of an edge across all layers, if any.
     ///
     /// Hot layer is checked first (O(1)), then the cold layer with a bloom
@@ -320,6 +348,25 @@ impl MVCCManager {
             .delete_ts_of(edge_id)
             .map_or(delete_ts, |ts| ts.min(delete_ts));
         self.tombstones.insert(edge_id, earliest);
+    }
+
+    /// Undo of [`Self::record_deletion`]: remove the tombstone for `edge_id`
+    /// from both layers. Used by the transaction undo path to revert a
+    /// segment-path edge deletion.
+    ///
+    /// Returns true when a tombstone was present and removed.
+    pub fn remove_deletion(&mut self, edge_id: EdgeId) -> bool {
+        let mut removed = self.tombstones.remove(&edge_id).is_some();
+        if self.cold_bloom_filter.might_contain(edge_id.0) {
+            if let Ok(idx) = self
+                .cold_tombstones
+                .binary_search_by_key(&edge_id, |&(id, _)| id)
+            {
+                self.cold_tombstones.remove(idx);
+                removed = true;
+            }
+        }
+        removed
     }
 
     /// Get number of active snapshots (for testing and debugging)

@@ -449,10 +449,10 @@ impl ColdSnapshot {
                 if removed.contains_key(&key) {
                     continue;
                 }
-                let mut nbr = Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp);
+                let nbr = Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp);
                 if let Some(update) = updates.get(&key) {
-                    nbr.prop_offset =
-                        properties.update(nbr.prop_offset, &update.properties, delta.delta_ts)?;
+                    // In-place versioned update: the property offset is stable.
+                    properties.update(nbr.prop_offset, &update.properties, delta.delta_ts)?;
                 }
                 out_entries.push((src_u32, nbr));
             }

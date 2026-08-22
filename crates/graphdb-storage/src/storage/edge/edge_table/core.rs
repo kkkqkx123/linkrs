@@ -47,12 +47,10 @@ pub struct EdgeTableConfig {
 
     /// Region-level recycling: vertex count per region (0 = disabled).
     pub region_vertex_count: usize,
-    /// Region high deletion ratio threshold (0.0-1.0) above which a region is considered dirty.
-    #[allow(dead_code)]
-    pub region_high_deletion_ratio: f64,
-    /// Region low density threshold below which a region is considered sparse.
-    #[allow(dead_code)]
-    pub region_low_density_threshold: f64,
+
+    /// Upper bound on the per-row before-image version chain length in the
+    /// property table. `0` disables the bound (unbounded history).
+    pub version_chain_cap: usize,
 }
 
 /// Thresholds that trigger automatic maintenance on the write path.
@@ -105,8 +103,7 @@ impl Default for EdgeTableConfig {
             merge_keep_newest: 5,
             auto_maintenance: AutoMaintenanceConfig::default(),
             region_vertex_count: super::segment::DEFAULT_REGION_VERTEX_COUNT,
-            region_high_deletion_ratio: 0.20,
-            region_low_density_threshold: super::segment::REGION_DENSITY_LOW_WATERMARK,
+            version_chain_cap: crate::storage::edge::property_table::DEFAULT_VERSION_CHAIN_CAP,
         }
     }
 }
@@ -204,6 +201,7 @@ impl TimeTravelEdgeStore {
         )?;
 
         let mut properties = PropertyTable::with_capacity(config.initial_edge_capacity);
+        properties.set_version_chain_cap(config.version_chain_cap);
         for prop in &schema.properties {
             properties.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)?;
         }
@@ -788,9 +786,64 @@ impl TimeTravelEdgeStore {
                     self.properties.revert_deletion(nbr.prop_offset);
                 }
             }
+            return Ok(true);
         }
 
-        Ok(reverted)
+        // Segment-path undo: a frozen-segment deletion recorded an MVCC
+        // tombstone plus a property-row mark (no CSR entry to revert). Undo it
+        // by removing the tombstone and restoring the property row.
+        let dst_key = Self::edge_endpoint_key(dst, rank);
+        let Some(nbr) = self.segment_find_edge_any(src, dst_key) else {
+            return Ok(false);
+        };
+        // Only revert our own deletion: the tombstone must not be newer than
+        // this undo point.
+        match self.mvcc.delete_ts_of(nbr.edge_id) {
+            Some(delete_ts) if delete_ts <= ts => {}
+            _ => return Ok(false),
+        }
+        self.mvcc.remove_deletion(nbr.edge_id);
+        // The cached current snapshot still excludes this edge; rebuild lazily.
+        self.snapshot_dirty = true;
+        if nbr.prop_offset > 0 {
+            self.properties.revert_deletion(nbr.prop_offset);
+        }
+        // Re-index the restored properties when the property index is active
+        // (the delete path removed them).
+        let restored = self.properties_for_offset(nbr.prop_offset, ts);
+        if let Some(ref mut index) = self.property_index {
+            for (prop_name, prop_value) in restored {
+                let _ = index.insert(&prop_name, &prop_value, src, dst, rank, self.label, ts);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Locate an edge in the frozen segments ignoring MVCC tombstones.
+    ///
+    /// Unlike [`Self::base_get_edge`] this returns entries whose deletion is
+    /// already recorded — exactly what the segment-path delete undo needs.
+    fn segment_find_edge_any(&self, src: u32, dst: VertexId) -> Option<Nbr> {
+        for segment in self.out_segments.iter() {
+            if segment.is_evicted() {
+                let _ = segment.reload_from_spill();
+            }
+            let positioned_edges = segment
+                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
+                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
+            for (position, edge) in positioned_edges {
+                if edge.neighbor == dst {
+                    let edge_id = segment.recover_edge_id(&edge, position);
+                    return Some(Nbr::new(
+                        edge.neighbor,
+                        edge_id,
+                        edge.prop_offset,
+                        edge.timestamp,
+                    ));
+                }
+            }
+        }
+        None
     }
 
     pub fn get_edge(&self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> Option<EdgeRecord> {
@@ -1087,13 +1140,6 @@ impl TimeTravelEdgeStore {
         encoding: crate::storage::encoding::EncodingType,
     ) -> StorageResult<()> {
         self.properties.apply_column_encoding(col_name, encoding)
-    }
-
-    /// Fine-grained stripe id for a property row (for striped locking).
-    #[allow(dead_code)]
-    pub fn property_stripe_for_offset(&self, offset: u32) -> Option<usize> {
-        let row_idx = crate::storage::edge::property_schema::prop_offset_to_index(offset)?;
-        Some(self.properties.stripe_for_row(row_idx))
     }
 
     /// Record a schema change event
@@ -1650,19 +1696,21 @@ impl TimeTravelEdgeStore {
         if cfg.tombstone_gc_threshold > 0
             && self.mvcc.total_tombstone_count() > cfg.tombstone_gc_threshold
         {
-            let min_ts = self.mvcc.get_min_active_snapshot_ts();
-            if min_ts != self.last_gc_min_snapshot_ts
-                || (cfg.gc_min_serial > 0 && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial))
+            let bound = self.mvcc.effective_retention_bound();
+            if bound < Timestamp::MAX
+                && (bound != self.last_gc_min_snapshot_ts
+                    || (cfg.gc_min_serial > 0
+                        && self.maintenance_serial.is_multiple_of(cfg.gc_min_serial)))
             {
-                let cleaned = self.mvcc.gc_tombstones(min_ts);
-                self.last_gc_min_snapshot_ts = min_ts;
+                let cleaned = self.mvcc.gc_tombstones(bound);
+                self.last_gc_min_snapshot_ts = bound;
                 self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 if cleaned > 0 {
                     maintenance_ran += 1;
                     log::debug!(
-                        "Auto-maintenance GC: removed {} tombstones (min_ts={}, total={})",
+                        "Auto-maintenance GC: removed {} tombstones (bound={}, total={})",
                         cleaned,
-                        min_ts,
+                        bound,
                         self.mvcc.total_tombstone_count()
                     );
                 }
@@ -1670,15 +1718,15 @@ impl TimeTravelEdgeStore {
         }
 
         // Tier 2: property table compaction when the deleted-row ratio is high.
-        // Only runs while a snapshot is active: compaction reclaims version
-        // chains older than the oldest active snapshot, so without a snapshot
+        // Only runs under a bounded retention horizon: compaction reclaims
+        // version chains older than the bound, so without a bounded horizon
         // there is no known safe retention boundary (ad-hoc time-travel reads
         // may still need the history).
-        let min_ts = self.mvcc.get_min_active_snapshot_ts();
-        if cfg.property_compact_ratio > 0.0 && min_ts != Timestamp::MAX {
+        let bound = self.mvcc.effective_retention_bound();
+        if cfg.property_compact_ratio > 0.0 && bound != Timestamp::MAX {
             let prop_stats = self.properties.compaction_stats();
             if prop_stats.fragmentation_ratio() >= cfg.property_compact_ratio as f64 {
-                self.compact_properties(min_ts);
+                self.compact_properties(bound);
                 self.maintenance_serial = self.maintenance_serial.saturating_add(1);
                 maintenance_ran += 1;
             }
@@ -1709,14 +1757,14 @@ impl TimeTravelEdgeStore {
                 self.mvcc.total_tombstone_count() as f64 / del_stats.total_frozen_edges as f64
             };
             if density >= cfg.deletion_compact_ratio {
-                let min_ts = self.mvcc.get_min_active_snapshot_ts();
+                let bound = self.mvcc.effective_retention_bound();
                 let merge_threshold = CompactConfig::default()
                     .compute_merge_size_threshold(self.mvcc.tombstone_stats().memory_bytes);
                 let result = self.merge_segments_with_config_and_deletion_filter(
                     self.config.segment_merge_threshold as Timestamp,
                     merge_threshold,
-                    if min_ts < Timestamp::MAX {
-                        Some(min_ts)
+                    if bound < Timestamp::MAX {
+                        Some(bound)
                     } else {
                         None
                     },

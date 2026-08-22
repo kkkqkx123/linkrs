@@ -20,10 +20,8 @@ pub(crate) mod macros;
 pub(crate) mod mvcc;
 
 pub use mvcc::SnapshotHandle;
-pub(crate) mod buffer_manager;
 pub(crate) mod naming;
 pub(crate) mod schema;
-pub mod striped_lock;
 pub(crate) mod thread_pool;
 
 mod batch_ops;
@@ -46,10 +44,10 @@ pub use client::{
     StorageSyncContextOps, StorageWriter,
 };
 pub use cursor::{
-    open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch,
-    EdgeCursor, FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan,
-    PartitionSelector, PredicateRange, PropertyColumn, RequiredProperty, ScanOptions,
-    ScanPredicate, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
+    open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,
+    FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
+    PredicateRange, PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget,
+    VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{ColdTierConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};
@@ -70,7 +68,6 @@ pub use index::{
 };
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
-pub use striped_lock::{SharedStripedLock, StripedRwLock};
 pub use types::StoragePropertyDef;
 
 pub use crate::core::StorageError;

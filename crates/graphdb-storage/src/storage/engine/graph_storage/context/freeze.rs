@@ -93,6 +93,24 @@ impl GraphStorageContext {
         Ok(())
     }
 
+    /// Set the operator retention floor on every edge partition.
+    ///
+    /// This is the reclamation exit for the no-snapshot steady state: with a
+    /// floor at `ts`, deletions at or before `ts` become reclaimable by the
+    /// regular maintenance pipeline exactly as if a snapshot existed at that
+    /// point. Registered snapshots always win — the floor only applies while
+    /// no snapshot pins history. A floor of `0` disables it again.
+    pub fn set_edge_retention_floor(&self, ts: Timestamp) -> StorageResult<()> {
+        self.persistent
+            .data_store
+            .for_all_edge_partitions_mut(|_key, table| {
+                table.set_retention_floor(ts);
+                Ok(())
+            })?;
+        log::info!("Edge retention floor set to {} on all partitions", ts);
+        Ok(())
+    }
+
     /// Compact vertex tables whose deleted-vertex ID holes exceed the
     /// configured thresholds (absolute count and ratio), with a cooldown
     /// between runs. Deletions at or before the snapshot cleanup threshold
@@ -203,11 +221,7 @@ impl GraphStorageContext {
                             decision.summary()
                         );
 
-                        frozen_here = table.compact_and_freeze(
-                            ts,
-                            &config,
-                            crate::storage::edge::edge_table::CompactionMode::Standard,
-                        ) as u64;
+                        frozen_here = table.compact_and_freeze(ts, &config) as u64;
                         any_here = true;
                     } else if log::log_enabled!(log::Level::Debug) {
                         log::debug!(
@@ -218,11 +232,7 @@ impl GraphStorageContext {
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
-                        frozen_here = table.compact_and_freeze(
-                            ts,
-                            &config,
-                            crate::storage::edge::edge_table::CompactionMode::Standard,
-                        ) as u64;
+                        frozen_here = table.compact_and_freeze(ts, &config) as u64;
                         any_here = true;
                     }
                 }

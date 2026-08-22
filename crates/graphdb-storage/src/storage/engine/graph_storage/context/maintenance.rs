@@ -179,11 +179,7 @@ impl GraphStorageContext {
             .data_store
             .for_all_edge_partitions_mut(|key, table| {
                 let removed = if config.enable_structure_compaction {
-                    table.compact_and_freeze(
-                        ts,
-                        config,
-                        crate::storage::edge::CompactionMode::Standard,
-                    )
+                    table.compact_and_freeze(ts, config)
                 } else {
                     table.freeze_csr_only(ts);
                     table.compact_properties(ts);

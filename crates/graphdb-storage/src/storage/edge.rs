@@ -47,7 +47,6 @@ pub use crate::core::types::EdgeStrategy;
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
-pub use edge_table::compaction::CompactionMode;
 pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
 pub use edge_table::snapshot::ExportedEdgeSnapshot;
 pub use edge_table::EdgeStore;

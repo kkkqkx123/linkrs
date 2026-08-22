@@ -11,23 +11,6 @@ use crate::core::types::{CompactConfig, Timestamp};
 
 use crate::storage::edge::CsrBase;
 
-/// Compaction mode for the unified compact_and_freeze pipeline.
-///
-/// Controls which steps are included in the compaction pipeline after the
-/// common prefix (compact_csr → freeze → compact_properties → stats).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompactionMode {
-    /// Standard: compact + freeze + merge + compact_properties + stats.
-    /// Merge uses in-place strategy (no physical deletion, no GC).
-    Standard,
-    /// Auto GC: Standard + mvcc.gc_tombstones(min_active_snapshot_ts).
-    /// Tombstone metadata (not edges) is cleaned up after property compaction.
-    AutoGC,
-    /// Physical deletion: Standard + merge with deletion filter + gc_tombstones.
-    /// Tombstoned edges are physically removed during segment merge.
-    PhysicalDeletion,
-}
-
 impl TimeTravelEdgeStore {
     /// Compact mutable CSR only - physical removal of deleted edges from delta.
     ///
@@ -57,7 +40,7 @@ impl TimeTravelEdgeStore {
     ///
     /// Returns number of edges removed.
     pub fn compact_csr_only(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
-        let cutoff = self.mvcc.get_min_active_snapshot_ts();
+        let cutoff = self.mvcc.effective_retention_bound();
         let region_n = self.config.region_vertex_count;
         let removed_out = if region_n > 0 {
             self.out_csr.compact_regions_with_ts_reporting(
@@ -96,7 +79,7 @@ impl TimeTravelEdgeStore {
     /// Useful before flushing to disk to reduce memory usage.
     pub fn maybe_compact_for_flush(&mut self, _ts: Timestamp, threshold: f32) {
         const RESERVE_RATIO: f32 = 0.25;
-        let cutoff = self.mvcc.get_min_active_snapshot_ts();
+        let cutoff = self.mvcc.effective_retention_bound();
         let out_stats = self.out_csr.fragmentation_stats();
         let in_stats = self.in_csr.fragmentation_stats();
         let out_wasted = self.out_csr.wasted_bytes_estimate();
@@ -162,11 +145,12 @@ impl TimeTravelEdgeStore {
         }
     }
 
-    /// Compact properties by removing unused property records.
+    /// Compact properties by reclaiming slots of unreferenced dead records.
     ///
     /// Identifies all valid property offsets referenced by edges in the table,
-    /// then compacts the property table to reclaim space from unused records.
-    /// Automatically applies adaptive compaction strategy based on fragmentation.
+    /// then reclaims the slots of tombstoned records that no live edge
+    /// references. Live rows keep their offsets, so CSR `prop_offset`
+    /// pointers never need remapping.
     ///
     /// # Handling of Deleted Edges
     ///
@@ -176,13 +160,6 @@ impl TimeTravelEdgeStore {
     /// - Physical deletion: Requires segment merge with deletion_filter
     ///
     /// This method only removes properties that are no longer referenced by any edge.
-    ///
-    /// # Fragmentation Management
-    ///
-    /// - Analyzes fragmentation statistics before compaction
-    /// - Triggers automatic compaction when fragmentation > 30% or free list > 1000
-    /// - Uses compact_with_relocation for full defragmentation when needed (frag > 50%)
-    /// - Uses lightweight compact for minor cleanup when fragmentation is acceptable (30-50%)
     pub fn compact_properties(&mut self, ts: Timestamp) {
         let mut valid_offsets = std::collections::HashSet::new();
 
@@ -243,30 +220,23 @@ impl TimeTravelEdgeStore {
             }
         }
 
-        // Analyze fragmentation to determine compaction strategy
-        let prop_stats = self.properties.compaction_stats();
-
-        // Adaptive compaction strategy based on fragmentation level
-        match prop_stats.fragmentation_ratio() {
-            // High fragmentation: full defragmentation with relocation
-            frag if frag > 0.5 => {
-                let _offset_mapping = self.properties.compact_with_relocation(&valid_offsets);
-            }
-            // Medium fragmentation or large free list: standard compaction
-            frag if frag > 0.3 || prop_stats.free_list_size > 1000 => {
-                self.properties.compact(&valid_offsets);
-            }
-            // Low fragmentation: skip compaction, just track stats
-            _ => {
-                // No compaction needed, but could record stats if needed
-            }
+        // Reclaim property slots whose rows are dead (tombstoned and no
+        // longer referenced by any live edge). Slot reclamation keeps every
+        // live row at a stable offset, so CSR `prop_offset` pointers stay
+        // valid without any relocation mapping. The retention bound derives
+        // from active snapshots / the operator floor: an unbounded bound
+        // (MAX) reclaims nothing, preserving time-travel history.
+        let bound = self.mvcc.effective_retention_bound();
+        let reclaimed = self.properties.reclaim_slots(&valid_offsets, bound);
+        if reclaimed > 0 {
+            log::debug!("Property slot reclaim recycled {} row(s)", reclaimed);
         }
 
-        // Reclaim before-image version chains that predate the oldest active
-        // snapshot (part of the Edge version-chain lifecycle; snapshot reads
-        // at or after `min_active_snapshot_ts` remain consistent).
+        // Reclaim before-image version chains that predate the retention
+        // bound (part of the Edge version-chain lifecycle; snapshot reads at
+        // or after the bound remain consistent).
         self.properties
-            .gc_versions(self.mvcc.get_min_active_snapshot_ts());
+            .gc_versions(self.mvcc.effective_retention_bound());
     }
 
     /// Get deletion statistics for all frozen segments.
@@ -334,29 +304,25 @@ impl TimeTravelEdgeStore {
                 .sum::<usize>()
     }
 
-    /// Unified compaction pipeline with configurable mode.
+    /// Unified compaction pipeline.
     ///
-    /// Provides a single entry point for all compaction variants:
+    /// Single entry point shared by every maintenance trigger (write-path
+    /// tiers, background thread, manual/admin invocation):
     ///
-    /// | Mode | Description | Steps |
-    /// |------|-------------|-------|
-    /// | `Standard` | Basic inline merge | compact_csr → freeze → merge (in-place) → compact_properties → stats |
-    /// | `AutoGC` | + tombstone GC | Standard + gc_tombstones |
-    /// | `PhysicalDeletion` | + physical edge removal | compact_csr → freeze → merge (with deletion filter) → compact_properties → gc_tombstones → stats |
+    /// compact_csr → freeze → merge → compact_properties → tombstone GC → stats
+    ///
+    /// The reclamation strength is derived from the retention state instead
+    /// of a caller-supplied mode:
+    ///
+    /// - With a bounded retention horizon (active snapshots or an operator
+    ///   retention floor) the merge physically drops edges deleted before the
+    ///   bound and tombstones older than it are GC'd.
+    /// - Unbounded (`MAX`: no snapshot pins history, no floor configured) the
+    ///   merge keeps every edge and GC is skipped, preserving full
+    ///   time-travel history.
     ///
     /// Returns number of edges removed from mutable CSR during Layer 1 compaction.
-    ///
-    /// # Deletion Lifecycle (PhysicalDeletion mode)
-    ///
-    /// - **Layer 1** (Mutable CSR): compact_csr_only() removes tombstoned entries from delta
-    /// - **Layer 2** (Frozen Segments): merge with deletion filter removes edges deleted before min_active_snapshot_ts
-    /// - **Layer 3** (Property Table): compact_properties() reclaims unused property offsets
-    pub fn compact_and_freeze(
-        &mut self,
-        ts: Timestamp,
-        config: &CompactConfig,
-        mode: CompactionMode,
-    ) -> usize {
+    pub fn compact_and_freeze(&mut self, ts: Timestamp, config: &CompactConfig) -> usize {
         let edge_count = self.edge_count() as usize;
         let reserve_ratio = config.compute_reserve_ratio(edge_count, 0);
 
@@ -366,41 +332,26 @@ impl TimeTravelEdgeStore {
         // Freeze mutable CSR to immutable segments
         self.freeze_csr_only(ts);
 
-        // Layer 2: Merge segments
+        // Layer 2: Merge segments. Physical deletion applies only under a
+        // bounded retention horizon; otherwise the merge keeps every edge.
         if config.segment_merge_enabled {
             let stats = self.mvcc.tombstone_stats();
             let merge_threshold = config.compute_merge_size_threshold(stats.memory_bytes);
+            let bound = self.mvcc.effective_retention_bound();
 
-            match mode {
-                CompactionMode::PhysicalDeletion => {
-                    let min_active_snapshot_ts = self.mvcc.min_active_snapshot_ts;
-                    let result = self.merge_segments_with_config_and_deletion_filter(
-                        config.segment_merge_threshold,
-                        merge_threshold,
-                        if min_active_snapshot_ts < Timestamp::MAX {
-                            Some(min_active_snapshot_ts)
-                        } else {
-                            None
-                        },
-                    );
-                    if result.metrics.edges_merged > 0 {
-                        result.metrics.log();
-                        if result.segments_reduced > 0 {
-                            log::debug!("Segments reduced: {}", result.segments_reduced);
-                        }
-                    }
-                }
-                _ => {
-                    let result = self.merge_segments_with_config(
-                        config.segment_merge_threshold,
-                        merge_threshold,
-                    );
-                    if result.metrics.edges_merged > 0 {
-                        result.metrics.log();
-                        if result.segments_reduced > 0 {
-                            log::debug!("Segments reduced: {}", result.segments_reduced);
-                        }
-                    }
+            let result = if bound < Timestamp::MAX {
+                self.merge_segments_with_config_and_deletion_filter(
+                    config.segment_merge_threshold,
+                    merge_threshold,
+                    Some(bound),
+                )
+            } else {
+                self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold)
+            };
+            if result.metrics.edges_merged > 0 {
+                result.metrics.log();
+                if result.segments_reduced > 0 {
+                    log::debug!("Segments reduced: {}", result.segments_reduced);
                 }
             }
             let total_bytes = self.segments_total_bytes();
@@ -410,10 +361,11 @@ impl TimeTravelEdgeStore {
         // Layer 3: Compact property table to reclaim unused offsets
         self.compact_properties(ts);
 
-        // GC tombstones (AutoGC and PhysicalDeletion modes)
-        if mode == CompactionMode::AutoGC || mode == CompactionMode::PhysicalDeletion {
-            let min_ts = self.mvcc.get_min_active_snapshot_ts();
-            self.mvcc.gc_tombstones(min_ts);
+        // GC tombstones — only meaningful under a bounded retention horizon;
+        // an unbounded bound would wipe tombstones arbitrary-ts reads need.
+        let bound = self.mvcc.effective_retention_bound();
+        if bound < Timestamp::MAX {
+            self.mvcc.gc_tombstones(bound);
         }
 
         // Record statistics

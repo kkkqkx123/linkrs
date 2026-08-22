@@ -58,22 +58,90 @@ fn test_update() {
         .add_property("weight".to_string(), DataType::Double, false)
         .unwrap();
 
-    let _offset = table
+    let offset = table
         .insert(&[("weight".to_string(), Value::Double(1.0))], 100)
         .unwrap();
 
-    // Update returns a new offset with the new record
-    let new_offset = table
-        .update(_offset, &[("weight".to_string(), Value::Double(2.0))], 200)
+    // In-place versioned update: the offset is stable and the new value
+    // becomes the current version.
+    table
+        .update(offset, &[("weight".to_string(), Value::Double(2.0))], 200)
         .unwrap();
 
-    let weight = table
-        .get(new_offset, None)
+    let weight_current = table
+        .get(offset, None)
         .unwrap()
         .into_iter()
         .find(|(n, _)| n == "weight")
         .and_then(|(_, v)| v);
-    assert_eq!(weight, Some(Value::Double(2.0)));
+    assert_eq!(weight_current, Some(Value::Double(2.0)));
+
+    // The previous version stays readable as a before-image.
+    let weight_before = table
+        .get(offset, Some(150))
+        .unwrap()
+        .into_iter()
+        .find(|(n, _)| n == "weight")
+        .and_then(|(_, v)| v);
+    assert_eq!(weight_before, Some(Value::Double(1.0)));
+}
+
+/// Multi-column in-place update must preserve untouched columns (row
+/// serialization writes NULL for absent names, so `update` has to carry the
+/// full merged row) and keep the row at its original offset.
+#[test]
+fn test_update_preserves_other_columns() {
+    let mut table = PropertyTable::new();
+    // A String column keeps the schema variable-size, exercising the shared
+    // slow path instead of the fixed-size fast path.
+    table
+        .add_property("name".to_string(), DataType::String, false)
+        .unwrap();
+    table
+        .add_property("age".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let offset = table
+        .insert(
+            &[
+                ("name".to_string(), Value::string("alice")),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
+        .unwrap();
+
+    table
+        .update(offset, &[("age".to_string(), Value::Int(31))], 200)
+        .unwrap();
+
+    let props = table.get(offset, None).unwrap();
+    assert_eq!(
+        props
+            .iter()
+            .find(|(n, _)| n == "name")
+            .and_then(|(_, v)| v.clone()),
+        Some(Value::string("alice")),
+        "untouched column must survive the update"
+    );
+    assert_eq!(
+        props
+            .iter()
+            .find(|(n, _)| n == "age")
+            .and_then(|(_, v)| v.clone()),
+        Some(Value::Int(31))
+    );
+
+    // Snapshot read before the update still sees the old age.
+    assert_eq!(
+        table
+            .get(offset, Some(150))
+            .unwrap()
+            .iter()
+            .find(|(n, _)| n == "age")
+            .and_then(|(_, v)| v.clone()),
+        Some(Value::Int(30))
+    );
 }
 
 #[test]
@@ -368,7 +436,7 @@ fn test_property_table_multiple_sequential_updates() {
     }
 }
 
-/// Test: Verify property offset reuse after deletion
+/// Test: Verify property offset reuse after slot reclamation
 #[test]
 fn test_property_table_offset_reuse() {
     let mut table = PropertyTable::new();
@@ -376,7 +444,7 @@ fn test_property_table_offset_reuse() {
         .add_property("value".to_string(), DataType::Int, false)
         .unwrap();
 
-    let _offset1 = table
+    let offset1 = table
         .insert(&[("value".to_string(), Value::Int(100))], 100)
         .unwrap();
 
@@ -384,13 +452,17 @@ fn test_property_table_offset_reuse() {
         .insert(&[("value".to_string(), Value::Int(200))], 100)
         .unwrap();
 
-    // Mark offset1 as deleted via compact
-    table.compact(&[offset2].iter().cloned().collect());
+    // Tombstone offset1 and reclaim its slot: live rows keep their offsets,
+    // the dead slot returns to the free list.
+    table.mark_deleted(offset1, 150).unwrap();
+    let reclaimed = table.reclaim_slots(&[offset2].iter().cloned().collect(), 300);
+    assert_eq!(reclaimed, 1);
 
-    // New insertion might reuse offset1
+    // New insertion reuses the reclaimed slot.
     let offset3 = table
         .insert(&[("value".to_string(), Value::Int(300))], 100)
         .unwrap();
+    assert_eq!(offset3, offset1);
 
     // Verify the new value is stored
     let props = table.get(offset3, None).expect("row should be visible");
@@ -472,7 +544,7 @@ fn test_concurrent_update_conflict() {
 }
 
 /// The before-image chain length must stay bounded under heavy updates once a
-/// cap is configured (F10): memory grows with the cap, not with the update count.
+/// cap is configured: memory grows with the cap, not with the update count.
 #[test]
 fn test_version_chain_bounded() {
     let mut table = PropertyTable::new();
@@ -511,7 +583,7 @@ fn test_version_chain_bounded() {
 }
 
 /// After folding, the oldest interval returns the folded (oldest) value while
-/// recent history stays exact (F10 merge semantics).
+/// recent history stays exact (interval-merge semantics).
 #[test]
 fn test_merged_oldest_version() {
     let mut table = PropertyTable::new();
@@ -626,8 +698,10 @@ fn test_used_memory_counter_tracks_records() {
     assert!(table.delete(o2));
     assert_eq!(table.used_data_bytes, direct_sum(&table));
 
-    // Compaction drops tombstones.
-    table.compact(&[o1].iter().cloned().collect());
+    // Slot reclamation with an unbounded retention bound reclaims nothing
+    // and leaves byte accounting untouched.
+    let reclaimed = table.reclaim_slots(&[o1].iter().cloned().collect(), Timestamp::MAX);
+    assert_eq!(reclaimed, 0);
     assert_eq!(table.used_data_bytes, direct_sum(&table));
 }
 
@@ -872,10 +946,10 @@ fn test_version_chain_survives_dump_load() {
     );
 }
 
-/// Before-images must survive property-table compaction (row relocation)
-/// so snapshot reads at historical timestamps remain correct.
+/// Before-images survive slot reclamation, and live rows keep their offsets,
+/// so snapshot reads stay correct without any relocation mapping.
 #[test]
-fn test_version_chain_survives_compaction() {
+fn test_version_chain_survives_slot_reclaim() {
     let mut table = PropertyTable::new();
     table
         .add_property("v".to_string(), DataType::Int, false)
@@ -891,10 +965,17 @@ fn test_version_chain_survives_compaction() {
         .set_property(keep, "v", Some(Value::Int(2)), 200)
         .unwrap();
 
-    table.compact(&[keep].iter().cloned().collect());
-    assert!(table.get(keep, Some(150)).is_some());
-    assert!(table.get(drop, Some(150)).is_none());
+    // Tombstone the dead row and reclaim it; the live row is untouched.
+    table.mark_deleted(drop, 150).unwrap();
+    let reclaimed = table.reclaim_slots(&[keep].iter().cloned().collect(), 300);
+    assert_eq!(reclaimed, 1);
 
+    // The dead row's slot is cleared wholesale.
+    assert!(table.get(drop, Some(150)).is_none());
+    assert!(!table.is_deleted(drop));
+
+    // The live row kept its offset: history and current version both read
+    // through the original offset.
     assert_eq!(
         table.get(keep, Some(150)).and_then(|props| props
             .into_iter()
@@ -909,21 +990,163 @@ fn test_version_chain_survives_compaction() {
             .and_then(|(_, v)| v)),
         Some(Value::Int(2))
     );
+}
 
-    let mapping = table.compact_with_relocation(&[keep].iter().cloned().collect());
-    let new_keep = mapping.get(&keep).copied().unwrap();
+/// Slot reclamation must not destroy history an active snapshot may still
+/// observe: rows deleted after the retention bound survive the pass, and an
+/// unbounded bound (MAX) reclaims nothing.
+#[test]
+fn test_slot_reclaim_respects_retention_bound() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+
+    let pinned = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+    let dead = table
+        .insert(&[("v".to_string(), Value::Int(9))], 100)
+        .unwrap();
+
+    // `dead` was deleted at ts=400, which is after the bound at ts=300:
+    // a snapshot registered between 300 and 400 may still observe it.
+    table.mark_deleted(pinned, 500).unwrap();
+    table.mark_deleted(dead, 400).unwrap();
+
+    let valid = [pinned].iter().cloned().collect::<HashSet<u32>>();
+    assert_eq!(table.reclaim_slots(&valid, 300), 0);
+    assert!(table.get(dead, None).is_none()); // tombstoned but slot intact
+
+    // Once time moves past every deletion point, the row is reclaimable.
+    assert_eq!(table.reclaim_slots(&valid, 450), 1);
+
+    // An unbounded bound is never treated as a real timestamp.
+    assert_eq!(table.reclaim_slots(&HashSet::new(), Timestamp::MAX), 0);
+}
+
+/// `update()` shares the write-write conflict semantics of `set_property`:
+/// a back-in-time write or a write past a tombstone is rejected without any
+/// side effect on the stored row.
+#[test]
+fn test_update_rejects_conflicting_write() {
+    let mut table = PropertyTable::new();
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(1))], 100)
+        .unwrap();
+
+    // A newer version exists at ts=300; updating at ts=150 would clobber it.
+    table
+        .set_property(offset, "v", Some(Value::Int(2)), 300)
+        .unwrap();
+    let err = table
+        .update(offset, &[("v".to_string(), Value::Int(3))], 150)
+        .unwrap_err();
     assert_eq!(
-        table.get(new_keep, Some(150)).and_then(|props| props
+        err.kind(),
+        crate::core::error::storage::StorageErrorKind::Conflict
+    );
+
+    // Writing to a row tombstoned at ts=400, at a later ts, is a conflict.
+    table.mark_deleted(offset, 400).unwrap();
+    let err2 = table
+        .update(offset, &[("v".to_string(), Value::Int(4))], 500)
+        .unwrap_err();
+    assert_eq!(
+        err2.kind(),
+        crate::core::error::storage::StorageErrorKind::Conflict
+    );
+
+    // The rejected writes left the row untouched.
+    assert_eq!(
+        table.get(offset, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        None,
+        "tombstoned row stays invisible"
+    );
+    assert!(table.is_deleted(offset));
+}
+
+/// Version-chain folding must not destroy entries an active snapshot may
+/// still observe. While the retention horizon pins old history the chain may
+/// temporarily exceed the cap; once snapshots release, folding resumes.
+#[test]
+fn test_fold_respects_active_snapshot_horizon() {
+    let mut table = PropertyTable::new();
+    table.set_version_chain_cap(2);
+    table
+        .add_property("v".to_string(), DataType::Int, false)
+        .unwrap();
+    let offset = table
+        .insert(&[("v".to_string(), Value::Int(0))], 100)
+        .unwrap();
+
+    // Pin history at ts=115: every version created afterwards (delete_ts >
+    // 115) must survive folding, so the chain grows past the cap.
+    table.set_retention_horizon(115);
+    for i in 1..=20u32 {
+        table
+            .set_property(
+                offset,
+                "v",
+                Some(Value::Int(i as i32)),
+                100 + i as Timestamp * 10,
+            )
+            .unwrap();
+    }
+
+    let row_idx = prop_offset_to_index(offset).unwrap();
+    let chain_len = table.chain_records[row_idx].len();
+    assert!(
+        chain_len > 2,
+        "pinned versions must not be folded: chain_len={}",
+        chain_len
+    );
+
+    // The pinned snapshot's view of ts=115 is exact (version [110, 120)).
+    assert_eq!(
+        table.get(offset, Some(115)).and_then(|props| props
             .into_iter()
             .find(|(n, _)| n == "v")
             .and_then(|(_, v)| v)),
         Some(Value::Int(1))
     );
+    // And the current value too.
     assert_eq!(
-        table.get(new_keep, None).and_then(|props| props
+        table.get(offset, None).and_then(|props| props
             .into_iter()
             .find(|(n, _)| n == "v")
             .and_then(|(_, v)| v)),
-        Some(Value::Int(2))
+        Some(Value::Int(20))
+    );
+
+    // Release the snapshot: folding resumes and the chain is bounded again.
+    table.set_retention_horizon(Timestamp::MAX);
+    table
+        .set_property(offset, "v", Some(Value::Int(21)), 400)
+        .unwrap();
+    let chain_len = table.chain_records[row_idx].len();
+    assert!(chain_len <= 2, "chain length {} exceeds cap 2", chain_len);
+
+    // The current value stays exact; recent history is preserved by the
+    // newest surviving before-image ([300, 400) → value 20).
+    assert_eq!(
+        table.get(offset, None).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(21))
+    );
+    assert_eq!(
+        table.get(offset, Some(395)).and_then(|props| props
+            .into_iter()
+            .find(|(n, _)| n == "v")
+            .and_then(|(_, v)| v)),
+        Some(Value::Int(20))
     );
 }

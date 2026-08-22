@@ -141,6 +141,16 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
         segments.push(merged_segment);
         merge_count
     } else {
+        // Every edge of the group was physically dropped: no merged segment
+        // is produced, but the source segments must still be removed and
+        // recycled, otherwise fully-dead segments would linger forever.
+        let removed_segments: Vec<_> = sorted_indices
+            .into_iter()
+            .map(|idx| segments.remove(idx))
+            .collect();
+        for segment in removed_segments {
+            free_space.recycle_csr(segment.into_csr());
+        }
         0
     }
 }
@@ -564,6 +574,7 @@ pub fn merge_in_place_physical_with_free_space(
 
     let mut total_edges = 0u64;
     let mut merged_segments = 0usize;
+    let mut merged_group_count = 0usize;
     for group in groups.into_iter().rev() {
         if group.len() <= 1 {
             continue;
@@ -579,12 +590,13 @@ pub fn merge_in_place_physical_with_free_space(
             edge_delete_ts,
             free_space,
         );
+        merged_group_count += 1;
     }
 
-    if merged_segments > 0 {
+    if merged_segments > 0 || merged_group_count > 0 {
         log::debug!(
-            "Physical merge: merged {} segments across {} groups (min active snapshot ts={})",
-            merged_segments,
+            "Physical merge: {} groups produced {} new segment(s) (min active snapshot ts={})",
+            merged_group_count,
             merged_segments,
             min_active_snapshot_ts
         );
@@ -1044,5 +1056,51 @@ mod tests {
         // Gaps between batches are ~1000 >> 10: nothing may be merged.
         assert_eq!(result.segments_reduced, 0);
         assert_eq!(table.out_segments.len() + table.in_segments.len(), 8);
+    }
+
+    #[test]
+    fn test_physical_merge_reclaims_fully_dead_segments() {
+        let schema = create_test_schema();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+        // Two frozen segments, then delete every edge they hold.
+        for batch in 0..2u64 {
+            for i in 0..3u64 {
+                let src = batch * 10 + i;
+                table
+                    .insert_edge(src as u32, src as u32 + 1, 0, &[], 100 + batch * 100 + i)
+                    .unwrap();
+            }
+            table.freeze_csr_only(105 + batch * 100);
+        }
+        assert!(table.out_segments.len() >= 2);
+
+        for batch in 0..2u64 {
+            for i in 0..3u64 {
+                let src = batch * 10 + i;
+                assert!(table
+                    .delete_edge(src as u32, src as u32 + 1, 0, 500)
+                    .unwrap());
+            }
+        }
+        // Snapshot registered after the deletions: every tombstone predates
+        // the retention bound, so the merge may drop everything.
+        table.mvcc.register_active_snapshot(600);
+
+        let result = table.merge_segments_with_config_and_deletion_filter(
+            10_000,
+            8 * 1024 * 1024,
+            Some(600),
+        );
+
+        // A fully-dead group produces no merged segment but must not leak:
+        // the dead source segments are removed and recycled.
+        assert!(
+            table.out_segments.is_empty(),
+            "fully-dead segments must be reclaimed, {} remain",
+            table.out_segments.len()
+        );
+        assert!(result.segments_reduced > 0);
     }
 }

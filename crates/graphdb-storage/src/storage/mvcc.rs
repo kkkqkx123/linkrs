@@ -48,10 +48,8 @@ pub struct TieredTombstoneManager<T: Clone + Copy + Eq + std::hash::Hash> {
     /// Cold layer: sorted Vec for older deletions (O(log n) binary search)
     cold_tombstones: Vec<TombstoneEntry<T>>,
 
-    /// Maximum size of hot layer before promotion to cold
-    hot_max_size: usize,
-
-    /// Threshold for triggering hot→cold demotion (hot_max_size * 1.5)
+    /// Threshold for triggering hot→cold demotion (1.5x the configured
+    /// hot-layer capacity)
     hot_gc_threshold: usize,
     cold_gc_cursor: usize,
 }
@@ -66,32 +64,8 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
         Self {
             hot_tombstones: HashMap::new(),
             cold_tombstones: Vec::new(),
-            hot_max_size,
             hot_gc_threshold,
             cold_gc_cursor: 0,
-        }
-    }
-
-    /// Check if a key is tombstoned (deleted) at the given timestamp
-    ///
-    /// Returns true if the deletion timestamp <= query timestamp.
-    /// Checks hot layer first (O(1)), then cold layer (O(log n)).
-    #[inline]
-    pub fn is_tombstoned(&self, key: T, ts: Timestamp) -> bool {
-        // Hot layer lookup (O(1))
-        if let Some(&delete_ts) = self.hot_tombstones.get(&key) {
-            return delete_ts <= ts;
-        }
-
-        // Cold layer lookup (O(log n) binary search)
-        self.is_tombstoned_cold(key, ts)
-    }
-
-    /// Binary search in cold layer for tombstone entry
-    fn is_tombstoned_cold(&self, key: T, ts: Timestamp) -> bool {
-        match self.cold_tombstones.binary_search_by_key(&key, |e| e.key) {
-            Ok(idx) => self.cold_tombstones[idx].delete_ts <= ts,
-            Err(_) => false,
         }
     }
 
@@ -231,21 +205,34 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
         self.hot_tombstones.len()
     }
 
-    /// Get cold layer size
+    /// Check if a key is tombstoned (deleted) at the given timestamp
+    ///
+    /// Returns true if the deletion timestamp <= query timestamp.
+    /// Checks hot layer first (O(1)), then cold layer (O(log n)).
+    ///
+    /// Read-side API of the tiered structure; production visibility goes
+    /// through the row records, this accessor is what the unit tests use to
+    /// verify promotion/GC behaviour across both layers.
+    #[allow(dead_code)]
+    #[inline]
+    pub fn is_tombstoned(&self, key: T, ts: Timestamp) -> bool {
+        // Hot layer lookup (O(1))
+        if let Some(&delete_ts) = self.hot_tombstones.get(&key) {
+            return delete_ts <= ts;
+        }
+
+        // Cold layer lookup (O(log n) binary search)
+        match self.cold_tombstones.binary_search_by_key(&key, |e| e.key) {
+            Ok(idx) => self.cold_tombstones[idx].delete_ts <= ts,
+            Err(_) => false,
+        }
+    }
+
+    /// Get cold layer size (layer-distribution diagnostics / tests)
+    #[allow(dead_code)]
     #[inline]
     pub fn cold_len(&self) -> usize {
         self.cold_tombstones.len()
-    }
-
-    /// Get the configured hot layer max size
-    pub fn hot_max_size(&self) -> usize {
-        self.hot_max_size
-    }
-
-    /// Check if hot layer is approaching capacity (above 80% of max)
-    pub fn is_hot_layer_near_capacity(&self) -> bool {
-        let threshold = self.hot_max_size.saturating_mul(8).saturating_div(10);
-        self.hot_tombstones.len() >= threshold
     }
 }
 

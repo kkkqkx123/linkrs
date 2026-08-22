@@ -40,7 +40,7 @@ impl TimeTravelEdgeStore {
         // where they would occupy space until a physical merge. Without an
         // active snapshot every deleted entry is retained so time-travel
         // before the deletion stays possible.
-        let cutoff = self.mvcc.get_min_active_snapshot_ts();
+        let cutoff = self.mvcc.effective_retention_bound();
         if cutoff < Timestamp::MAX && has_deleted_delta_entries {
             self.compact_csr_only(ts, 0.0);
         }
@@ -297,11 +297,11 @@ impl TimeTravelEdgeStore {
         }
 
         let mut total_merged = 0;
-        let min_snapshot_ts = self.mvcc.get_min_active_snapshot_ts();
-        // Physical deletion is only safe while an active snapshot pins the
-        // history; with no active snapshot (min == MAX) pass None so the
-        // merge never drops tombstoned edges.
-        let deletion_filter = (min_snapshot_ts < Timestamp::MAX).then_some(min_snapshot_ts);
+        // Physical deletion is only safe under a bounded retention horizon
+        // (active snapshot or operator retention floor); unbounded (MAX)
+        // passes None so the merge never drops tombstoned edges.
+        let bound = self.mvcc.effective_retention_bound();
+        let deletion_filter = (bound < Timestamp::MAX).then_some(bound);
 
         // Emergency merge: if segment count exceeds hard limit, merge aggressively
         let region_n = self.config.region_vertex_count;
