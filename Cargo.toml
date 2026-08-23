@@ -216,7 +216,6 @@ toml = "1.1"
 reqwest = { version = "0.12", features = ["json"] }
 postcard.workspace = true
 graphdb-wire = { path = "crates/graphdb-wire" }
-vector-client = { path = "crates/vector-client" }
 
 [[bench]]
 name = "storage_bench"

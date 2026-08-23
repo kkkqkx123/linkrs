@@ -320,6 +320,7 @@ fn test_complete_storage_to_query_workflow() {
         session_variables: None,
         query_id: None,
         parsed_statement: None,
+        isolation_level: None,
     };
 
     let result = query_api.execute("CREATE SPACE workflow_test (vid_type=STRING)", request);

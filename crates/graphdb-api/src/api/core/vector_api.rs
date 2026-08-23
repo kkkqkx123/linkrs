@@ -73,19 +73,29 @@ impl VectorApi {
         } else {
             let collection_name =
                 VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-            let config = CollectionConfig {
-                vector_size,
-                distance,
-                index_type: Some(vector_search::types::IndexType::HNSW),
-                hnsw_config: Some(vector_search::types::HnswConfig {
-                    m: 16,
-                    ef_construct: 100,
-                    full_scan_threshold: None,
-                    max_indexing_threads: None,
-                    on_disk: None,
-                    payload_m: Some(16),
-                }),
-                ..Default::default()
+            // Index-tier fields are only meaningful for the remote qdrant
+            // backend; the local engine controls its tiers itself.
+            let config = if self.backend.is_local() {
+                CollectionConfig {
+                    vector_size,
+                    distance,
+                    ..Default::default()
+                }
+            } else {
+                CollectionConfig {
+                    vector_size,
+                    distance,
+                    index_type: Some(vector_search::types::IndexType::HNSW),
+                    hnsw_config: Some(vector_search::types::HnswConfig {
+                        m: 16,
+                        ef_construct: 100,
+                        full_scan_threshold: None,
+                        max_indexing_threads: None,
+                        on_disk: None,
+                        payload_m: Some(16),
+                    }),
+                    ..Default::default()
+                }
             };
             self.backend
                 .create_index(&collection_name, &config)

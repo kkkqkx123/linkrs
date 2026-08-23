@@ -229,6 +229,26 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
             }
         }
 
+        // SemiJoin (Mark-Join): surface the residual join condition and the
+        // anti (NOT EXISTS) semantics.
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Join(
+            crate::query::executor::streaming::operators::spec::JoinSpec::SemiJoin {
+                join_condition,
+                anti,
+            },
+        ) = &op_spec.spec
+        {
+            if let Some(condition) = join_condition {
+                pairs.push(Pair::new(
+                    "join_condition",
+                    condition.to_expression_string(),
+                ));
+            }
+            if *anti {
+                pairs.push(Pair::new("anti", "true"));
+            }
+        }
+
         // Expression-level subqueries: Filter/Project/Assign hosts
         // surface the number of compiled subqueries as `subquery: N`.
         if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(unary_spec) =

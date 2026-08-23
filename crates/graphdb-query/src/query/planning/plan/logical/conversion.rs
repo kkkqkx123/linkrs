@@ -381,6 +381,8 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
                     hash_keys: n.hash_keys().to_vec(),
                     probe_keys: n.probe_keys().to_vec(),
                     deps: vec![logical_left, logical_right],
+                    join_condition: n.join_condition().cloned(),
+                    anti: n.is_anti(),
                     output_var: n.output_var().map(|s| s.to_string()),
                     col_names: n.col_names().to_vec(),
                     column_types: n.column_types().to_vec(),

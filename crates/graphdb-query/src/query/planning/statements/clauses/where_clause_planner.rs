@@ -120,7 +120,9 @@ impl ClausePlanner for WhereClausePlanner {
                 &space_name,
                 &outer_col_names,
             )?;
-            plan = if planned.correlated {
+            plan = if let Some(condition) = &planned.mark_join_condition {
+                exists_planner::wrap_mark_join(plan, &planned, condition, spec.negated)?
+            } else if planned.correlated {
                 exists_planner::wrap_correlated_apply(plan, &planned, spec.negated)?
             } else {
                 exists_planner::wrap_pattern_apply(plan, &planned, spec.negated)?

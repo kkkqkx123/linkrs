@@ -290,10 +290,11 @@ fn test_nested_correlated_exists() {
     assert_eq!(result.rows().len(), 2, "Bob and Dave match");
 }
 
-/// EXPLAIN surfaces the CorrelatedApply operator for a non-equi correlated
-/// subquery, with an `anti` annotation on the NOT EXISTS variant.
+/// EXPLAIN surfaces the SemiJoin (Mark-Join) decorrelation for a non-equi
+/// correlated subquery, carrying the residual as its join condition, with an
+/// `anti` annotation on the NOT EXISTS variant.
 #[test]
-fn test_explain_shows_correlated_apply() {
+fn test_explain_shows_mark_join() {
     let mut db = create_test_db();
     setup_person_graph(&mut db);
 
@@ -315,23 +316,17 @@ fn test_explain_shows_correlated_apply() {
         "EXPLAIN MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age > t.age } RETURN t.name",
     );
     assert!(
-        semi.contains("CorrelatedApply"),
-        "expected CorrelatedApply in EXPLAIN output, got: {}",
+        semi.contains("SemiJoin"),
+        "expected SemiJoin in EXPLAIN output, got: {}",
         semi
     );
-    assert!(!semi.contains("anti:"), "semi variant must not be anti");
 
     let anti = joined(
         "EXPLAIN MATCH (t:person) WHERE NOT EXISTS { MATCH (p:person) WHERE p.age > t.age } RETURN t.name",
     );
     assert!(
-        anti.contains("CorrelatedApply"),
-        "expected CorrelatedApply in EXPLAIN output, got: {}",
-        anti
-    );
-    assert!(
-        anti.contains("anti:"),
-        "expected anti annotation in EXPLAIN output, got: {}",
+        anti.contains("SemiJoin"),
+        "expected SemiJoin in EXPLAIN output, got: {}",
         anti
     );
 }

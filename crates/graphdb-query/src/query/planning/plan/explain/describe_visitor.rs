@@ -381,12 +381,51 @@ impl PlanNodeVisitor for DescribeVisitor {
         visit_left_join => "LeftJoin", LeftJoinNode,
         visit_right_join => "RightJoin", RightJoinNode,
         visit_full_outer_join => "FullOuterJoin", FullOuterJoinNode,
-        visit_semi_join => "SemiJoin", SemiJoinNode,
     );
 
     // ==========================================
     // Single-input nodes with extra descriptions
     // ==========================================
+
+    fn visit_semi_join(&mut self, node: &SemiJoinNode) {
+        node.left_input().accept(self);
+        node.right_input().accept(self);
+        let deps = vec![node.left_input().id(), node.right_input().id()];
+        let mut desc = PlanNodeDescription::new("SemiJoin", node.id());
+        if let Some(var) = node.output_var() {
+            desc = desc.with_output_var(var.to_string());
+        }
+        desc.set_dependencies(deps);
+
+        let hash_keys: Vec<String> = node
+            .hash_keys()
+            .iter()
+            .map(|k| k.to_expression_string())
+            .collect();
+        let probe_keys: Vec<String> = node
+            .probe_keys()
+            .iter()
+            .map(|k| k.to_expression_string())
+            .collect();
+        if !hash_keys.is_empty() {
+            desc.add_description("hash_keys", hash_keys.join(", "));
+        }
+        if !probe_keys.is_empty() {
+            desc.add_description("probe_keys", probe_keys.join(", "));
+        }
+        if let Some(condition) = node.join_condition() {
+            desc.add_description("join_condition", condition.to_expression_string());
+        }
+        if node.has_folded_expressions() {
+            desc.add_description("folded", "true");
+        }
+        if node.is_anti() {
+            desc.add_description("anti", "true");
+        }
+
+        self.descriptions.push(desc);
+        self.visited_ids.insert(node.id());
+    }
 
     fn visit_pattern_apply(&mut self, node: &PatternApplyNode) {
         node.left_input().accept(self);

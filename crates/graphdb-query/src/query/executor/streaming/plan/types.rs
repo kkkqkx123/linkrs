@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
-    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, SpaceManageCommand, TxnSpec, UnarySpec,
+    VectorSpec,
 };
 use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
@@ -508,12 +509,19 @@ impl PhysicalPlan {
     ///
     /// Used to reject statements that need writes before instantiation when
     /// the transaction scope forbids them (read-only snapshot, etc.).
+    ///
+    /// `USE <space>` (SpaceManage Switch) only flips session-level space
+    /// routing; it mutates no graph data and stays legal in any scope.
     pub fn contains_write_operator(&self) -> bool {
-        self.operators.iter().any(|op| {
-            matches!(
-                op.spec,
-                OperatorKindSpec::Sink(_) | OperatorKindSpec::Ddl(_)
-            )
+        self.operators.iter().any(|op| match &op.spec {
+            OperatorKindSpec::Sink(_) => true,
+            OperatorKindSpec::Ddl(spec) => !matches!(
+                spec,
+                DdlSpec::SpaceManage {
+                    command: SpaceManageCommand::Switch { .. }
+                }
+            ),
+            _ => false,
         })
     }
 }

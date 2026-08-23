@@ -387,15 +387,26 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::SemiJoin(n) => {
             let left = convert_logical_to_physical(*n.left);
             let right = convert_logical_to_physical(*n.right);
-            let mut node =
-                crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode::new(
+            let node = match &n.join_condition {
+                Some(condition) => crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode::new_with_condition(
                     left,
                     right,
                     n.hash_keys,
                     n.probe_keys,
-                    false,
+                    condition.clone(),
+                    n.anti,
                 )
-                .expect("Failed to construct SemiJoinNode");
+                .expect("Failed to construct SemiJoinNode"),
+                None => crate::query::planning::plan::core::nodes::join::join_node::SemiJoinNode::new(
+                    left,
+                    right,
+                    n.hash_keys,
+                    n.probe_keys,
+                    n.anti,
+                )
+                .expect("Failed to construct SemiJoinNode"),
+            };
+            let mut node = node;
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }

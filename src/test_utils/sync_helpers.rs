@@ -97,10 +97,10 @@ impl SyncTestHarness {
     }
 
     /// Create test harness with vector support
-    /// Note: Vector support requires external vector_client setup
+    ///
+    /// Vector tests run against the built-in local engine (default backend);
+    /// no external service is required.
     pub fn with_vector() -> Result<Self, Box<dyn std::error::Error>> {
-        // For now, just return standard harness
-        // Vector tests can be added when vector_client is properly configured
         Self::new()
     }
 
@@ -144,7 +144,7 @@ impl SyncTestHarness {
     }
 
     /// Create tag with vector index
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "vector")]
     pub fn create_tag_with_vector(
         &mut self,
         space_name: &str,
@@ -172,7 +172,7 @@ impl SyncTestHarness {
                         tag_name,
                         vector_field,
                         vector_dim,
-                        vector_client::DistanceMetric::Cosine,
+                        crate::sync::vector_sync::DistanceMetric::Cosine,
                     )
                     .await
             })?;
@@ -383,7 +383,7 @@ impl SyncTestHarness {
     }
 
     /// Search vector
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "vector")]
     pub fn search_vector(
         &self,
         space_name: &str,
@@ -391,13 +391,13 @@ impl SyncTestHarness {
         _field_name: &str,
         query_vector: Vec<f32>,
         limit: usize,
-    ) -> Result<Vec<vector_client::SearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<crate::sync::vector_sync::SearchResult>, Box<dyn std::error::Error>> {
         if let Some(vector_coord) = self.sync_manager.vector_coordinator() {
             let _space_id = self.storage.get_space_id(space_name)?;
             let rt = tokio::runtime::Runtime::new()?;
             let results = rt.block_on(async {
                 // Create search query
-                let query = vector_client::SearchQuery::new(query_vector, limit);
+                let query = crate::sync::vector_sync::SearchQuery::new(query_vector, limit);
 
                 vector_coord.search(tag_name, query).await
             })?;

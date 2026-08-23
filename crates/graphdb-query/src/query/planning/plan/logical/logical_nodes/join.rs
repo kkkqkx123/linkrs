@@ -1,5 +1,7 @@
 //! Logical join nodes: InnerJoin, LeftJoin, RightJoin, CrossJoin, FullOuterJoin, SemiJoin.
 
+use crate::core::types::expr::contextual::ContextualExpression;
+
 use crate::define_logical_join_node;
 
 define_logical_join_node! {
@@ -28,6 +30,9 @@ define_logical_join_node! {
 }
 
 define_logical_join_node! {
-    pub struct LogicalSemiJoinNode {}
+    pub struct LogicalSemiJoinNode {
+        join_condition: Option<ContextualExpression>,
+        anti: bool,
+    }
     enum: SemiJoin
 }

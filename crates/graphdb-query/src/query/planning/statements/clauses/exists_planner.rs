@@ -1046,6 +1046,8 @@ pub fn wrap_mark_join(
                 hash_keys: planned.hash_keys.clone(),
                 probe_keys: planned.probe_keys.clone(),
                 deps: vec![left_logical.clone(), right_logical.clone()],
+                join_condition: Some(condition.clone()),
+                anti,
                 output_var: None,
                 col_names: vec![],
                 column_types: vec![],

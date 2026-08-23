@@ -347,23 +347,27 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let needs_write = requires_write_storage(parser_result.ast.stmt());
+        let is_ddl_statement = is_ddl(parser_result.ast.stmt());
         // Read-only auto-commit statements get a statement-level snapshot
         // context too (T2): every operator observes one fixed read timestamp
         // and the per-table MVCC snapshots pin the versions until finalize.
-        // DDL / diagnostic / ANALYZE / transaction statements are excluded:
-        // DDL writes schema and must bind through the write path.
+        // Diagnostic / ANALYZE / transaction statements are excluded.
         let is_read_only_statement = !needs_write
-            && !is_ddl(parser_result.ast.stmt())
+            && !is_ddl_statement
             && !is_diagnostic(parser_result.ast.stmt())
             && !is_analyze(parser_result.ast.stmt())
             && !is_transaction(parser_result.ast.stmt());
+        // DML *and* DDL bind through the write path: both mutate state, so
+        // both need the auto-commit operation scope that authorizes writes.
         let auto_commit_needs_binding = effective_rctx.operation_storage.is_none()
             && effective_rctx.auto_commit
-            && (needs_write || is_read_only_statement);
+            && (needs_write || is_ddl_statement || is_read_only_statement);
 
         let (operation_storage, effective_rctx, owns_operation_storage) =
             if auto_commit_needs_binding {
-                let storage = if needs_write {
+                // DML *and* DDL take the write binding: both need the
+                // auto-commit transaction id that authorizes writes.
+                let storage = if needs_write || is_ddl_statement {
                     self.bind_auto_commit_storage()?
                 } else {
                     self.bind_read_operation_storage()?

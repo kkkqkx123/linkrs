@@ -63,3 +63,11 @@ pub use vector_sync::{
 
 #[cfg(feature = "vector")]
 pub use backend::VectorBackend;
+#[cfg(feature = "vector")]
+pub use vector_search::HealthStatus;
+
+// Re-export the remote client surface so downstream crates (root integration
+// tests, embedded API) can reference it without a direct vector-client
+// dependency. Only available with the qdrant feature.
+#[cfg(feature = "vector-qdrant")]
+pub use vector_client::{VectorClientConfig, VectorManager};

@@ -11,9 +11,9 @@ use graphdb::core::Value;
 use graphdb::sync::{
     PendingVectorUpdate, VectorBackend, VectorChangeContext, VectorChangeType, VectorIndexLocation,
     VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer, VectorTransactionBufferConfig,
+    VectorClientConfig, VectorManager,
 };
 use graphdb::transaction::types::TransactionId;
-use vector_client::{VectorClientConfig, VectorManager};
 
 /// TC-200: Vector change type variants
 #[tokio::test]

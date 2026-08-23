@@ -10,7 +10,7 @@ use graphdb::core::metadata::SchemaManager;
 use graphdb::core::StatsManager;
 use graphdb::core::Value;
 use graphdb::query::executor::streaming::StreamingQueryResult;
-use graphdb::storage::{GraphStorage, StorageSchemaContextOps};
+use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaContextOps};
 use graphdb::sync::SyncManager;
 use graphdb::transaction::{
     TransactionId, TransactionManager, TransactionManagerConfig, TransactionOptions,
@@ -25,7 +25,9 @@ use graphdb::search::{FulltextConfig, FulltextIndexManager};
 use graphdb::sync::SyncConfig;
 
 #[cfg(feature = "vector-qdrant")]
-use vector_client::{HealthStatus, VectorClientConfig, VectorManager};
+use graphdb::sync::vector_sync::HealthStatus;
+#[cfg(feature = "vector-qdrant")]
+use graphdb::sync::{VectorClientConfig, VectorManager};
 
 /// Test database wrapper with proper schema manager initialization
 pub struct TestDb {
@@ -372,6 +374,7 @@ impl TestDb {
                 session_variables: None,
                 query_id: None,
                 parsed_statement: None,
+                isolation_level: None,
             };
             let result = self
                 .query_api
@@ -390,8 +393,10 @@ impl TestDb {
                 session_variables: None,
                 query_id: None,
                 parsed_statement: None,
+                isolation_level: None,
             };
-            self.query_api.execute(query, ctx)
+            let storage = self.bound_auto_commit_storage()?;
+            self.query_api.execute_with_operation_storage(query, ctx, storage)
         };
         let result = result?;
 
@@ -415,8 +420,11 @@ impl TestDb {
             session_variables: None,
             query_id: None,
             parsed_statement: None,
+            isolation_level: None,
         };
-        self.query_api.execute_stream(query, ctx)
+        let storage = self.bound_auto_commit_storage()?;
+        self.query_api
+            .execute_stream_with_operation_storage(query, ctx, storage)
     }
 
     /// Execute a statement as an independent auto-commit session, ignoring
@@ -432,8 +440,11 @@ impl TestDb {
             session_variables: None,
             query_id: None,
             parsed_statement: None,
+            isolation_level: None,
         };
-        self.query_api.execute(query, ctx)
+        let storage = self.bound_auto_commit_storage()?;
+        self.query_api
+            .execute_with_operation_storage(query, ctx, storage)
     }
 
     /// Execute a batch of auto-commit statements in one storage window.
@@ -452,6 +463,7 @@ impl TestDb {
             session_variables: None,
             query_id: None,
             parsed_statement: None,
+            isolation_level: None,
         };
         let outcomes = self.query_api.execute_batch(statements, ctx);
         let mut results = Vec::with_capacity(outcomes.len());
@@ -480,6 +492,7 @@ impl TestDb {
             session_variables: None,
             query_id: None,
             parsed_statement: None,
+            isolation_level: None,
         };
         let outcomes = self
             .query_api
@@ -494,6 +507,17 @@ impl TestDb {
     }
 
     /// Apply space-switch state from a USE result.
+    /// Bind an auto-commit storage window, mirroring the server-side
+    /// execution path (`GraphService::run_query_plan`): auto-commit
+    /// statements must run against an operation-bound storage handle,
+    /// otherwise the plan-level write check rejects them (scope `None`).
+    fn bound_auto_commit_storage(&self) -> CoreResult<GraphStorage> {
+        self.storage
+            .read()
+            .bind_auto_commit_context()
+            .map_err(|e| graphdb::api::core::CoreError::StorageError(e.to_string()))
+    }
+
     fn track_space_from_result(&mut self, result: &QueryResult) {
         let columns = result.columns();
         if !columns.iter().any(|c| c == "space_name") {

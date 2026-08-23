@@ -16,11 +16,10 @@ use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult}
 
 #[cfg(feature = "vector-qdrant")]
 use vector_client::EmbeddingService;
-pub use vector_search::types::{DistanceMetric, PointId, VectorPoint};
-use vector_search::{
-    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, SearchQuery, SearchResult,
-    TxnOp, VectorFilter,
+pub use vector_search::types::{
+    DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint,
 };
+use vector_search::{CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, TxnOp, VectorFilter};
 
 /// Runtime state of the vector engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -477,8 +476,14 @@ impl VectorSyncCoordinator {
             return Ok(collection_name);
         }
 
-        let hnsw_config = vector_search::HnswConfig::new(16, 100).with_payload_m(16);
-        let config = CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config);
+        // Index-tier fields are only meaningful for the remote qdrant backend;
+        // the local engine controls its tiers through [vector.local.ivf].
+        let config = if self.backend.is_local() {
+            CollectionConfig::new(vector_size, distance)
+        } else {
+            let hnsw_config = vector_search::HnswConfig::new(16, 100).with_payload_m(16);
+            CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
+        };
 
         // Only create the physical collection if it doesn't exist yet
         if !self.backend.index_exists(&collection_name) {
