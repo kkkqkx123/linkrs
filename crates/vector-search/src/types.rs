@@ -59,10 +59,15 @@ pub enum DistanceMetric {
 }
 
 impl DistanceMetric {
+    /// Whether the remote qdrant engine natively supports this metric.
+    /// Qdrant-specific semantics; kept only for the `vector-qdrant` path.
+    #[doc(hidden)]
     pub fn is_supported_by_qdrant(&self) -> bool {
         matches!(self, Self::Cosine | Self::Euclid | Self::Dot)
     }
 
+    /// Inverse of [`DistanceMetric::is_supported_by_qdrant`].
+    #[doc(hidden)]
     pub fn requires_custom_implementation(&self) -> bool {
         matches!(self, Self::Manhattan)
     }

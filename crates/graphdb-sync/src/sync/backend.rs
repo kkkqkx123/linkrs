@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use vector_search::{
-    CollectionConfig, IndexMetadata, LocalVectorEngine, PayloadSchemaType, SearchQuery,
-    SearchResult, TxnOp, VectorFilter, VectorPoint,
+    CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, PayloadSchemaType,
+    SearchQuery, SearchResult, TxnOp, VectorFilter, VectorPoint,
 };
 
 use crate::core::types::TransactionId;
@@ -73,6 +73,19 @@ impl VectorBackend {
         match self {
             VectorBackend::Local(_) => None,
             VectorBackend::Qdrant(manager) => Some(manager),
+        }
+    }
+
+    /// Engine health status. The local engine is always healthy: it has no
+    /// remote endpoint to probe.
+    pub async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
+        match self {
+            VectorBackend::Local(_) => Ok(HealthStatus::healthy(
+                "vector-search",
+                env!("CARGO_PKG_VERSION"),
+            )),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => Ok(manager.engine().health_check().await?),
         }
     }
 

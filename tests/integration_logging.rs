@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use graphdb::config::Config;
-#[cfg(all(feature = "vector-qdrant", feature = "embedded"))]
+#[cfg(all(feature = "vector", feature = "embedded"))]
+use graphdb::config::VectorConfig;
+#[cfg(all(feature = "vector", feature = "embedded"))]
 use graphdb::search::FulltextConfig;
-#[cfg(all(feature = "vector-qdrant", feature = "embedded"))]
-use vector_client::config::VectorClientConfig;
 
 /// Test Log Configuration Defaults
 #[test]
@@ -29,7 +29,7 @@ fn test_log_config_defaults() {
 }
 
 /// Test Log Configuration Serialization and Deserialization
-#[cfg(all(feature = "vector-qdrant", feature = "embedded"))]
+#[cfg(all(feature = "vector", feature = "embedded"))]
 #[test]
 fn test_log_config_serialization() {
     let config = Config {
@@ -61,7 +61,7 @@ fn test_log_config_serialization() {
         },
         #[cfg(feature = "server")]
         server: graphdb::config::ServerConfig::default(),
-        vector: VectorClientConfig::default(),
+        vector: VectorConfig::default(),
         fulltext: FulltextConfig::default(),
         embedded: graphdb::config::EmbeddedConfig::default(),
     };
@@ -411,7 +411,7 @@ fn test_flexi_logger_integration() {
 }
 
 /// Test Log File Path Resolution
-#[cfg(all(feature = "vector-qdrant", feature = "embedded"))]
+#[cfg(all(feature = "vector", feature = "embedded"))]
 #[test]
 fn test_log_file_path_resolution() {
     let config = Config::default();
@@ -430,7 +430,7 @@ fn test_log_file_path_resolution() {
         },
         #[cfg(feature = "server")]
         server: graphdb::config::ServerConfig::default(),
-        vector: VectorClientConfig::default(),
+        vector: VectorConfig::default(),
         fulltext: FulltextConfig::default(),
         embedded: graphdb::config::EmbeddedConfig::default(),
     };

@@ -15,7 +15,6 @@ use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
 use graphdb::test_utils::TestStorage;
 use graphdb_server::server::graph_service::GraphService;
 use std::sync::Arc;
-use vector_client::VectorClientConfig;
 
 /// Test that GraphService can be created with SyncWrapper<GraphStorage>
 #[tokio::test]
@@ -97,14 +96,18 @@ fn test_pipeline_manager_schema_manager_behavior() {
     );
 }
 
-/// Test that VectorClientConfig::default() returns disabled config
+/// Test that VectorConfig::default() uses the local engine
+#[cfg(feature = "vector")]
 #[test]
-fn test_vector_config_default_is_disabled() {
-    let config = VectorClientConfig::default();
+fn test_vector_config_default_is_local() {
+    use graphdb::config::{VectorConfig, VectorEngineKind};
 
-    assert!(
-        !config.enabled,
-        "VectorClientConfig::default() should return disabled config"
+    let config = VectorConfig::default();
+
+    assert_eq!(
+        config.engine,
+        VectorEngineKind::Local,
+        "VectorConfig::default() should default to the local engine"
     );
 }
 

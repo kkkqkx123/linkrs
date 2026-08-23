@@ -27,12 +27,11 @@ bitvec.workspace = true
 futures.workspace = true
 tokio.workspace = true
 moka.workspace = true
-vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
 vector-search = { path = "../vector-search", optional = true }
 
 [features]
 vector = ["dep:vector-search", "graphdb-sync/vector"]
-vector-qdrant = ["vector"]
+vector-qdrant = ["vector", "graphdb-sync/vector-qdrant"]
 fulltext-search = ["graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
 
 [dev-dependencies]

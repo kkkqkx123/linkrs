@@ -418,6 +418,85 @@ async fn test_crash_recovery_replays_committed_wal() {
 }
 
 #[tokio::test]
+async fn test_delete_then_compaction_keeps_search_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vec");
+    let engine = make_engine(root.as_path());
+    let coordinator = make_coordinator(engine.clone());
+
+    coordinator
+        .create_vector_index(8, "user", "embedding", 2, DistanceMetric::Cosine)
+        .await
+        .unwrap();
+
+    // Insert five points through committed transactions.
+    let txn: TransactionId = 300u64.into();
+    for i in 1..=5 {
+        let v = match i {
+            1 => vec![1.0, 0.0],
+            2 => vec![0.9, 0.1],
+            3 => vec![0.5, 0.5],
+            4 => vec![0.1, 0.9],
+            _ => vec![0.0, 1.0],
+        };
+        coordinator
+            .buffer_vector_change(
+                txn,
+                change_ctx(
+                    8,
+                    "user",
+                    "embedding",
+                    VectorChangeType::Insert,
+                    &format!("v{}_user_embedding", i),
+                    v,
+                ),
+            )
+            .unwrap();
+    }
+    coordinator.commit_transaction(txn).await.unwrap();
+    assert_eq!(engine.count("space_8").unwrap(), 5);
+
+    // Delete two of five (40% > 20% threshold): auto-compaction physically
+    // removes the tombstones during commit.
+    let txn2: TransactionId = 301u64.into();
+    for id in ["v1_user_embedding", "v3_user_embedding"] {
+        coordinator
+            .buffer_vector_change(
+                txn2,
+                change_ctx(8, "user", "embedding", VectorChangeType::Delete, id, Vec::new()),
+            )
+            .unwrap();
+    }
+    coordinator.commit_transaction(txn2).await.unwrap();
+
+    assert_eq!(engine.count("space_8").unwrap(), 3);
+    assert!(engine.get("space_8", "v1_user_embedding").unwrap().is_none());
+    assert!(engine.get("space_8", "v3_user_embedding").unwrap().is_none());
+
+    // Search after compaction only surfaces surviving points.
+    let results = coordinator
+        .search_with_options(SearchOptions::new(8, "user", "embedding", vec![1.0, 0.0], 5))
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    let ids: std::collections::HashSet<String> =
+        results.iter().map(|r| r.id.to_string()).collect();
+    assert!(!ids.contains("v1_user_embedding"));
+    assert!(!ids.contains("v3_user_embedding"));
+    assert_eq!(results[0].id.to_string(), "v2_user_embedding");
+
+    // The compacted state survives a close/reopen cycle.
+    drop(coordinator);
+    drop(engine);
+    let recovered = make_engine(root.as_path());
+    assert_eq!(recovered.count("space_8").unwrap(), 3);
+    assert!(recovered
+        .get("space_8", "v2_user_embedding")
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn test_delete_by_filter_through_coordinator() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());

@@ -104,3 +104,82 @@ async fn local_vector_engine_startup_e2e() {
     let list = vector_api.list_indexes();
     assert!(list.is_empty());
 }
+
+/// Restart consistency: committed points survive a full service teardown and
+/// rebuild against the same local vector data directory.
+#[tokio::test]
+async fn local_vector_engine_restart_consistency_e2e() {
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+    let storage = Arc::new(
+        GraphStorage::new_with_config(PropertyGraphConfig::test())
+            .expect("Failed to create storage"),
+    );
+
+    let build_service = || {
+        let mut config = Config::default();
+        config.vector.enabled = true;
+        config.vector.engine = VectorEngineKind::Local;
+        config.vector.local.data_dir = Some(temp_dir.path().join("vector"));
+        GraphService::new_for_test(config, storage.clone())
+    };
+
+    // First lifecycle: write a batch, delete one point, then tear down.
+    {
+        let graph_service = build_service().await;
+        let vector_api = graph_service.vector_api().unwrap();
+
+        vector_api
+            .create_index(1, "item", "vec", 2, DistanceMetric::Cosine)
+            .await
+            .expect("create_index should succeed");
+        vector_api
+            .insert_vector_batch(
+                1,
+                "item",
+                "vec",
+                vec![
+                    point(1, vec![1.0, 0.0], "item_vec"),
+                    point(2, vec![0.0, 1.0], "item_vec"),
+                    point(3, vec![1.0, 1.0], "item_vec"),
+                ],
+            )
+            .await
+            .expect("insert_vector_batch should succeed");
+        vector_api
+            .delete_vector(1, "item", "vec", "3")
+            .await
+            .expect("delete_vector should succeed");
+        // Drop the whole service (engine included); the directory stays.
+    }
+
+    // Second lifecycle: reopen from the same data_dir and verify state.
+    {
+        let graph_service = build_service().await;
+        let vector_api = graph_service.vector_api().unwrap();
+
+        let count = vector_api
+            .count(1, "item", "vec")
+            .await
+            .expect("count after restart should succeed");
+        assert_eq!(count, 2);
+
+        let got = vector_api
+            .get_vector(1, "item", "vec", "2")
+            .await
+            .expect("get_vector after restart should succeed")
+            .expect("point 2 should survive the restart");
+        assert_eq!(got.vector, vec![0.0, 1.0]);
+        assert!(vector_api
+            .get_vector(1, "item", "vec", "3")
+            .await
+            .expect("get_vector after restart should succeed")
+            .is_none());
+
+        let results = vector_api
+            .search_with_options(SearchOptions::new(1, "item", "vec", vec![1.0, 0.0], 5))
+            .await
+            .expect("search after restart should succeed");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, PointId::Num(1));
+    }
+}

@@ -9,9 +9,6 @@ edition.workspace = true
 vector = ["dep:vector-search"]
 # Remote qdrant client on top of the local engine types.
 vector-qdrant = ["vector", "dep:vector-client"]
-# Backward-compatible alias kept so downstream crates can keep their existing
-# `qdrant` feature names while the built-in vector path lands.
-qdrant = ["vector-qdrant"]
 fulltext-search = ["graphdb-search/fulltext-search"]
 
 [dependencies]

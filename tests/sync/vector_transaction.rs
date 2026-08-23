@@ -1,4 +1,8 @@
 //! Vector Transaction Buffer Integration Tests
+//!
+//! The coordinator-level cases drive the remote-qdrant backend and therefore
+//! require `vector-qdrant`.
+#![cfg(feature = "vector-qdrant")]
 
 use std::sync::Arc;
 
