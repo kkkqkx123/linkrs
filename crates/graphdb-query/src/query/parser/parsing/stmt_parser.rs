@@ -28,7 +28,13 @@ impl StmtParser {
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
+            // MATCH VECTOR is dispatched to the vector parser; plain
+            // MATCH (and OPTIONAL MATCH, whose first token is OPTIONAL)
+            // goes to the traversal parser.
             TokenKind::Match | TokenKind::Optional => {
+                if ctx.check_keyword_sequence(&["MATCH", "VECTOR"]) {
+                    return crate::query::parser::parsing::vector_parser::parse_vector(ctx);
+                }
                 TraversalParser::new().parse_match_statement(ctx)
             }
             TokenKind::Go => TraversalParser::new().parse_go_statement(ctx),
@@ -67,7 +73,14 @@ impl StmtParser {
             TokenKind::Group => Self::parse_group_by_statement(ctx),
             TokenKind::Kill => Self::parse_kill_statement(ctx),
             TokenKind::Fetch => UtilStmtParser::new().parse_fetch_statement(ctx),
-            TokenKind::Lookup => UtilStmtParser::new().parse_lookup_statement(ctx),
+            TokenKind::Lookup => {
+                // LOOKUP VECTOR is dispatched to the vector parser; plain
+                // LOOKUP ON EDGE/TAG goes to the util statement parser.
+                if ctx.check_keyword_sequence(&["LOOKUP", "VECTOR"]) {
+                    return crate::query::parser::parsing::vector_parser::parse_vector(ctx);
+                }
+                UtilStmtParser::new().parse_lookup_statement(ctx)
+            }
             TokenKind::Unwind => UtilStmtParser::new().parse_unwind_statement(ctx),
             TokenKind::Return => UtilStmtParser::new().parse_return_statement(ctx),
             TokenKind::With => UtilStmtParser::new().parse_with_statement(ctx),

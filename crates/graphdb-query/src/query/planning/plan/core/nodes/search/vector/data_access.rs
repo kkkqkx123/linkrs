@@ -175,6 +175,12 @@ pub struct VectorLookupNode {
     pub query: VectorQueryExpr,
     pub yield_fields: Vec<OutputField>,
     pub limit: usize,
+    /// Pre-resolved space id from index metadata (0 when unresolved).
+    pub space_id: u64,
+    /// Pre-resolved tag name from index metadata (empty when unresolved).
+    pub tag_name: String,
+    /// Pre-resolved field name from index metadata (empty when unresolved).
+    pub field_name: String,
 }
 
 impl VectorLookupNode {
@@ -192,7 +198,20 @@ impl VectorLookupNode {
             query,
             yield_fields,
             limit,
+            space_id: 0,
+            tag_name: String::new(),
+            field_name: String::new(),
         }
+    }
+
+    /// Attach the index location resolved from metadata during planning so
+    /// the lookup executes through the same `(space_id, tag, field)` address
+    /// as a vector search.
+    pub fn with_metadata(mut self, space_id: u64, tag_name: String, field_name: String) -> Self {
+        self.space_id = space_id;
+        self.tag_name = tag_name;
+        self.field_name = field_name;
+        self
     }
 }
 

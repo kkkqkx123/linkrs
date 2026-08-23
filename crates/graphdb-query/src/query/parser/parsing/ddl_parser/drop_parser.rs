@@ -14,6 +14,10 @@ impl DdlParser {
             return crate::query::parser::parsing::fulltext_parser::parse_drop_fulltext_index_after_drop(ctx);
         }
 
+        if ctx.check_keyword("VECTOR") {
+            return crate::query::parser::parsing::vector_parser::parse_drop_vector_index_after_drop(ctx);
+        }
+
         let target = if ctx.match_token(TokenKind::Space) {
             let mut if_exists = false;
             if ctx.match_token(TokenKind::If) {

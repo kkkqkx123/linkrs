@@ -808,6 +808,14 @@ pub enum VectorManageCommand {
     },
     Drop {
         index_name: String,
+        if_exists: bool,
+        /// Pre-resolved coordinator location (space_id/tag/field); empty
+        /// tag/field means the location could not be resolved at planning
+        /// time and the executor reports a clear error or an `IF EXISTS`
+        /// no-op status row.
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
     },
 }
 
@@ -903,6 +911,18 @@ pub enum FulltextSpec {
 
 // ── Vector spec ──────────────────────────────────────────────────────────────
 
+/// Payload filter type for vector search.
+///
+/// Mirrors the planning-layer alias: the real `vector_search::VectorFilter`
+/// when the vector feature is on, and an uninhabited-in-practice stub
+/// otherwise (vector search itself is feature-gated).
+#[cfg(feature = "vector")]
+pub use vector_search::types::VectorFilter as SpecVectorFilter;
+
+#[cfg(not(feature = "vector"))]
+#[derive(Debug, Clone)]
+pub struct SpecVectorFilter;
+
 /// Immutable config for vector search operators.
 #[derive(Debug, Clone)]
 pub enum VectorSpec {
@@ -918,11 +938,22 @@ pub enum VectorSpec {
         top_k: u32,
         tag_name: String,
         field_name: String,
+        /// Minimum similarity score a result must reach.
+        threshold: Option<f32>,
+        /// Payload filter derived from the WHERE clause.
+        filter: Option<SpecVectorFilter>,
+        /// Number of leading result rows to skip after the engine returns
+        /// `top_k + offset` candidates (OFFSET semantics).
+        offset: usize,
     },
     VectorLookup {
         space_name: String,
+        space_id: u64,
         index_name: String,
-        lookup_key: Expression,
+        query_vector: Vec<f32>,
+        top_k: u32,
+        tag_name: String,
+        field_name: String,
     },
     VectorMatch {
         space_name: String,

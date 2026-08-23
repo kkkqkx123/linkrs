@@ -99,7 +99,9 @@ impl Planner for VectorSearchPlanner {
             Stmt::CreateVectorIndex(create) => {
                 self.transform_create_vector_index(create, &space_name, space_id)
             }
-            Stmt::DropVectorIndex(drop) => self.transform_drop_vector_index(drop, &space_name),
+            Stmt::DropVectorIndex(drop) => {
+                self.transform_drop_vector_index_with_metadata(drop, &space_name, metadata_context)
+            }
             Stmt::SearchVector(search) => {
                 self.transform_search_vector_with_metadata(search, space_id, metadata_context)
             }
@@ -161,6 +163,47 @@ impl VectorSearchPlanner {
             space_name.to_string(),
             drop.if_exists,
         );
+
+        Ok(SubPlan::new(Some(node.into_enum()), None))
+    }
+
+    /// Transform DROP VECTOR INDEX with pre-resolved metadata.
+    ///
+    /// The coordinator's `drop_vector_index` API is addressed by
+    /// `(space_id, tag_name, field_name)` instead of the logical index name,
+    /// so the location is resolved here from index metadata. A missing index
+    /// yields `IndexNotFound` unless `IF EXISTS` was given, in which case the
+    /// node keeps an empty location and the executor turns it into a no-op
+    /// status row.
+    fn transform_drop_vector_index_with_metadata(
+        &self,
+        drop: &DropVectorIndex,
+        space_name: &str,
+        metadata_context: &MetadataContext,
+    ) -> Result<SubPlan, PlannerError> {
+        let node = match metadata_context.get_index_metadata(&drop.index_name) {
+            Some(index_metadata) => DropVectorIndexNode::new(
+                drop.index_name.clone(),
+                space_name.to_string(),
+                drop.if_exists,
+            )
+            .with_location(
+                index_metadata.space_id,
+                index_metadata.tag_name.clone(),
+                index_metadata.field_name.clone(),
+            ),
+            None => {
+                if drop.if_exists {
+                    DropVectorIndexNode::new(
+                        drop.index_name.clone(),
+                        space_name.to_string(),
+                        drop.if_exists,
+                    )
+                } else {
+                    return Err(PlannerError::IndexNotFound(drop.index_name.clone()));
+                }
+            }
+        };
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -228,13 +271,30 @@ impl VectorSearchPlanner {
 
         let yield_fields = self.parse_output_fields(&lookup.yield_clause);
 
+        // Pre-resolve tag_name and field_name from metadata context if
+        // available; otherwise leave empty (executor will report a clear error).
+        let (tag_name, field_name, resolved_space_id) =
+            if let Some(ref metadata_context) = self.metadata_context {
+                match metadata_context.get_index_metadata(&lookup.index_name) {
+                    Some(index_metadata) => (
+                        index_metadata.tag_name.clone(),
+                        index_metadata.field_name.clone(),
+                        index_metadata.space_id,
+                    ),
+                    None => (String::new(), String::new(), 0),
+                }
+            } else {
+                (String::new(), String::new(), 0)
+            };
+
         let node = VectorLookupNode::new(
             schema_name,
             lookup.index_name.clone(),
             lookup.query.clone(),
             yield_fields,
             lookup.limit.unwrap_or(10),
-        );
+        )
+        .with_metadata(resolved_space_id, tag_name, field_name);
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -573,13 +633,19 @@ impl VectorSearchPlanner {
         space_name: &str,
         metadata_context: &MetadataContext,
     ) -> Result<SubPlan, PlannerError> {
-        // Validate index exists in metadata context
-        if metadata_context
-            .get_index_metadata(&lookup.index_name)
-            .is_none()
-        {
-            return Err(PlannerError::IndexNotFound(lookup.index_name.clone()));
-        }
+        // LOOKUP VECTOR executes through the same search path as SEARCH
+        // VECTOR, so the index location must be fully resolved here.
+        let (resolved_space_id, tag_name, field_name) =
+            match metadata_context.get_index_metadata(&lookup.index_name) {
+                Some(index_metadata) => (
+                    index_metadata.space_id,
+                    index_metadata.tag_name.clone(),
+                    index_metadata.field_name.clone(),
+                ),
+                None => {
+                    return Err(PlannerError::IndexNotFound(lookup.index_name.clone()));
+                }
+            };
 
         let schema_name = if lookup.schema_name.is_empty() {
             space_name.to_string()
@@ -595,7 +661,8 @@ impl VectorSearchPlanner {
             lookup.query.clone(),
             yield_fields,
             lookup.limit.unwrap_or(10),
-        );
+        )
+        .with_metadata(resolved_space_id, tag_name, field_name);
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }

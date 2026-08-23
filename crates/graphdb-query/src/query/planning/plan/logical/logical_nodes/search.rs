@@ -84,6 +84,9 @@ mod vector {
             query: VectorQueryExpr,
             yield_fields: Vec<OutputField>,
             limit: usize,
+            space_id: u64,
+            tag_name: String,
+            field_name: String,
         }
         enum: VectorLookup
         input: ZeroInputNode

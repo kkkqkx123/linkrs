@@ -433,6 +433,9 @@ pub fn parse_match_vector(
     let span = ctx.current_span();
 
     ctx.consume_keyword("MATCH")?;
+    // The statement entry is the `MATCH VECTOR` sequence; the VECTOR keyword
+    // lexes as a dedicated keyword token and must be consumed explicitly.
+    ctx.consume_keyword("VECTOR")?;
 
     // Parse pattern (simplified)
     let pattern = ctx.consume_string()?;
@@ -497,5 +500,80 @@ mod tests {
 
         let yield_items = search.yield_clause.as_ref().expect("YIELD should parse");
         assert_eq!(yield_items.items.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_drop_vector_index_statement() {
+        for (sql, if_exists) in [
+            ("DROP VECTOR INDEX idx_product_embedding", false),
+            ("DROP VECTOR INDEX IF EXISTS idx_product_embedding", true),
+        ] {
+            let mut parser = Parser::new(sql);
+            let result = parser.parse().expect("DROP VECTOR INDEX should parse");
+            match result.ast.stmt() {
+                Stmt::DropVectorIndex(drop) => {
+                    assert_eq!(drop.index_name, "idx_product_embedding");
+                    assert_eq!(drop.if_exists, if_exists);
+                }
+                other => panic!("expected DROP VECTOR INDEX statement, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_lookup_vector_statement() {
+        let sql = r#"LOOKUP VECTOR basketball idx_product_embedding WITH vector=[0.1, 0.2]
+                     YIELD product_id
+                     LIMIT 5"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse().expect("LOOKUP VECTOR should parse");
+        match result.ast.stmt() {
+            Stmt::LookupVector(lookup) => {
+                assert_eq!(lookup.schema_name, "basketball");
+                assert_eq!(lookup.index_name, "idx_product_embedding");
+                assert_eq!(lookup.limit, Some(5));
+                assert!(lookup.yield_clause.is_some());
+            }
+            other => panic!("expected LOOKUP VECTOR statement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_match_vector_statement() {
+        let sql = r#"MATCH VECTOR "(n:Person)" WHERE embedding vector=[0.1, 0.2]
+                     THRESHOLD 0.8"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse().expect("MATCH VECTOR should parse");
+        match result.ast.stmt() {
+            Stmt::MatchVector(match_stmt) => {
+                assert_eq!(match_stmt.pattern, "(n:Person)");
+                assert_eq!(match_stmt.vector_condition.field, "embedding");
+                assert_eq!(match_stmt.vector_condition.threshold, Some(0.8));
+            }
+            other => panic!("expected MATCH VECTOR statement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plain_match_and_lookup_still_parse() {
+        // Plain MATCH must not be swallowed by the MATCH VECTOR dispatch.
+        let mut parser = Parser::new("MATCH (n:Person) RETURN n");
+        let match_result = parser.parse().expect("plain MATCH should parse");
+        assert!(
+            matches!(match_result.ast.stmt(), Stmt::Match(_)),
+            "plain MATCH stays a traversal"
+        );
+
+        // Plain LOOKUP ON TAG must not be swallowed by LOOKUP VECTOR.
+        let mut parser = Parser::new("LOOKUP ON TAG player");
+        let lookup_result = parser
+            .parse()
+            .expect("plain LOOKUP ON TAG should parse");
+        assert!(
+            matches!(lookup_result.ast.stmt(), Stmt::Lookup(_)),
+            "plain LOOKUP stays a util lookup"
+        );
     }
 }

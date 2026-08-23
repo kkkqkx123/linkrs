@@ -670,6 +670,10 @@ fn vector_manage_to_command(
         },
         Drop(n) => VectorManageCommand::Drop {
             index_name: n.index_name.clone(),
+            if_exists: n.if_exists,
+            space_id: n.space_id,
+            tag_name: n.tag_name.clone(),
+            field_name: n.field_name.clone(),
         },
     }
 }
@@ -689,14 +693,18 @@ pub(in crate::query::executor::streaming::plan::arena_builder) fn build_vector_s
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
+    let query_vector = vector_query_to_vec(&node.query)?;
     Ok(VectorSpec::VectorSearch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         space_id: node.space_id,
         index_name: node.index_name.clone(),
-        query_vector: vector_query_to_vec(&node.query),
+        query_vector,
         top_k: node.limit as u32,
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
+        threshold: node.threshold,
+        filter: node.filter.clone(),
+        offset: node.offset,
     })
 }
 
@@ -705,10 +713,18 @@ pub(in crate::query::executor::streaming::plan::arena_builder) fn build_vector_l
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
+    // LOOKUP VECTOR resolves to the same index location as SEARCH VECTOR and
+    // executes through the identical search path; the query expression keeps
+    // its semantics (converted here exactly like a search query vector).
+    let query_vector = vector_query_to_vec(&node.query)?;
     Ok(VectorSpec::VectorLookup {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        space_id: node.space_id,
         index_name: node.index_name.clone(),
-        lookup_key: Expression::Literal(crate::core::Value::string(node.query.query_data.clone())),
+        query_vector,
+        top_k: node.limit as u32,
+        tag_name: node.tag_name.clone(),
+        field_name: node.field_name.clone(),
     })
 }
 
@@ -717,11 +733,12 @@ pub(in crate::query::executor::streaming::plan::arena_builder) fn build_vector_m
     node: &crate::query::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {
+    let query_vector = vector_query_to_vec(&node.query)?;
     Ok(VectorSpec::VectorMatch {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         pattern: node.pattern.clone(),
         field: node.field.clone(),
-        query_vector: vector_query_to_vec(&node.query),
+        query_vector,
         threshold: node.threshold,
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
@@ -730,8 +747,38 @@ pub(in crate::query::executor::streaming::plan::arena_builder) fn build_vector_m
 }
 
 #[cfg(feature = "vector")]
-fn vector_query_to_vec(expr: &crate::query::parser::ast::vector::VectorQueryExpr) -> Vec<f32> {
-    serde_json::from_str(&expr.query_data).unwrap_or_default()
+fn vector_query_to_vec(
+    expr: &crate::query::parser::ast::vector::VectorQueryExpr,
+) -> Result<Vec<f32>, PlanBuildError> {
+    match expr.query_type {
+        crate::query::parser::ast::vector::VectorQueryType::Vector => {
+            let vec: Vec<f32> = serde_json::from_str(&expr.query_data).unwrap_or_default();
+            Ok(vec)
+        }
+        crate::query::parser::ast::vector::VectorQueryType::Text => {
+            // Text queries require an embedding service which is not wired
+            // into the statement pipeline yet; fail loudly instead of silently
+            // searching with an empty vector.
+            Err(PlanBuildError::CapabilityUnavailable {
+                capability: "text-embedding".to_string(),
+                detail: format!(
+                    "TEXT query for vector search is not supported yet: '{}'",
+                    expr.query_data
+                ),
+            })
+        }
+        crate::query::parser::ast::vector::VectorQueryType::Parameter => {
+            // Parameter-bound vectors are not bound at plan-build time yet;
+            // fail loudly instead of silently searching with an empty vector.
+            Err(PlanBuildError::CapabilityUnavailable {
+                capability: "parameterized-vector-query".to_string(),
+                detail: format!(
+                    "PARAM query for vector search is not supported yet: '${}'",
+                    expr.query_data
+                ),
+            })
+        }
+    }
 }
 fn fulltext_query_to_string(
     expr: &crate::query::parser::ast::fulltext::FulltextQueryExpr,

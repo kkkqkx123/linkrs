@@ -615,9 +615,10 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             | FulltextSpec::MatchFulltext { .. },
         ) => SlotLayout::from_names(&["doc_id".to_string(), "score".to_string()]),
         OperatorKindSpec::Vector(
-            VectorSpec::VectorSearch { .. } | VectorSpec::VectorMatch { .. },
+            VectorSpec::VectorSearch { .. }
+            | VectorSpec::VectorLookup { .. }
+            | VectorSpec::VectorMatch { .. },
         ) => SlotLayout::from_names(&["id".to_string(), "score".to_string()]),
-        OperatorKindSpec::Vector(VectorSpec::VectorLookup { .. }) => input,
     }
 }
 

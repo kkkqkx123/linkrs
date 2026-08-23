@@ -3,7 +3,6 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
 #[cfg(feature = "vector")]
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -32,6 +31,14 @@ fn make_manage_result(
     )
 }
 
+/// Candidate count for MATCH VECTOR searches.
+///
+/// The `MATCH VECTOR` grammar has no LIMIT clause yet (see the parser AST),
+/// so a fixed candidate window is used; wire this to syntax once LIMIT is
+/// added to the statement form.
+#[cfg(feature = "vector")]
+const DEFAULT_MATCH_TOP_K: usize = 100;
+
 #[derive(Debug)]
 pub enum VectorOperatorKind {
     VectorManage {
@@ -50,14 +57,21 @@ pub enum VectorOperatorKind {
         top_k: u32,
         tag_name: String,
         field_name: String,
+        threshold: Option<f32>,
+        filter: Option<super::spec::SpecVectorFilter>,
+        offset: usize,
         #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorLookup {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
+        space_id: u64,
         index_name: String,
-        lookup_key: Expression,
+        query_vector: Vec<f32>,
+        top_k: u32,
+        tag_name: String,
+        field_name: String,
         #[cfg(feature = "vector")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -116,6 +130,9 @@ impl VectorOperator {
                 top_k,
                 tag_name,
                 field_name,
+                threshold,
+                filter,
+                offset,
             } => VectorOperatorKind::VectorSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -125,18 +142,29 @@ impl VectorOperator {
                 top_k: *top_k,
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
+                threshold: *threshold,
+                filter: filter.clone(),
+                offset: *offset,
                 #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
             super::spec::VectorSpec::VectorLookup {
                 space_name,
+                space_id,
                 index_name,
-                lookup_key,
+                query_vector,
+                top_k,
+                tag_name,
+                field_name,
             } => VectorOperatorKind::VectorLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
+                space_id: *space_id,
                 index_name: index_name.clone(),
-                lookup_key: lookup_key.clone(),
+                query_vector: query_vector.clone(),
+                top_k: *top_k,
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
                 #[cfg(feature = "vector")]
                 vector_coordinator: vector_coordinator.clone(),
             },
@@ -283,18 +311,73 @@ impl VectorOperator {
                             ))
                         }
                     }
-                    VectorManageCommand::Drop { index_name } => {
+                    VectorManageCommand::Drop {
+                        index_name,
+                        if_exists,
+                        space_id,
+                        tag_name,
+                        field_name,
+                    } => {
                         #[cfg(feature = "vector")]
                         {
-                            let _ = vector_coordinator;
-                            Err(QueryError::execution(format!(
-                                "Vector index drop requires tag and field metadata: {}",
-                                index_name
-                            )))
+                            // The drop API is addressed by (space_id, tag,
+                            // field). An unresolved location means the index
+                            // was not found at planning time: `IF EXISTS`
+                            // degrades to a no-op status row, otherwise it is
+                            // a clear error.
+                            if tag_name.is_empty() || field_name.is_empty() {
+                                if *if_exists {
+                                    return Ok(Some(make_manage_result(
+                                        Arc::clone(&self.output_layout),
+                                        "drop_vector_index",
+                                        Some(index_name.as_str()),
+                                        "not_exists",
+                                    )));
+                                }
+                                return Err(QueryError::execution(format!(
+                                    "Vector index '{}' cannot be dropped: index location (tag/field) is not resolved",
+                                    index_name
+                                )));
+                            }
+                            match vector_coordinator {
+                                Some(coordinator) => {
+                                    futures::executor::block_on(coordinator.drop_vector_index(
+                                        *space_id,
+                                        tag_name,
+                                        field_name,
+                                    ))
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "Vector drop failed: {}",
+                                            e
+                                        ))
+                                    })?;
+                                    Ok(Some(make_manage_result(
+                                        Arc::clone(&self.output_layout),
+                                        "drop_vector_index",
+                                        Some(index_name.as_str()),
+                                        "dropped",
+                                    )))
+                                }
+                                None => Ok(Some(make_manage_result(
+                                    Arc::clone(&self.output_layout),
+                                    "drop_vector_index",
+                                    Some(index_name.as_str()),
+                                    "no-coordinator",
+                                ))),
+                            }
                         }
                         #[cfg(not(feature = "vector"))]
                         {
-                            let _ = (storage, space_name, index_name);
+                            let _ = (
+                                storage,
+                                space_name,
+                                index_name,
+                                if_exists,
+                                space_id,
+                                tag_name,
+                                field_name,
+                            );
                             Err(QueryError::feature_disabled("vector", "DROP VECTOR INDEX"))
                         }
                     }
@@ -309,6 +392,9 @@ impl VectorOperator {
                 field_name,
                 query_vector,
                 top_k,
+                threshold,
+                filter,
+                offset,
                 #[cfg(feature = "vector")]
                 vector_coordinator,
                 ..
@@ -316,20 +402,33 @@ impl VectorOperator {
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
-                        let options = crate::sync::vector_sync::SearchOptions::new(
+                        // Fetch enough candidates so skipping `offset` rows
+                        // still leaves up to `top_k` results.
+                        let mut options = crate::sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
                             query_vector.clone(),
-                            *top_k as usize,
+                            (*top_k as usize).saturating_add(*offset),
                         );
-                        let search_results =
-                            futures::executor::block_on(coordinator.search_with_options(options))
-                                .map_err(|e| {
-                                QueryError::execution(format!("Vector search failed: {}", e))
-                            })?;
+                        // A zero threshold is vacuous for similarity scores;
+                        // keep it unset so behavior matches the no-THRESHOLD
+                        // statement form.
+                        match threshold {
+                            Some(t) if *t > 0.0 => options.threshold = Some(*t),
+                            _ => {}
+                        }
+                        if let Some(filter) = filter {
+                            options.filter = Some(filter.clone());
+                        }
+                        let search_results = futures::executor::block_on(
+                            coordinator.search_with_options(options),
+                        )
+                        .map_err(|e| {
+                            QueryError::execution(format!("Vector search failed: {}", e))
+                        })?;
                         let mut rows = Vec::new();
-                        for result in search_results {
+                        for result in search_results.into_iter().skip(*offset) {
                             rows.push(vec![
                                 Value::string(result.id.to_string()),
                                 Value::Double(result.score as f64),
@@ -361,18 +460,78 @@ impl VectorOperator {
                         &field_name,
                         &query_vector,
                         &top_k,
+                        &threshold,
+                        &filter,
+                        &offset,
                         input,
                     );
                     return Err(QueryError::feature_disabled("vector", "VECTOR SEARCH"));
                 }
             }
 
-            VectorOperatorKind::VectorLookup { .. } => {
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("VectorSearch");
-                    return Ok(Some(chunk));
+            VectorOperatorKind::VectorLookup {
+                space_id,
+                tag_name,
+                field_name,
+                query_vector,
+                top_k,
+                #[cfg(feature = "vector")]
+                vector_coordinator,
+                ..
+            } => {
+                #[cfg(feature = "vector")]
+                {
+                    if let Some(coordinator) = vector_coordinator {
+                        // LOOKUP VECTOR resolves to the same index location
+                        // as SEARCH VECTOR and reuses the identical search
+                        // path, producing (id, score) rows.
+                        if tag_name.is_empty() || field_name.is_empty() {
+                            return Err(QueryError::execution(
+                                "LOOKUP VECTOR cannot execute: index location (tag/field) is not resolved",
+                            ));
+                        }
+                        let options = crate::sync::vector_sync::SearchOptions::new(
+                            *space_id,
+                            tag_name.clone(),
+                            field_name.clone(),
+                            query_vector.clone(),
+                            *top_k as usize,
+                        );
+                        let search_results =
+                            futures::executor::block_on(coordinator.search_with_options(options))
+                                .map_err(|e| {
+                                QueryError::execution(format!("Vector lookup failed: {}", e))
+                            })?;
+                        let mut rows = Vec::new();
+                        for result in search_results {
+                            rows.push(vec![
+                                Value::string(result.id.to_string()),
+                                Value::Double(result.score as f64),
+                            ]);
+                        }
+                        return if rows.is_empty() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                self.output_layout.clone(),
+                            )))
+                        };
+                    }
+
+                    // No coordinator configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("VectorSearch");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
-                Ok(None)
+
+                #[cfg(not(feature = "vector"))]
+                {
+                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
+                    return Err(QueryError::feature_disabled("vector", "VECTOR LOOKUP"));
+                }
             }
 
             VectorOperatorKind::VectorMatch {
@@ -395,7 +554,7 @@ impl VectorOperator {
                                 tag_name,
                                 field_name,
                                 query_vector.clone(),
-                                100,
+                                DEFAULT_MATCH_TOP_K,
                                 thr,
                             ))
                             .map_err(|e| {

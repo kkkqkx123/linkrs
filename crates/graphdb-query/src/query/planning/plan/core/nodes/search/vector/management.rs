@@ -142,6 +142,12 @@ pub struct DropVectorIndexNode {
     pub index_name: String,
     pub space_name: String,
     pub if_exists: bool,
+    /// Pre-resolved space id from index metadata (0 when unresolved).
+    pub space_id: u64,
+    /// Pre-resolved tag name from index metadata (empty when unresolved).
+    pub tag_name: String,
+    /// Pre-resolved field name from index metadata (empty when unresolved).
+    pub field_name: String,
 }
 
 impl DropVectorIndexNode {
@@ -151,7 +157,20 @@ impl DropVectorIndexNode {
             index_name,
             space_name,
             if_exists,
+            space_id: 0,
+            tag_name: String::new(),
+            field_name: String::new(),
         }
+    }
+
+    /// Attach the coordinator location resolved from index metadata during
+    /// planning. The drop executor needs `(space_id, tag, field)` to address
+    /// the logical index.
+    pub fn with_location(mut self, space_id: u64, tag_name: String, field_name: String) -> Self {
+        self.space_id = space_id;
+        self.tag_name = tag_name;
+        self.field_name = field_name;
+        self
     }
 }
 
@@ -204,6 +223,10 @@ impl MemoryEstimatable for CreateVectorIndexNode {
 
 impl MemoryEstimatable for DropVectorIndexNode {
     fn estimate_memory(&self) -> usize {
-        std::mem::size_of::<Self>() + self.index_name.capacity() + self.space_name.capacity()
+        std::mem::size_of::<Self>()
+            + self.index_name.capacity()
+            + self.space_name.capacity()
+            + self.tag_name.capacity()
+            + self.field_name.capacity()
     }
 }

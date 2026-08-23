@@ -991,7 +991,8 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
                 n.query,
                 n.yield_fields,
                 n.limit,
-            );
+            )
+            .with_metadata(n.space_id, n.tag_name, n.field_name);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
