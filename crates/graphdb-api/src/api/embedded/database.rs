@@ -142,13 +142,6 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
     Ok((None, Some(Arc::new(sync))))
 }
 
-/// Stub: no vector, return (None, None)
-#[cfg(not(feature = "vector"))]
-#[allow(dead_code)]
-fn setup_sync_with_vector_only(_runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
-    Ok((None, None))
-}
-
 /// Embedded GraphDB database
 ///
 /// This is the main entry point for the embedded API, offering a simple way of use similar to that of SQLite.

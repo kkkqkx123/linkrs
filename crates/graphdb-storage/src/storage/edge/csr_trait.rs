@@ -102,17 +102,6 @@ pub trait MutableCsrTrait: CsrBase {
         0
     }
 
-    #[allow(dead_code)]
-    fn compact_regions_with_ts_reporting(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        _on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        _region_vertex_count: usize,
-    ) -> usize {
-        self.compact_with_ts(cutoff, reserve_ratio)
-    }
-
     /// Return the approximate memory usage in bytes.
     fn used_memory_size(&self) -> usize;
 }

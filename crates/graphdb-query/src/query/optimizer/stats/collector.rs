@@ -41,16 +41,6 @@ pub struct CollectedSummary {
 }
 
 impl CollectedSummary {
-    #[allow(dead_code)]
-    fn collected(tags: usize, edge_types: usize) -> Self {
-        Self {
-            tags,
-            edge_types,
-            properties: 0,
-            cached: false,
-        }
-    }
-
     fn collected_with_props(tags: usize, edge_types: usize, properties: usize) -> Self {
         Self {
             tags,

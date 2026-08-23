@@ -9,10 +9,11 @@ use crate::query::executor::streaming::operators::spec::{
 };
 use crate::query::executor::streaming::subquery::SubqueryRunnerSpec;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, SingleInputNode};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    PlanNode, SingleInputNode,
+};
 
 use super::contextual_to_expression;
-
 
 pub(in crate::query::executor::streaming::plan::arena_builder) fn build_filter_spec(
     node: &crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode,
@@ -68,7 +69,8 @@ pub(in crate::query::executor::streaming::plan::arena_builder) fn build_append_v
 /// Name of the single column a count-only expand emits (the per-chunk edge
 /// count).  The count-only aggregate above rewrites `COUNT` to
 /// `SUM(_expand_count)` over this column.
-pub(in crate::query::executor::streaming::plan::arena_builder) const COUNT_ONLY_COLUMN: &str = "_expand_count";
+pub(in crate::query::executor::streaming::plan::arena_builder) const COUNT_ONLY_COLUMN: &str =
+    "_expand_count";
 
 /// Walk down from `node` through consecutive `Project` operators to find a
 /// `count_only`-annotated `ExpandAll`.  Any other operator (including a

@@ -27,10 +27,7 @@ impl<'a> Parser<'a> {
         let mut ctx = ParseContext::new(input);
         ctx.set_expression_context(expr_context.clone());
 
-        Self {
-            ctx,
-            expr_context,
-        }
+        Self { ctx, expr_context }
     }
 
     pub fn from_string(input: String) -> Self {
@@ -38,10 +35,7 @@ impl<'a> Parser<'a> {
         let mut ctx = ParseContext::from_string(input);
         ctx.set_expression_context(expr_context.clone());
 
-        Self {
-            ctx,
-            expr_context,
-        }
+        Self { ctx, expr_context }
     }
 
     pub fn set_compat_mode(&mut self, enabled: bool) {

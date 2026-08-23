@@ -22,7 +22,6 @@ pub(crate) struct FragmentCtx<'a> {
 }
 
 /// Parameters for creating a hash-repartition exchange fragment.
-#[allow(dead_code)]
 pub(crate) struct HashExchangeParams {
     pub(crate) partition_fids: Vec<FragmentId>,
     pub(crate) partition_count: usize,
@@ -178,7 +177,6 @@ impl ArenaPlanAssembler {
     ///
     /// Used by E1b for co-partition joins where the join key differs from
     /// the partition key, requiring a shuffle to align partitions.
-    #[allow(dead_code)]
     pub(crate) fn push_hash_exchange_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
         fragments: &mut Vec<FragmentSpec>,

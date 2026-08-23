@@ -192,28 +192,6 @@ impl CollectionStore {
         self.inner.read().meta.clone()
     }
 
-    /// Snapshot of the tombstone bitmap.
-    pub fn tombstones(&self) -> arc_swap::Guard<Arc<BitVec>> {
-        self.tombstones.load()
-    }
-
-    // Accessors consumed by the search pipeline (Tier 0 scan) and the engine
-    // work item.
-    #[allow(dead_code)]
-    pub(crate) fn vectors(&self) -> &Vectors {
-        &self.vectors
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn keys(&self) -> &Keys {
-        &self.keys
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn payloads(&self) -> &Payloads {
-        &self.payloads
-    }
-
     /// Upsert a point. Existing ids reuse their slot (overwrite); new ids get
     /// the next free slot (growing capacity when needed).
     ///

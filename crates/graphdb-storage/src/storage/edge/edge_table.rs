@@ -260,66 +260,12 @@ impl EdgeStore {
         self.0.scan(ts)
     }
 
-    /// OLAP scan with column pruning.
-    #[allow(dead_code)]
-    pub fn scan_projected(&self, ts: Timestamp, projection: &[String]) -> Vec<super::EdgeRecord> {
-        self.0.scan_projected(ts, projection)
-    }
-
-    #[allow(dead_code)]
-    pub fn out_edges_projected(
-        &self,
-        src: u32,
-        ts: Timestamp,
-        projection: &[String],
-    ) -> Vec<super::EdgeRecord> {
-        self.0.out_edges_projected(src, ts, projection)
-    }
-
-    #[allow(dead_code)]
-    pub fn prune_by_zone_map(
-        &self,
-        column: &str,
-        lower: Option<&crate::core::Value>,
-        upper: Option<&crate::core::Value>,
-        include_lower: bool,
-        include_upper: bool,
-    ) -> Option<Vec<bool>> {
-        self.0
-            .prune_by_zone_map(column, lower, upper, include_lower, include_upper)
-    }
-
-    #[allow(dead_code)]
-    pub fn zone_map_for_column(
-        &self,
-        column: &str,
-    ) -> Option<Vec<crate::storage::column_stats::ColumnStats>> {
-        self.0.zone_map_for_column(column)
-    }
-
-    #[allow(dead_code)]
-    pub fn column_stats(
-        &self,
-        col_idx: usize,
-    ) -> Option<crate::storage::column_stats::ColumnStats> {
-        self.0.column_stats(col_idx)
-    }
-
     /// Optimizer-facing statistics snapshot for one property column.
     pub fn column_stats_snapshot(
         &self,
         column: &str,
     ) -> Option<crate::storage::stats_reader::ColumnStatsSnapshot> {
         self.0.column_stats_snapshot(column)
-    }
-
-    #[allow(dead_code)]
-    pub fn apply_column_encoding(
-        &mut self,
-        col_name: &str,
-        encoding: crate::storage::encoding::EncodingType,
-    ) -> StorageResult<()> {
-        self.0.apply_column_encoding(col_name, encoding)
     }
 
     pub fn edge_count(&self) -> u64 {

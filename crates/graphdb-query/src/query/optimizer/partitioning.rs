@@ -327,17 +327,16 @@ impl PartitioningPlanner {
 
         let layout_version = self.layout_signature_with_layout(&source, &strategy, layout);
         let build = |strategy: &PartitionStrategy| match strategy {
-            PartitionStrategy::Range => PartitionSpec::try_new(
-                ranges.clone(),
-                source.clone(),
-                Some(layout_version),
-            )
-            .map(|spec| PartitioningDecision {
-                partition_spec: Some(spec),
-                reason: format!(
+            PartitionStrategy::Range => {
+                PartitionSpec::try_new(ranges.clone(), source.clone(), Some(layout_version)).map(
+                    |spec| PartitioningDecision {
+                        partition_spec: Some(spec),
+                        reason: format!(
                     "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
                 ),
-            }),
+                    },
+                )
+            }
             PartitionStrategy::Hash { key } => PartitionSpec::try_new_hash(
                 key.clone(),
                 ranges.clone(),

@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
+#[cfg(feature = "fulltext-search")]
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
@@ -32,6 +33,7 @@ fn fulltext_command_info(cmd: &FulltextManageCommand) -> (&'static str, Option<&
     }
 }
 
+#[cfg(feature = "fulltext-search")]
 fn make_manage_result(
     output_layout: Arc<SlotLayout>,
     action: &str,
@@ -485,7 +487,10 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
-                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT SEARCH"));
+                    return Err(QueryError::feature_disabled(
+                        "fulltext-search",
+                        "FULLTEXT SEARCH",
+                    ));
                 }
             }
 
@@ -536,7 +541,10 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 {
                     let _ = (&search_query, &space_id, &tag_name, &field_name, input);
-                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT LOOKUP"));
+                    return Err(QueryError::feature_disabled(
+                        "fulltext-search",
+                        "FULLTEXT LOOKUP",
+                    ));
                 }
             }
 
@@ -584,7 +592,10 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 {
                     let _ = (&match_expr, &tag_name, &field_name, input);
-                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT MATCH"));
+                    return Err(QueryError::feature_disabled(
+                        "fulltext-search",
+                        "FULLTEXT MATCH",
+                    ));
                 }
             }
         }

@@ -200,6 +200,10 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     }
 
     /// Get hot layer size
+    ///
+    /// Production code no longer persists the tombstone count; this accessor
+    /// exists only for the unit tests that verify hot-layer promotion/GC.
+    #[cfg(test)]
     #[inline]
     pub fn hot_len(&self) -> usize {
         self.hot_tombstones.len()
@@ -213,7 +217,7 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     /// Read-side API of the tiered structure; production visibility goes
     /// through the row records, this accessor is what the unit tests use to
     /// verify promotion/GC behaviour across both layers.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub fn is_tombstoned(&self, key: T, ts: Timestamp) -> bool {
         // Hot layer lookup (O(1))
@@ -229,7 +233,7 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     }
 
     /// Get cold layer size (layer-distribution diagnostics / tests)
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub fn cold_len(&self) -> usize {
         self.cold_tombstones.len()

@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Compile-time exhaustive check: a new `Value` variant must be listed here
 /// (and a fixture added below) or this fails to compile.
-#[allow(dead_code)]
+
 fn exhaustive_variant_check(value: &Value) {
     debug_assert!(matches!(
         value,

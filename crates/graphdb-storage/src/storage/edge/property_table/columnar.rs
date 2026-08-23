@@ -206,7 +206,7 @@ impl PropertyTable {
         // SAFETY: `_mm_prefetch` only issues a cache-line prefetch hint and
         // never dereferences or faults on unmapped memory.
         unsafe {
-            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch::<{ _MM_HINT_T0 }>(addr.cast::<i8>());
         }
         #[cfg(not(target_arch = "x86_64"))]

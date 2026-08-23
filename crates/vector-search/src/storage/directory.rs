@@ -61,17 +61,6 @@ impl DirView {
         Some((off, len))
     }
 
-    // Consumed by the search/compaction work items.
-    #[allow(dead_code)]
-    pub fn rec_capacity(&self) -> usize {
-        self.rec_capacity
-    }
-
-    #[allow(dead_code)]
-    pub fn blob_len(&self) -> u64 {
-        self.blob_len
-    }
-
     /// Blob for a slot. Returns `None` for empty records.
     pub fn blob(&self, rec_size: usize, slot: usize) -> Option<&[u8]> {
         let (off, len) = self.rec_off_len(rec_size, slot)?;
@@ -190,12 +179,6 @@ impl BlobDirectory {
 
     pub fn snapshot(&self) -> arc_swap::Guard<Arc<DirView>> {
         self.view.load()
-    }
-
-    // Consumed by the search/compaction work items.
-    #[allow(dead_code)]
-    pub fn rec_size(&self) -> usize {
-        self.rec_size
     }
 
     /// Append a blob and wire up the record for `slot`.
@@ -359,11 +342,6 @@ impl BlobDirectory {
             blob_len: view.blob_len,
         }));
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 

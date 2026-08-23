@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
+#[cfg(feature = "vector")]
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
@@ -15,6 +16,7 @@ use crate::storage::QueryStorage;
 #[cfg(feature = "vector")]
 use crate::sync::VectorSyncCoordinator;
 
+#[cfg(feature = "vector")]
 fn make_manage_result(
     output_layout: Arc<SlotLayout>,
     action: &str,
@@ -353,7 +355,14 @@ impl VectorOperator {
 
                 #[cfg(not(feature = "vector"))]
                 {
-                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k, input);
+                    let _ = (
+                        &space_id,
+                        &tag_name,
+                        &field_name,
+                        &query_vector,
+                        &top_k,
+                        input,
+                    );
                     return Err(QueryError::feature_disabled("vector", "VECTOR SEARCH"));
                 }
             }
@@ -419,7 +428,14 @@ impl VectorOperator {
 
                 #[cfg(not(feature = "vector"))]
                 {
-                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold, input);
+                    let _ = (
+                        &space_id,
+                        &tag_name,
+                        &field_name,
+                        &query_vector,
+                        &threshold,
+                        input,
+                    );
                     return Err(QueryError::feature_disabled("vector", "VECTOR MATCH"));
                 }
             }

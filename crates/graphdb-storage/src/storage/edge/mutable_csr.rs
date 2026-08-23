@@ -1304,22 +1304,6 @@ impl MutableCsrTrait for MutableCsr {
         MutableCsr::compact_with_ts(self, ts, reserve_ratio)
     }
 
-    fn compact_regions_with_ts_reporting(
-        &mut self,
-        cutoff: Timestamp,
-        reserve_ratio: f32,
-        on_edge_removed: &mut dyn FnMut(EdgeId, Timestamp),
-        region_vertex_count: usize,
-    ) -> usize {
-        MutableCsr::compact_regions_with_ts_reporting(
-            self,
-            cutoff,
-            reserve_ratio,
-            on_edge_removed,
-            region_vertex_count,
-        )
-    }
-
     fn used_memory_size(&self) -> usize {
         MutableCsr::used_memory_size(self)
     }

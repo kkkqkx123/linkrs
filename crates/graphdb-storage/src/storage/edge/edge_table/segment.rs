@@ -193,8 +193,11 @@ pub struct RegionMeta {
     pub estimated_bytes: usize,
 }
 
+/// Region-stat helpers used by the unit tests that verify region metadata
+/// derivation and persistence; production merge decisions read the raw
+/// `deleted_count` / `edge_count` fields directly.
+#[cfg(test)]
 impl RegionMeta {
-    #[allow(dead_code)]
     pub fn deletion_ratio(&self) -> f64 {
         if self.edge_count == 0 {
             0.0
@@ -202,30 +205,6 @@ impl RegionMeta {
             self.deleted_count as f64 / self.edge_count as f64
         }
     }
-
-    #[allow(dead_code)]
-    pub fn density(&self) -> f64 {
-        let width = (self.vertex_end - self.vertex_start) as f64;
-        if width <= 0.0 {
-            0.0
-        } else {
-            self.edge_count as f64 / width
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn needs_rebuild(&self, high_deletion_ratio: f64, low_density_threshold: f64) -> bool {
-        self.deletion_ratio() > high_deletion_ratio || self.density() < low_density_threshold
-    }
-}
-
-/// Result of a region-aware merge, for observability.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct RegionMergeStats {
-    pub regions_rebuilt: usize,
-    pub regions_skipped: usize,
-    pub bytes_saved: usize,
 }
 
 pub struct CsrSegment {
@@ -596,39 +575,6 @@ impl CsrSegment {
                 + (width + 1) * std::mem::size_of::<u32>();
         }
         self.regions = metas;
-    }
-
-    #[allow(dead_code)]
-    pub fn region_deletion_ratio(&self, region_id: u32) -> f64 {
-        self.regions
-            .get(region_id as usize)
-            .map(|r| r.deletion_ratio())
-            .unwrap_or(0.0)
-    }
-
-    #[allow(dead_code)]
-    pub fn region_density(&self, region_id: u32) -> f64 {
-        self.regions
-            .get(region_id as usize)
-            .map(|r| r.density())
-            .unwrap_or(0.0)
-    }
-
-    #[allow(dead_code)]
-    pub fn needs_region_rebuild(
-        &self,
-        region_id: u32,
-        high_deletion_ratio: f64,
-        low_density_threshold: f64,
-    ) -> bool {
-        self.regions
-            .get(region_id as usize)
-            .is_some_and(|r| r.needs_rebuild(high_deletion_ratio, low_density_threshold))
-    }
-
-    #[allow(dead_code)]
-    pub fn total_regions(&self) -> usize {
-        self.regions.len()
     }
 }
 

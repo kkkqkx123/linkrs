@@ -102,17 +102,6 @@ impl Vectors {
         Ok(())
     }
 
-    // Consumed by the search pipeline (segment iteration) and the engine.
-    #[allow(dead_code)]
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
-
-    #[allow(dead_code)]
-    pub fn segment_slots(&self) -> u32 {
-        self.segment_slots
-    }
-
     /// Total number of slots currently mapped.
     pub fn slot_capacity(&self) -> u64 {
         self.segments.load().len() as u64 * self.segment_slots as u64
