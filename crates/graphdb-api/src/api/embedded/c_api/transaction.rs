@@ -212,6 +212,7 @@ pub unsafe extern "C" fn graphdb_txn_execute(
         parameters: None,
         session_variables: None,
         query_id: None,
+        isolation_level: None,
         parsed_statement: None,
     };
 

@@ -31,7 +31,7 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```rust
-/// use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+/// use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig};
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = GraphDatabase::open("my_db")?;
@@ -295,6 +295,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: None,
             session_variables: Some(self.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -498,6 +499,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: None,
             session_variables: Some(self.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: Some(parsed_ast),
         };
         let mut query_api = self.db.query_api.write();
@@ -544,6 +546,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters,
             session_variables: Some(self.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -592,6 +595,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters,
             session_variables: merged_variables,
             query_id: None,
+            isolation_level: None,
             parsed_statement: Some(parsed_ast),
         };
 
@@ -708,6 +712,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: Some(params),
             session_variables: Some(self.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -780,6 +785,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             parameters: Some(params),
             session_variables: Some(session_variables),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -831,7 +837,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Examples
     ///
     /// ```rust
-    /// use graphdb::api::embedded::{GraphDatabase, TransactionConfig};
+    /// use graphdb_api::api::embedded::{GraphDatabase, TransactionConfig};
     /// use std::time::Duration;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -968,8 +974,9 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// # Examples
     ///
     /// ```rust
-    /// use graphdb::api::embedded::GraphDatabase;
-    /// use graphdb::core::{Vertex, Value};
+    /// use graphdb_api::api::embedded::GraphDatabase;
+    /// use graphdb_api::core::Vertex;
+    /// use graphdb_api::core::types::VertexId;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let db = GraphDatabase::open("my_db")?;
@@ -980,7 +987,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     ///
     // Add vertices
     /// for i in 0..1000 {
-    ///     let vertex = Vertex::with_vid(Value::Int(i));
+    ///     let vertex = Vertex::with_vid(VertexId::from_int64(i));
     ///     inserter.add_vertex(vertex);
     /// }
     ///

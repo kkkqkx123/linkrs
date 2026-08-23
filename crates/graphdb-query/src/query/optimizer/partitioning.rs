@@ -10,7 +10,9 @@ use crate::query::optimizer::stats::StatsView;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
-use crate::query::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum};
+use crate::query::planning::plan::{
+    PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum,
+};
 
 /// Static configuration for partition selection. The default is disabled so
 /// introducing the optimizer cannot change query results without an explicit
@@ -325,33 +327,33 @@ impl PartitioningPlanner {
 
         let layout_version = self.layout_signature_with_layout(&source, &strategy, layout);
         let build = |strategy: &PartitionStrategy| match strategy {
-            PartitionStrategy::Range => {
-                PartitionSpec::try_new(ranges.clone(), source.clone(), Some(layout_version))
-                    .map(|spec| PartitioningDecision {
-                        partition_spec: Some(spec),
-                        reason: format!(
-                            "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
-                        ),
-                    })
-            }
-            PartitionStrategy::Hash { key } => {
-                PartitionSpec::try_new_hash(
-                    key.clone(),
-                    ranges.clone(),
-                    source.clone(),
-                    Some(layout_version),
-                )
-                .map(|spec| PartitioningDecision {
-                    partition_spec: Some(spec),
-                    reason: format!(
-                        "hash-partitioned {kind} '{left_tag}'/'{right_tag}' by key '{key}' \
+            PartitionStrategy::Range => PartitionSpec::try_new(
+                ranges.clone(),
+                source.clone(),
+                Some(layout_version),
+            )
+            .map(|spec| PartitioningDecision {
+                partition_spec: Some(spec),
+                reason: format!(
+                    "partitioned {kind} '{left_tag}'/'{right_tag}' into {desired} shared ranges"
+                ),
+            }),
+            PartitionStrategy::Hash { key } => PartitionSpec::try_new_hash(
+                key.clone(),
+                ranges.clone(),
+                source.clone(),
+                Some(layout_version),
+            )
+            .map(|spec| PartitioningDecision {
+                partition_spec: Some(spec),
+                reason: format!(
+                    "hash-partitioned {kind} '{left_tag}'/'{right_tag}' by key '{key}' \
                          into {desired} buckets"
-                    ),
-                })
+                ),
+            }),
+            PartitionStrategy::RoundRobin => {
+                unreachable!("multi-scan decisions never emit round-robin layouts")
             }
-            PartitionStrategy::RoundRobin => unreachable!(
-                "multi-scan decisions never emit round-robin layouts"
-            ),
         };
         match build(&strategy) {
             Ok(decision) => decision,
@@ -390,7 +392,9 @@ impl PartitioningPlanner {
     }
 
     /// Whether every key expression references the vertex-id partition key.
-    fn keys_reference_vid(keys: &[crate::core::types::expr::contextual::ContextualExpression]) -> bool {
+    fn keys_reference_vid(
+        keys: &[crate::core::types::expr::contextual::ContextualExpression],
+    ) -> bool {
         !keys.is_empty()
             && keys.iter().all(|key| {
                 key.expression().is_some_and(|meta| {

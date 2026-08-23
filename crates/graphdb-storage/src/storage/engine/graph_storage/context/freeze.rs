@@ -181,7 +181,16 @@ impl GraphStorageContext {
         // original 2.0 growth intent; 2.0 clamps to 1.0 inside
         // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
         let config = CompactConfig::with_fixed_ratio(true, 0.5).enable_segment_merge(1000);
-        let ts = Timestamp::MAX;
+        // Freeze incrementally up to the oldest active snapshot timestamp:
+        // with no active snapshots this resolves to `MAX` (full freeze as
+        // before), while an open reader pins `ts` at its snapshot so the
+        // background pass only converts deltas that are already safely below
+        // every active read point instead of one blocking full conversion.
+        let ts = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
 
         // Use FreezeGuard to manage freeze statistics
         let mut freeze_guard = self

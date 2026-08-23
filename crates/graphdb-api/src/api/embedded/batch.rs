@@ -19,8 +19,9 @@ use crate::storage::StorageClient;
 /// # Examples
 ///
 /// ```rust
-/// use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
-/// use graphdb::core::{Vertex, Edge, Value};
+/// use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig};
+/// use graphdb_api::core::{Vertex, Edge, Value};
+/// use graphdb_api::core::types::VertexId;
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = GraphDatabase::open("my_db")?;
@@ -31,7 +32,7 @@ use crate::storage::StorageClient;
 ///
 /// // Add vertices
 /// for i in 0..1000 {
-///     let vertex = Vertex::with_vid(Value::Int(i));
+///     let vertex = Vertex::with_vid(VertexId::from_int64(i));
 ///     inserter.add_vertex(vertex);
 /// }
 ///

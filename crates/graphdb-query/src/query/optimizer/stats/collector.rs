@@ -121,8 +121,14 @@ impl StatisticsCollector {
 
         let storage = storage.read();
 
-        let tags =
-            Self::collect_tags(manager, &*storage, space, schema_version, data_epoch, sample_limit)?;
+        let tags = Self::collect_tags(
+            manager,
+            &*storage,
+            space,
+            schema_version,
+            data_epoch,
+            sample_limit,
+        )?;
         let edge_types = Self::collect_edge_types(
             manager,
             &*storage,
@@ -131,14 +137,9 @@ impl StatisticsCollector {
             data_epoch,
             sample_limit,
         )?;
-        let properties = Self::collect_property_stats(
-            manager,
-            &*storage,
-            space,
-            data_epoch,
-            sample_limit,
-        )
-        .unwrap_or(0);
+        let properties =
+            Self::collect_property_stats(manager, &*storage, space, data_epoch, sample_limit)
+                .unwrap_or(0);
 
         manager.set_space_stamp(space, schema_version, data_epoch);
         Ok(CollectedSummary::collected_with_props(
@@ -419,9 +420,7 @@ impl StatisticsCollector {
         })?;
         for tag_info in &tag_infos {
             let tag_name = &tag_info.tag_name;
-            let total = storage
-                .count_vertices_by_tag(space, tag_name)
-                .unwrap_or(0) as usize;
+            let total = storage.count_vertices_by_tag(space, tag_name).unwrap_or(0) as usize;
             let offset = Self::vertex_tag_offset(total, sample_limit, data_epoch, tag_name);
 
             // Sample a window of vertices for this tag (no full materialization).
@@ -471,10 +470,7 @@ impl StatisticsCollector {
 
                 // Emit the property when the snapshot carries bounds or when
                 // sampling observed at least one value.
-                let snap_has_bounds = snapshot
-                    .as_ref()
-                    .map(|s| s.has_envelope())
-                    .unwrap_or(false);
+                let snap_has_bounds = snapshot.as_ref().map(|s| s.has_envelope()).unwrap_or(false);
                 if sampled_distinct == 0 && !snap_has_bounds {
                     continue;
                 }
@@ -498,9 +494,7 @@ impl StatisticsCollector {
         })?;
         for edge_info in &edge_infos {
             let edge_type = &edge_info.edge_type_name;
-            let total = storage
-                .count_edges_by_type(space, edge_type)
-                .unwrap_or(0) as usize;
+            let total = storage.count_edges_by_type(space, edge_type).unwrap_or(0) as usize;
             let offset = Self::edge_type_offset(total, sample_limit, data_epoch, edge_type);
 
             let edges = storage
@@ -508,13 +502,7 @@ impl StatisticsCollector {
                 .or_else(|_| {
                     storage
                         .scan_edges_by_type(space, edge_type)
-                        .map(|edges| {
-                            edges
-                                .into_iter()
-                                .skip(offset)
-                                .take(sample_limit)
-                                .collect()
-                        })
+                        .map(|edges| edges.into_iter().skip(offset).take(sample_limit).collect())
                 })
                 .unwrap_or_default();
             if edge_info.properties.is_empty() {
@@ -545,12 +533,8 @@ impl StatisticsCollector {
                     .get(&prop_def.name)
                     .map(|s| s.len() as u64)
                     .unwrap_or(0);
-                let snapshot =
-                    storage.edge_column_stats(space, edge_type, &prop_def.name);
-                let snap_has_bounds = snapshot
-                    .as_ref()
-                    .map(|s| s.has_envelope())
-                    .unwrap_or(false);
+                let snapshot = storage.edge_column_stats(space, edge_type, &prop_def.name);
+                let snap_has_bounds = snapshot.as_ref().map(|s| s.has_envelope()).unwrap_or(false);
                 if sampled_distinct == 0 && !snap_has_bounds {
                     continue;
                 }

@@ -232,7 +232,15 @@ impl<S: StorageClient> SyncWrapper<S> {
         let transaction_id = context.transaction_id.ok_or_else(|| {
             StorageError::db_error("Auto-commit write has no transaction ID".to_string())
         })?;
-        self.commit_transaction_fact(transaction_id).map(Some)
+        let commit_lsn = self.commit_transaction_fact(transaction_id)?;
+        // Mirror the explicit-transaction sink flow: after the WAL durability
+        // fence, materialize the staged intents into the durable outbox and
+        // release them. Skipping this step would pin the outbox frontier at
+        // its pre-commit value forever, which in turn pins the checkpoint
+        // safe-WAL boundary at 0 (WAL never truncated) and leaks the staged
+        // intents in `pending_intents`.
+        self.finalize_commit_fact(transaction_id, commit_lsn)?;
+        Ok(Some(commit_lsn))
     }
 
     fn abort_transaction_fact(

@@ -85,8 +85,12 @@ pub struct PartitionSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartitionSpecError {
     Empty,
-    EmptyRange { index: usize },
-    UnorderedOrOverlapping { index: usize },
+    EmptyRange {
+        index: usize,
+    },
+    UnorderedOrOverlapping {
+        index: usize,
+    },
     /// Bucket count below the minimum viable parallel degree (2).
     TooFewBuckets,
     /// A hash key must name the distribution column.
@@ -110,10 +114,9 @@ impl fmt::Display for PartitionSpecError {
                 formatter,
                 "partition range at index {index} must be ordered and non-overlapping"
             ),
-            Self::TooFewBuckets => write!(
-                formatter,
-                "partition layout requires at least two buckets"
-            ),
+            Self::TooFewBuckets => {
+                write!(formatter, "partition layout requires at least two buckets")
+            }
             Self::EmptyHashKey => {
                 write!(formatter, "hash partition key must not be empty")
             }
@@ -303,9 +306,8 @@ mod tests {
 
     #[test]
     fn round_robin_spec_is_bucketed() {
-        let spec =
-            PartitionSpec::try_new_round_robin(vec![0..10, 10..20], test_source(), None)
-                .expect("valid round-robin spec");
+        let spec = PartitionSpec::try_new_round_robin(vec![0..10, 10..20], test_source(), None)
+            .expect("valid round-robin spec");
         assert_eq!(spec.strategy(), &PartitionStrategy::RoundRobin);
         assert_eq!(spec.partition_count(), 2);
     }

@@ -431,13 +431,11 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext-search"))]
                 {
-                    let (name, index_name) = fulltext_command_info(command);
-                    Ok(Some(make_manage_result(
-                        Arc::clone(&self.output_layout),
-                        name,
-                        index_name,
-                        "fulltext-search feature disabled",
-                    )))
+                    let (operation, _) = fulltext_command_info(command);
+                    Err(QueryError::feature_disabled(
+                        "fulltext-search",
+                        &operation.to_uppercase(),
+                    ))
                 }
             }
 

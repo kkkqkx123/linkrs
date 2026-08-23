@@ -12,7 +12,8 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 
 fn setup() -> Arc<RwLock<dyn graphdb_query::storage::QueryStorage>> {
-    let mut raw = GraphStorage::new_with_config(PropertyGraphConfig::test()).expect("create storage");
+    let mut raw =
+        GraphStorage::new_with_config(PropertyGraphConfig::test()).expect("create storage");
 
     {
         let mut space = SpaceInfo::new("col_stats_e2e".to_string())
@@ -66,9 +67,8 @@ fn snapshot_overrides_sampled_envelope_for_vertex_property() {
     let storage = setup();
     let manager = StatisticsManager::new();
 
-    let summary =
-        StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
-            .expect("collect_space");
+    let summary = StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
+        .expect("collect_space");
 
     assert_eq!(summary.tags, 1);
     assert!(!summary.cached);
@@ -86,14 +86,12 @@ fn cache_hit_on_second_collect_with_same_stamp() {
     let storage = setup();
     let manager = StatisticsManager::new();
 
-    let first =
-        StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
-            .expect("collect_space 1");
+    let first = StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
+        .expect("collect_space 1");
     assert!(!first.cached);
 
-    let second =
-        StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
-            .expect("collect_space 2");
+    let second = StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
+        .expect("collect_space 2");
     assert!(second.cached);
 }
 
@@ -102,13 +100,11 @@ fn cache_invalidation_on_epoch_bump() {
     let storage = setup();
     let manager = StatisticsManager::new();
 
-    let first =
-        StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
-            .expect("collect_space epoch=1");
+    let first = StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 1, 50)
+        .expect("collect_space epoch=1");
     assert!(!first.cached);
 
-    let second =
-        StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 2, 50)
-            .expect("collect_space epoch=2");
+    let second = StatisticsCollector::collect_space(&manager, &storage, "col_stats_e2e", 1, 2, 50)
+        .expect("collect_space epoch=2");
     assert!(!second.cached);
 }

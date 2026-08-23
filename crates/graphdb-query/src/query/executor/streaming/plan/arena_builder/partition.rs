@@ -570,7 +570,8 @@ fn build_co_partitioned_join(
     // Guards: the join key must be the vertex-id partition key and both
     // branches must be partition-local scan chains (no global operators or
     // split aggregates, which need a full gather before they can run).
-    if !equality_join_keys_reference_vid(node) || !matches!(spec.strategy(), PartitionStrategy::Range)
+    if !equality_join_keys_reference_vid(node)
+        || !matches!(spec.strategy(), PartitionStrategy::Range)
     {
         return Ok(None);
     }

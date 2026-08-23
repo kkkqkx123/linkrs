@@ -28,7 +28,7 @@ impl BusyHandler {
     /// # Examples
     ///
     /// ```rust
-    /// use graphdb::api::embedded::BusyHandler;
+    /// use graphdb_api::api::embedded::BusyHandler;
     ///
     /// let handler = BusyHandler::new(5000); // 5 second timeout
     /// ```

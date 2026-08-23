@@ -12,8 +12,9 @@ use std::time::Duration;
 /// # Example
 ///
 /// ```rust
-/// use graphdb::api::embedded::DatabaseConfig;
+/// use graphdb_api::api::embedded::DatabaseConfig;
 ///
+/// # use std::time::Duration;
 // Configuration for the in-memory database
 /// let config = DatabaseConfig::memory();
 ///

@@ -34,26 +34,23 @@ fn execute_vertex_plan(
     plan: &MigrationPlan,
     remaining: &[usize],
 ) -> Result<MigrationReport, MigrationError> {
-    let mut rows_migrated = 0u64;
-    let mut errors = Vec::new();
-    let mut completed_step_indices = plan.completed_steps.clone();
-
     let vertices = storage.scan_vertices_by_tag(&plan.target.space, &plan.target.label)?;
 
-    for &step_idx in remaining {
-        let step = &plan.steps[step_idx];
-        if !step.is_data_modifying() {
-            completed_step_indices.push(step_idx);
-            continue;
-        }
-
-        let mut migrated = 0u64;
-        for vertex in &vertices {
-            match apply_step_to_vertex(vertex, &plan.target.label, step) {
-                Ok(Some(transformed)) => {
-                    storage.update_vertex(&plan.target.space, transformed)?;
-                    migrated += 1;
-                }
+    // Phase 1 (staging): apply every remaining data-modifying step to
+    // in-memory copies of the scanned rows. No storage writes happen here,
+    // so any transformation failure leaves the stored data untouched and
+    // the migration is all-or-nothing instead of partially committed.
+    let mut staged: Vec<Vertex> = Vec::new();
+    let mut errors = Vec::new();
+    'vertex_rows: for vertex in &vertices {
+        let mut current = vertex.clone();
+        for &step_idx in remaining {
+            let step = &plan.steps[step_idx];
+            if !step.is_data_modifying() {
+                continue;
+            }
+            match apply_step_to_vertex(&current, &plan.target.label, step) {
+                Ok(Some(next)) => current = next,
                 Ok(None) => {}
                 Err(e) => {
                     errors.push(format!(
@@ -63,20 +60,41 @@ fn execute_vertex_plan(
                         vertex.vid,
                         e
                     ));
+                    continue 'vertex_rows;
                 }
             }
         }
-
-        rows_migrated += migrated;
-        completed_step_indices.push(step_idx);
+        staged.push(current);
     }
 
-    let success = errors.is_empty();
+    if !errors.is_empty() {
+        return Ok(MigrationReport {
+            success: false,
+            steps_completed: plan.completed_steps.len(),
+            rows_migrated: 0,
+            errors,
+            completed_step_indices: plan.completed_steps.clone(),
+        });
+    }
+
+    // Phase 2 (commit): every row was fully transformed before the first
+    // write, so only storage-level failures can interrupt this loop.
+    let rows_migrated = staged.len() as u64;
+    for vertex in staged {
+        storage.update_vertex(&plan.target.space, vertex)?;
+    }
+
+    let completed_step_indices: Vec<usize> = plan
+        .completed_steps
+        .iter()
+        .copied()
+        .chain(remaining.iter().copied())
+        .collect();
     Ok(MigrationReport {
-        success,
+        success: true,
         steps_completed: completed_step_indices.len(),
         rows_migrated,
-        errors,
+        errors: vec![],
         completed_step_indices,
     })
 }
@@ -88,27 +106,19 @@ fn execute_edge_plan(
 ) -> Result<MigrationReport, MigrationError> {
     let edges = storage.scan_edges_by_type(&plan.target.space, &plan.target.label)?;
 
-    let mut rows_migrated = 0u64;
+    // Phase 1 (staging): transform all rows in memory first so a step or
+    // conversion failure never leaves partially migrated data behind.
+    let mut staged: Vec<Edge> = Vec::new();
     let mut errors = Vec::new();
-    let mut completed_step_indices = plan.completed_steps.clone();
-
-    for &step_idx in remaining {
-        let step = &plan.steps[step_idx];
-        if !step.is_data_modifying() {
-            completed_step_indices.push(step_idx);
-            continue;
-        }
-
-        for edge in &edges {
-            match apply_step_to_edge(edge, step) {
-                Ok(new_props) => {
-                    let mut transformed = edge.clone();
-                    transformed.props = new_props;
-
-                    storage.update_edge(&plan.target.space, transformed)?;
-
-                    rows_migrated += 1;
-                }
+    'edge_rows: for edge in &edges {
+        let mut current = edge.clone();
+        for &step_idx in remaining {
+            let step = &plan.steps[step_idx];
+            if !step.is_data_modifying() {
+                continue;
+            }
+            match apply_step_to_edge(&current, step) {
+                Ok(new_props) => current.props = new_props,
                 Err(e) => {
                     errors.push(format!(
                         "Step {} ({}) edge ({:?}→{:?}): {}",
@@ -118,19 +128,40 @@ fn execute_edge_plan(
                         edge.dst,
                         e
                     ));
+                    continue 'edge_rows;
                 }
             }
         }
-
-        completed_step_indices.push(step_idx);
+        staged.push(current);
     }
 
-    let success = errors.is_empty();
+    if !errors.is_empty() {
+        return Ok(MigrationReport {
+            success: false,
+            steps_completed: plan.completed_steps.len(),
+            rows_migrated: 0,
+            errors,
+            completed_step_indices: plan.completed_steps.clone(),
+        });
+    }
+
+    // Phase 2 (commit): all transformations validated before the first write.
+    let rows_migrated = staged.len() as u64;
+    for edge in staged {
+        storage.update_edge(&plan.target.space, edge)?;
+    }
+
+    let completed_step_indices: Vec<usize> = plan
+        .completed_steps
+        .iter()
+        .copied()
+        .chain(remaining.iter().copied())
+        .collect();
     Ok(MigrationReport {
-        success,
+        success: true,
         steps_completed: completed_step_indices.len(),
         rows_migrated,
-        errors,
+        errors: vec![],
         completed_step_indices,
     })
 }

@@ -236,6 +236,7 @@ pub enum QueryErrorKind {
     Transaction,
     Type,
     Timeout,
+    FeatureDisabled,
 }
 
 impl QueryErrorKind {
@@ -254,6 +255,7 @@ impl QueryErrorKind {
             QueryErrorKind::Transaction => "transaction",
             QueryErrorKind::Type => "type",
             QueryErrorKind::Timeout => "timeout",
+            QueryErrorKind::FeatureDisabled => "feature_disabled",
         }
     }
 }
@@ -373,6 +375,17 @@ impl QueryError {
 
     pub fn timeout(message: impl Into<String>) -> Self {
         Self::new(QueryErrorKind::Timeout, message)
+    }
+
+    /// Error for operations requiring a compile-time feature that is not
+    /// enabled in this build.
+    pub fn feature_disabled(feature: &str, operation: &str) -> Self {
+        Self::new(
+            QueryErrorKind::FeatureDisabled,
+            format!(
+                "operation {operation} requires the \"{feature}\" feature, which is not enabled in this build"
+            ),
+        )
     }
 
     pub fn structured_parse_error(err: StructuredParseError) -> Self {
@@ -583,6 +596,7 @@ impl ToPublicError for QueryError {
             QueryErrorKind::Transaction => ErrorCode::ExecutionError,
             QueryErrorKind::Type => ErrorCode::TypeError,
             QueryErrorKind::Timeout => ErrorCode::Timeout,
+            QueryErrorKind::FeatureDisabled => ErrorCode::ValidationError,
         }
     }
 

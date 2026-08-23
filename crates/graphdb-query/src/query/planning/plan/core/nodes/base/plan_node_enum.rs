@@ -388,13 +388,17 @@ crate::define_enum_as_methods! {
     // Connecting nodes
     (InnerJoin, as_inner_join, InnerJoinNode),
     (LeftJoin, as_left_join, LeftJoinNode),
+    (RightJoin, as_right_join, RightJoinNode),
     (CrossJoin, as_cross_join, CrossJoinNode),
     (FullOuterJoin, as_full_outer_join, FullOuterJoinNode),
+    (SemiJoin, as_semi_join, SemiJoinNode),
     // Traverse the nodes
     (Expand, as_expand, ExpandNode),
     (ExpandAll, as_expand_all, ExpandAllNode),
     (Traverse, as_traverse, TraverseNode),
     (AppendVertices, as_append_vertices, AppendVerticesNode),
+    (BiExpand, as_bi_expand, BiExpandNode),
+    (BiTraverse, as_bi_traverse, BiTraverseNode),
     // Control flow nodes
     (Argument, as_argument, ArgumentNode),
     (Loop, as_loop, LoopNode),
@@ -418,6 +422,7 @@ crate::define_enum_as_methods! {
     (Unwind, as_unwind, UnwindNode),
     (Materialize, as_materialize, MaterializeNode),
     (Assign, as_assign, AssignNode),
+    (Apply, as_apply, ApplyNode),
     // Algorithm node
     (MultiShortestPath, as_multi_shortest_path, MultiShortestPathNode),
     (BFSShortest, as_bfs_shortest, BFSShortestNode),
@@ -489,13 +494,17 @@ crate::define_enum_as_mut_methods! {
     // Connecting nodes
     (InnerJoin, as_inner_join_mut, InnerJoinNode),
     (LeftJoin, as_left_join_mut, LeftJoinNode),
+    (RightJoin, as_right_join_mut, RightJoinNode),
     (CrossJoin, as_cross_join_mut, CrossJoinNode),
     (FullOuterJoin, as_full_outer_join_mut, FullOuterJoinNode),
+    (SemiJoin, as_semi_join_mut, SemiJoinNode),
     // Traverse the nodes
     (Expand, as_expand_mut, ExpandNode),
     (ExpandAll, as_expand_all_mut, ExpandAllNode),
     (Traverse, as_traverse_mut, TraverseNode),
     (AppendVertices, as_append_vertices_mut, AppendVerticesNode),
+    (BiExpand, as_bi_expand_mut, BiExpandNode),
+    (BiTraverse, as_bi_traverse_mut, BiTraverseNode),
     // Control flow nodes
     (Argument, as_argument_mut, ArgumentNode),
     (Loop, as_loop_mut, LoopNode),
@@ -519,6 +528,7 @@ crate::define_enum_as_mut_methods! {
     (Unwind, as_unwind_mut, UnwindNode),
     (Materialize, as_materialize_mut, MaterializeNode),
     (Assign, as_assign_mut, AssignNode),
+    (Apply, as_apply_mut, ApplyNode),
     // Algorithm node
     (MultiShortestPath, as_multi_shortest_path_mut, MultiShortestPathNode),
     (BFSShortest, as_bfs_shortest_mut, BFSShortestNode),

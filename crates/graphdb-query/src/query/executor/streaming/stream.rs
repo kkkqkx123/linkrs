@@ -132,7 +132,17 @@ impl ResultStream {
         let result = if let Some(ref mut engine) = self.engine {
             let stop_error = engine.stop_root().err();
             let close_error = engine.close_root().err();
-            stop_error.or(close_error).map_or(Ok(()), Err)
+            match (stop_error, close_error) {
+                (Some(stop_err), Some(close_err)) => {
+                    log::warn!(
+                        "Both stop and close failed during stream teardown; \
+                         stop error: {stop_err}; close error: {close_err}"
+                    );
+                    Err(stop_err)
+                }
+                (Some(stop_err), None) | (None, Some(stop_err)) => Err(stop_err),
+                (None, None) => Ok(()),
+            }
         } else {
             Ok(())
         };

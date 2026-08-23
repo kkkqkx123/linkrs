@@ -157,7 +157,7 @@ fn setup_sync_with_vector_only(_runtime: &tokio::runtime::Handle) -> CoreResult<
 /// # Example
 ///
 /// ```rust
-/// use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+/// use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig};
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 // Open the database
@@ -177,7 +177,10 @@ fn setup_sync_with_vector_only(_runtime: &tokio::runtime::Handle) -> CoreResult<
 /// txn.execute("CREATE TAG user(name string)")?;
 /// txn.commit()?;
 ///
-/// The database is automatically closed when the `db` variable goes out of scope.
+// The database is automatically closed when the `db` variable goes out of scope.
+///
+/// # Ok(())
+/// # }
 /// ```
 pub struct GraphDatabase<S: StorageClient + Clone + 'static> {
     inner: Arc<GraphDatabaseInner<S>>,

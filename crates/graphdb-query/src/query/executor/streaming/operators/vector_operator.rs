@@ -268,18 +268,17 @@ impl VectorOperator {
                             let _ = (
                                 storage,
                                 space_name,
+                                index_name,
                                 tag_name,
                                 field_name,
                                 vector_size,
                                 distance,
                                 space_id,
                             );
-                            Ok(Some(make_manage_result(
-                                Arc::clone(&self.output_layout),
-                                "create_vector_index",
-                                Some(index_name.as_str()),
-                                "qdrant feature disabled",
-                            )))
+                            Err(QueryError::feature_disabled(
+                                "vector",
+                                "CREATE VECTOR INDEX",
+                            ))
                         }
                     }
                     VectorManageCommand::Drop { index_name } => {
@@ -293,13 +292,8 @@ impl VectorOperator {
                         }
                         #[cfg(not(feature = "vector"))]
                         {
-                            let _ = (storage, space_name);
-                            Ok(Some(make_manage_result(
-                                Arc::clone(&self.output_layout),
-                                "drop_vector_index",
-                                Some(index_name.as_str()),
-                                "qdrant feature disabled",
-                            )))
+                            let _ = (storage, space_name, index_name);
+                            Err(QueryError::feature_disabled("vector", "DROP VECTOR INDEX"))
                         }
                     }
                 };

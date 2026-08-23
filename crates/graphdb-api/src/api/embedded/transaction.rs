@@ -19,8 +19,9 @@ use std::time::Duration;
 /// # Example
 ///
 /// ```rust
-/// use graphdb::api::embedded::{GraphDatabase, DatabaseConfig, TransactionConfig};
+/// use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig, TransactionConfig};
 ///
+/// # use std::time::Duration;
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = GraphDatabase::open("my_db")?;
 /// let session = db.session()?;
@@ -136,7 +137,7 @@ impl TransactionConfig {
 /// # Examples
 ///
 /// ```rust
-/// use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+/// use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig};
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = GraphDatabase::open("my_db")?;
@@ -200,6 +201,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: None,
             session_variables: Some(self.session.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -239,6 +241,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: Some(params),
             session_variables: Some(self.session.variables_snapshot()),
             query_id: None,
+            isolation_level: None,
             parsed_statement: None,
         };
 
@@ -311,7 +314,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
     /// # Examples
     ///
     /// ```rust
-    /// use graphdb::api::embedded::GraphDatabase;
+    /// use graphdb_api::api::embedded::GraphDatabase;
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let db = GraphDatabase::open("my_db")?;

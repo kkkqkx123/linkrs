@@ -5,7 +5,7 @@
 //! # Get started quickly
 //!
 //! ```rust
-//! use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+//! use graphdb_api::api::embedded::{GraphDatabase, DatabaseConfig};
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 // Open the database
