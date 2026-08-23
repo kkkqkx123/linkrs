@@ -9,17 +9,20 @@
 //! append + fsync before applying to memory, so crash recovery replays
 //! idempotently. Coordinated graph transactions land in [`LocalVectorEngine::apply_txn`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::thread::{Builder as ThreadBuilder, JoinHandle};
+use std::time::Duration;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::error::{Result, VectorSearchError};
 use crate::storage::{CollectionStore, WalPoint, WalRecord, WalTxn};
 use crate::types::{
-    CollectionConfig, CollectionInfo, CollectionStatus, PointId, SearchQuery, SearchResult,
-    VectorFilter, VectorPoint,
+    CollectionConfig, CollectionInfo, CollectionStatus, IvfConfig, PointId, SearchQuery,
+    SearchResult, VectorFilter, VectorPoint,
 };
 
 /// A single operation of a coordinated transaction, grouped per collection.
@@ -37,14 +40,36 @@ pub enum TxnOp {
     },
 }
 
+/// Maintenance work scheduled for the background worker thread.
+#[derive(Debug)]
+enum MaintenanceJob {
+    /// Build (or rebuild) the IVF index of a collection.
+    Build(String),
+    /// Stop the worker (sent on engine drop).
+    Shutdown,
+}
+
+/// How often the idle maintenance worker runs drift / promotion sweeps.
+const MAINTENANCE_TICK: Duration = Duration::from_secs(30);
+
 /// The built-in (local) vector engine.
 ///
 /// All operations are synchronous; the graphdb-sync coordinator serializes
 /// access through an async shell. Collection names must be valid path segments
 /// (enforced by [`CollectionStore::create`]).
+///
+/// A background worker thread performs IVF scheduling: index builds,
+/// post-compaction rebuilds and periodic drift checks. It holds only shared
+/// handles to the collection map, so dropping the engine shuts it down.
 pub struct LocalVectorEngine {
     root_dir: PathBuf,
-    collections: RwLock<HashMap<String, Arc<CollectionStore>>>,
+    collections: Arc<RwLock<HashMap<String, Arc<CollectionStore>>>>,
+    /// Applied to collections created without an explicit IVF config.
+    default_ivf: RwLock<Option<IvfConfig>>,
+    jobs: Option<Sender<MaintenanceJob>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    /// Collections with a build already queued or running.
+    in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl std::fmt::Debug for LocalVectorEngine {
@@ -53,6 +78,17 @@ impl std::fmt::Debug for LocalVectorEngine {
             .field("root_dir", &self.root_dir)
             .field("collection_count", &self.collections.read().len())
             .finish()
+    }
+}
+
+impl Drop for LocalVectorEngine {
+    fn drop(&mut self) {
+        if let Some(jobs) = self.jobs.take() {
+            let _ = jobs.send(MaintenanceJob::Shutdown);
+        }
+        if let Some(handle) = self.worker.lock().take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -84,10 +120,32 @@ impl LocalVectorEngine {
             collections.insert(name, store);
         }
 
-        Ok(Self {
+        Ok(Self::assemble(root_dir, collections))
+    }
+
+    fn assemble(root_dir: PathBuf, collections: HashMap<String, Arc<CollectionStore>>) -> Self {
+        let (tx, rx) = mpsc::channel::<MaintenanceJob>();
+        let collections = Arc::new(RwLock::new(collections));
+        let in_flight = Arc::new(Mutex::new(HashSet::new()));
+
+        let worker_collections = Arc::clone(&collections);
+        let worker_in_flight = Arc::clone(&in_flight);
+        let worker_jobs = tx.clone();
+        let handle = ThreadBuilder::new()
+            .name("vector-maintenance".to_string())
+            .spawn(move || {
+                maintenance_loop(rx, worker_collections, worker_jobs, worker_in_flight);
+            })
+            .expect("spawn vector-maintenance thread");
+
+        Self {
             root_dir,
-            collections: RwLock::new(collections),
-        })
+            collections,
+            default_ivf: RwLock::new(None),
+            jobs: Some(tx),
+            worker: Mutex::new(Some(handle)),
+            in_flight,
+        }
     }
 
     /// Root directory backing this engine.
@@ -105,10 +163,48 @@ impl LocalVectorEngine {
     /// Create a collection. Fails with
     /// [`VectorSearchError::CollectionAlreadyExists`] if it already exists.
     pub fn create_collection(&self, name: &str, config: &CollectionConfig) -> Result<()> {
+        let mut effective = config.clone();
+        if effective.ivf_config.is_none() {
+            if let Some(default) = &*self.default_ivf.read() {
+                effective.ivf_config = Some(default.clone());
+            }
+        }
         let dir = self.root_dir.join(name);
-        let store = Arc::new(CollectionStore::create(&dir, name, config)?);
+        let store = Arc::new(CollectionStore::create(&dir, name, &effective)?);
         self.collections.write().insert(name.to_string(), store);
         Ok(())
+    }
+
+    /// Default IVF configuration for collections created without one.
+    pub fn set_default_ivf_config(&self, config: IvfConfig) {
+        *self.default_ivf.write() = Some(config.clone());
+        for store in self.collections.read().values() {
+            store.set_ivf_config(config.clone());
+        }
+    }
+
+    /// Build and publish the IVF index of a collection synchronously.
+    /// Returns whether a usable index is now published. This is also the
+    /// entry point used by the maintenance worker.
+    pub fn build_index(&self, collection: &str) -> Result<bool> {
+        let store = self.store(collection)?;
+        store.build_index()
+    }
+
+    /// Drop the published IVF index; the collection falls back to
+    /// exact scan.
+    pub fn drop_index(&self, collection: &str) -> Result<()> {
+        self.store(collection)?.drop_index()
+    }
+
+    /// Whether an IVF index is published for the collection.
+    pub fn has_index(&self, collection: &str) -> bool {
+        self.store(collection).is_ok_and(|s| s.has_index())
+    }
+
+    /// Manually compact a collection (remove tombstoned slots).
+    pub fn compact_collection(&self, collection: &str) -> Result<u64> {
+        self.store(collection)?.compact()
     }
 
     /// Drop a collection and delete its directory.
@@ -158,6 +254,7 @@ impl LocalVectorEngine {
             segments_count: segments as u64,
             config: CollectionConfig::new(meta.vector_size, meta.distance),
             status: CollectionStatus::Green,
+            index: store.index_info(),
         })
     }
 
@@ -204,7 +301,7 @@ impl LocalVectorEngine {
         self.store(collection)?.delete_by_filter(filter)
     }
 
-    /// Exact full-scan search (Tier 0). Scores follow Qdrant semantics:
+    /// Exact full-scan search. Scores follow Qdrant semantics:
     /// cosine similarity, inner product and 1/(1+distance) for euclid.
     pub fn search(&self, collection: &str, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         self.store(collection)?.search(query)
@@ -264,6 +361,120 @@ impl LocalVectorEngine {
             .get(collection)
             .cloned()
             .ok_or_else(|| VectorSearchError::CollectionNotFound(collection.to_string()))
+    }
+
+    /// Run one maintenance sweep immediately: post-compaction rebuilds,
+    /// drift-triggered rebuilds and exact-scan-to-IVF promotion. Normally
+    /// driven by the worker's idle tick; also useful for administrative
+    /// tooling and tests.
+    pub fn run_maintenance_sweep(&self) {
+        let Some(jobs) = self.jobs.as_ref() else {
+            return;
+        };
+        maintenance_sweep(&self.collections, jobs, &self.in_flight);
+    }
+
+    /// Enqueue an index build unless one is already scheduled/running for the
+    /// collection.
+    fn schedule_build(
+        name: &str,
+        jobs: &Sender<MaintenanceJob>,
+        in_flight: &Mutex<HashSet<String>>,
+    ) {
+        let mut guard = in_flight.lock();
+        if guard.contains(name) {
+            return;
+        }
+        guard.insert(name.to_string());
+        if jobs.send(MaintenanceJob::Build(name.to_string())).is_err() {
+            guard.remove(name);
+        }
+    }
+}
+
+/// Background maintenance loop: executes scheduled builds and, on each idle
+/// tick, sweeps collections for post-compaction rebuilds, drift-triggered
+/// rebuilds and exact-scan-to-IVF promotion.
+fn maintenance_loop(
+    rx: Receiver<MaintenanceJob>,
+    collections: Arc<RwLock<HashMap<String, Arc<CollectionStore>>>>,
+    jobs: Sender<MaintenanceJob>,
+    in_flight: Arc<Mutex<HashSet<String>>>,
+) {
+    loop {
+        match rx.recv_timeout(MAINTENANCE_TICK) {
+            Ok(MaintenanceJob::Build(name)) => {
+                let store = collections.read().get(&name).cloned();
+                if let Some(store) = store {
+                    match store.build_index() {
+                        Ok(published) => {
+                            tracing::debug!(collection = %name, published, "maintenance build done")
+                        }
+                        Err(e) => tracing::warn!(
+                            collection = %name,
+                            error = %e,
+                            "maintenance build failed"
+                        ),
+                    }
+                }
+                in_flight.lock().remove(&name);
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                maintenance_sweep(&collections, &jobs, &in_flight);
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+            Ok(MaintenanceJob::Shutdown) => break,
+        }
+    }
+}
+
+/// One periodic pass over all collections.
+fn maintenance_sweep(
+    collections: &Arc<RwLock<HashMap<String, Arc<CollectionStore>>>>,
+    jobs: &Sender<MaintenanceJob>,
+    in_flight: &Arc<Mutex<HashSet<String>>>,
+) {
+    let stores = collections.read().clone();
+    for (name, store) in stores {
+        // Compaction invalidated a previously published index: restore it
+        // regardless of the auto-promotion switch.
+        if store.take_needs_rebuild() {
+            LocalVectorEngine::schedule_build(&name, jobs, in_flight);
+            continue;
+        }
+
+        let Some(config) = store.ivf_config_opt() else {
+            continue;
+        };
+
+        match store.ivf_state() {
+            Some((index, _)) => {
+                // Drift maintenance keeps any published index fresh; it does
+                // not depend on the auto-promotion switch.
+                if !index.should_check_drift() {
+                    continue;
+                }
+                let ratio = store.measure_drift(&index);
+                store.record_drift(ratio);
+                tracing::debug!(collection = %name, drift = ratio, "drift check");
+                if ratio > config.drift_threshold {
+                    tracing::info!(
+                        collection = %name,
+                        drift = ratio,
+                        threshold = config.drift_threshold,
+                        "drift threshold exceeded; scheduling rebuild"
+                    );
+                    LocalVectorEngine::schedule_build(&name, jobs, in_flight);
+                }
+            }
+            None => {
+                // Promotion check: build once the collection is large enough
+                // and automatic promotion is enabled.
+                if config.auto_promotion && store.count() >= config.min_build_points.max(1) {
+                    LocalVectorEngine::schedule_build(&name, jobs, in_flight);
+                }
+            }
+        }
     }
 }
 

@@ -893,7 +893,7 @@ fn partitioned_equality_join_matches_serial_results() {
 
 #[test]
 fn storage_self_proven_domain_enables_partitioning_without_config_range() {
-    // Phase 4 enablement: with no configured vertex-id range, the storage's
+    // With no configured vertex-id range, the storage's
     // self-proven domain (accumulated on writes) must be enough to partition
     // a large tagged scan, and results must match the serial path.
     let storage = setup_storage();

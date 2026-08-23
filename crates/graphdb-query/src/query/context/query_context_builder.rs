@@ -153,13 +153,15 @@ impl QueryContextBuilder {
 
         QueryContext::from_builder(
             rctx,
-            CancelToken::new(),
-            id_gen,
-            self.space_info,
-            self.charset_info,
-            self.snapshot_ts,
-            self.isolation_level,
-            self.arena,
+            super::query_context::ContextParams {
+                cancel_token: CancelToken::new(),
+                id_gen,
+                space_info: self.space_info,
+                charset_info: self.charset_info,
+                snapshot_ts: self.snapshot_ts,
+                isolation_level: self.isolation_level,
+                arena: self.arena,
+            },
         )
     }
 }

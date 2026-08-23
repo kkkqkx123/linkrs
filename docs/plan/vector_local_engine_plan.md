@@ -85,11 +85,12 @@ vector-client：pub use vector-search 的类型 + 保留 Qdrant 引擎
 
 | 文件 | 格式 | 说明 |
 |------|------|------|
-| `meta.bin` | postcard | 维度、距离度量、索引层级配置、Tier 1 聚类中心 |
+| `meta.bin` | postcard | 维度、距离度量、索引层级配置（Tier 1 质心与归属实际存于 `index.bin`，见 `docs/plan/vector_local_engine_phase_b.md` §2.3） |
 | `vectors.bin` | mmap 稠密行主序 f32 数组 | 定长槽位（slot = 内部稠密 u32 序号），分 segment 增长 |
 | `payloads.bin` | mmap 容器 | slot → postcard(Payload)；含删除位图（tombstone bitmap） |
 | `keys.bin` | mmap | slot → PointId（u64/String）双向映射 |
 | `wal.bin` | 追加式 | 向量操作日志（txn id + op），崩溃恢复用 |
+| `index.bin` | magic + postcard | Tier 1 IVFFlat 派生状态（质心 + slot→list）；损坏即丢弃回退 Tier 0 |
 
 - PointId → 内部 slot 映射为稠密 u32，热路径避免哈希；
 - slot 删除 = 位图标记，触发阈值（如 20% tombstone）后压缩（memcpy 存活行）。
@@ -211,10 +212,15 @@ vector-qdrant = ["vector", "graphdb-api/qdrant", "graphdb-server/qdrant",
 
 ### Phase B：Tier 1 IVFFlat + 压缩调度
 
-- [ ] 采样 k-means 聚类、list 分配、probe 搜索；
-- [ ] 漂移监测与重建调度（10% 规则）；
-- [ ] 压缩与重建的并发安全（读写锁切换）；
-- [ ] bench：Tier 0 vs Tier 1（延迟/recall/构建时间），据此决定默认层级。
+> 实施方案与设计决策见 `docs/plan/vector_local_engine_phase_b.md`（含 G1~G8
+> 缺口定案：升级触发、index.bin 持久化、pending 集合、list 粒度锁、压缩失效、
+> 漂移量化、probe+filter 语义、k-means 细节）。
+
+- [x] 采样 k-means 聚类、list 分配、probe 搜索；
+- [x] 漂移监测与重建调度（10% 规则，drift_ratio = 采样点换簇比例）；
+- [x] 压缩与重建的并发安全（maintenance 互斥 + 写锁内原子发布）；
+- [ ] bench：Tier 0 vs Tier 1（延迟/recall/构建时间），据此决定默认层级
+      （bench 已就绪 `benches/ivf_bench.rs`，默认层级待 1M 点数据结论）。
 
 ### Phase C：qdrant 路径适配 + 收尾
 

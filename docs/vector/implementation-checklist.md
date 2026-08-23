@@ -202,10 +202,16 @@
   - [ ] 搜索最近邻
   - [ ] 删除节点
 
-- [ ] IVF 索引实现
-  - [ ] 聚类中心
-  - [ ] 向量分配
-  - [ ] 倒排列表
+- [x] IVF 索引实现（已由内置本地引擎落地，见 `crates/vector-search` 与
+      `docs/vector/vector-engine-design.md` 头部「内置本地引擎」说明；
+      设计定案见 `docs/plan/vector_local_engine_phase_b.md`）
+  - [x] 聚类中心（采样 k-means 训练，固定种子可复现；质心构建后不可变）
+  - [x] 向量分配（slot→list 归属，list 粒度读写锁；构建窗口内的新写入经
+        pending 集合兜底并在发布时合并，保证 probe 搜索不漏点）
+  - [x] 倒排列表（按质心距离取 nprobe 个最近 list 探测；带过滤结果不足时
+        受控翻倍重试一次；`nprobe = lists` 退化为精确扫描）
+  - [x] 生命周期（`index.bin` 持久化、损坏回退 Tier 0、压缩失效并自动重建、
+        漂移超阈值自动重建、手动 build/drop API）
 
 ## 4. 并发控制
 

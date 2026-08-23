@@ -215,6 +215,64 @@ impl QuantizationConfig {
     }
 }
 
+/// IVF index configuration. All thresholds are evaluated per collection.
+///
+/// The IVF index is a derived structure: it can be built, dropped and rebuilt
+/// at any time without affecting correctness (the exact scan stays the
+/// source of truth). Every field has a conservative default so that automatic
+/// promotion never happens unless explicitly enabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IvfConfig {
+    /// Number of clusters; `None` = auto (`sqrt(live)` clamped to [1, 4096]).
+    pub lists: Option<u32>,
+    /// Minimum live points before an index is built.
+    pub min_build_points: u64,
+    /// Training sample cap and drift-check sample cap.
+    pub sample_limit: usize,
+    /// k-means iteration cap.
+    pub kmeans_max_iter: u32,
+    /// Drift ratio above which a rebuild is scheduled.
+    pub drift_threshold: f64,
+    /// Upserts accumulated before the next drift check.
+    pub drift_check_interval: u64,
+    /// Default nprobe when the query does not set one.
+    pub default_nprobe: usize,
+    /// Whether automatic index promotion is allowed.
+    pub auto_promotion: bool,
+}
+
+impl Default for IvfConfig {
+    fn default() -> Self {
+        Self {
+            lists: None,
+            min_build_points: 100_000,
+            sample_limit: 65_536,
+            kmeans_max_iter: 10,
+            drift_threshold: 0.10,
+            drift_check_interval: 25_000,
+            default_nprobe: 8,
+            // Off until benchmarks justify turning it on.
+            auto_promotion: false,
+        }
+    }
+}
+
+impl IvfConfig {
+    /// Number of lists to train for `live` live points.
+    pub fn effective_lists(&self, live: u64) -> u32 {
+        match self.lists {
+            Some(k) => k.max(1),
+            None => ((live as f64).sqrt().round() as u32).clamp(1, 4096),
+        }
+    }
+
+    /// Clamp nprobe to the number of lists and keep at least one probe.
+    pub fn clamp_nprobe(&self, nprobe: Option<usize>, lists: usize) -> usize {
+        let requested = nprobe.unwrap_or(self.default_nprobe);
+        requested.clamp(1, lists.max(1))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionConfig {
     pub vector_size: usize,
@@ -226,6 +284,7 @@ pub struct CollectionConfig {
     pub write_consistency_factor: Option<usize>,
     pub on_disk_payload: Option<bool>,
     pub shard_number: Option<usize>,
+    pub ivf_config: Option<IvfConfig>,
 }
 
 impl CollectionConfig {
@@ -240,7 +299,13 @@ impl CollectionConfig {
             write_consistency_factor: None,
             on_disk_payload: None,
             shard_number: None,
+            ivf_config: None,
         }
+    }
+
+    pub fn with_ivf(mut self, ivf_config: IvfConfig) -> Self {
+        self.ivf_config = Some(ivf_config);
+        self
     }
 
     pub fn with_index_type(mut self, index_type: IndexType) -> Self {
@@ -276,6 +341,17 @@ impl Default for CollectionConfig {
     }
 }
 
+/// Index state exposed through [`CollectionInfo`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexInfo {
+    /// 0 = exact scan, 1 = IVFFlat.
+    pub index_kind: u8,
+    pub lists: u32,
+    pub nprobe_default: usize,
+    pub built_at_live_count: u64,
+    pub last_drift_ratio: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionInfo {
     pub name: String,
@@ -285,6 +361,7 @@ pub struct CollectionInfo {
     pub segments_count: u64,
     pub config: CollectionConfig,
     pub status: CollectionStatus,
+    pub index: Option<IndexInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

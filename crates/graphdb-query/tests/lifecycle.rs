@@ -418,9 +418,9 @@ fn lifecycle_partition_cache_ddl_invalidates_partitioned_plans() {
 
 #[test]
 fn lifecycle_partition_cache_hit_returns_exact_compiled_instance() {
-    // Regression for the review note: "分区计划 cache 命中与否结果一致".  A
-    // cache hit must serve the exact plan instance that a miss would compile
-    // (identity, not just equivalence), so hit/miss execution cannot diverge.
+    // Regression: a partition-plan cache hit must serve the exact plan
+    // instance that a miss would compile (identity, not just equivalence),
+    // so hit/miss execution cannot diverge.
     use graphdb_query::query::cache::plan_cache::QueryPlanCache;
     let cache = QueryPlanCache::default();
     let query = "MATCH (n:Node) RETURN n";

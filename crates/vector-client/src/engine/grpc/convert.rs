@@ -413,6 +413,7 @@ pub fn collection_info_from_proto(
             .and_then(|p| p.write_consistency_factor.map(|v| v as usize)),
         on_disk_payload: params.map(|p| p.on_disk_payload),
         shard_number: params.map(|p| p.shard_number as usize),
+        ivf_config: None,
     };
 
     Ok(CollectionInfo {
@@ -423,6 +424,7 @@ pub fn collection_info_from_proto(
         segments_count: info.segments_count,
         config,
         status,
+        index: None,
     })
 }
 

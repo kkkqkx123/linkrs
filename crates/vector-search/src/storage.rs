@@ -18,25 +18,28 @@ mod directory;
 mod keys;
 mod meta;
 mod payloads;
-mod vectors;
+pub(crate) mod vectors;
 mod wal;
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use bitvec::prelude::*;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 
 pub(crate) use meta::Meta;
 pub use wal::{Wal, WalPoint, WalRecord, WalTxn};
 
 use crate::error::{Result, VectorSearchError};
+use crate::index::{persist, IvfIndex};
 use crate::types::{
-    CollectionConfig, DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint,
+    CollectionConfig, DistanceMetric, IndexInfo, IvfConfig, PointId, SearchQuery, SearchResult,
+    VectorPoint,
 };
 
 use self::compaction::{plan_slots, write_dir_file, write_vectors_file, DirEntry};
@@ -52,6 +55,10 @@ const COMPACTION_THRESHOLD: f64 = 0.20;
 struct StoreInner {
     meta: Meta,
     reverse: HashMap<PointId, u32>,
+    /// IVF configuration (not persisted; supplied by the engine).
+    ivf_config: Option<IvfConfig>,
+    /// Last measured drift ratio, exposed via `CollectionInfo`.
+    last_drift_ratio: Option<f64>,
 }
 
 /// A single opened collection.
@@ -64,6 +71,20 @@ pub struct CollectionStore {
     keys: Keys,
     payloads: Payloads,
     wal: Wal,
+    /// Published IVF index; `None` = exact scan. Swapped atomically.
+    ivf: ArcSwap<Option<Arc<IvfIndex>>>,
+    /// Slots inserted while no index was published and a build was in
+    /// flight; drained into the index on publish so probe search never
+    /// misses them.
+    pending: RwLock<Vec<u32>>,
+    /// Serializes compaction vs index build/rebuild. Lock order:
+    /// maintenance -> inner.write; never taken while holding inner.write.
+    maintenance: Mutex<()>,
+    /// Set while an index build is in flight (routes inserts to `pending`).
+    building: AtomicBool,
+    /// Compaction invalidated a published index and a rebuild should be
+    /// scheduled by the engine maintenance worker.
+    needs_rebuild: AtomicBool,
 }
 
 impl CollectionStore {
@@ -129,12 +150,19 @@ impl CollectionStore {
             inner: RwLock::new(StoreInner {
                 meta,
                 reverse: HashMap::new(),
+                ivf_config: config.ivf_config.clone(),
+                last_drift_ratio: None,
             }),
             tombstones,
             vectors,
             keys,
             payloads,
             wal,
+            ivf: ArcSwap::from(Arc::new(None)),
+            pending: RwLock::new(Vec::new()),
+            maintenance: Mutex::new(()),
+            building: AtomicBool::new(false),
+            needs_rebuild: AtomicBool::new(false),
         })
     }
 
@@ -172,15 +200,73 @@ impl CollectionStore {
 
         let store = Self {
             dir: dir.to_path_buf(),
-            inner: RwLock::new(StoreInner { meta, reverse }),
+            inner: RwLock::new(StoreInner {
+                meta,
+                reverse,
+                ivf_config: None,
+                last_drift_ratio: None,
+            }),
             tombstones: ArcSwap::from(Arc::new(tombstones)),
             vectors,
             keys,
             payloads,
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
+            ivf: ArcSwap::from(Arc::new(None)),
+            pending: RwLock::new(Vec::new()),
+            maintenance: Mutex::new(()),
+            building: AtomicBool::new(false),
+            needs_rebuild: AtomicBool::new(false),
         };
         store.replay_wal()?;
+        store.load_ivf()?;
         Ok(store)
+    }
+
+    /// Supply the IVF configuration after open (the config is not persisted;
+    /// the engine passes it from graphdb-config). Applies both to future
+    /// builds and to any published index, so a rehydrated index — which
+    /// starts with default settings — immediately honors the runtime config.
+    pub fn set_ivf_config(&self, config: IvfConfig) {
+        self.inner.write().ivf_config = Some(config.clone());
+        if let Some(index) = self.ivf.load().as_ref() {
+            index.set_config(config);
+        }
+    }
+    /// Rehydrate a persisted IVF index if present and consistent with the
+    /// live metadata; otherwise fall back to exact scan. Slots appended after
+    /// the build (WAL replay) land in `pending` so probe search still sees
+    /// them.
+    fn load_ivf(&self) -> Result<()> {
+        let Some(data) = persist::load(&self.dir)? else {
+            return Ok(());
+        };
+        let (dim, distance, next_slot, capacity) = {
+            let inner = self.inner.read();
+            (
+                inner.meta.vector_size,
+                inner.meta.distance,
+                inner.meta.next_slot,
+                inner.meta.slot_capacity as usize,
+            )
+        };
+        if !data.valid_for(dim, distance, next_slot) {
+            tracing::info!("vector index.bin inconsistent with meta; falling back to exact scan");
+            return Ok(());
+        }
+        let config = self.inner.read().ivf_config.clone().unwrap_or_default();
+        let covered = data.slot_list.len();
+        let index = Arc::new(IvfIndex::from_persisted(data, config));
+        {
+            let tombstones = self.tombstones.load();
+            let mut pending = self.pending.write();
+            for slot in covered..next_slot as usize {
+                if slot < capacity && !tombstones[slot] {
+                    pending.push(slot as u32);
+                }
+            }
+        }
+        self.ivf.store(Arc::new(Some(index)));
+        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -367,7 +453,24 @@ impl CollectionStore {
         self.vectors.write_slot(slot, &point.vector)?;
         self.payloads
             .append_payload(slot as usize, point.payload.as_ref())?;
+        self.register_slot(slot as u32, &point.vector);
         Ok(())
+    }
+
+    /// Route a freshly written slot into the published index (nearest list)
+    /// or, when no index is published but one is being built, into the
+    /// pending set so probe search never misses it.
+    fn register_slot(&self, slot: u32, vector: &[f32]) {
+        let ivf = self.ivf.load();
+        if let Some(index) = ivf.as_ref() {
+            index.assign_slot(slot, vector);
+            index.note_upsert();
+            return;
+        }
+        drop(ivf);
+        if self.building.load(AtomicOrdering::Relaxed) {
+            self.pending.write().push(slot);
+        }
     }
 
     fn apply_delete_locked(&self, inner: &mut StoreInner, point_id: &str) -> Result<()> {
@@ -446,16 +549,22 @@ impl CollectionStore {
     /// Physically remove tombstoned slots and rebuild all files with compacted
     /// slot numbering `0..live_count`.
     ///
-    /// Runs under the write lock (blocking searches, acceptable for a
-    /// single-node deployment). Procedure:
+    /// Runs under the store's write lock (blocking searches, acceptable for a
+    /// single-node deployment) and holds the `maintenance` mutex, so an index
+    /// build cannot run concurrently and observe torn slot numbers.
+    /// Procedure:
     /// 1. write `vectors_tmp.bin`/`keys_tmp.bin`/`payloads_tmp.bin`;
     /// 2. fsync each and rename over the live file (atomic swap);
     /// 3. rebuild mmap snapshots, `reverse` map and tombstone bitmap;
     /// 4. rewrite `meta.bin`;
-    /// 5. append a `Compact` checkpoint to the WAL and truncate it.
+    /// 5. drop any published IVF index (slot numbers changed wholesale) and
+    ///    flag the engine maintenance worker for a rebuild;
+    /// 6. append a `Compact` checkpoint to the WAL and truncate it.
     ///
     /// Returns the number of live points after compaction.
     pub fn compact(&self) -> Result<u64> {
+        let _guard = self.maintenance.lock();
+        let had_index = self.ivf.load().is_some();
         let mut inner = self.inner.write();
         if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
             return Ok(inner.meta.live_count);
@@ -546,7 +655,16 @@ impl CollectionStore {
         inner.meta.tombstone_count = 0;
         inner.meta.save(&self.dir)?;
 
-        // 5. WAL checkpoint + truncate
+        // 5. Invalidate the IVF index: slot numbering changed wholesale.
+        self.ivf.store(Arc::new(None));
+        self.pending.write().clear();
+        self.building.store(false, AtomicOrdering::Relaxed);
+        if had_index {
+            self.needs_rebuild.store(true, AtomicOrdering::Relaxed);
+        }
+        persist::discard(&self.dir.join("index.bin"));
+
+        // 6. WAL checkpoint + truncate
         self.wal.append(&WalTxn {
             txn_id: inner.meta.last_applied_txn,
             ops: vec![WalRecord::Compact],
@@ -556,9 +674,192 @@ impl CollectionStore {
         Ok(live_count)
     }
 
-    /// Tier 0 exact scan: parallel full scan with the SIMD distance
-    /// kernel, post-filter on payload, score threshold, then top-K heap
-    /// selection and offset/limit slicing.
+    // ---- IVF index lifecycle ----
+
+    /// Build and publish an IVF index from the current live set.
+    ///
+    /// Heavy work (sampling + k-means) runs off the store lock under the
+    /// `maintenance` mutex, so compaction cannot interleave and slot numbers
+    /// stay stable. Publication happens atomically under the store write
+    /// lock: slots appended during the build are adopted, pending slots are
+    /// drained, and only afterwards does the index become visible, so probe
+    /// search never misses a point.
+    ///
+    /// Returns whether a usable index is now published.
+    pub fn build_index(&self) -> Result<bool> {
+        let Some(config) = self.inner.read().ivf_config.clone() else {
+            return Ok(false);
+        };
+        let _guard = self.maintenance.lock();
+
+        let (dim, metric, segment_slots, snapshot_next_slot, name) = {
+            let inner = self.inner.read();
+            (
+                inner.meta.vector_size,
+                inner.meta.distance,
+                inner.meta.segment_slots,
+                inner.meta.next_slot,
+                inner.meta.collection.clone(),
+            )
+        };
+        let live: Vec<u32> = {
+            let tombstones = self.tombstones.load();
+            (0..snapshot_next_slot as u32)
+                .filter(|&s| !tombstones[s as usize])
+                .collect()
+        };
+        if (live.len() as u64) < config.min_build_points.max(1) || live.is_empty() {
+            return Ok(false);
+        }
+
+        self.building.store(true, AtomicOrdering::Relaxed);
+        tracing::info!(
+            collection = %name,
+            points = live.len(),
+            "building IVF index"
+        );
+
+        let built = {
+            let vsnap = self.vectors.snapshot();
+            IvfIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots).map(Arc::new)
+        };
+
+        let index = match built {
+            Ok(index) => index,
+            Err(e) => {
+                self.building.store(false, AtomicOrdering::Relaxed);
+                tracing::warn!(collection = %name, error = %e, "IVF build failed");
+                return Err(e);
+            }
+        };
+
+        // Publish atomically with respect to writers: everything below holds
+        // the store write lock (acquired before the pending lock, matching
+        // `register_slot`'s order) so concurrent upserts either ran before
+        // (and their slots are adopted/drained here) or run after (and see
+        // the published index directly).
+        let persisted = {
+            let inner = self.inner.write();
+            let mut pending = self.pending.write();
+            let tombstones = self.tombstones.load();
+            let vsnap = self.vectors.snapshot();
+            index.adopt_range(
+                snapshot_next_slot as u32,
+                inner.meta.next_slot as u32,
+                &tombstones,
+                &vsnap,
+                segment_slots,
+            );
+            for slot in pending.drain(..) {
+                if !tombstones[slot as usize] {
+                    if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
+                        index.assign_slot(slot, v);
+                    }
+                }
+            }
+            index.to_persisted()
+        };
+        // Publish before clearing the building flag: an upsert that loaded
+        // `ivf == None` and then observed `building == false` would record its
+        // slot nowhere and go missing from probe searches. With this order
+        // such an upsert still sees `building == true` and lands in `pending`,
+        // which every probe search scans unconditionally.
+        self.ivf.store(Arc::new(Some(index)));
+        self.building.store(false, AtomicOrdering::Relaxed);
+        self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
+
+        if let Err(e) = persist::save(&self.dir, &persisted) {
+            tracing::warn!(collection = %name, error = %e, "index.bin save failed");
+        }
+        tracing::info!(
+            collection = %name,
+            lists = persisted.lists,
+            "IVF index published"
+        );
+        Ok(true)
+    }
+
+    /// Drop the published index and return to exact scan.
+    pub fn drop_index(&self) -> Result<()> {
+        let _guard = self.maintenance.lock();
+        self.ivf.store(Arc::new(None));
+        self.pending.write().clear();
+        self.building.store(false, AtomicOrdering::Relaxed);
+        self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
+        persist::discard(&self.dir.join("index.bin"));
+        Ok(())
+    }
+
+    /// Whether an index is published.
+    pub fn has_index(&self) -> bool {
+        self.ivf.load().is_some()
+    }
+
+    /// Swap-and-reset the post-compaction rebuild flag.
+    pub(crate) fn take_needs_rebuild(&self) -> bool {
+        self.needs_rebuild.swap(false, AtomicOrdering::Relaxed)
+    }
+
+    pub(crate) fn ivf_config_opt(&self) -> Option<IvfConfig> {
+        self.inner.read().ivf_config.clone()
+    }
+
+    /// Measure the current drift ratio of the published index.
+    pub(crate) fn measure_drift(&self, index: &IvfIndex) -> f64 {
+        let (next_slot, segment_slots) = {
+            let inner = self.inner.read();
+            (inner.meta.next_slot as u32, inner.meta.segment_slots)
+        };
+        let samples = IvfIndex::sample_plan(index.config().sample_limit, next_slot);
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let tombstones = self.tombstones.load();
+        let vsnap = self.vectors.snapshot();
+        index.drift_ratio(&samples, &tombstones, &vsnap, segment_slots)
+    }
+
+    /// Published index plus its configuration, for the maintenance worker.
+    pub(crate) fn ivf_state(&self) -> Option<(Arc<IvfIndex>, IvfConfig)> {
+        let published: Option<Arc<IvfIndex>> = self.ivf.load().as_ref().clone();
+        let index = published?;
+        let config = self.inner.read().ivf_config.clone()?;
+        Some((index, config))
+    }
+
+    pub(crate) fn record_drift(&self, ratio: f64) {
+        self.inner.write().last_drift_ratio = Some(ratio);
+    }
+
+    /// Current index state for [`CollectionInfo`](crate::types::CollectionInfo).
+    pub fn index_info(&self) -> Option<IndexInfo> {
+        let ivf = self.ivf.load();
+        match ivf.as_ref() {
+            Some(index) => {
+                let info = IndexInfo {
+                    index_kind: 1,
+                    lists: index.list_count() as u32,
+                    nprobe_default: index.default_nprobe(),
+                    built_at_live_count: index.built_at_live_count(),
+                    last_drift_ratio: self.inner.read().last_drift_ratio,
+                };
+                Some(info)
+            }
+            None => self.inner.read().ivf_config.as_ref().map(|_| IndexInfo {
+                index_kind: 0,
+                lists: 0,
+                nprobe_default: 0,
+                built_at_live_count: 0,
+                last_drift_ratio: None,
+            }),
+        }
+    }
+
+    /// Search: probe over the closest IVF lists when an index is
+    /// published, otherwise the exact full scan. Both paths share
+    /// identical post-processing (payload filter, score threshold, top-K,
+    /// offset/limit) through [`Self::finish_candidates`], so scores and
+    /// semantics are path-independent.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         let (dim, metric, segment_slots, next_slot) = {
             let inner = self.inner.read();
@@ -578,8 +879,23 @@ impl CollectionStore {
         let tombstones = self.tombstones.load();
         let vsnap = self.vectors.snapshot();
 
-        // 1. Parallel scan, skipping tombstones.
-        let mut candidates: Vec<(f32, u32)> = (0..next_slot as u32)
+        let ivf = self.ivf.load();
+        if let Some(index) = ivf.as_ref() {
+            return self.search_ivf(
+                index.as_ref(),
+                query,
+                dim,
+                metric,
+                segment_slots,
+                next_slot,
+                &tombstones,
+                &vsnap,
+            );
+        }
+        drop(ivf);
+
+        // 1. Parallel exact scan, skipping tombstones.
+        let candidates: Vec<(f32, u32)> = (0..next_slot as u32)
             .into_par_iter()
             .filter(|s| !tombstones[*s as usize])
             .map(|s| {
@@ -591,9 +907,69 @@ impl CollectionStore {
                 Ok((crate::distance::to_score(metric, dist), s))
             })
             .collect::<Result<Vec<_>>>()?;
-        drop(vsnap);
-        drop(tombstones);
 
+        self.finish_candidates(candidates, query, dim, metric, segment_slots)
+    }
+
+    /// IVF path: probe the `nprobe` closest lists (+ pending slots), then
+    /// shared post-processing. With a payload filter that leaves fewer than
+    /// `limit` results while unprobed lists remain, nprobe is doubled once as
+    /// a bounded accuracy fallback; beyond that the approximate semantics of
+    /// IVFFlat apply (`nprobe = lists` degenerates to exact).
+    #[allow(clippy::too_many_arguments)]
+    fn search_ivf(
+        &self,
+        index: &IvfIndex,
+        query: &SearchQuery,
+        dim: usize,
+        metric: DistanceMetric,
+        segment_slots: u32,
+        next_slot: u64,
+        tombstones: &BitVec,
+        vsnap: &[Arc<memmap2::Mmap>],
+    ) -> Result<Vec<SearchResult>> {
+        let _ = (dim, metric, next_slot);
+        let lists = index.list_count();
+        let mut nprobe = index.clamp_nprobe(query.nprobe);
+        let pending = self.pending.read().clone();
+
+        let candidates = index.probe_candidates(
+            &query.vector,
+            nprobe,
+            &pending,
+            tombstones,
+            vsnap,
+            segment_slots,
+        )?;
+        let results = self.finish_candidates(candidates, query, dim, metric, segment_slots)?;
+
+        let short = query.filter.is_some() && results.len() < query.limit;
+        if !short || nprobe >= lists {
+            return Ok(results);
+        }
+        // Single controlled retry with a doubled probe width.
+        nprobe = (nprobe * 2).min(lists);
+        let candidates = index.probe_candidates(
+            &query.vector,
+            nprobe,
+            &pending,
+            tombstones,
+            vsnap,
+            segment_slots,
+        )?;
+        self.finish_candidates(candidates, query, dim, metric, segment_slots)
+    }
+
+    /// Shared post-processing for both search paths: payload post-filter,
+    /// score threshold, top-K heap selection and result assembly.
+    fn finish_candidates(
+        &self,
+        mut candidates: Vec<(f32, u32)>,
+        query: &SearchQuery,
+        dim: usize,
+        _metric: DistanceMetric,
+        segment_slots: u32,
+    ) -> Result<Vec<SearchResult>> {
         // 2. Post-filter on payload.
         if let Some(filter) = &query.filter {
             let psnap = self.payloads.snapshot();

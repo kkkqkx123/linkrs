@@ -1,6 +1,6 @@
 //! Benchmark baseline.
 //!
-//! Establishes the Tier 0 exact-scan baseline before any optimization work:
+//! Establishes the exact-scan baseline before any optimization work:
 //! scan latency/throughput vs. dataset size, SIMD vs naive ratio, filter
 //! selectivity impact, and WAL-backed upsert throughput.
 //!
@@ -46,7 +46,7 @@ fn unit_vector(seed: u64) -> Vec<f32> {
     v
 }
 
-/// Tier 0 scan loop: distance to every candidate, keep the nearest.
+/// Exact scan loop: distance to every candidate, keep the nearest.
 fn scan_best(kernel: Kernel, metric: DistanceMetric, query: &[f32], data: &[Vec<f32>]) -> f32 {
     let mut best = f32::INFINITY;
     for v in data {

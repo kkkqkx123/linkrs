@@ -116,7 +116,7 @@ pub struct OptimizerEngine {
     /// per-shape EWMA factors; `estimate_node_output_rows` consults these
     /// factors so all cost-based decisions consume corrected row counts.
     cardinality_feedback: Arc<CardinalityFeedbackManager>,
-    /// Shared decision-level feedback store (Apply vs Join, phase 3).
+    /// Shared decision-level feedback store (Apply vs Join decorrelation).
     ///
     /// Records which decorrelation path actually executed and its measured
     /// rows / time; the CBO unnesting decision consults the empirical advice.
@@ -518,23 +518,23 @@ impl OptimizerEngine {
     ) -> OptimizeResult<ExecutionPlan> {
         let mut current_plan = plan;
 
-        // Phase 0: fold recorded execution feedback into the selectivity
+        // Fold recorded execution feedback into the selectivity
         // corrections (stats feedback loop).  Gated by
         // `enable_feedback`; cheap when no history is present.
         self.maybe_apply_feedback();
 
-        // Phase 1: Heuristic Optimization (Always Executed)
+        // Heuristic optimization (always executed).
         if self.enable_heuristic {
-            log::debug!("Starting Phase 1: Heuristic Optimization");
+            log::debug!("Starting heuristic optimization");
             current_plan = self
                 .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
-            log::debug!("Phase 1 completed successfully");
+            log::debug!("Heuristic optimization completed successfully");
         }
 
-        // Phase 2: Cost-Based Optimization (always active — conservative rules)
-        log::debug!("Starting Phase 2: Cost-Based Optimization");
+        // Cost-based optimization (always active — conservative rules)
+        log::debug!("Starting cost-based optimization");
         current_plan = self.apply_cost_based(current_plan, space)?;
-        log::debug!("Phase 2 completed successfully");
+        log::debug!("Cost-based optimization completed successfully");
 
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
@@ -643,32 +643,32 @@ impl OptimizerEngine {
         space: Option<&str>,
         plan: &mut ExecutionPlan,
     ) -> OptimizeResult<()> {
-        // Phase 1: Subquery unnesting (structural rewrite on the physical
+        // Subquery unnesting (structural rewrite on the physical
         // root; the logical tree cannot represent PatternApply, so plans
         // containing one fall back to `optimize_plan_nodes` — defensive).
         self.apply_unnesting(plan, stats);
 
-        // Phase 2: Join order — decision on the logical tree, rewrite on
+        // Join order — decision on the logical tree, rewrite on
         // the physical root.
         self.apply_join_order_logical(logical, stats, plan);
 
-        // Phase 3: Cost-based index selection — decision on the logical
+        // Cost-based index selection — decision on the logical
         // tree, rewrite on the physical root.
         self.apply_index_selection_logical(logical, space, plan);
 
-        // Phase 4: Sort + Limit → TopN conversion (residual patterns,
+        // Sort + Limit → TopN conversion (residual patterns,
         // cost-based; physical structural rewrite).
         self.apply_topn_wiring(plan, stats);
 
-        // Phase 5: Aggregate strategy selection — decision on the logical
+        // Aggregate strategy selection — decision on the logical
         // tree (the strategy is consumed by the physical planner via the
         // notes).
         self.apply_aggregate_strategy_logical(logical, stats, plan);
 
-        // Phase 6: Collect per-node row estimates for estimated_rows writeback.
+        // Collect per-node row estimates for estimated_rows writeback.
         self.apply_row_estimates(plan, stats);
 
-        // Phase 7: Expression precomputation decisions (note-only; EXPLAIN
+        // Expression precomputation decisions (note-only; EXPLAIN
         // observability for expressions worth precomputing).
         self.apply_precompute_notes(plan);
 
@@ -686,10 +686,10 @@ impl OptimizerEngine {
         space: Option<&str>,
         plan: &mut ExecutionPlan,
     ) -> OptimizeResult<()> {
-        // Phase 1: Subquery unnesting (PatternApply → InnerJoin)
+        // Subquery unnesting (PatternApply → InnerJoin)
         self.apply_unnesting(plan, stats);
 
-        // Phase 2: Join order optimization
+        // Join order optimization
         if let Some(ref root) = plan.root.clone() {
             let mut notes = Vec::new();
             let mut decisions = std::collections::HashMap::new();
@@ -706,7 +706,7 @@ impl OptimizerEngine {
             plan.cbo_notes.extend(notes);
         }
 
-        // Phase 3: Cost-based index selection (ScanVertices → IndexScan)
+        // Cost-based index selection (ScanVertices → IndexScan)
         if let Some(ref root) = plan.root.clone() {
             let selector = IndexSelector::new(
                 self.cost_calculator.clone(),
@@ -725,10 +725,10 @@ impl OptimizerEngine {
             plan.cbo_notes.extend(notes);
         }
 
-        // Phase 4: Sort + Limit → TopN conversion (residual patterns)
+        // Sort + Limit → TopN conversion (residual patterns)
         self.apply_topn_wiring(plan, stats);
 
-        // Phase 5: Aggregate strategy selection (decision notes)
+        // Aggregate strategy selection (decision notes)
         if let Some(ref root) = plan.root.clone() {
             let selector = AggregateStrategySelector::new(self.cost_calculator.clone());
             let mut notes = Vec::new();
@@ -737,10 +737,10 @@ impl OptimizerEngine {
             plan.cbo_notes.extend(notes);
         }
 
-        // Phase 6: Collect per-node row estimates for estimated_rows writeback.
+        // Collect per-node row estimates for estimated_rows writeback.
         self.apply_row_estimates(plan, stats);
 
-        // Phase 7: Expression precomputation decisions (note-only)
+        // Expression precomputation decisions (note-only)
         self.apply_precompute_notes(plan);
 
         Ok(())

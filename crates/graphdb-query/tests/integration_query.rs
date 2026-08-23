@@ -1,4 +1,4 @@
-//! Phase III: Query Engine Component Integration Testing
+//! Query Engine Component Integration Testing
 //!
 //! Test Range.
 //! - query::parser - SQL/NGQL parsing, AST generation

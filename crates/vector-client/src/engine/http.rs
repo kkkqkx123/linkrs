@@ -321,6 +321,7 @@ impl VectorEngine for QdrantEngine {
             segments_count: raw.segments_count.unwrap_or(0),
             config,
             status: parse_collection_status(raw.status.as_deref()),
+            index: None,
         })
     }
 

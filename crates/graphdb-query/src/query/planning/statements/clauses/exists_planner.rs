@@ -810,7 +810,7 @@ pub fn plan_subquery(
 
     // Build the base subquery plan. Index selection is disabled for the
     // subquery: its tags are not part of the outer ValidationInfo, so scans
-    // degrade to full scans (see the design doc risk table).
+    // degrade to full scans.
     let expr_context = Arc::new(ExpressionAnalysisContext::new());
     let validation_info = ValidationInfo::new();
     let planning_ctx = PlanningContext {

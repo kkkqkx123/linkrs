@@ -4,6 +4,25 @@
 
 本文档描述了 GraphDB 向量搜索引擎的架构设计、接口规范和实现指南。向量引擎为图数据库提供了高效的向量相似度搜索能力，支持 ANN（Approximate Nearest Neighbor）搜索、过滤、批量操作等功能。
 
+> **内置本地引擎补充（Phase A/B 已落地）**：除本文描述的 `VectorEngine` trait
+> 抽象外，项目另有内置本地引擎 `crates/vector-search`（Tier 0 精确扫描 +
+> Tier 1 IVFFlat），设计与实施见：
+> - 总方案：`docs/plan/vector_local_engine_plan.md`
+> - Tier 1 实施方案：`docs/plan/vector_local_engine_phase_b.md`
+>
+> 本地引擎要点：
+> - **Tier 0（默认）**：精确全扫描（SIMD 距离核），结果精确；
+> - **Tier 1（IVFFlat）**：近似搜索。`nprobe` 控制探测 list 数，
+>   `nprobe = lists` 时退化为精确；带 payload 过滤且结果不足时做一次
+>   受控 nprobe 翻倍重试，仍可能返回不足 limit 的结果（近似语义）；
+> - 索引状态存于 collection 目录下派生文件 `index.bin`（magic `VIVF`），
+>   损坏即丢弃并回退 Tier 0；压缩会整体失效索引并自动调度重建；
+> - 漂移重建：索引构建时记录「训练样本到质心的平均距离」基线，维护线程
+>   周期抽样计算当前平均距离，相对增长超过 `drift_threshold` 即自动重建
+>   （与 `auto_promotion` 开关无关；手动建的索引同样受漂移维护）；
+> - 配置入口：`[vector.local.ivf]`（`auto_promotion` 默认关闭，
+>   待 bench 结论后调整）。
+
 ## 2. 架构设计
 
 ### 2.1 分层架构

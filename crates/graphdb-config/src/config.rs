@@ -129,6 +129,79 @@ pub enum VectorEngineKind {
     Qdrant,
 }
 
+/// IVF settings for the local vector engine (raw TOML surface).
+///
+/// The values mirror `vector_search::IvfConfig`; the conversion lives in
+/// graphdb-api so that graphdb-config stays free of vector-search types.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct IvfSettings {
+    /// Whether collections are promoted to an IVF index automatically once
+    /// they exceed `min_build_points`. Off by default until benchmarks
+    /// justify turning it on.
+    #[serde(default)]
+    pub auto_promotion: bool,
+    /// Cluster count; `0` = auto (`sqrt(live)` clamped to [1, 4096]).
+    #[serde(default)]
+    pub lists: u32,
+    /// Minimum live points before an index is built.
+    #[serde(default = "default_ivf_min_build_points")]
+    pub min_build_points: u64,
+    /// Training / drift-check sample cap.
+    #[serde(default = "default_ivf_sample_limit")]
+    pub sample_limit: usize,
+    /// k-means iteration cap.
+    #[serde(default = "default_ivf_kmeans_max_iter")]
+    pub kmeans_max_iter: u32,
+    /// Drift ratio above which a rebuild is scheduled.
+    #[serde(default = "default_ivf_drift_threshold")]
+    pub drift_threshold: f64,
+    /// Upserts accumulated before the next drift check.
+    #[serde(default = "default_ivf_drift_check_interval")]
+    pub drift_check_interval: u64,
+    /// Default nprobe when a query does not set one.
+    #[serde(default = "default_ivf_nprobe")]
+    pub default_nprobe: usize,
+}
+
+impl Default for IvfSettings {
+    fn default() -> Self {
+        Self {
+            auto_promotion: false,
+            lists: 0,
+            min_build_points: 100_000,
+            sample_limit: 65_536,
+            kmeans_max_iter: 10,
+            drift_threshold: 0.10,
+            drift_check_interval: 25_000,
+            default_nprobe: 8,
+        }
+    }
+}
+
+fn default_ivf_min_build_points() -> u64 {
+    100_000
+}
+
+fn default_ivf_sample_limit() -> usize {
+    65_536
+}
+
+fn default_ivf_kmeans_max_iter() -> u32 {
+    10
+}
+
+fn default_ivf_drift_threshold() -> f64 {
+    0.10
+}
+
+fn default_ivf_drift_check_interval() -> u64 {
+    25_000
+}
+
+fn default_ivf_nprobe() -> usize {
+    8
+}
+
 /// Local vector engine configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LocalVectorConfig {
@@ -136,6 +209,9 @@ pub struct LocalVectorConfig {
     /// `<database.storage_path>/vector`.
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
+    /// IVF settings (local engine only).
+    #[serde(default)]
+    pub ivf: Option<IvfSettings>,
 }
 
 /// Vector search configuration

@@ -107,6 +107,7 @@ impl VectorEngine for MockVectorEngine {
             segments_count: 1,
             config: collection.config.clone(),
             status: CollectionStatus::Green,
+            index: None,
         })
     }
 

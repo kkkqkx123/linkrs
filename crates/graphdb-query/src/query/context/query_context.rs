@@ -84,6 +84,18 @@ pub struct QueryContext {
     arena: Option<Arena>,
 }
 
+/// Builder-supplied context parameters, grouped so the internal constructor
+/// stays within a manageable arity.
+pub(super) struct ContextParams {
+    pub cancel_token: CancelToken,
+    pub id_gen: IdGenerator,
+    pub space_info: Option<SpaceInfo>,
+    pub charset_info: Option<Box<CharsetInfo>>,
+    pub snapshot_ts: Option<Timestamp>,
+    pub isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
+    pub arena: Option<Arena>,
+}
+
 impl QueryContext {
     /// Create a new query context with default configuration.
     ///
@@ -119,25 +131,16 @@ impl QueryContext {
 
     /// Internal constructor for QueryContextBuilder.
     /// Only visible within the query::context module.
-    pub(super) fn from_builder(
-        rctx: Arc<QueryRequestContext>,
-        cancel_token: CancelToken,
-        id_gen: IdGenerator,
-        space_info: Option<SpaceInfo>,
-        charset_info: Option<Box<CharsetInfo>>,
-        snapshot_ts: Option<Timestamp>,
-        isolation_level: Option<crate::core::types::TransactionIsolationLevel>,
-        arena: Option<Arena>,
-    ) -> Self {
+    pub(super) fn from_builder(rctx: Arc<QueryRequestContext>, params: ContextParams) -> Self {
         Self {
             rctx,
-            cancel_token,
-            id_gen,
-            space_info,
-            charset_info,
-            snapshot_ts,
-            isolation_level,
-            arena,
+            cancel_token: params.cancel_token,
+            id_gen: params.id_gen,
+            space_info: params.space_info,
+            charset_info: params.charset_info,
+            snapshot_ts: params.snapshot_ts,
+            isolation_level: params.isolation_level,
+            arena: params.arena,
         }
     }
 

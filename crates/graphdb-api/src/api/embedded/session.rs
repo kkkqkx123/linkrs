@@ -648,7 +648,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         let row = rows.first().ok_or_else(|| {
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
-        let value = row.get(0).cloned().ok_or_else(|| {
+        let value = row.first().cloned().ok_or_else(|| {
             CoreError::InvalidParameter("LET expression returned no value".to_string())
         })?;
         self.set_variable(assign.name.clone(), value);

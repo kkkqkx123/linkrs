@@ -1,4 +1,4 @@
-//! Tier 0 search integration tests: distance, filtering, score threshold,
+//! Exact scan search integration tests: distance, filtering, score threshold,
 //! pagination, and payload/vector trimming.
 
 use vector_search::distance::naive;

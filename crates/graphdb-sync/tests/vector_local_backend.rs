@@ -463,24 +463,42 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
         coordinator
             .buffer_vector_change(
                 txn2,
-                change_ctx(8, "user", "embedding", VectorChangeType::Delete, id, Vec::new()),
+                change_ctx(
+                    8,
+                    "user",
+                    "embedding",
+                    VectorChangeType::Delete,
+                    id,
+                    Vec::new(),
+                ),
             )
             .unwrap();
     }
     coordinator.commit_transaction(txn2).await.unwrap();
 
     assert_eq!(engine.count("space_8").unwrap(), 3);
-    assert!(engine.get("space_8", "v1_user_embedding").unwrap().is_none());
-    assert!(engine.get("space_8", "v3_user_embedding").unwrap().is_none());
+    assert!(engine
+        .get("space_8", "v1_user_embedding")
+        .unwrap()
+        .is_none());
+    assert!(engine
+        .get("space_8", "v3_user_embedding")
+        .unwrap()
+        .is_none());
 
     // Search after compaction only surfaces surviving points.
     let results = coordinator
-        .search_with_options(SearchOptions::new(8, "user", "embedding", vec![1.0, 0.0], 5))
+        .search_with_options(SearchOptions::new(
+            8,
+            "user",
+            "embedding",
+            vec![1.0, 0.0],
+            5,
+        ))
         .await
         .unwrap();
     assert_eq!(results.len(), 3);
-    let ids: std::collections::HashSet<String> =
-        results.iter().map(|r| r.id.to_string()).collect();
+    let ids: std::collections::HashSet<String> = results.iter().map(|r| r.id.to_string()).collect();
     assert!(!ids.contains("v1_user_embedding"));
     assert!(!ids.contains("v3_user_embedding"));
     assert_eq!(results[0].id.to_string(), "v2_user_embedding");

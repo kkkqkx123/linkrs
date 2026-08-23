@@ -89,6 +89,11 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 let data_dir = config.vector_data_dir();
                 match vector_search::LocalVectorEngine::open(&data_dir) {
                     Ok(engine) => {
+                        if let Some(ivf) =
+                            graphdb_api::local_ivf_config(&config.vector_config().local)
+                        {
+                            engine.set_default_ivf_config(ivf);
+                        }
                         info!("Local vector engine initialized at {}", data_dir.display());
                         Some(VectorBackend::Local(Arc::new(engine)))
                     }
