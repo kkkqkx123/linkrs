@@ -190,15 +190,29 @@ impl PropertyTable {
         if let Some(row_idx) = prop_offset_to_index(offset) {
             if row_idx < self.records.len() {
                 if let Some(record) = &self.records[row_idx] {
-                    // Prefetch the data location to L1/L2 cache
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        let addr = record.data.as_ptr();
-                        // Use a volatile read to ensure prefetch happens
-                        std::ptr::read_volatile(addr);
-                    }
+                    // Prefetch the data location to L1/L2 cache without
+                    // dereferencing the memory.
+                    Self::prefetch_cache_line(record.data.as_ptr());
                 }
             }
+        }
+    }
+
+    /// Non-temporal hint that fetches the cache line containing `addr`
+    /// into L1. Uses the platform prefetch intrinsic when available.
+    #[inline]
+    fn prefetch_cache_line(addr: *const u8) {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: `_mm_prefetch` only issues a cache-line prefetch hint and
+        // never dereferences or faults on unmapped memory.
+        unsafe {
+            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            _mm_prefetch::<{ _MM_HINT_T0 }>(addr.cast::<i8>());
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let _ = addr;
+            std::hint::black_box(());
         }
     }
 

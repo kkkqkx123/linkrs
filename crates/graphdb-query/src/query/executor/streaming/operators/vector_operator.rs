@@ -311,9 +311,6 @@ impl VectorOperator {
                 vector_coordinator,
                 ..
             } => {
-                #[cfg(not(feature = "vector"))]
-                let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
-
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
@@ -345,13 +342,20 @@ impl VectorOperator {
                             )))
                         };
                     }
+
+                    // No coordinator configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("VectorSearch");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
 
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("VectorSearch");
-                    return Ok(Some(chunk));
+                #[cfg(not(feature = "vector"))]
+                {
+                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k, input);
+                    return Err(QueryError::feature_disabled("vector", "VECTOR SEARCH"));
                 }
-                Ok(None)
             }
 
             VectorOperatorKind::VectorLookup { .. } => {
@@ -372,9 +376,6 @@ impl VectorOperator {
                 vector_coordinator,
                 ..
             } => {
-                #[cfg(not(feature = "vector"))]
-                let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold);
-
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
@@ -407,13 +408,20 @@ impl VectorOperator {
                             )))
                         };
                     }
+
+                    // No coordinator configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("VectorSearch");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
 
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("VectorSearch");
-                    return Ok(Some(chunk));
+                #[cfg(not(feature = "vector"))]
+                {
+                    let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold, input);
+                    return Err(QueryError::feature_disabled("vector", "VECTOR MATCH"));
                 }
-                Ok(None)
             }
         }
     }

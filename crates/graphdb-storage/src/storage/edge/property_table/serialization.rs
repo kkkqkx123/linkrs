@@ -341,15 +341,6 @@ impl PropertyTable {
             }
         }
 
-        // Store tiered tombstones for garbage collection tracking
-        result.extend_from_slice(&(self.tombstones_manager.len() as u32).to_le_bytes());
-
-        // Serialize hot layer
-        for _idx in 0..self.tombstones_manager.hot_len() {
-            // Note: We serialize tombstones in order, hot then cold
-            // This is for persistence; reconstruction happens during load
-        }
-
         // Store free list with Varint encoding
         result.extend_from_slice(&(self.free_list.len() as u32).to_le_bytes());
         for &off in &self.free_list {
@@ -577,14 +568,10 @@ impl PropertyTable {
         }
         self.ensure_chain_len();
 
-        // Load tiered tombstones for GC tracking
-        // The persisted tombstone payload is not stored (rebuilt from record delete_ts below).
-        // We read and discard the count for compatibility with older files that may have
-        // written placeholder bytes.
-        let _tombstones_len = read_u32_le(data, &mut offset)? as usize;
-        self.tombstones_manager = TieredTombstoneManager::new(10_000);
-
         // Rebuild tiered tombstone manager from record timestamps
+        // Tombstones are fully derivable from record delete_ts, so nothing
+        // is persisted for them.
+        self.tombstones_manager = TieredTombstoneManager::new(10_000);
         for (idx, record_opt) in self.records.iter().enumerate() {
             if let Some(record) = record_opt {
                 if let Some(delete_ts) = record.delete_ts {

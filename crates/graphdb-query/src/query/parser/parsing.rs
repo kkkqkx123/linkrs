@@ -22,7 +22,7 @@ mod tests;
 
 pub use fulltext_parser::parse_fulltext;
 pub use parse_context::{ParseContext, RecoveryScope};
-pub use parser::{ExtensionParseResult, ExtensionRegistry, Parser, ParserExtension, ParserResult};
+pub use parser::{Parser, ParserResult};
 pub use stmt_parser::StmtParser;
 pub use vector_parser::parse_vector;
 

@@ -448,9 +448,6 @@ impl FulltextOperator {
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(not(feature = "fulltext-search"))]
-                let _ = (&search_query, &space_id, &tag_name, &field_name);
-
                 #[cfg(feature = "fulltext-search")]
                 {
                     if let Some(manager) = fulltext_manager {
@@ -468,22 +465,28 @@ impl FulltextOperator {
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
                         }
-                        return if rows.is_empty() {
-                            Ok(None)
-                        } else {
-                            Ok(Some(DataChunk::new_with_layout(
+                        if !rows.is_empty() {
+                            return Ok(Some(DataChunk::new_with_layout(
                                 rows,
                                 self.output_layout.clone(),
-                            )))
-                        };
+                            )));
+                        }
+                        return Ok(None);
                     }
+
+                    // No manager configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("Fulltext");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
 
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Fulltext");
-                    return Ok(Some(chunk));
+                #[cfg(not(feature = "fulltext-search"))]
+                {
+                    let _ = (&search_query, &space_id, &tag_name, &field_name, input);
+                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT SEARCH"));
                 }
-                Ok(None)
             }
 
             FulltextOperatorKind::FulltextLookup {
@@ -495,9 +498,6 @@ impl FulltextOperator {
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(not(feature = "fulltext-search"))]
-                let _ = (&search_query, &space_id, &tag_name, &field_name);
-
                 #[cfg(feature = "fulltext-search")]
                 {
                     if let Some(manager) = fulltext_manager {
@@ -524,13 +524,20 @@ impl FulltextOperator {
                             )))
                         };
                     }
+
+                    // No manager configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("Fulltext");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
 
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Fulltext");
-                    return Ok(Some(chunk));
+                #[cfg(not(feature = "fulltext-search"))]
+                {
+                    let _ = (&search_query, &space_id, &tag_name, &field_name, input);
+                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT LOOKUP"));
                 }
-                Ok(None)
             }
 
             FulltextOperatorKind::MatchFulltext {
@@ -541,9 +548,6 @@ impl FulltextOperator {
                 fulltext_manager,
                 ..
             } => {
-                #[cfg(not(feature = "fulltext-search"))]
-                let _ = (&match_expr, &tag_name, &field_name);
-
                 #[cfg(feature = "fulltext-search")]
                 {
                     if let Some(manager) = fulltext_manager {
@@ -568,13 +572,20 @@ impl FulltextOperator {
                             )))
                         };
                     }
+
+                    // No manager configured: fall through to the input.
+                    if let Some(mut chunk) = input.advance()? {
+                        chunk.materialize_selection_by("Fulltext");
+                        return Ok(Some(chunk));
+                    }
+                    Ok(None)
                 }
 
-                if let Some(mut chunk) = input.advance()? {
-                    chunk.materialize_selection_by("Fulltext");
-                    return Ok(Some(chunk));
+                #[cfg(not(feature = "fulltext-search"))]
+                {
+                    let _ = (&match_expr, &tag_name, &field_name, input);
+                    return Err(QueryError::feature_disabled("fulltext-search", "FULLTEXT MATCH"));
                 }
-                Ok(None)
             }
         }
     }

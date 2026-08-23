@@ -31,7 +31,13 @@ pub fn generate_vertex_plan(
 ) -> Result<MigrationPlan, MigrationError> {
     let changes = reader.get_vertex_schema_changes(space, tag, from_version, to_version)?;
 
-    let steps: Vec<MigrationStep> = changes.iter().flat_map(step_from_change).collect();
+    let steps: Vec<MigrationStep> = changes
+        .iter()
+        .map(step_from_change)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_vertex_rows(reader, space, tag).unwrap_or(0);
@@ -84,7 +90,13 @@ pub fn generate_edge_plan(
 ) -> Result<MigrationPlan, MigrationError> {
     let changes = reader.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
 
-    let steps: Vec<MigrationStep> = changes.iter().flat_map(step_from_change).collect();
+    let steps: Vec<MigrationStep> = changes
+        .iter()
+        .map(step_from_change)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_edge_rows(reader, space, edge_type).unwrap_or(0);
@@ -140,65 +152,64 @@ fn estimate_edge_rows(
     reader.count_edges_by_type(space, edge_type)
 }
 
-fn step_from_change(change: &PropertyChange) -> Vec<MigrationStep> {
+fn step_from_change(change: &PropertyChange) -> Result<Vec<MigrationStep>, MigrationError> {
     match &change.details {
         ChangeDetails::PropertyAdded {
             name,
             data_type,
             nullable,
             default_value,
-        } => {
-            vec![MigrationStep::AddColumn {
-                name: name.clone(),
-                data_type: data_type.clone(),
-                nullable: *nullable,
-                default_value: default_value.clone(),
-            }]
-        }
+        } => Ok(vec![MigrationStep::AddColumn {
+            name: name.clone(),
+            data_type: data_type.clone(),
+            nullable: *nullable,
+            default_value: default_value.clone(),
+        }]),
         ChangeDetails::PropertyRemoved { name, data_type: _ } => {
-            vec![MigrationStep::DropColumn { name: name.clone() }]
+            Ok(vec![MigrationStep::DropColumn { name: name.clone() }])
         }
         ChangeDetails::PropertyRenamed { old_name, new_name } => {
-            vec![MigrationStep::RenameColumn {
+            Ok(vec![MigrationStep::RenameColumn {
                 old_name: old_name.clone(),
                 new_name: new_name.clone(),
-            }]
+            }])
         }
         ChangeDetails::PropertyTypeModified {
             name,
             old_type,
             new_type,
-        } => {
-            vec![MigrationStep::ConvertType {
-                name: name.clone(),
-                from_type: old_type.clone(),
-                to_type: new_type.clone(),
-            }]
-        }
+        } => Ok(vec![MigrationStep::ConvertType {
+            name: name.clone(),
+            from_type: old_type.clone(),
+            to_type: new_type.clone(),
+        }]),
         ChangeDetails::PropertyNullabilityChanged {
             name,
             was_nullable,
             now_nullable,
-        } => {
-            vec![MigrationStep::ChangeNullability {
-                name: name.clone(),
-                was_nullable: *was_nullable,
-                now_nullable: *now_nullable,
-            }]
-        }
+        } => Ok(vec![MigrationStep::ChangeNullability {
+            name: name.clone(),
+            was_nullable: *was_nullable,
+            now_nullable: *now_nullable,
+        }]),
         ChangeDetails::PropertyDefaultValueChanged {
             name,
             old_default: _,
             new_default,
-        } => {
-            vec![MigrationStep::SetDefault {
-                name: name.clone(),
-                default_value: new_default.clone(),
-            }]
-        }
-        ChangeDetails::PrimaryKeyChanged { .. } => {
-            vec![]
-        }
+        } => Ok(vec![MigrationStep::SetDefault {
+            name: name.clone(),
+            default_value: new_default.clone(),
+        }]),
+        // A primary key change cannot be expressed as a property-level
+        // migration step; silently ignoring it would leave the target schema
+        // inconsistent with the declared change, so surface an explicit error.
+        ChangeDetails::PrimaryKeyChanged {
+            old_property,
+            new_property,
+        } => Err(MigrationError::Plan(format!(
+            "Primary key changes are not supported by migration plans ('{}' -> '{}')",
+            old_property, new_property
+        ))),
     }
 }
 

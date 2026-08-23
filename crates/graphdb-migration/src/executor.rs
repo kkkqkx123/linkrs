@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use graphdb_core::core::{Edge, Tag, Value, Vertex};
-use graphdb_storage::storage::StorageClient;
+use graphdb_storage::core::error::storage::StorageErrorKind;
+use graphdb_storage::core::StorageError;
+use graphdb_storage::storage::{StorageClient, StorageWriter};
 
 use crate::converter::convert_value;
 use crate::generator::MigrationError;
@@ -11,6 +13,21 @@ pub fn execute_migration_plan(
     storage: &mut dyn StorageClient,
     plan: &MigrationPlan,
 ) -> Result<MigrationReport, MigrationError> {
+    // Dropping a column permanently destroys the stored property values and
+    // has no reverse step, so make sure the irreversibility is explicit
+    // before anything is executed.
+    for step in &plan.steps {
+        if let MigrationStep::DropColumn { name } = step {
+            log::warn!(
+                "Migration plan contains an irreversible DropColumn step: column '{}' on \
+                 {}/{} will be permanently removed and cannot be rolled back",
+                name,
+                plan.target.space,
+                plan.target.label
+            );
+        }
+    }
+
     let remaining = plan.remaining_steps();
     if remaining.is_empty() {
         return Ok(MigrationReport {
@@ -78,11 +95,13 @@ fn execute_vertex_plan(
     }
 
     // Phase 2 (commit): every row was fully transformed before the first
-    // write, so only storage-level failures can interrupt this loop.
+    // write. All writes run inside a single auto-commit group window so the
+    // migration is atomic: one commit point at the end, and any storage-level
+    // failure rolls back every already-written row through the shared undo log.
     let rows_migrated = staged.len() as u64;
-    for vertex in staged {
-        storage.update_vertex(&plan.target.space, vertex)?;
-    }
+    commit_staged_rows(storage, staged, |writer, vertex| {
+        writer.update_vertex(&plan.target.space, vertex)
+    })?;
 
     let completed_step_indices: Vec<usize> = plan
         .completed_steps
@@ -145,11 +164,13 @@ fn execute_edge_plan(
         });
     }
 
-    // Phase 2 (commit): all transformations validated before the first write.
+    // Phase 2 (commit): every row was fully transformed before the first
+    // write. Same group-window commit as the vertex plan; see
+    // `commit_staged_rows`.
     let rows_migrated = staged.len() as u64;
-    for edge in staged {
-        storage.update_edge(&plan.target.space, edge)?;
-    }
+    commit_staged_rows(storage, staged, |writer, edge| {
+        writer.update_edge(&plan.target.space, edge)
+    })?;
 
     let completed_step_indices: Vec<usize> = plan
         .completed_steps
@@ -164,6 +185,62 @@ fn execute_edge_plan(
         errors: vec![],
         completed_step_indices,
     })
+}
+
+/// Commit a batch of fully-staged rows atomically.
+///
+/// All rows are written through a single auto-commit group window: the
+/// engine assigns one shared write timestamp and undo log, so either every
+/// row becomes visible (one commit point in `finalize_auto_commit_group`)
+/// or none does (`rollback_auto_commit_group` replays the shared undo log).
+/// Storage backends without group support fall back to per-row auto-commit;
+/// that path keeps the previous all-or-nothing guarantee for transformation
+/// errors only, and a mid-loop failure may leave earlier rows committed.
+fn commit_staged_rows<T>(
+    storage: &mut dyn StorageClient,
+    staged: Vec<T>,
+    mut write_one: impl FnMut(&mut dyn StorageWriter, T) -> Result<(), StorageError>,
+) -> Result<(), MigrationError> {
+    let window = match storage.begin_auto_commit_group() {
+        Ok(window) => Some(window),
+        Err(e) if e.kind() == StorageErrorKind::NotSupported => {
+            log::warn!(
+                "Storage backend does not support auto-commit groups; \
+                 falling back to per-row commits for migration"
+            );
+            None
+        }
+        Err(e) => return Err(MigrationError::Storage(Box::new(e))),
+    };
+
+    let Some(window) = window else {
+        for row in staged {
+            write_one(&mut *storage, row).map_err(MigrationError::from)?;
+        }
+        return Ok(());
+    };
+
+    let result = (|| {
+        let mut writer = storage
+            .bind_auto_commit_writer(&window)
+            .map_err(MigrationError::from)?;
+        for row in staged {
+            write_one(&mut *writer, row).map_err(MigrationError::from)?;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => storage
+            .finalize_auto_commit_group(&window)
+            .map_err(MigrationError::from),
+        Err(error) => {
+            if let Err(rollback_error) = storage.rollback_auto_commit_group(&window) {
+                log::error!("Migration rollback failed: {rollback_error}");
+            }
+            Err(error)
+        }
+    }
 }
 
 pub fn rollback_migration(
