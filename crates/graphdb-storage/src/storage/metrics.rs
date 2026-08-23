@@ -32,6 +32,30 @@ impl<S: StorageClient> MetricsStorage<S> {
     }
 }
 
+impl<S: StorageClient> crate::storage::stats_reader::ColumnStatsReader for MetricsStorage<S> {
+    fn vertex_column_stats(
+        &self,
+        space: &str,
+        tag: &str,
+        column: &str,
+    ) -> Option<Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.vertex_column_stats(space, tag, column)
+    }
+
+    fn edge_column_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+        column: &str,
+    ) -> Option<Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.edge_column_stats(space, edge_type, column)
+    }
+
+    fn stats_epoch(&self) -> u64 {
+        self.inner.stats_epoch()
+    }
+}
+
 impl<S: StorageClient + crate::storage::AutoCommitBatchOps> crate::storage::AutoCommitBatchOps
     for MetricsStorage<S>
 {

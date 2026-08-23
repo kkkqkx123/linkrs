@@ -14,6 +14,7 @@ mod reader;
 mod schema_engine;
 mod schema_writer;
 mod serial;
+mod stats_reader_impl;
 mod writer;
 
 #[cfg(test)]
@@ -59,6 +60,33 @@ impl std::fmt::Debug for GraphStorage {
             .field("work_dir", &self.ctx.work_dir())
             .field("db_path", &self.ctx.db_path())
             .finish()
+    }
+}
+
+impl crate::storage::stats_reader::ColumnStatsReader for GraphStorage {
+    fn vertex_column_stats(
+        &self,
+        space: &str,
+        tag: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        stats_reader_impl::vertex_column_stats(&self.ctx, space, tag, column)
+    }
+
+    fn edge_column_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        stats_reader_impl::edge_column_stats(&self.ctx, space, edge_type, column)
+    }
+
+    fn stats_epoch(&self) -> u64 {
+        // The MVCC write timestamp is monotonic and bumps on every write
+        // allocation, making it a cheap data-version stamp for the
+        // optimizer's statistics cache.
+        self.ctx.version_manager().write_timestamp()
     }
 }
 

@@ -854,6 +854,7 @@ pub trait QueryStorage:
     + CatalogStore
     + StorageAuthOps
     + StorageAdmin
+    + crate::storage::stats_reader::ColumnStatsReader
     + crate::storage::AutoCommitBatchOps
     + crate::storage::AutoCommitGroupOps
 {
@@ -887,6 +888,7 @@ impl<T> QueryStorage for T where
         + CatalogStore
         + StorageAuthOps
         + StorageAdmin
+        + crate::storage::stats_reader::ColumnStatsReader
         + crate::storage::AutoCommitBatchOps
         + crate::storage::AutoCommitGroupOps
 {
@@ -913,6 +915,7 @@ pub trait StorageClient:
     + StorageRecoveryOps
     + StorageGcOps
     + UndoTarget
+    + crate::storage::stats_reader::ColumnStatsReader
     + crate::storage::AutoCommitBatchOps
     + crate::storage::AutoCommitGroupOps
     + Send
@@ -934,6 +937,7 @@ impl<T> StorageClient for T where
         + StorageRecoveryOps
         + StorageGcOps
         + UndoTarget
+        + crate::storage::stats_reader::ColumnStatsReader
         + crate::storage::AutoCommitBatchOps
         + crate::storage::AutoCommitGroupOps
         + Send

@@ -216,6 +216,53 @@ impl ShardedVertexTable {
         mask
     }
 
+    /// Aggregate optimizer-facing statistics for one property column across
+    /// all shards. Zone-map bounds are merged with the numeric-aware
+    /// comparison used by pushed predicates; null/distinct counts come from
+    /// the persisted column stats meta when available. Returns `None` when
+    /// the column is unknown or no shard has any recorded information.
+    pub fn column_stats_snapshot(
+        &self,
+        column: &str,
+    ) -> Option<crate::storage::stats_reader::ColumnStatsSnapshot> {
+        use crate::storage::stats_reader::ColumnStatsSnapshot;
+
+        let mut min: Option<crate::core::Value> = None;
+        let mut max: Option<crate::core::Value> = None;
+        let mut null_count: Option<u64> = None;
+        let mut distinct_count: Option<u64> = None;
+        let mut any_info = false;
+
+        for shard in &self.shards {
+            let table = shard.read();
+            if let Some(bounds) = table.columns.aggregate_zone_bounds(column) {
+                any_info = true;
+                crate::storage::stats_reader::merge_min(&mut min, bounds.min);
+                crate::storage::stats_reader::merge_max(&mut max, bounds.max);
+            }
+            if let Some(stats) = table.columns.get_column(column).and_then(|c| c.stats()) {
+                any_info = true;
+                *null_count.get_or_insert(0) += stats.null_count;
+                if let Some(d) = stats.distinct_count {
+                    // Sum of per-shard distincts is an upper bound; good
+                    // enough for cardinality estimation.
+                    *distinct_count.get_or_insert(0) += d;
+                }
+            }
+        }
+
+        if !any_info {
+            return None;
+        }
+        Some(ColumnStatsSnapshot {
+            row_count: self.total_count() as u64,
+            null_count,
+            distinct_count,
+            min_value: min,
+            max_value: max,
+        })
+    }
+
     // ==================== Write Operations ====================
 
     pub fn insert(

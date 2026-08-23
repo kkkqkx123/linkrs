@@ -10,8 +10,9 @@ mod tests {
     use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
     use crate::storage::{
         GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
-        StorageAdmin, StorageAuthOps, StorageOperationContext, StorageOperationContextOps,
-        StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
+        StorageAdmin, StorageAuthOps, StorageCommitOps, StorageOperationContext,
+        StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageSchemaOps,
+        StorageWriter,
     };
 
     fn create_test_storage() -> GraphStorage {
@@ -118,6 +119,156 @@ mod tests {
             .cleanup_snapshots()
             .expect("snapshot cleanup should succeed");
         assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn vertex_column_stats_snapshot_matches_inserted_range() {
+        use crate::core::vertex_edge_path::{Tag, Vertex};
+        use crate::core::Value;
+        use crate::storage::stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
+        use std::sync::Arc;
+
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        // Insert 200 vertices with ages 1..=200.  The snapshot should
+        // capture the true global min/max regardless of any sample window.
+        let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
+            crate::core::types::TransactionId::from(1),
+            10,
+            false,
+        ));
+        for i in 1..=200i64 {
+            writer
+                .insert_vertex(
+                    "test_space",
+                    Vertex::new(
+                        VertexId::from_int64(i),
+                        vec![Tag::new(
+                            "Person".to_string(),
+                            [
+                                ("name".to_string(), Value::string(format!("P{i}"))),
+                                ("age".to_string(), Value::BigInt(i)),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        )],
+                    ),
+                )
+                .expect("insert should succeed");
+        }
+        drop(writer);
+        storage
+            .commit_staged_writes(crate::core::types::TransactionId::from(1), &[])
+            .expect("commit");
+
+        // Read the snapshot via the trait.
+        let snap: Arc<ColumnStatsSnapshot> = storage
+            .vertex_column_stats("test_space", "Person", "age")
+            .expect("snapshot should be available");
+
+        assert_eq!(snap.row_count, 200, "row count should match inserts");
+        assert_eq!(snap.min_value, Some(Value::BigInt(1)));
+        assert_eq!(snap.max_value, Some(Value::BigInt(200)));
+
+        // Also verify a string column.  Lexicographic max of "P1".."P200"
+        // is "P99" (since '9' > '2'), which is the zone map's correct
+        // bound under the native Value::cmp ordering.
+        let name_snap = storage
+            .vertex_column_stats("test_space", "Person", "name")
+            .expect("name snapshot should be available");
+        assert_eq!(name_snap.min_value, Some(Value::string("P1")));
+        assert_eq!(name_snap.max_value, Some(Value::string("P99")));
+    }
+
+    #[test]
+    fn edge_column_stats_snapshot_returns_none_for_unpopulated_columnar_store() {
+        use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
+        use crate::core::Value;
+        use crate::storage::stats_reader::ColumnStatsReader;
+
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        setup_knows_edge(&mut storage);
+
+        // Insert two vertices and two edges.  The edge columnar store is
+        // not populated until flush/compaction, so the snapshot should
+        // gracefully return None rather than panicking.
+        let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
+            crate::core::types::TransactionId::from(1),
+            10,
+            false,
+        ));
+        writer
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(1),
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        [("name".to_string(), Value::string("Alice"))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .unwrap();
+        writer
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(2),
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        [("name".to_string(), Value::string("Bob"))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .unwrap();
+        writer
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    VertexId::from_int64(1),
+                    VertexId::from_int64(2),
+                    "KNOWS".to_string(),
+                    0,
+                    [("since".to_string(), Value::Int(2020))]
+                        .into_iter()
+                        .collect(),
+                ),
+            )
+            .unwrap();
+        writer
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    VertexId::from_int64(2),
+                    VertexId::from_int64(1),
+                    "KNOWS".to_string(),
+                    0,
+                    [("since".to_string(), Value::Int(2025))]
+                        .into_iter()
+                        .collect(),
+                ),
+            )
+            .unwrap();
+        drop(writer);
+        storage
+            .commit_staged_writes(crate::core::types::TransactionId::from(1), &[])
+            .expect("commit");
+
+        // The edge columnar store is not populated until flush, so the
+        // snapshot gracefully returns None (conservative fallback).
+        let snap = storage.edge_column_stats("test_space", "KNOWS", "since");
+        assert!(
+            snap.is_none() || !snap.as_ref().unwrap().has_envelope(),
+            "edge snapshot should be None or empty when columnar store is unpopulated"
+        );
     }
 
     #[test]

@@ -1131,6 +1131,15 @@ impl TimeTravelEdgeStore {
         self.properties.compute_column_stats(col_idx)
     }
 
+    /// Optimizer-facing statistics snapshot for one property column
+    /// (zone-map aggregated, with live row count).
+    pub fn column_stats_snapshot(
+        &self,
+        column: &str,
+    ) -> Option<crate::storage::stats_reader::ColumnStatsSnapshot> {
+        self.properties.column_stats_snapshot(column)
+    }
+
     /// Apply per-column compression encoding (ALP / bitpacking / dict / FSST / RLE)
     /// for OLAP IO reduction. Mirrors vertex `ColumnStore` encodings.
     #[allow(dead_code)]

@@ -23,6 +23,7 @@ pub(crate) mod mvcc;
 pub use mvcc::SnapshotHandle;
 pub(crate) mod naming;
 pub(crate) mod schema;
+pub mod stats_reader;
 pub(crate) mod thread_pool;
 
 mod batch_ops;
@@ -69,6 +70,7 @@ pub use index::{
 };
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
+pub use stats_reader::{ColumnStatsReader, ColumnStatsSnapshot};
 pub use types::StoragePropertyDef;
 
 pub use crate::core::StorageError;

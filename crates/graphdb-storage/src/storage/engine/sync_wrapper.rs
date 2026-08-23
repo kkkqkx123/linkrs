@@ -554,6 +554,32 @@ macro_rules! forward_auto_commit_methods {
     };
 }
 
+impl<S: StorageClient + 'static> crate::storage::stats_reader::ColumnStatsReader
+    for SyncWrapper<S>
+{
+    fn vertex_column_stats(
+        &self,
+        space: &str,
+        tag: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.vertex_column_stats(space, tag, column)
+    }
+
+    fn edge_column_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::storage::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.edge_column_stats(space, edge_type, column)
+    }
+
+    fn stats_epoch(&self) -> u64 {
+        self.inner.stats_epoch()
+    }
+}
+
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
     forward_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;

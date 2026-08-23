@@ -26,8 +26,11 @@ pub struct StatisticsManager {
     /// Property combination statistics for GROUP BY cardinality estimation,
     /// keyed by `"{space}.{tag}.{prop1}.{prop2}..."`.
     property_combo_stats: Arc<DashMap<String, PropertyCombinationStats>>,
-    /// Schema version at which each space's statistics were last collected.
-    space_versions: Arc<DashMap<String, u64>>,
+    /// Composite cache key `(schema_version, data_epoch)` at which each
+    /// space's statistics were last collected.  A DDL bumps the schema
+    /// generation; a committed write bumps the data epoch held by the storage
+    /// engine.  Both must match for a cache hit.
+    space_versions: Arc<DashMap<String, (u64, u64)>>,
     /// Index catalog for cost-based index selection, keyed by
     /// `"{space}.{tag_name}"` → (tag_id, available indexes). Registered
     /// per query from the planning metadata context.
@@ -71,15 +74,16 @@ impl StatisticsManager {
         }
     }
 
-    /// The schema version at which `space` was last collected, if any.
-    pub fn space_version(&self, space: &str) -> Option<u64> {
+    /// The composite `(schema_version, data_epoch)` stamp for `space`, if
+    /// statistics have been collected for it.
+    pub fn space_stamp(&self, space: &str) -> Option<(u64, u64)> {
         self.space_versions.get(space).map(|v| *v)
     }
 
-    /// Record the schema version at which `space` was last collected.
-    pub fn set_space_version(&self, space: &str, schema_version: u64) {
+    /// Record the composite stamp at which `space` was last collected.
+    pub fn set_space_stamp(&self, space: &str, schema_version: u64, data_epoch: u64) {
         self.space_versions
-            .insert(space.to_string(), schema_version);
+            .insert(space.to_string(), (schema_version, data_epoch));
     }
 
     /// Register the available indexes for `tag_name` in `space`.
@@ -586,18 +590,18 @@ mod tests {
     #[test]
     fn test_space_version_gate() {
         let manager = StatisticsManager::new();
-        assert_eq!(manager.space_version("basketball"), None);
+        assert_eq!(manager.space_stamp("basketball"), None);
 
-        manager.set_space_version("basketball", 3);
-        assert_eq!(manager.space_version("basketball"), Some(3));
+        manager.set_space_stamp("basketball", 3, 100);
+        assert_eq!(manager.space_stamp("basketball"), Some((3, 100)));
 
         manager.mark_space_dirty("basketball");
-        assert_eq!(manager.space_version("basketball"), None);
+        assert_eq!(manager.space_stamp("basketball"), None);
 
-        manager.set_space_version("a", 1);
-        manager.set_space_version("b", 2);
+        manager.set_space_stamp("a", 1, 10);
+        manager.set_space_stamp("b", 2, 20);
         manager.invalidate_space(None);
-        assert_eq!(manager.space_version("a"), None);
-        assert_eq!(manager.space_version("b"), None);
+        assert_eq!(manager.space_stamp("a"), None);
+        assert_eq!(manager.space_stamp("b"), None);
     }
 }

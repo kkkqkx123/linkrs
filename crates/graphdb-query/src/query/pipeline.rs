@@ -137,11 +137,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .as_ref()
             .ok_or_else(|| "No storage binding available for statistics collection".to_string())?
             .clone();
+        let data_epoch = storage.read().stats_epoch();
         let result = crate::query::optimizer::stats::StatisticsCollector::collect_space(
             &stats_manager,
             &storage,
             space,
             schema_version,
+            data_epoch,
             self.statistics_sample_limit,
         );
         match &result {

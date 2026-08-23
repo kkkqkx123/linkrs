@@ -305,6 +305,14 @@ impl EdgeStore {
         self.0.column_stats(col_idx)
     }
 
+    /// Optimizer-facing statistics snapshot for one property column.
+    pub fn column_stats_snapshot(
+        &self,
+        column: &str,
+    ) -> Option<crate::storage::stats_reader::ColumnStatsSnapshot> {
+        self.0.column_stats_snapshot(column)
+    }
+
     #[allow(dead_code)]
     pub fn apply_column_encoding(
         &mut self,

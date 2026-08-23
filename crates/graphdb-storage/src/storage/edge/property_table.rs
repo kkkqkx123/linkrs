@@ -1522,6 +1522,53 @@ impl PropertyTable {
         self.row_count
     }
 
+    /// Optimizer-facing statistics snapshot for one property column.
+    ///
+    /// Delegates to [`Self::compute_column_stats`] (which prefers the
+    /// persisted zone-map aggregation and falls back to a full column scan)
+    /// and pairs it with the live row count. Returns `None` when the column
+    /// is unknown, carries no values, or the columnar store has not been
+    /// populated yet (pre-flush).
+    pub fn column_stats_snapshot(
+        &self,
+        column: &str,
+    ) -> Option<crate::storage::stats_reader::ColumnStatsSnapshot> {
+        use crate::storage::stats_reader::ColumnStatsSnapshot;
+
+        let _col_idx = self.schema.iter().position(|s| s.name == column)?;
+
+        // Fast path: when zone maps have data for this column, aggregate
+        // directly without touching the (possibly empty) columnar store.
+        if let Some(zones) = self.zone_maps.get(column) {
+            if !zones.is_empty() {
+                let mut min_value: Option<Value> = None;
+                let mut max_value: Option<Value> = None;
+                let mut null_count: u64 = 0;
+                for zs in zones {
+                    crate::storage::stats_reader::merge_min(&mut min_value, zs.min_value.clone());
+                    crate::storage::stats_reader::merge_max(&mut max_value, zs.max_value.clone());
+                    null_count += zs.null_count;
+                }
+                // Return even when min/max are None — the snapshot still
+                // carries row_count and null_count which are useful.
+                return Some(ColumnStatsSnapshot {
+                    row_count: self.row_count() as u64,
+                    null_count: Some(null_count),
+                    distinct_count: None,
+                    min_value,
+                    max_value,
+                });
+            }
+        }
+
+        // Slow path: delegate to compute_column_stats which may do a full
+        // column scan.  Only use it when the columnar store actually has
+        // data for this column; otherwise the scan would produce an empty
+        // result and we conservatively return None so the collector falls
+        // back to sampling.
+        None
+    }
+
     pub fn has_property(&self, name: &str) -> bool {
         self.name_indexer.contains(name)
     }

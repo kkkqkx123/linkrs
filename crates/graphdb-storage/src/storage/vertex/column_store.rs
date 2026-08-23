@@ -920,7 +920,7 @@ pub const ZONE_MAP_CHUNK_ROWS: usize = 1024;
 /// Compare two scalar values with the same semantics as pushed-predicate
 /// evaluation: exact `i64` for integer kinds, `f64` when a float is
 /// involved, otherwise `Value` ordering.
-fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
     fn as_i64(value: &Value) -> Option<i64> {
         match value {
             Value::SmallInt(v) => Some(*v as i64),
@@ -1335,6 +1335,12 @@ impl Column {
         &self.zone_maps
     }
 
+    /// Persisted column statistics meta (min/max/null/distinct from the last
+    /// flush), if any. Complements the always-fresh zone maps with counts.
+    pub fn stats(&self) -> Option<&crate::storage::column_stats::ColumnStats> {
+        self.stats.as_ref()
+    }
+
     /// Compute statistics for the bytes that this column will persist.
     ///
     /// Encoded columns persist their encoding metadata, while unencoded
@@ -1626,6 +1632,29 @@ impl ColumnStore {
         self.name_to_index
             .get(name)
             .map(|&index| self.columns[index].zone_maps())
+    }
+
+    /// Global min/max bounds of one column, merged across all chunks with the
+    /// same numeric comparison semantics used by pushed-predicate evaluation.
+    /// `None` when the column is absent or has no recorded bounds.
+    pub fn aggregate_zone_bounds(&self, name: &str) -> Option<ZoneBounds> {
+        let zones = self.zone_maps_for_column(name)?;
+        let mut merged = ZoneBounds::default();
+        for zone in zones {
+            if let Some(v) = &zone.min {
+                match &merged.min {
+                    Some(cur) if compare_values(cur, v) != std::cmp::Ordering::Greater => {}
+                    _ => merged.min = Some(v.clone()),
+                }
+            }
+            if let Some(v) = &zone.max {
+                match &merged.max {
+                    Some(cur) if compare_values(cur, v) != std::cmp::Ordering::Less => {}
+                    _ => merged.max = Some(v.clone()),
+                }
+            }
+        }
+        (merged.min.is_some() || merged.max.is_some()).then_some(merged)
     }
 
     pub fn add_column(&mut self, name: String, data_type: DataType, nullable: bool) -> i32 {

@@ -87,6 +87,11 @@ impl Default for MockStorage {
     }
 }
 
+/// The mock keeps its rows outside the engine's tables, so there is nothing
+/// meaningful to report; the defaulted no-op snapshots make consumers fall
+/// back to their sampling path.
+impl crate::storage::stats_reader::ColumnStatsReader for MockStorage {}
+
 impl StorageReader for MockStorage {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError> {
         Ok(self
