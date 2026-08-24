@@ -8,13 +8,16 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VectorSearchError};
-use crate::types::{DistanceMetric, IvfConfig};
+use crate::types::{DistanceMetric, HnswConfig, IndexType, IvfConfig};
 
 /// Current on-disk format version.
 ///
-/// v2 adds `ivf_config` so the effective index configuration survives
-/// restarts. Development stage: no backward compatibility is maintained.
-pub(crate) const FORMAT_VERSION: u32 = 2;
+/// Development stage: the version is locked at 1 and no backward
+/// compatibility is maintained — incompatible layout changes are applied
+/// directly against v1 (existing files may become unreadable between
+/// builds). Versioned evolution (migration paths, reading older layouts)
+/// begins only with the first stable release.
+pub(crate) const FORMAT_VERSION: u32 = 1;
 
 /// Default number of slots per `vectors.bin` segment.
 pub(crate) const SEGMENT_SLOTS_DEFAULT: u32 = 8192;
@@ -26,8 +29,14 @@ pub struct Meta {
     pub collection: String,
     pub vector_size: usize,
     pub distance: DistanceMetric,
-    /// Effective IVF configuration in force when the collection was created
-    /// (engine defaults already applied). `None` = exact scan only.
+    /// ANN tier selection in force for this collection (`HNSW` by default;
+    /// `FLAT` keeps the collection on exact scan permanently).
+    pub index_type: IndexType,
+    /// Effective HNSW configuration (engine defaults already applied) when
+    /// `index_type == HNSW`.
+    pub hnsw_config: Option<HnswConfig>,
+    /// Effective IVF configuration when `index_type == IVF`. `None` = exact
+    /// scan only.
     pub ivf_config: Option<IvfConfig>,
     pub segment_slots: u32,
     /// Allocated slots (grows in segment steps).
@@ -58,6 +67,8 @@ impl Meta {
             collection: collection.to_string(),
             vector_size,
             distance,
+            index_type: IndexType::HNSW,
+            hnsw_config: None,
             ivf_config: None,
             segment_slots,
             slot_capacity: segment_slots as u64,

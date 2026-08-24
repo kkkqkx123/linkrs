@@ -1,12 +1,16 @@
-//! IVFFlat index.
+//! ANN index tiers for the local engine.
 //!
-//! The index maps every live slot to one of `lists` clusters (IVF lists).
-//! Centroids are immutable after construction; per-list membership is guarded
-//! by its own `RwLock`, so an upsert takes exactly one write lock and a probe
-//! search takes read locks on the probed lists only.
+//! [`HnswIndex`] is the default tier: incremental inserts, no retraining,
+//! and the same algorithm/knob surface as Qdrant. [`IvfIndex`] is the bulk
+//! alternative with cluster-based pruning. Both are derived structures over
+//! `vectors.bin`: they can be dropped and rebuilt at any time without
+//! affecting correctness.
 
+pub(crate) mod hnsw;
 pub(crate) mod kmeans;
 pub(crate) mod persist;
+
+pub(crate) use hnsw::HnswIndex;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

@@ -12,38 +12,42 @@
 //! Mutations go through [`CollectionStore::apply_txn`]: the WAL is appended
 //! and fsync'ed before the transaction is applied to memory, so a crash at
 //! any point recovers by idempotent replay.
+//!
+//! This module hosts the store type itself plus its lifecycle and
+//! mutation/read paths; orthogonal concerns live in sibling modules:
+//! - [`tombstones`]   lock-free tombstone table
+//! - [`compaction`]   physical tombstone reclamation
+//! - [`index_lifecycle`]  ANN index load/build/publish/drop
+//! - [`search`]       exact scan and ANN search execution
 
 mod compaction;
 mod directory;
+mod index_lifecycle;
 mod keys;
 mod meta;
 mod payloads;
+mod search;
+mod tombstones;
 pub(crate) mod vectors;
 mod wal;
 
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use bitvec::prelude::*;
 use parking_lot::{Mutex, RwLock};
-use rayon::prelude::*;
 
 pub(crate) use meta::Meta;
+pub(crate) use tombstones::TombstoneBits;
 pub use wal::{Wal, WalPoint, WalRecord, WalTxn};
 
 use crate::error::{Result, VectorSearchError};
-use crate::index::{persist, IvfIndex};
-use crate::types::{
-    CollectionConfig, DistanceMetric, IndexInfo, IvfConfig, PointId, SearchQuery, SearchResult,
-    VectorPoint,
-};
+use crate::types::{CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, VectorPoint};
 
-use self::compaction::{plan_slots, write_dir_file, write_vectors_file, DirEntry};
-use self::directory::{DirView, KEY_REC_SIZE, SLOT_REC_SIZE};
+use self::index_lifecycle::PublishedIndex;
 use self::keys::Keys;
 use self::payloads::Payloads;
 use self::vectors::Vectors;
@@ -51,92 +55,13 @@ use self::vectors::Vectors;
 /// Tombstone ratio above which deletes trigger compaction.
 const COMPACTION_THRESHOLD: f64 = 0.20;
 
-/// Bits per tombstone chunk (8 KiB of bitmap).
-const TOMBSTONE_CHUNK_BITS: usize = 1 << 16;
-
-/// Lock-free tombstone table held as fixed-size immutable chunks.
-///
-/// Setting one bit clones a single 8 KiB chunk instead of the whole bitmap,
-/// whose size grows with collection capacity; readers snapshot the chunk list
-/// through an [`ArcSwap`] exactly as before, so scan cost is unchanged.
-#[derive(Debug, Default)]
-pub(crate) struct TombstoneBits {
-    chunks: Vec<Arc<BitVec>>,
-}
-
-impl TombstoneBits {
-    fn new(slot_capacity: usize) -> Self {
-        let chunk_count = slot_capacity.div_ceil(TOMBSTONE_CHUNK_BITS).max(1);
-        Self {
-            chunks: (0..chunk_count)
-                .map(|_| Arc::new(bitvec::bitvec![0; TOMBSTONE_CHUNK_BITS]))
-                .collect(),
-        }
-    }
-
-    pub(crate) fn from_bits(bits: BitVec) -> Self {
-        let mut chunks = Vec::new();
-        for chunk in bits.chunks(TOMBSTONE_CHUNK_BITS) {
-            chunks.push(Arc::new(chunk.to_bitvec()));
-        }
-        if chunks.is_empty() {
-            chunks.push(Arc::new(bitvec::bitvec![0; TOMBSTONE_CHUNK_BITS]));
-        }
-        Self { chunks }
-    }
-
-    pub(crate) fn bit(&self, slot: usize) -> bool {
-        let (chunk, offset) = (slot / TOMBSTONE_CHUNK_BITS, slot % TOMBSTONE_CHUNK_BITS);
-        match self.chunks.get(chunk) {
-            Some(c) => c.as_bitslice()[offset],
-            None => false,
-        }
-    }
-
-    fn count_ones(&self) -> u64 {
-        self.chunks
-            .iter()
-            .map(|c| c.as_bitslice().count_ones() as u64)
-            .sum()
-    }
-
-    /// Copy-on-write single-bit update: only the affected chunk is cloned.
-    fn with_slot(&self, slot: usize, value: bool) -> Self {
-        let (chunk, offset) = (slot / TOMBSTONE_CHUNK_BITS, slot % TOMBSTONE_CHUNK_BITS);
-        let mut next = Self {
-            chunks: Vec::with_capacity(self.chunks.len()),
-        };
-        for (index, existing) in self.chunks.iter().enumerate() {
-            if index == chunk {
-                let mut copy = (**existing).clone();
-                if offset < copy.len() {
-                    copy.set(offset, value);
-                }
-                next.chunks.push(Arc::new(copy));
-            } else {
-                next.chunks.push(Arc::clone(existing));
-            }
-        }
-        next
-    }
-
-    /// Grow or shrink to `slot_capacity` slots, preserving existing bits.
-    fn resized(&self, slot_capacity: usize) -> Self {
-        let mut bits = BitVec::with_capacity(slot_capacity);
-        for chunk in &self.chunks {
-            bits.extend_from_bitslice(chunk.as_bitslice());
-        }
-        bits.resize(slot_capacity, false);
-        Self::from_bits(bits)
-    }
-}
-
 /// In-memory mutable state, guarded by the store's `RwLock`.
 struct StoreInner {
     meta: Meta,
     reverse: HashMap<PointId, u32>,
-    /// IVF configuration. Persisted in `meta.bin` since format v2; the
-    /// engine may still override it at runtime via [`CollectionStore::set_ivf_config`].
+    /// IVF configuration for `IndexType::IVF` collections. Persisted in
+    /// `meta.bin`; the engine may still override it at runtime via
+    /// [`CollectionStore::set_ivf_config`].
     ivf_config: Option<IvfConfig>,
     /// Last measured drift ratio, exposed via `CollectionInfo`.
     last_drift_ratio: Option<f64>,
@@ -152,8 +77,8 @@ pub struct CollectionStore {
     keys: Keys,
     payloads: Payloads,
     wal: Wal,
-    /// Published IVF index; `None` = exact scan. Swapped atomically.
-    ivf: ArcSwap<Option<Arc<IvfIndex>>>,
+    /// Published ANN index; `None` = exact scan. Swapped atomically.
+    index: ArcSwap<Option<PublishedIndex>>,
     /// Slots inserted while no index was published and a build was in
     /// flight; drained into the index on publish so probe search never
     /// misses them.
@@ -166,16 +91,6 @@ pub struct CollectionStore {
     /// Compaction invalidated a published index and a rebuild should be
     /// scheduled by the engine maintenance worker.
     needs_rebuild: AtomicBool,
-}
-
-/// Snapshot of the immutable views used by a single search pass.
-struct SearchSnapshot<'a> {
-    dim: usize,
-    segment_slots: u32,
-    tombstones: &'a TombstoneBits,
-    vsnap: &'a [Arc<memmap2::Mmap>],
-    keysnap: &'a DirView,
-    paysnap: &'a DirView,
 }
 
 impl CollectionStore {
@@ -224,7 +139,22 @@ impl CollectionStore {
             config.distance,
             segment_slots,
         );
-        meta.ivf_config = config.ivf_config.clone();
+        // HNSW is the default ANN tier; FLAT keeps exact scan only.
+        meta.index_type = config.index_type.unwrap_or(IndexType::HNSW);
+        match meta.index_type {
+            IndexType::HNSW => {
+                meta.hnsw_config = Some(config.hnsw_config.clone().unwrap_or_default());
+                meta.ivf_config = None;
+            }
+            IndexType::IVF => {
+                meta.ivf_config = config.ivf_config.clone();
+                meta.hnsw_config = None;
+            }
+            IndexType::FLAT => {
+                meta.ivf_config = None;
+                meta.hnsw_config = None;
+            }
+        }
         meta.save(dir)?;
 
         let vectors = Vectors::create(
@@ -250,7 +180,7 @@ impl CollectionStore {
             keys,
             payloads,
             wal,
-            ivf: ArcSwap::from(Arc::new(None)),
+            index: ArcSwap::from(Arc::new(None)),
             pending: RwLock::new(Vec::new()),
             maintenance: Mutex::new(()),
             building: AtomicBool::new(false),
@@ -303,63 +233,15 @@ impl CollectionStore {
             keys,
             payloads,
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
-            ivf: ArcSwap::from(Arc::new(None)),
+            index: ArcSwap::from(Arc::new(None)),
             pending: RwLock::new(Vec::new()),
             maintenance: Mutex::new(()),
             building: AtomicBool::new(false),
             needs_rebuild: AtomicBool::new(false),
         };
         store.replay_wal()?;
-        store.load_ivf()?;
+        store.load_index()?;
         Ok(store)
-    }
-
-    /// Supply the IVF configuration after open. Collections created since
-    /// format v2 persist their effective config, but the engine-provided
-    /// runtime configuration takes precedence. Applies both to future builds
-    /// and to any published index, so a rehydrated index immediately honors
-    /// the runtime config.
-    pub fn set_ivf_config(&self, config: IvfConfig) {
-        self.inner.write().ivf_config = Some(config.clone());
-        if let Some(index) = self.ivf.load().as_ref() {
-            index.set_config(config);
-        }
-    }
-    /// Rehydrate a persisted IVF index if present and consistent with the
-    /// live metadata; otherwise fall back to exact scan. Slots appended after
-    /// the build (WAL replay) land in `pending` so probe search still sees
-    /// them.
-    fn load_ivf(&self) -> Result<()> {
-        let Some(data) = persist::load(&self.dir)? else {
-            return Ok(());
-        };
-        let (dim, distance, next_slot, capacity) = {
-            let inner = self.inner.read();
-            (
-                inner.meta.vector_size,
-                inner.meta.distance,
-                inner.meta.next_slot,
-                inner.meta.slot_capacity as usize,
-            )
-        };
-        if !data.valid_for(dim, distance, next_slot) {
-            tracing::info!("vector index.bin inconsistent with meta; falling back to exact scan");
-            return Ok(());
-        }
-        let config = self.inner.read().ivf_config.clone().unwrap_or_default();
-        let covered = data.slot_list.len();
-        let index = Arc::new(IvfIndex::from_persisted(data, config));
-        {
-            let tombstones = self.tombstones.load();
-            let mut pending = self.pending.write();
-            for slot in covered..next_slot as usize {
-                if slot < capacity && !tombstones.bit(slot) {
-                    pending.push(slot as u32);
-                }
-            }
-        }
-        self.ivf.store(Arc::new(Some(index)));
-        Ok(())
     }
 
     pub fn dir(&self) -> &Path {
@@ -539,24 +421,8 @@ impl CollectionStore {
         self.vectors.write_slot(slot, &point.vector)?;
         self.payloads
             .append_payload(slot as usize, point.payload.as_ref())?;
-        self.register_slot(slot as u32, &point.vector);
+        self.register_slot(slot as u32, &point.vector, inner.meta.segment_slots);
         Ok(())
-    }
-
-    /// Route a freshly written slot into the published index (nearest list)
-    /// or, when no index is published but one is being built, into the
-    /// pending set so probe search never misses it.
-    fn register_slot(&self, slot: u32, vector: &[f32]) {
-        let ivf = self.ivf.load();
-        if let Some(index) = ivf.as_ref() {
-            index.assign_slot(slot, vector);
-            index.note_upsert();
-            return;
-        }
-        drop(ivf);
-        if self.building.load(AtomicOrdering::Relaxed) {
-            self.pending.write().push(slot);
-        }
     }
 
     fn apply_delete_locked(&self, inner: &mut StoreInner, point_id: &str) -> Result<()> {
@@ -634,592 +500,6 @@ impl CollectionStore {
     fn update_tombstone_bit(&self, slot: usize, value: bool) {
         let next = self.tombstones.load().with_slot(slot, value);
         self.tombstones.store(Arc::new(next));
-    }
-
-    /// Physically remove tombstoned slots and rebuild all files with compacted
-    /// slot numbering `0..live_count`.
-    ///
-    /// Runs under the store's write lock (blocking searches, acceptable for a
-    /// single-node deployment) and holds the `maintenance` mutex, so an index
-    /// build cannot run concurrently and observe torn slot numbers.
-    /// Procedure:
-    /// 1. write `vectors_tmp.bin`/`keys_tmp.bin`/`payloads_tmp.bin`;
-    /// 2. fsync each and rename over the live file (atomic swap);
-    /// 3. rebuild mmap snapshots, `reverse` map and tombstone bitmap;
-    /// 4. rewrite `meta.bin`;
-    /// 5. drop any published IVF index (slot numbers changed wholesale) and
-    ///    flag the engine maintenance worker for a rebuild;
-    /// 6. append a `Compact` checkpoint to the WAL and truncate it.
-    ///
-    /// Returns the number of live points after compaction.
-    pub fn compact(&self) -> Result<u64> {
-        let _guard = self.maintenance.lock();
-        let had_index = self.ivf.load().is_some();
-        let mut inner = self.inner.write();
-        if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
-            return Ok(inner.meta.live_count);
-        }
-        let dim = inner.meta.vector_size;
-        let segment_slots = inner.meta.segment_slots;
-
-        let tombstones = self.tombstones.load();
-        let (new_capacity, map) =
-            plan_slots(|s| !tombstones.bit(s), inner.meta.next_slot, segment_slots);
-        let live_count = map.iter().filter(|s| **s != u32::MAX).count() as u64;
-        drop(tombstones);
-
-        // 1. vectors.bin
-        let tmp_vectors = self.dir.join("vectors_tmp.bin");
-        {
-            let vsnap = self.vectors.snapshot();
-            write_vectors_file(&tmp_vectors, dim, segment_slots, new_capacity, &vsnap, &map)?;
-        }
-        self.vectors.replace_from(&tmp_vectors)?;
-
-        // 2. keys.bin
-        let tmp_keys = self.dir.join("keys_tmp.bin");
-        {
-            let keys_view = self.keys.snapshot();
-            let mut entries = Vec::with_capacity(live_count as usize);
-            for (old_slot, new_slot) in map.iter().enumerate() {
-                if *new_slot == u32::MAX {
-                    continue;
-                }
-                let key = Keys::read_key(&keys_view, old_slot)?.ok_or_else(|| {
-                    VectorSearchError::CorruptData(format!("live slot {old_slot} has no key"))
-                })?;
-                entries.push(DirEntry {
-                    slot: *new_slot,
-                    blob: key.into_bytes(),
-                    flags: 0,
-                });
-            }
-            write_dir_file(&tmp_keys, *b"VKEY", KEY_REC_SIZE, new_capacity, &entries)?;
-        }
-        self.keys.replace_from(&tmp_keys)?;
-
-        // 3. payloads.bin
-        let tmp_payloads = self.dir.join("payloads_tmp.bin");
-        {
-            let payloads_view = self.payloads.snapshot();
-            let mut entries = Vec::with_capacity(live_count as usize);
-            for (old_slot, new_slot) in map.iter().enumerate() {
-                if *new_slot == u32::MAX {
-                    continue;
-                }
-                let blob = match Payloads::read_payload(&payloads_view, old_slot)? {
-                    Some(p) => serde_json::to_vec(&p)?,
-                    None => Vec::new(),
-                };
-                entries.push(DirEntry {
-                    slot: *new_slot,
-                    blob,
-                    flags: 0,
-                });
-            }
-            write_dir_file(
-                &tmp_payloads,
-                *b"VPLD",
-                SLOT_REC_SIZE,
-                new_capacity,
-                &entries,
-            )?;
-        }
-        self.payloads.replace_from(&tmp_payloads)?;
-
-        // 4. in-memory rebuild + meta.bin
-        self.tombstones
-            .store(Arc::new(TombstoneBits::new(new_capacity as usize)));
-        inner.reverse.clear();
-        {
-            let keys_view = self.keys.snapshot();
-            for slot in 0..live_count as usize {
-                let key = Keys::read_key(&keys_view, slot)?.ok_or_else(|| {
-                    VectorSearchError::CorruptData(format!("live slot {slot} has no key"))
-                })?;
-                inner.reverse.insert(PointId::from(key), slot as u32);
-            }
-        }
-        inner.meta.slot_capacity = new_capacity;
-        inner.meta.next_slot = live_count;
-        inner.meta.live_count = live_count;
-        inner.meta.tombstone_count = 0;
-        inner.meta.save(&self.dir)?;
-
-        // 5. Invalidate the IVF index: slot numbering changed wholesale.
-        self.ivf.store(Arc::new(None));
-        self.pending.write().clear();
-        self.building.store(false, AtomicOrdering::Relaxed);
-        if had_index {
-            self.needs_rebuild.store(true, AtomicOrdering::Relaxed);
-        }
-        persist::discard(&self.dir.join("index.bin"));
-
-        // 6. WAL checkpoint + truncate
-        self.wal.append(&WalTxn {
-            txn_id: inner.meta.last_applied_txn,
-            ops: vec![WalRecord::Compact],
-        })?;
-        self.wal.truncate()?;
-
-        Ok(live_count)
-    }
-
-    // ---- IVF index lifecycle ----
-
-    /// Build and publish an IVF index from the current live set.
-    ///
-    /// Heavy work (sampling + k-means) runs off the store lock under the
-    /// `maintenance` mutex, so compaction cannot interleave and slot numbers
-    /// stay stable. Publication happens atomically under the store write
-    /// lock: slots appended during the build are adopted, pending slots are
-    /// drained, and only afterwards does the index become visible, so probe
-    /// search never misses a point.
-    ///
-    /// Returns whether a usable index is now published.
-    pub fn build_index(&self) -> Result<bool> {
-        let Some(config) = self.inner.read().ivf_config.clone() else {
-            return Ok(false);
-        };
-        let _guard = self.maintenance.lock();
-
-        let (dim, metric, segment_slots, snapshot_next_slot, name) = {
-            let inner = self.inner.read();
-            (
-                inner.meta.vector_size,
-                inner.meta.distance,
-                inner.meta.segment_slots,
-                inner.meta.next_slot,
-                inner.meta.collection.clone(),
-            )
-        };
-        let live: Vec<u32> = {
-            let tombstones = self.tombstones.load();
-            (0..snapshot_next_slot as u32)
-                .filter(|&s| !tombstones.bit(s as usize))
-                .collect()
-        };
-        if (live.len() as u64) < config.min_build_points.max(1) || live.is_empty() {
-            return Ok(false);
-        }
-
-        self.building.store(true, AtomicOrdering::Relaxed);
-        tracing::info!(
-            collection = %name,
-            points = live.len(),
-            "building IVF index"
-        );
-
-        let built = {
-            let vsnap = self.vectors.snapshot();
-            IvfIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots).map(Arc::new)
-        };
-
-        let index = match built {
-            Ok(index) => index,
-            Err(e) => {
-                self.building.store(false, AtomicOrdering::Relaxed);
-                tracing::warn!(collection = %name, error = %e, "IVF build failed");
-                return Err(e);
-            }
-        };
-
-        // Publish atomically with respect to writers: everything below holds
-        // the store write lock (acquired before the pending lock, matching
-        // `register_slot`'s order) so concurrent upserts either ran before
-        // (and their slots are adopted/drained here) or run after (and see
-        // the published index directly).
-        let persisted = {
-            let inner = self.inner.write();
-            let mut pending = self.pending.write();
-            let tombstones = self.tombstones.load();
-            let vsnap = self.vectors.snapshot();
-            index.adopt_range(
-                snapshot_next_slot as u32,
-                inner.meta.next_slot as u32,
-                &tombstones,
-                &vsnap,
-                segment_slots,
-            );
-            for slot in pending.drain(..) {
-                if !tombstones.bit(slot as usize) {
-                    if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
-                        index.assign_slot(slot, v);
-                    }
-                }
-            }
-            index.to_persisted()
-        };
-        // Publish before clearing the building flag: an upsert that loaded
-        // `ivf == None` and then observed `building == false` would record its
-        // slot nowhere and go missing from probe searches. With this order
-        // such an upsert still sees `building == true` and lands in `pending`,
-        // which every probe search scans unconditionally.
-        self.ivf.store(Arc::new(Some(index)));
-        self.building.store(false, AtomicOrdering::Relaxed);
-        self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
-
-        if let Err(e) = persist::save(&self.dir, &persisted) {
-            tracing::warn!(collection = %name, error = %e, "index.bin save failed");
-        }
-        tracing::info!(
-            collection = %name,
-            lists = persisted.lists,
-            "IVF index published"
-        );
-        Ok(true)
-    }
-
-    /// Drop the published index and return to exact scan.
-    pub fn drop_index(&self) -> Result<()> {
-        let _guard = self.maintenance.lock();
-        self.ivf.store(Arc::new(None));
-        self.pending.write().clear();
-        self.building.store(false, AtomicOrdering::Relaxed);
-        self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
-        persist::discard(&self.dir.join("index.bin"));
-        Ok(())
-    }
-
-    /// Whether an index is published.
-    pub fn has_index(&self) -> bool {
-        self.ivf.load().is_some()
-    }
-
-    /// Swap-and-reset the post-compaction rebuild flag.
-    pub(crate) fn take_needs_rebuild(&self) -> bool {
-        self.needs_rebuild.swap(false, AtomicOrdering::Relaxed)
-    }
-
-    pub(crate) fn ivf_config_opt(&self) -> Option<IvfConfig> {
-        self.inner.read().ivf_config.clone()
-    }
-
-    /// Measure the current drift ratio of the published index.
-    pub(crate) fn measure_drift(&self, index: &IvfIndex) -> f64 {
-        let (next_slot, segment_slots) = {
-            let inner = self.inner.read();
-            (inner.meta.next_slot as u32, inner.meta.segment_slots)
-        };
-        let samples = IvfIndex::sample_plan(index.config().sample_limit, next_slot);
-        if samples.is_empty() {
-            return 0.0;
-        }
-        let tombstones = self.tombstones.load();
-        let vsnap = self.vectors.snapshot();
-        index.drift_ratio(&samples, &tombstones, &vsnap, segment_slots)
-    }
-
-    /// Published index plus its configuration, for the maintenance worker.
-    pub(crate) fn ivf_state(&self) -> Option<(Arc<IvfIndex>, IvfConfig)> {
-        let published: Option<Arc<IvfIndex>> = self.ivf.load().as_ref().clone();
-        let index = published?;
-        let config = self.inner.read().ivf_config.clone()?;
-        Some((index, config))
-    }
-
-    pub(crate) fn record_drift(&self, ratio: f64) {
-        self.inner.write().last_drift_ratio = Some(ratio);
-    }
-
-    /// Current index state for [`CollectionInfo`](crate::types::CollectionInfo).
-    pub fn index_info(&self) -> Option<IndexInfo> {
-        let ivf = self.ivf.load();
-        match ivf.as_ref() {
-            Some(index) => {
-                let info = IndexInfo {
-                    index_kind: 1,
-                    lists: index.list_count() as u32,
-                    nprobe_default: index.default_nprobe(),
-                    built_at_live_count: index.built_at_live_count(),
-                    last_drift_ratio: self.inner.read().last_drift_ratio,
-                };
-                Some(info)
-            }
-            None => self.inner.read().ivf_config.as_ref().map(|_| IndexInfo {
-                index_kind: 0,
-                lists: 0,
-                nprobe_default: 0,
-                built_at_live_count: 0,
-                last_drift_ratio: None,
-            }),
-        }
-    }
-
-    /// Search: probe over the closest IVF lists when an index is
-    /// published, otherwise the exact full scan. Both paths share
-    /// identical post-processing (payload filter, score threshold, top-K,
-    /// offset/limit) through [`Self::finish_candidates`], so scores and
-    /// semantics are path-independent.
-    pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
-        // Take the metadata and all per-file views inside one read-lock
-        // acquisition so a concurrent background compaction (which swaps
-        // every file under the write lock) cannot produce a mixed-generation
-        // view. Only the atomic loads happen under the lock; the actual scan
-        // runs on immutable snapshots.
-        let (dim, metric, segment_slots, next_slot, tombstones, vsnap, keysnap, paysnap, ivf) = {
-            let inner = self.inner.read();
-            if query.vector.len() != inner.meta.vector_size {
-                return Err(VectorSearchError::InvalidVectorDimension {
-                    expected: inner.meta.vector_size,
-                    actual: query.vector.len(),
-                });
-            }
-            (
-                inner.meta.vector_size,
-                inner.meta.distance,
-                inner.meta.segment_slots,
-                inner.meta.next_slot,
-                self.tombstones.load(),
-                self.vectors.snapshot(),
-                self.keys.snapshot(),
-                self.payloads.snapshot(),
-                self.ivf.load(),
-            )
-        };
-        if let Some(index) = ivf.as_ref() {
-            let results = self.search_ivf(
-                index.as_ref(),
-                query,
-                dim,
-                metric,
-                segment_slots,
-                next_slot,
-                &tombstones,
-                &vsnap,
-                &keysnap,
-                &paysnap,
-            );
-            drop(ivf);
-            return results;
-        }
-        drop(ivf);
-
-        // 1. Parallel exact scan, skipping tombstones.
-        let candidates: Vec<(f32, u32)> = (0..next_slot as u32)
-            .into_par_iter()
-            .filter(|s| !tombstones.bit(*s as usize))
-            .map(|s| {
-                let v =
-                    Vectors::read_slot(&vsnap, s as u64, segment_slots, dim).ok_or_else(|| {
-                        VectorSearchError::CorruptData(format!("slot {s} out of vectors.bin range"))
-                    })?;
-                let dist = crate::distance::distance(metric, &query.vector, v);
-                Ok((crate::distance::to_score(metric, dist), s))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        self.finish_candidates(
-            candidates,
-            query,
-            &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones: &tombstones,
-                vsnap: &vsnap,
-                keysnap: &keysnap,
-                paysnap: &paysnap,
-            },
-        )
-    }
-
-    /// IVF path: probe the `nprobe` closest lists (+ pending slots), then
-    /// shared post-processing. With a payload filter that leaves fewer than
-    /// `limit` results while unprobed lists remain, nprobe is doubled once as
-    /// a bounded accuracy fallback; beyond that the approximate semantics of
-    /// IVFFlat apply (`nprobe = lists` degenerates to exact).
-    #[allow(clippy::too_many_arguments)]
-    fn search_ivf(
-        &self,
-        index: &IvfIndex,
-        query: &SearchQuery,
-        dim: usize,
-        metric: DistanceMetric,
-        segment_slots: u32,
-        next_slot: u64,
-        tombstones: &TombstoneBits,
-        vsnap: &[Arc<memmap2::Mmap>],
-        keysnap: &DirView,
-        paysnap: &DirView,
-    ) -> Result<Vec<SearchResult>> {
-        let _ = (metric, next_slot);
-        let lists = index.list_count();
-        let mut nprobe = index.clamp_nprobe(query.nprobe);
-        let pending = self.pending.read().clone();
-
-        let candidates = index.probe_candidates(
-            &query.vector,
-            nprobe,
-            &pending,
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
-        let results = self.finish_candidates(
-            candidates,
-            query,
-            &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones,
-                vsnap,
-                keysnap,
-                paysnap,
-            },
-        )?;
-
-        let short = query.filter.is_some() && results.len() < query.limit;
-        if !short || nprobe >= lists {
-            return Ok(results);
-        }
-        // Single controlled retry with a doubled probe width.
-        nprobe = (nprobe * 2).min(lists);
-        let candidates = index.probe_candidates(
-            &query.vector,
-            nprobe,
-            &pending,
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
-        self.finish_candidates(
-            candidates,
-            query,
-            &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones,
-                vsnap,
-                keysnap,
-                paysnap,
-            },
-        )
-    }
-
-    /// Shared post-processing for both search paths: payload post-filter,
-    /// score threshold, top-K heap selection and result assembly.
-    fn finish_candidates(
-        &self,
-        mut candidates: Vec<(f32, u32)>,
-        query: &SearchQuery,
-        snap: &SearchSnapshot,
-    ) -> Result<Vec<SearchResult>> {
-        let SearchSnapshot {
-            dim,
-            segment_slots,
-            tombstones,
-            vsnap,
-            keysnap,
-            paysnap,
-        } = snap;
-        let _ = tombstones;
-        // 2. Post-filter on payload, against the snapshots taken by the
-        // caller (one compaction generation).
-        if let Some(filter) = &query.filter {
-            let mut kept = Vec::with_capacity(candidates.len());
-            for (score, slot) in candidates {
-                let key = Keys::read_key(keysnap, slot as usize)?.ok_or_else(|| {
-                    VectorSearchError::CorruptData(format!("slot {slot} has no key"))
-                })?;
-                let id = PointId::from(key);
-                let payload = Payloads::read_payload(paysnap, slot as usize)?;
-                if crate::filter::matches(filter, &id, payload.as_ref())? {
-                    kept.push((score, slot));
-                }
-            }
-            candidates = kept;
-        }
-
-        // 3. Score threshold (lower bound on the output score).
-        if let Some(threshold) = query.score_threshold {
-            candidates.retain(|(score, _)| *score >= threshold);
-        }
-
-        // 4. Top-K by score (K = offset + limit), then sort descending.
-        let k = query.offset.unwrap_or(0).saturating_add(query.limit);
-        let top: Vec<(f32, u32)> = if candidates.len() <= k {
-            candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-            candidates
-        } else {
-            let mut heap: BinaryHeap<std::cmp::Reverse<ScoredSlot>> = BinaryHeap::new();
-            for (score, slot) in candidates {
-                let s = ScoredSlot { score, slot };
-                if heap.len() < k {
-                    heap.push(std::cmp::Reverse(s));
-                } else if heap.peek().is_some_and(|top| s > top.0) {
-                    heap.pop();
-                    heap.push(std::cmp::Reverse(s));
-                }
-            }
-            let mut v: Vec<(f32, u32)> = heap
-                .into_iter()
-                .map(|std::cmp::Reverse(s)| (s.score, s.slot))
-                .collect();
-            v.sort_by(|a, b| b.0.total_cmp(&a.0));
-            v
-        };
-
-        // 5. Assemble results against the same snapshots the scan used.
-        let with_payload = query
-            .with_payload
-            .unwrap_or(crate::types::DEFAULT_WITH_PAYLOAD);
-        let with_vector = query.with_vector.unwrap_or(false);
-        let mut results = Vec::new();
-        for (score, slot) in top
-            .into_iter()
-            .skip(query.offset.unwrap_or(0))
-            .take(query.limit)
-        {
-            let key = Keys::read_key(keysnap, slot as usize)?
-                .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
-            let mut result = SearchResult::new(PointId::from(key), score);
-            if with_payload {
-                if let Some(payload) = Payloads::read_payload(paysnap, slot as usize)? {
-                    result = result.with_payload(payload);
-                }
-            }
-            if with_vector {
-                let v = Vectors::read_slot(vsnap, slot as u64, *segment_slots, *dim).ok_or_else(
-                    || {
-                        VectorSearchError::CorruptData(format!(
-                            "slot {slot} out of vectors.bin range"
-                        ))
-                    },
-                )?;
-                result = result.with_vector(v.to_vec());
-            }
-            results.push(result);
-        }
-        Ok(results)
-    }
-}
-
-/// A (score, slot) pair ordered by score for the top-K heap.
-#[derive(Clone, Copy, Debug)]
-struct ScoredSlot {
-    score: f32,
-    slot: u32,
-}
-
-impl PartialEq for ScoredSlot {
-    fn eq(&self, other: &Self) -> bool {
-        self.score.to_bits() == other.score.to_bits() && self.slot == other.slot
-    }
-}
-
-impl Eq for ScoredSlot {}
-
-impl PartialOrd for ScoredSlot {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ScoredSlot {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.score
-            .total_cmp(&other.score)
-            .then(self.slot.cmp(&other.slot))
     }
 }
 

@@ -219,6 +219,11 @@ impl<
                 None => {
                     let engine = vector_search::LocalVectorEngine::open(config.vector_data_dir())
                         .unwrap_or_else(|_| panic!("Failed to open local vector engine"));
+                    if let Some(hnsw) =
+                        graphdb_api::local_hnsw_config(&config.vector_config().local)
+                    {
+                        engine.set_default_hnsw_config(hnsw);
+                    }
                     if let Some(ivf) = graphdb_api::local_ivf_config(&config.vector_config().local)
                     {
                         engine.set_default_ivf_config(ivf);

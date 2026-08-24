@@ -107,6 +107,7 @@ impl VectorApi {
                         max_indexing_threads: None,
                         on_disk: None,
                         payload_m: Some(16),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 }

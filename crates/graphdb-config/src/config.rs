@@ -202,6 +202,48 @@ fn default_ivf_nprobe() -> usize {
     8
 }
 
+/// HNSW settings for the local vector engine (raw TOML surface).
+///
+/// The values mirror `vector_search::HnswConfig`; the conversion lives in
+/// graphdb-api so that graphdb-config stays free of vector-search types.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct HnswSettings {
+    /// Number of bidirectional links per layer above the ground layer
+    /// (the ground layer uses `2 * m`).
+    #[serde(default = "default_hnsw_m")]
+    pub m: usize,
+    /// Size of the dynamic candidate list during graph construction.
+    #[serde(default = "default_hnsw_ef_construct")]
+    pub ef_construct: usize,
+    /// Live points below which a collection stays on exact scan; `0` =
+    /// engine default.
+    #[serde(default)]
+    pub full_scan_threshold: usize,
+    /// Default search-list size at query time (`ef_search`); `0` = engine
+    /// default. Per-query `SearchMode::KNN.ef_search` overrides it.
+    #[serde(default)]
+    pub ef_search: usize,
+}
+
+impl Default for HnswSettings {
+    fn default() -> Self {
+        Self {
+            m: 16,
+            ef_construct: 100,
+            full_scan_threshold: 0,
+            ef_search: 0,
+        }
+    }
+}
+
+fn default_hnsw_m() -> usize {
+    16
+}
+
+fn default_hnsw_ef_construct() -> usize {
+    100
+}
+
 /// Local vector engine configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LocalVectorConfig {
@@ -209,7 +251,10 @@ pub struct LocalVectorConfig {
     /// `<database.storage_path>/vector`.
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
-    /// IVF settings (local engine only).
+    /// HNSW settings (local engine only). This is the default ANN tier.
+    #[serde(default)]
+    pub hnsw: Option<HnswSettings>,
+    /// IVF settings (local engine only, opt-in alternative tier).
     #[serde(default)]
     pub ivf: Option<IvfSettings>,
 }

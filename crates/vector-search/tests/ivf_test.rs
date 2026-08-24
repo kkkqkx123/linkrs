@@ -143,8 +143,8 @@ fn restart_applies_runtime_config_to_published_index() {
 
     let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
     assert!(reopened.has_index("col"));
-    // Since meta.bin format v2 the effective creation-time config is
-    // persisted, so the rehydrated index restores `ivf_config()`
+    // The effective creation-time config is persisted in meta.bin, so the
+    // rehydrated index restores `ivf_config()`
     // (`default_nprobe = 2`) instead of falling back to `IvfConfig::default()`.
     assert_eq!(
         reopened

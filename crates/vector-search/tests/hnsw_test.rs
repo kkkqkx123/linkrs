@@ -1,0 +1,280 @@
+//! HNSW index integration tests: build/publish lifecycle, incremental
+//! insert visibility, crash recovery fallback and promotion semantics.
+
+use std::sync::Arc;
+
+use vector_search::{
+    CollectionConfig, DistanceMetric, FilterCondition, HnswConfig, LocalVectorEngine, SearchMode,
+    SearchQuery, VectorFilter, VectorPoint,
+};
+
+const DIM: usize = 8;
+
+fn hnsw_config() -> HnswConfig {
+    HnswConfig {
+        m: 8,
+        ef_construct: 64,
+        ef_search: 32,
+        ..HnswConfig::default()
+    }
+}
+
+/// Two well-separated blobs tagged by payload `blob` = "0"/"1".
+fn blob_point(id: usize, dim_values: [f32; DIM], tag: &str) -> VectorPoint {
+    let mut payload = std::collections::HashMap::new();
+    payload.insert("blob".to_string(), serde_json::json!(tag));
+    VectorPoint::new(format!("p{id}"), dim_values.to_vec()).with_payload(payload)
+}
+
+fn clustered_points(n_per_blob: usize) -> Vec<VectorPoint> {
+    let mut out = Vec::new();
+    let mut id = 0usize;
+    for center in [[0.0f32; DIM], [50.0; DIM]] {
+        let tag = if center[0] == 0.0 { "0" } else { "1" };
+        for i in 0..n_per_blob {
+            let mut v = center;
+            // Keep every coordinate strictly unique: the extra epsilon term
+            // breaks the (i % 7, i % 8) aliasing so exact-scan and ANN
+            // results never disagree on tied distances.
+            v[i % DIM] += (i % 7) as f32 * 0.1 + i as f32 * 0.003;
+            out.push(blob_point(id, v, tag));
+            id += 1;
+        }
+    }
+    out
+}
+
+fn engine_with_hnsw(path: &std::path::Path, n_per_blob: usize) -> LocalVectorEngine {
+    let engine = LocalVectorEngine::open(path).unwrap();
+    engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid)
+                .with_index_type(vector_search::IndexType::HNSW)
+                .with_hnsw(hnsw_config()),
+        )
+        .unwrap();
+    let points = clustered_points(n_per_blob);
+    engine.upsert_batch("col", &points).unwrap();
+    engine
+}
+
+#[test]
+fn publish_search_drop_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let engine = engine_with_hnsw(&dir.path().join("vec"), 40);
+
+        assert!(!engine.has_index("col"));
+        assert!(engine.build_index("col").unwrap());
+        assert!(engine.has_index("col"));
+
+        // Indexed results must match exact-scan ground truth on clean
+        // clusters.
+        let query = vec![1.0; DIM];
+        let indexed = engine
+            .search(
+                "col",
+                &SearchQuery::new(query.clone(), 5).with_knn(5, Some(64)),
+            )
+            .unwrap();
+
+        let info = engine.collection_info("col").unwrap();
+        let index = info.index.expect("index info present");
+        assert_eq!(index.index_kind, 2);
+        assert_eq!(index.m, 8);
+        assert_eq!(index.ef_construct, 64);
+
+        // Filtered search across the whole collection still returns rows.
+        let filter = VectorFilter::new().must(FilterCondition::match_value("blob", "1"));
+        let filtered = engine
+            .search(
+                "col",
+                &SearchQuery::new(vec![50.0; DIM], 3)
+                    .with_filter(filter)
+                    .with_knn(3, Some(64)),
+            )
+            .unwrap();
+        assert!(!filtered.is_empty());
+        assert!(filtered.iter().all(|r| r.id.to_string() != "p0"));
+
+        // Drop back to exact scan.
+        engine.drop_index("col").unwrap();
+        assert!(!engine.has_index("col"));
+        let exact = engine
+            .search("col", &SearchQuery::new(query.clone(), 5))
+            .unwrap();
+        assert_eq!(
+            exact.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            indexed.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+            "hnsw results equal exact scan on separated blobs"
+        );
+    }
+
+    // Reopen: index files were dropped together with drop_index.
+    let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+    assert!(!reopened.has_index("col"));
+    assert_eq!(reopened.count("col").unwrap(), 80);
+}
+
+#[test]
+fn index_persists_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let engine = engine_with_hnsw(&dir.path().join("vec"), 30);
+        assert!(engine.build_index("col").unwrap());
+    }
+    let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+    assert!(
+        reopened.has_index("col"),
+        "published index must survive restart via hnsw.bin"
+    );
+    let info = reopened.collection_info("col").unwrap();
+    let index = info.index.unwrap();
+    assert_eq!(index.index_kind, 2);
+    // The effective config is persisted in meta.bin, so the rehydrated
+    // graph keeps its search-time default instead of the crate default.
+    assert_eq!(index.ef_search_default, 32);
+}
+
+#[test]
+fn incremental_inserts_stay_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Arc::new(engine_with_hnsw(&dir.path().join("vec"), 30));
+    assert!(engine.build_index("col").unwrap());
+
+    // Points appended to the published graph must be reachable through
+    // approximate search immediately (incremental insert path). Every late
+    // vector is unique, so the exact zero-distance hit identifies it.
+    for i in 0..20u64 {
+        let mut v = [50.0f32; DIM];
+        v[(i as usize) % DIM] -= i as f32 * 0.13 + 0.01;
+        engine
+            .upsert("col", VectorPoint::new(format!("late{i}"), v.to_vec()))
+            .unwrap();
+        let hits = engine
+            .search(
+                "col",
+                &SearchQuery::new(v.to_vec(), 1).with_knn(1, Some(48)),
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1, "no result for late point {i}");
+        assert_eq!(
+            hits[0].id.to_string(),
+            format!("late{i}"),
+            "fresh point must be its own nearest neighbor"
+        );
+    }
+}
+
+#[test]
+fn deleted_points_are_never_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_with_hnsw(&dir.path().join("vec"), 30);
+    assert!(engine.build_index("col").unwrap());
+
+    // Delete one blob-1 member; queries near blob 1 must not surface it,
+    // even though the node stays in the graph for navigation.
+    engine.delete("col", "p40").unwrap();
+    let hits = engine
+        .search(
+            "col",
+            &SearchQuery::new(vec![50.0; DIM], 80).with_knn(80, Some(128)),
+        )
+        .unwrap();
+    assert!(!hits.is_empty());
+    assert!(
+        hits.iter().all(|r| r.id.to_string() != "p40"),
+        "tombstoned point must not be returned"
+    );
+
+    // Compaction renumbers slots wholesale and flags a rebuild; the
+    // maintenance sweep must restore a published index afterwards.
+    engine.compact_collection("col").unwrap();
+    assert!(!engine.has_index("col"));
+    engine.run_maintenance_sweep();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !engine.has_index("col") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        engine.run_maintenance_sweep();
+    }
+    assert!(engine.has_index("col"), "post-compaction rebuild ran");
+}
+
+#[test]
+fn promotion_after_full_scan_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+    // Small threshold so promotion triggers without a large fixture.
+    let cfg = HnswConfig {
+        full_scan_threshold: Some(10),
+        ..HnswConfig::default()
+    };
+    engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid)
+                .with_index_type(vector_search::IndexType::HNSW)
+                .with_hnsw(cfg),
+        )
+        .unwrap();
+
+    let points: Vec<VectorPoint> = (0..25u64)
+        .map(|i| VectorPoint::new(i, vec![(i % 7) as f32; DIM]))
+        .collect();
+    engine.upsert_batch("col", &points).unwrap();
+    assert!(!engine.has_index("col"));
+
+    // The idle-tick sweep normally drives this; invoke it directly so the
+    // test does not depend on wall-clock timing.
+    engine.run_maintenance_sweep();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !engine.has_index("col") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        engine.has_index("col"),
+        "collection above full_scan_threshold must auto-promote"
+    );
+
+    let info = engine.collection_info("col").unwrap();
+    assert_eq!(info.index.unwrap().index_kind, 2);
+}
+
+#[test]
+fn knn_mode_controls_recall_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_with_hnsw(&dir.path().join("vec"), 40);
+    assert!(engine.build_index("col").unwrap());
+
+    let q = vec![50.0; DIM];
+    let narrow = engine
+        .search(
+            "col",
+            &SearchQuery::new(q.clone(), 5).with_search_mode(SearchMode::KNN {
+                k: 5,
+                ef_search: Some(1),
+            }),
+        )
+        .unwrap();
+    let wide = engine
+        .search(
+            "col",
+            &SearchQuery::new(q.clone(), 5).with_search_mode(SearchMode::KNN {
+                k: 5,
+                ef_search: Some(256),
+            }),
+        )
+        .unwrap();
+
+    assert!(!narrow.is_empty());
+    assert!(!wide.is_empty());
+    // Wider exploration can only improve the best found score; with ef >= N
+    // the search degenerates to exact scan on this metric.
+    assert!(
+        wide[0].score >= narrow[0].score,
+        "wider ef must not degrade the best hit: {} < {}",
+        wide[0].score,
+        narrow[0].score
+    );
+}

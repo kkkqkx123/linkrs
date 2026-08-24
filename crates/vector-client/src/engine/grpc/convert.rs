@@ -434,6 +434,7 @@ fn hnsw_config_from_proto(diff: Option<&proto::HnswConfigDiff>) -> Option<HnswCo
         max_indexing_threads: hnsw.max_indexing_threads.map(|v| v as usize),
         on_disk: hnsw.on_disk,
         payload_m: hnsw.payload_m.map(|v| v as usize),
+        ..HnswConfig::default()
     })
 }
 

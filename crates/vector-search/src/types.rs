@@ -90,6 +90,15 @@ pub struct HnswConfig {
     pub max_indexing_threads: Option<usize>,
     pub on_disk: Option<bool>,
     pub payload_m: Option<usize>,
+    /// Default `ef` for layer-0 graph search when a query leaves
+    /// `SearchMode::KNN.ef_search` unset. Local engine only; remote backends
+    /// apply their server-side default.
+    #[serde(default = "default_hnsw_ef_search")]
+    pub ef_search: usize,
+}
+
+fn default_hnsw_ef_search() -> usize {
+    40
 }
 
 impl Default for HnswConfig {
@@ -101,6 +110,7 @@ impl Default for HnswConfig {
             max_indexing_threads: None,
             on_disk: None,
             payload_m: None,
+            ef_search: 40,
         }
     }
 }
@@ -110,10 +120,7 @@ impl HnswConfig {
         Self {
             m,
             ef_construct,
-            full_scan_threshold: None,
-            max_indexing_threads: None,
-            on_disk: None,
-            payload_m: None,
+            ..Self::default()
         }
     }
 
@@ -136,13 +143,26 @@ impl HnswConfig {
         self.payload_m = Some(payload_m);
         self
     }
+
+    pub fn with_ef_search(mut self, ef_search: usize) -> Self {
+        self.ef_search = ef_search;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum IndexType {
+    /// Default local ANN tier. Mirrors Qdrant's primary index so the local
+    /// engine and remote backends expose the same knobs (`m`,
+    /// `ef_construct`, per-query `ef_search`) and comparable behavior.
     #[default]
     HNSW,
+    /// Exact scan only; no ANN structure is built or consulted.
     FLAT,
+    /// IVFFlat alternative tier. Kept as an explicit opt-in; clustering
+    /// semantics need bulk training and rebuild maintenance that suit
+    /// large batch-oriented collections better than OLTP workloads.
+    IVF,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +333,7 @@ impl CollectionConfig {
     }
 
     pub fn with_ivf(mut self, ivf_config: IvfConfig) -> Self {
+        self.index_type = Some(IndexType::IVF);
         self.ivf_config = Some(ivf_config);
         self
     }
@@ -351,13 +372,25 @@ impl Default for CollectionConfig {
 }
 
 /// Index state exposed through [`CollectionInfo`].
+///
+/// Kind-agnostic: IVF reports list/nprobe fields, HNSW reports graph
+/// parameters; fields that do not apply to the active kind stay zeroed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexInfo {
-    /// 0 = exact scan, 1 = IVFFlat.
+    /// 0 = exact scan, 1 = IVFFlat, 2 = HNSW.
     pub index_kind: u8,
+    /// IVF only: number of clusters.
     pub lists: u32,
+    /// IVF only: default nprobe.
     pub nprobe_default: usize,
+    /// HNSW only: maximum connections per layer (> 0).
+    pub m: usize,
+    /// HNSW only: build-time candidate list size.
+    pub ef_construct: usize,
+    /// HNSW only: default layer-0 search width.
+    pub ef_search_default: usize,
     pub built_at_live_count: u64,
+    /// IVF only: last measured cluster drift ratio.
     pub last_drift_ratio: Option<f64>,
 }
 
@@ -891,9 +924,9 @@ pub struct SearchQuery {
     pub filter: Option<VectorFilter>,
     pub with_payload: Option<bool>,
     pub with_vector: Option<bool>,
-    /// Number of IVF cells probed per search. Only the local engine's IVF
-    /// tier consumes this; remote HNSW backends ignore it. For HNSW recall
-    /// control use `SearchMode::KNN.ef_search` instead.
+    /// Number of IVF cells probed per search. Consumed only when the local
+    /// engine published an IVF index; HNSW and remote backends ignore it.
+    /// For HNSW recall control use `SearchMode::KNN.ef_search` instead.
     pub nprobe: Option<usize>,
     pub search_mode: Option<SearchMode>,
 }

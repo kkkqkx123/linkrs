@@ -42,6 +42,26 @@ pub mod vector_config {
             auto_promotion: s.auto_promotion,
         })
     }
+
+    /// Map raw TOML HNSW settings to the local engine's HNSW configuration.
+    /// `0` leaves a field at the engine default.
+    pub fn local_hnsw_config(local: &LocalVectorConfig) -> Option<vector_search::HnswConfig> {
+        let s = local.hnsw.as_ref()?;
+        let mut config = vector_search::HnswConfig::default();
+        if s.m > 0 {
+            config.m = s.m;
+        }
+        if s.ef_construct > 0 {
+            config.ef_construct = s.ef_construct;
+        }
+        if s.full_scan_threshold > 0 {
+            config.full_scan_threshold = Some(s.full_scan_threshold);
+        }
+        if s.ef_search > 0 {
+            config.ef_search = s.ef_search;
+        }
+        Some(config)
+    }
 }
 
 #[cfg(feature = "embedded")]

@@ -15,9 +15,16 @@ use crate::error::{Result, VectorSearchError};
 use crate::types::DistanceMetric;
 
 pub(crate) const INDEX_MAGIC: [u8; 4] = *b"VIVF";
-/// v2: added `baseline_mean_dist` (drift baseline).
-pub(crate) const INDEX_VERSION: u16 = 2;
+/// Development stage: locked at 1, no backward compatibility (see the
+/// `FORMAT_VERSION` note in `storage::meta` for the policy).
+pub(crate) const INDEX_VERSION: u16 = 1;
 const INDEX_TMP: &str = "index_tmp.bin";
+
+const HNSW_FILE: &str = "hnsw.bin";
+const HNSW_MAGIC: [u8; 4] = *b"VHSW";
+/// Same dev-stage policy as `INDEX_VERSION`.
+const HNSW_VERSION: u16 = 1;
+const HNSW_TMP: &str = "hnsw_tmp.bin";
 
 /// The persisted subset of the IVF index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,16 +69,8 @@ impl PersistedIvf {
 
 /// Write `data` to `<dir>/index.bin` atomically (temp file + fsync + rename).
 pub(crate) fn save(dir: &Path, data: &PersistedIvf) -> Result<()> {
-    let bytes = postcard::to_stdvec(data)?;
-    let tmp = dir.join(INDEX_TMP);
-    {
-        let mut file = File::create(&tmp)?;
-        file.write_all(&INDEX_MAGIC)?;
-        file.write_all(&INDEX_VERSION.to_le_bytes())?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&tmp, dir.join("index.bin"))?;
+    write_tagged(&dir.join(INDEX_TMP), &INDEX_MAGIC, INDEX_VERSION, data)?;
+    std::fs::rename(dir.join(INDEX_TMP), dir.join("index.bin"))?;
     Ok(())
 }
 
@@ -86,20 +85,7 @@ pub(crate) fn load(dir: &Path) -> Result<Option<PersistedIvf>> {
         Err(e) => return Err(e.into()),
     };
 
-    let parsed = (|| -> Result<PersistedIvf> {
-        if bytes.len() < 6 || bytes[..4] != INDEX_MAGIC {
-            return Err(VectorSearchError::CorruptData(
-                "index.bin bad magic".to_string(),
-            ));
-        }
-        let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != INDEX_VERSION {
-            return Err(VectorSearchError::CorruptData(format!(
-                "index.bin unsupported version {version}"
-            )));
-        }
-        Ok(postcard::from_bytes(&bytes[6..])?)
-    })();
+    let parsed = read_tagged::<PersistedIvf>(&bytes, &INDEX_MAGIC, INDEX_VERSION);
 
     match parsed {
         // Any malformed content is treated as absent: the index is a derived
@@ -114,6 +100,125 @@ pub(crate) fn load(dir: &Path) -> Result<Option<PersistedIvf>> {
 
 pub(crate) fn discard(path: &Path) {
     let _ = std::fs::remove_file(path);
+}
+
+/// One persisted HNSW node: slot plus its per-layer adjacency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PersistedNodeRecord {
+    pub slot: u32,
+    pub level: u8,
+    /// Adjacency for layers `0..=level`; outer index = layer.
+    pub neighbors: Vec<Vec<u32>>,
+}
+
+/// The persisted subset of the HNSW index (`hnsw.bin`).
+///
+/// Like the IVF state this is a *derived* structure: any validation failure
+/// on load discards the file and falls back to exact scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PersistedHnsw {
+    pub dim: usize,
+    pub distance: DistanceMetric,
+    pub m: usize,
+    pub ef_construct: usize,
+    pub ef_search: usize,
+    /// `(slot, level)` of the graph entry point; `None` = empty graph.
+    pub entry: Option<(u32, i32)>,
+    pub built_at_live_count: u64,
+    /// Dense from slot 0 (compaction renumbers live slots densely and the
+    /// insert path appends in ascending order).
+    pub nodes: Vec<PersistedNodeRecord>,
+}
+
+impl PersistedHnsw {
+    /// Structural self-check independent of collection state.
+    pub(crate) fn structurally_valid(&self) -> bool {
+        if self.dim == 0 || self.m < 2 || self.ef_construct == 0 || self.ef_search == 0 {
+            return false;
+        }
+        let slots: std::collections::HashSet<u32> = self.nodes.iter().map(|n| n.slot).collect();
+        self.nodes.iter().all(|n| {
+            n.neighbors.len() == n.level as usize + 1
+                && n.neighbors.iter().enumerate().all(|(lc, list)| {
+                    let cap = if lc == 0 { self.m * 2 } else { self.m };
+                    list.len() <= cap && list.iter().all(|&s| slots.contains(&s))
+                })
+        }) && match self.entry {
+            None => true,
+            Some((slot, level)) => self
+                .nodes
+                .iter()
+                .any(|n| n.slot == slot && n.level as i32 == level),
+        }
+    }
+
+    /// Check against the live collection metadata on open. Nodes are dense
+    /// from slot 0, so every recorded slot must sit below `next_slot`.
+    pub(crate) fn valid_for(&self, dim: usize, distance: DistanceMetric, next_slot: u64) -> bool {
+        self.structurally_valid()
+            && self.dim == dim
+            && self.distance == distance
+            && self.nodes.iter().all(|n| (n.slot as u64) < next_slot)
+    }
+}
+
+/// Write `data` to `<dir>/hnsw.bin` atomically (temp file + fsync + rename).
+pub(crate) fn save_hnsw(dir: &Path, data: &PersistedHnsw) -> Result<()> {
+    write_tagged(&dir.join(HNSW_TMP), &HNSW_MAGIC, HNSW_VERSION, data)?;
+    std::fs::rename(dir.join(HNSW_TMP), dir.join(HNSW_FILE))?;
+    Ok(())
+}
+
+/// Load `<dir>/hnsw.bin`. Same contract as [`load`]: absent or invalid means
+/// `Ok(None)` with the file removed so the next save starts clean.
+pub(crate) fn load_hnsw(dir: &Path) -> Result<Option<PersistedHnsw>> {
+    let path = dir.join(HNSW_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    let parsed = read_tagged::<PersistedHnsw>(&bytes, &HNSW_MAGIC, HNSW_VERSION);
+    match parsed {
+        Ok(data) if data.structurally_valid() => Ok(Some(data)),
+        _ => {
+            discard(&path);
+            Ok(None)
+        }
+    }
+}
+
+fn write_tagged<T: serde::Serialize>(
+    path: &Path,
+    magic: &[u8; 4],
+    version: u16,
+    data: &T,
+) -> Result<()> {
+    let bytes = postcard::to_stdvec(data)?;
+    let mut file = File::create(path)?;
+    file.write_all(magic)?;
+    file.write_all(&version.to_le_bytes())?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn read_tagged<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    magic: &[u8; 4],
+    version: u16,
+) -> Result<T> {
+    if bytes.len() < 6 || &bytes[..4] != magic {
+        return Err(VectorSearchError::CorruptData("bad magic".to_string()));
+    }
+    let stored = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if stored != version {
+        return Err(VectorSearchError::CorruptData(format!(
+            "unsupported version {stored}"
+        )));
+    }
+    Ok(postcard::from_bytes(&bytes[6..])?)
 }
 
 #[cfg(test)]

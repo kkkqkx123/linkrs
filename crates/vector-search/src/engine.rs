@@ -21,8 +21,8 @@ use parking_lot::{Mutex, RwLock};
 use crate::error::{Result, VectorSearchError};
 use crate::storage::{CollectionStore, WalPoint, WalRecord, WalTxn};
 use crate::types::{
-    CollectionConfig, CollectionInfo, CollectionStatus, IvfConfig, PointId, SearchQuery,
-    SearchResult, VectorFilter, VectorPoint,
+    CollectionConfig, CollectionInfo, CollectionStatus, HnswConfig, IndexType, IvfConfig, PointId,
+    SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 /// A single operation of a coordinated transaction, grouped per collection.
@@ -54,6 +54,11 @@ enum MaintenanceJob {
 /// How often the idle maintenance worker runs drift / promotion sweeps.
 const MAINTENANCE_TICK: Duration = Duration::from_secs(30);
 
+/// Default live-point threshold above which HNSW collections are promoted
+/// from exact scan to the published graph (Qdrant's `full_scan_threshold`
+/// default) when the config leaves it unset.
+const HNSW_PROMOTION_DEFAULT: usize = 10_000;
+
 /// The built-in (local) vector engine.
 ///
 /// All operations are synchronous; the graphdb-sync coordinator serializes
@@ -66,8 +71,10 @@ const MAINTENANCE_TICK: Duration = Duration::from_secs(30);
 pub struct LocalVectorEngine {
     root_dir: PathBuf,
     collections: Arc<RwLock<HashMap<String, Arc<CollectionStore>>>>,
-    /// Applied to collections created without an explicit IVF config.
+    /// Applied to IVF collections created without an explicit IVF config.
     default_ivf: RwLock<Option<IvfConfig>>,
+    /// Applied to HNSW collections created without an explicit HNSW config.
+    default_hnsw: RwLock<Option<HnswConfig>>,
     jobs: Option<Sender<MaintenanceJob>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     /// Collections with a build already queued or running.
@@ -144,6 +151,7 @@ impl LocalVectorEngine {
             root_dir,
             collections,
             default_ivf: RwLock::new(None),
+            default_hnsw: RwLock::new(None),
             jobs: Some(tx),
             worker: Mutex::new(Some(handle)),
             in_flight,
@@ -166,10 +174,24 @@ impl LocalVectorEngine {
     /// [`VectorSearchError::CollectionAlreadyExists`] if it already exists.
     pub fn create_collection(&self, name: &str, config: &CollectionConfig) -> Result<()> {
         let mut effective = config.clone();
-        if effective.ivf_config.is_none() {
-            if let Some(default) = &*self.default_ivf.read() {
-                effective.ivf_config = Some(default.clone());
+        match effective.index_type.unwrap_or(IndexType::HNSW) {
+            IndexType::HNSW => {
+                if effective.hnsw_config.is_none() {
+                    if let Some(default) = &*self.default_hnsw.read() {
+                        effective.hnsw_config = Some(default.clone());
+                    }
+                }
+                effective.ivf_config = None;
             }
+            IndexType::IVF => {
+                if effective.ivf_config.is_none() {
+                    if let Some(default) = &*self.default_ivf.read() {
+                        effective.ivf_config = Some(default.clone());
+                    }
+                }
+                effective.hnsw_config = None;
+            }
+            IndexType::FLAT => {}
         }
         let dir = self.root_dir.join(name);
         let store = Arc::new(CollectionStore::create(&dir, name, &effective)?);
@@ -177,11 +199,19 @@ impl LocalVectorEngine {
         Ok(())
     }
 
-    /// Default IVF configuration for collections created without one.
+    /// Default IVF configuration for IVF collections created without one.
     pub fn set_default_ivf_config(&self, config: IvfConfig) {
         *self.default_ivf.write() = Some(config.clone());
         for store in self.collections.read().values() {
             store.set_ivf_config(config.clone());
+        }
+    }
+
+    /// Default HNSW configuration for HNSW collections created without one.
+    pub fn set_default_hnsw_config(&self, config: HnswConfig) {
+        *self.default_hnsw.write() = Some(config.clone());
+        for store in self.collections.read().values() {
+            let _ = store.set_hnsw_config(config.clone());
         }
     }
 
@@ -229,14 +259,16 @@ impl LocalVectorEngine {
 
     /// Collection configuration, or `None` if the collection does not exist.
     ///
-    /// Dimension, distance and the effective IVF configuration are read back
-    /// from the persisted metadata; remote-only fields (HNSW/quantization)
-    /// are not stored locally.
+    /// Dimension, distance, effective index type and the effective ANN
+    /// configuration are read back from the persisted metadata; remote-only
+    /// fields (quantization, replication) are not stored locally.
     pub fn collection_config(&self, name: &str) -> Result<Option<CollectionConfig>> {
         let collections = self.collections.read();
         Ok(collections.get(name).map(|store| {
             let meta = store.meta();
             let mut config = CollectionConfig::new(meta.vector_size, meta.distance);
+            config.index_type = Some(meta.index_type);
+            config.hnsw_config = meta.hnsw_config.clone();
             config.ivf_config = meta.ivf_config.clone();
             config
         }))
@@ -252,6 +284,8 @@ impl LocalVectorEngine {
         let live = store.count();
         let segments = (meta.next_slot as usize).div_ceil(meta.segment_slots as usize);
         let mut config = CollectionConfig::new(meta.vector_size, meta.distance);
+        config.index_type = Some(meta.index_type);
+        config.hnsw_config = meta.hnsw_config.clone();
         config.ivf_config = meta.ivf_config.clone();
         Ok(CollectionInfo {
             name: meta.collection.clone(),
@@ -502,44 +536,91 @@ fn maintenance_sweep(
     let stores = collections.read().clone();
     for (name, store) in stores {
         // Compaction invalidated a previously published index: restore it
-        // regardless of the auto-promotion switch.
+        // regardless of promotion switches.
         if store.take_needs_rebuild() {
             LocalVectorEngine::schedule_build(&name, jobs, in_flight);
             continue;
         }
 
-        let Some(config) = store.ivf_config_opt() else {
-            continue;
-        };
+        let meta = store.meta();
+        match meta.index_type {
+            IndexType::FLAT => continue,
+            IndexType::IVF => sweep_ivf(&name, &store, jobs, in_flight),
+            IndexType::HNSW => sweep_hnsw(&name, &store, jobs, in_flight),
+        }
+    }
+}
 
-        match store.ivf_state() {
-            Some((index, _)) => {
-                // Drift maintenance keeps any published index fresh; it does
-                // not depend on the auto-promotion switch.
-                if !index.should_check_drift() {
-                    continue;
-                }
-                let ratio = store.measure_drift(&index);
-                store.record_drift(ratio);
-                tracing::debug!(collection = %name, drift = ratio, "drift check");
-                if ratio > config.drift_threshold {
-                    tracing::info!(
-                        collection = %name,
-                        drift = ratio,
-                        threshold = config.drift_threshold,
-                        "drift threshold exceeded; scheduling rebuild"
-                    );
-                    LocalVectorEngine::schedule_build(&name, jobs, in_flight);
-                }
+/// IVF maintenance: drift-triggered rebuilds and opt-in exact-scan
+/// promotion.
+fn sweep_ivf(
+    name: &str,
+    store: &Arc<CollectionStore>,
+    jobs: &Sender<MaintenanceJob>,
+    in_flight: &Arc<Mutex<HashSet<String>>>,
+) {
+    let Some(config) = store.ivf_config_opt() else {
+        return;
+    };
+
+    match store.ivf_state() {
+        Some((index, _)) => {
+            // Drift maintenance keeps any published index fresh; it does
+            // not depend on the auto-promotion switch.
+            if !index.should_check_drift() {
+                return;
             }
-            None => {
-                // Promotion check: build once the collection is large enough
-                // and automatic promotion is enabled.
-                if config.auto_promotion && store.count() >= config.min_build_points.max(1) {
-                    LocalVectorEngine::schedule_build(&name, jobs, in_flight);
-                }
+            let ratio = store.measure_drift(&index);
+            store.record_drift(ratio);
+            tracing::debug!(collection = %name, drift = ratio, "drift check");
+            if ratio > config.drift_threshold {
+                tracing::info!(
+                    collection = %name,
+                    drift = ratio,
+                    threshold = config.drift_threshold,
+                    "drift threshold exceeded; scheduling rebuild"
+                );
+                LocalVectorEngine::schedule_build(name, jobs, in_flight);
             }
         }
+        None => {
+            // Promotion check: build once the collection is large enough
+            // and automatic promotion is enabled.
+            if config.auto_promotion && store.count() >= config.min_build_points.max(1) {
+                LocalVectorEngine::schedule_build(name, jobs, in_flight);
+            }
+        }
+    }
+}
+
+/// HNSW maintenance: promote from exact scan once the collection outgrows
+/// `full_scan_threshold` (Qdrant semantics: automatic, no separate switch).
+/// The published graph itself needs no drift upkeep — inserts are
+/// incremental and distances always read the live vectors.
+fn sweep_hnsw(
+    name: &str,
+    store: &Arc<CollectionStore>,
+    jobs: &Sender<MaintenanceJob>,
+    in_flight: &Arc<Mutex<HashSet<String>>>,
+) {
+    if store.has_index() {
+        return;
+    }
+    let Some(config) = store.hnsw_config_opt() else {
+        return;
+    };
+    let threshold = config
+        .full_scan_threshold
+        .unwrap_or(HNSW_PROMOTION_DEFAULT)
+        .max(1);
+    if store.count() >= threshold as u64 {
+        tracing::info!(
+            collection = %name,
+            count = store.count(),
+            threshold,
+            "full scan threshold reached; scheduling HNSW build"
+        );
+        LocalVectorEngine::schedule_build(name, jobs, in_flight);
     }
 }
 
