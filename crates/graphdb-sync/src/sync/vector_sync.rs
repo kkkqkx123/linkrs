@@ -3,14 +3,15 @@
 //! Coordinates vector index updates with graph data changes.
 
 use std::collections::HashMap;
+
+#[cfg(feature = "vector-qdrant")]
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::core::types::{TransactionId, VertexId};
-use crate::core::{Value, Vertex};
+use crate::core::Value;
 use crate::sync::backend::VectorBackend;
 use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
 
@@ -18,7 +19,7 @@ use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult}
 use vector_client::EmbeddingService;
 pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use vector_search::{
-    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, TxnOp, VectorFilter,
+    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, VectorFilter,
 };
 
 /// Runtime state of the vector engine.
@@ -167,175 +168,13 @@ impl VectorChangeContext {
     }
 }
 
-/// Pending vector index update
-#[derive(Debug, Clone)]
-pub struct PendingVectorUpdate {
-    pub txn_id: TransactionId,
-    pub sequence: u64,
-    pub context: VectorChangeContext,
-}
-
-impl PendingVectorUpdate {
-    pub fn new(txn_id: TransactionId, sequence: u64, context: VectorChangeContext) -> Self {
-        Self {
-            txn_id,
-            sequence,
-            context,
-        }
-    }
-}
-
-/// Vector transaction buffer configuration
-#[derive(Debug, Clone)]
-pub struct VectorTransactionBufferConfig {
-    pub max_buffer_size: usize,
-    pub flush_timeout_ms: u64,
-}
-
-impl Default for VectorTransactionBufferConfig {
-    fn default() -> Self {
-        Self {
-            max_buffer_size: 1000,
-            flush_timeout_ms: 100,
-        }
-    }
-}
-
-/// Vector transaction buffer
-pub struct VectorTransactionBuffer {
-    buffers: DashMap<TransactionId, Vec<PendingVectorUpdate>>,
-    config: VectorTransactionBufferConfig,
-}
-
-impl std::fmt::Debug for VectorTransactionBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VectorTransactionBuffer")
-            .field("buffers", &self.buffers.len())
-            .field("config", &self.config)
-            .finish()
-    }
-}
-
-impl VectorTransactionBuffer {
-    pub fn new(config: VectorTransactionBufferConfig) -> Self {
-        Self {
-            buffers: DashMap::new(),
-            config,
-        }
-    }
-
-    pub fn config(&self) -> &VectorTransactionBufferConfig {
-        &self.config
-    }
-
-    /// Add a pending vector update
-    pub fn add_update(
-        &self,
-        txn_id: TransactionId,
-        update: PendingVectorUpdate,
-    ) -> Result<(), VectorBufferError> {
-        let mut buffer = self.buffers.entry(txn_id).or_default();
-
-        if buffer.len() >= self.config.max_buffer_size {
-            return Err(VectorBufferError::BufferFull(format!(
-                "Buffer full for transaction {:?}",
-                txn_id
-            )));
-        }
-
-        buffer.push(update);
-        Ok(())
-    }
-
-    /// Peek at pending updates without removing them from the buffer
-    pub fn peek_updates(&self, txn_id: TransactionId) -> Vec<PendingVectorUpdate> {
-        self.buffers
-            .get(&txn_id)
-            .map(|entry| entry.value().clone())
-            .unwrap_or_default()
-    }
-
-    /// Get and clear pending updates for a transaction
-    pub fn take_updates(&self, txn_id: TransactionId) -> Vec<PendingVectorUpdate> {
-        self.buffers
-            .remove(&txn_id)
-            .map(|(_, updates)| updates)
-            .unwrap_or_default()
-    }
-
-    /// Get and remove updates with sequence number greater than the given sequence.
-    /// This is used for rollback operations where you want to remove operations
-    /// that occurred after a specific savepoint sequence.
-    pub fn take_updates_after_sequence(
-        &self,
-        txn_id: TransactionId,
-        sequence: u64,
-    ) -> Vec<PendingVectorUpdate> {
-        if let Some(mut buffer) = self.buffers.get_mut(&txn_id) {
-            // Split into two groups: keep (<= sequence) and take (> sequence)
-            let mut to_take = Vec::new();
-            buffer.retain(|update| {
-                if update.sequence > sequence {
-                    to_take.push(update.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            return to_take;
-        }
-        Vec::new()
-    }
-
-    pub fn truncate_updates(&self, txn_id: TransactionId, sequence: u64) {
-        if let Some(mut buffer) = self.buffers.get_mut(&txn_id) {
-            buffer.retain(|update| update.sequence <= sequence);
-        }
-    }
-
-    /// Check if there are pending updates
-    pub fn has_pending_updates(&self, txn_id: TransactionId) -> bool {
-        if let Some(buffer) = self.buffers.get(&txn_id) {
-            !buffer.is_empty()
-        } else {
-            false
-        }
-    }
-
-    /// Cleanup buffer for a transaction
-    pub fn cleanup(&self, txn_id: TransactionId) {
-        self.buffers.remove(&txn_id);
-    }
-
-    pub fn pending_sequence(&self, txn_id: TransactionId) -> u64 {
-        self.buffers
-            .get(&txn_id)
-            .and_then(|buffer| buffer.iter().map(|update| update.sequence).max())
-            .unwrap_or(0)
-    }
-}
-
-/// Vector buffer error
-#[derive(Debug, thiserror::Error)]
-pub enum VectorBufferError {
-    #[error("Buffer full: {0}")]
-    BufferFull(String),
-
-    #[error("Transaction not found: {0}")]
-    TransactionNotFound(TransactionId),
-
-    #[error("Internal error: {0}")]
-    Internal(String),
-}
-
 /// Vector synchronization coordinator
 pub struct VectorSyncCoordinator {
     backend: VectorBackend,
     #[cfg(feature = "vector-qdrant")]
     embedding_service: Option<Arc<EmbeddingService>>,
-    transaction_buffer: Option<Arc<VectorTransactionBuffer>>,
     /// Tracks registered logical indexes by key "space_{space_id}_{tag}_{field}" -> metadata
-    logical_indexes: DashMap<String, IndexMetadata>,
+    logical_indexes: DashMap<VectorIndexLocation, IndexMetadata>,
     /// Tokio runtime handle for blocking async operations from sync context.
     /// Using `Handle` instead of `&Runtime` avoids lifetime issues while allowing
     /// the caller (API layer or tests) to control the runtime lifecycle.
@@ -387,7 +226,6 @@ impl VectorSyncCoordinator {
             backend,
             #[cfg(feature = "vector-qdrant")]
             embedding_service,
-            transaction_buffer: None,
             logical_indexes: DashMap::new(),
             runtime,
         }
@@ -408,30 +246,9 @@ impl VectorSyncCoordinator {
         }
     }
 
-    /// Create with transaction buffer support
-    pub fn with_transaction_buffer(
-        backend: VectorBackend,
-        #[cfg(feature = "vector-qdrant")] embedding_service: Option<Arc<EmbeddingService>>,
-        config: VectorTransactionBufferConfig,
-        runtime: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            backend,
-            #[cfg(feature = "vector-qdrant")]
-            embedding_service,
-            transaction_buffer: Some(Arc::new(VectorTransactionBuffer::new(config))),
-            logical_indexes: DashMap::new(),
-            runtime,
-        }
-    }
-
     /// Get the runtime handle for blocking async operations
     pub fn runtime(&self) -> &tokio::runtime::Handle {
         &self.runtime
-    }
-
-    fn logical_index_key(space_id: u64, tag_name: &str, field_name: &str) -> String {
-        format!("space_idx_{}_{}_{}", space_id, tag_name, field_name)
     }
 
     /// Get the vector backend
@@ -443,11 +260,6 @@ impl VectorSyncCoordinator {
     #[cfg(feature = "vector-qdrant")]
     pub fn embedding_service(&self) -> Option<&Arc<EmbeddingService>> {
         self.embedding_service.as_ref()
-    }
-
-    /// Get the transaction buffer
-    pub fn transaction_buffer(&self) -> Option<&Arc<VectorTransactionBuffer>> {
-        self.transaction_buffer.as_ref()
     }
 
     /// Create a vector index (logical index in shared collection)
@@ -463,7 +275,7 @@ impl VectorSyncCoordinator {
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
 
         if self.is_disabled_engine() {
-            let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+            let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
             let meta = IndexMetadata::new(
                 collection_name.clone(),
                 CollectionConfig::new(vector_size, distance),
@@ -525,7 +337,7 @@ impl VectorSyncCoordinator {
         }
 
         // Register logical index with the actual config used
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
 
@@ -543,317 +355,50 @@ impl VectorSyncCoordinator {
         tag_name: &str,
         field_name: &str,
     ) -> VectorCoordinatorResult<()> {
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
+        let collection_name = logical_key.to_collection_name();
         self.logical_indexes.remove(&logical_key);
 
-        // Don't delete the physical collection as other indexes may be using it
-        // Just mark that this logical index no longer exists
+        // The local engine owns its collection files, so once no logical
+        // index references the collection anymore the physical directory can
+        // be reclaimed. Remote collections keep their own lifecycle.
+        if self.backend.is_local() && self.backend.index_exists(&collection_name) {
+            let remaining_siblings = self
+                .logical_indexes
+                .iter()
+                .filter(|entry| entry.value().name == collection_name)
+                .count();
+            if remaining_siblings == 0 {
+                if let Err(error) = self.backend.delete_collection(&collection_name).await {
+                    tracing::warn!(
+                        "Failed to reclaim vector collection '{}': {}",
+                        collection_name,
+                        error
+                    );
+                }
+            } else if let Err(error) = self
+                .backend
+                .delete_by_filter(
+                    &collection_name,
+                    VectorFilter::new().must(FilterCondition::match_value(
+                        "group_id",
+                        format!("{tag_name}_{field_name}"),
+                    )),
+                )
+                .await
+            {
+                tracing::warn!(
+                    "Failed to purge dropped vector group '{tag_name}_{field_name}' from collection '{}': {}",
+                    collection_name,
+                    error
+                );
+            }
+        }
 
         info!(
             "Logical vector index dropped: space={} tag={} field={}",
             space_id, tag_name, field_name
         );
-        Ok(())
-    }
-
-    /// Handle vertex insertion
-    pub async fn on_vertex_inserted(
-        &self,
-        space_id: u64,
-        vertex: &Vertex,
-    ) -> VectorCoordinatorResult<()> {
-        self.upsert_vertex_vectors(space_id, vertex).await
-    }
-
-    /// Upsert vectors for a vertex
-    async fn upsert_vertex_vectors(
-        &self,
-        space_id: u64,
-        vertex: &Vertex,
-    ) -> VectorCoordinatorResult<()> {
-        let mut points_by_collection: HashMap<String, Vec<VectorPoint>> = HashMap::new();
-
-        for tag in &vertex.tags {
-            for (field_name, value) in &tag.properties {
-                let collection_name =
-                    VectorIndexLocation::new(space_id, &tag.name, field_name).to_collection_name();
-
-                if self.backend.index_exists(&collection_name) {
-                    if let Some(vector) = value.as_vector() {
-                        let point_id = format!(
-                            "{}_{}_{}",
-                            vertex_id_repr(&vertex.vid),
-                            tag.name,
-                            field_name
-                        );
-                        let mut payload = HashMap::new();
-                        payload.insert("vertex_id".to_string(), vertex_id_payload(&vertex.vid));
-                        payload.insert(
-                            "group_id".to_string(),
-                            serde_json::to_value(
-                                VectorIndexLocation::new(space_id, &tag.name, field_name)
-                                    .group_id(),
-                            )
-                            .unwrap_or(serde_json::Value::Null),
-                        );
-                        payload.insert(
-                            "tags".to_string(),
-                            serde_json::to_value(
-                                vertex
-                                    .tags
-                                    .iter()
-                                    .map(|t| t.name.clone())
-                                    .collect::<Vec<_>>(),
-                            )
-                            .unwrap_or(serde_json::Value::Null),
-                        );
-                        payload.insert(
-                            "field".to_string(),
-                            serde_json::Value::String(field_name.clone()),
-                        );
-
-                        let point = VectorPoint::new(point_id.clone(), vector.clone())
-                            .with_payload(payload);
-
-                        points_by_collection
-                            .entry(collection_name)
-                            .or_default()
-                            .push(point);
-                    }
-                }
-            }
-        }
-
-        for (collection_name, points) in points_by_collection {
-            let points_count = points.len();
-            if points_count == 1 {
-                self.backend
-                    .upsert(&collection_name, points.into_iter().next().unwrap())
-                    .await?;
-            } else if !points.is_empty() {
-                self.backend.upsert_batch(&collection_name, points).await?;
-                debug!(
-                    "Batch upserted {} vectors for vertex {} in collection {}",
-                    points_count, vertex.vid, collection_name
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle vertex update
-    pub async fn on_vertex_updated(
-        &self,
-        space_id: u64,
-        vertex: &Vertex,
-        changed_fields: &[String],
-    ) -> VectorCoordinatorResult<()> {
-        let mut points_to_upsert: HashMap<String, Vec<VectorPoint>> = HashMap::new();
-        let mut points_to_delete: HashMap<String, Vec<String>> = HashMap::new();
-
-        for tag in &vertex.tags {
-            for field_name in changed_fields {
-                if let Some(value) = tag.properties.get(field_name) {
-                    let collection_name = VectorIndexLocation::new(space_id, &tag.name, field_name)
-                        .to_collection_name();
-
-                    if self.backend.index_exists(&collection_name) {
-                        let point_id = format!(
-                            "{}_{}_{}",
-                            vertex_id_repr(&vertex.vid),
-                            tag.name,
-                            field_name
-                        );
-
-                        if let Some(vector) = value.as_vector() {
-                            let mut payload = HashMap::new();
-                            payload.insert("vertex_id".to_string(), vertex_id_payload(&vertex.vid));
-                            payload.insert(
-                                "group_id".to_string(),
-                                serde_json::to_value(
-                                    VectorIndexLocation::new(space_id, &tag.name, field_name)
-                                        .group_id(),
-                                )
-                                .unwrap_or(serde_json::Value::Null),
-                            );
-                            payload.insert(
-                                "tags".to_string(),
-                                serde_json::to_value(
-                                    vertex
-                                        .tags
-                                        .iter()
-                                        .map(|t| t.name.clone())
-                                        .collect::<Vec<_>>(),
-                                )
-                                .unwrap_or(serde_json::Value::Null),
-                            );
-                            payload.insert(
-                                "field".to_string(),
-                                serde_json::Value::String(field_name.clone()),
-                            );
-
-                            let point = VectorPoint::new(point_id.clone(), vector.clone())
-                                .with_payload(payload);
-
-                            points_to_upsert
-                                .entry(collection_name)
-                                .or_default()
-                                .push(point);
-                        } else {
-                            points_to_delete
-                                .entry(collection_name)
-                                .or_default()
-                                .push(point_id);
-                        }
-                    }
-                }
-            }
-        }
-
-        for (collection_name, points) in points_to_upsert {
-            let points_count = points.len();
-            if points_count == 1 {
-                self.backend
-                    .upsert(&collection_name, points.into_iter().next().unwrap())
-                    .await?;
-            } else if !points.is_empty() {
-                self.backend.upsert_batch(&collection_name, points).await?;
-                debug!(
-                    "Batch updated {} vectors for vertex {} in collection {}",
-                    points_count, vertex.vid, collection_name
-                );
-            }
-        }
-
-        for (collection_name, point_ids) in points_to_delete {
-            let point_ids_count = point_ids.len();
-            if point_ids_count == 1 {
-                self.backend.delete(&collection_name, &point_ids[0]).await?;
-            } else if !point_ids.is_empty() {
-                let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
-                self.backend.delete_batch(&collection_name, &refs).await?;
-                debug!(
-                    "Batch deleted {} vectors for vertex {} from collection {}",
-                    point_ids_count, vertex.vid, collection_name
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle vertex deletion
-    pub async fn on_vertex_deleted(
-        &self,
-        space_id: u64,
-        _tag_name: &str,
-        vertex_id: &Value,
-    ) -> VectorCoordinatorResult<()> {
-        let collection_name = VectorIndexLocation::new(space_id, "", "").to_collection_name();
-
-        let filter = VectorFilter::new().must(FilterCondition::match_value(
-            "vertex_id",
-            format!("{}", vertex_id),
-        ));
-
-        self.backend
-            .delete_by_filter(&collection_name, filter)
-            .await?;
-
-        debug!(
-            "Deleted vectors for vertex {} from collection {}",
-            vertex_id, collection_name
-        );
-        Ok(())
-    }
-
-    /// Handle vector change (transaction mode - buffer the operation)
-    pub fn buffer_vector_change(
-        &self,
-        txn_id: TransactionId,
-        ctx: VectorChangeContext,
-    ) -> Result<(), VectorCoordinatorError> {
-        self.buffer_vector_change_with_sequence(txn_id, 0, ctx)
-    }
-
-    pub fn buffer_vector_change_with_sequence(
-        &self,
-        txn_id: TransactionId,
-        sequence: u64,
-        ctx: VectorChangeContext,
-    ) -> Result<(), VectorCoordinatorError> {
-        if let Some(ref buffer) = self.transaction_buffer {
-            let update = PendingVectorUpdate::new(txn_id, sequence, ctx);
-            buffer.add_update(txn_id, update).map_err(|e| {
-                VectorCoordinatorError::BufferError(format!(
-                    "Failed to buffer vector update: {}",
-                    e
-                ))
-            })?;
-            Ok(())
-        } else {
-            Err(VectorCoordinatorError::BufferError(
-                "Transaction buffer not initialized".to_string(),
-            ))
-        }
-    }
-
-    /// Commit transaction: flush buffered vector updates
-    pub async fn commit_transaction(&self, txn_id: TransactionId) -> VectorCoordinatorResult<()> {
-        if let Some(ref buffer) = self.transaction_buffer {
-            // Peek at updates without removing them from the buffer.
-            // This prevents data loss: if batch processing fails partway,
-            // the buffer still has all pending updates for retry.
-            let updates = buffer.peek_updates(txn_id);
-
-            if !updates.is_empty() {
-                debug!(
-                    "Committing {} vector updates for transaction {:?}",
-                    updates.len(),
-                    txn_id
-                );
-
-                if self.backend.is_local() {
-                    // Local backend: single WAL-backed commit per txn id.
-                    // Replay is idempotent, so a
-                    // failed commit may be retried after crash recovery.
-                    let txn_ops: Vec<TxnOp> = updates
-                        .iter()
-                        .map(|update| to_txn_op(&update.context))
-                        .collect();
-                    self.backend.apply_txn(txn_id, txn_ops).await?;
-                } else {
-                    // Qdrant backend: batch delivery through the outbox.
-                    let contexts: Vec<VectorChangeContext> =
-                        updates.into_iter().map(|u| u.context).collect();
-                    self.on_vector_change_batch(contexts).await?;
-                }
-
-                // All operations succeeded — now safely remove from buffer
-                buffer.take_updates(txn_id);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Rollback transaction: clear buffered vector updates
-    pub async fn rollback_transaction(&self, txn_id: TransactionId) {
-        if let Some(ref buffer) = self.transaction_buffer {
-            buffer.cleanup(txn_id);
-            debug!("Rolled back vector updates for transaction {:?}", txn_id);
-        }
-    }
-
-    pub fn truncate_transaction(
-        &self,
-        txn_id: TransactionId,
-        sequence: u64,
-    ) -> Result<(), VectorCoordinatorError> {
-        if let Some(ref buffer) = self.transaction_buffer {
-            buffer.truncate_updates(txn_id, sequence);
-        }
         Ok(())
     }
 
@@ -1067,7 +612,7 @@ impl VectorSyncCoordinator {
 
     /// Check if index exists (logical index)
     pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         self.logical_indexes.contains_key(&logical_key)
     }
 
@@ -1085,7 +630,7 @@ impl VectorSyncCoordinator {
         field_name: &str,
         index_name: &str,
     ) {
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         if let Some(mut meta) = self.logical_indexes.get_mut(&logical_key) {
             meta.index_name = Some(index_name.to_string());
         }
@@ -1098,7 +643,7 @@ impl VectorSyncCoordinator {
         tag_name: &str,
         field_name: &str,
     ) -> Option<IndexMetadata> {
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         self.logical_indexes.get(&logical_key).map(|v| v.clone())
     }
 
@@ -1107,22 +652,12 @@ impl VectorSyncCoordinator {
         self.logical_indexes
             .iter()
             .map(|pair| {
-                let key = pair.key();
-                let parts: Vec<&str> = key.split('_').collect();
-                let (space_id, tag_name, field_name) =
-                    if parts.len() >= 5 && parts[0] == "space" && parts[1] == "idx" {
-                        let sid: u64 = parts[2].parse().unwrap_or(0);
-                        let tag = parts[3..parts.len() - 1].join("_");
-                        let field = parts[parts.len() - 1].to_string();
-                        (sid, tag, field)
-                    } else {
-                        (0, String::new(), String::new())
-                    };
+                let location = pair.key();
                 crate::sync::vector_sync::IndexMetadataWrapper {
                     collection_name: pair.value().name.clone(),
-                    space_id,
-                    tag_name,
-                    field_name,
+                    space_id: location.space_id,
+                    tag_name: location.tag_name.clone(),
+                    field_name: location.field_name.clone(),
                     index_name: pair.value().index_name.clone(),
                 }
             })
@@ -1139,7 +674,7 @@ impl VectorSyncCoordinator {
         config: CollectionConfig,
         user_index_name: Option<String>,
     ) {
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         let meta = if let Some(idx_name) = user_index_name {
             IndexMetadata::with_index_name(collection_name, config, idx_name)
         } else {
@@ -1197,7 +732,7 @@ impl VectorSyncCoordinator {
             }
         }
 
-        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        let logical_key = VectorIndexLocation::new(space_id, tag_name, field_name);
         let meta = IndexMetadata::new(collection_name.clone(), config);
         self.logical_indexes.insert(logical_key, meta);
 
@@ -1229,63 +764,4 @@ pub struct IndexMetadataWrapper {
     pub tag_name: String,
     pub field_name: String,
     pub index_name: Option<String>,
-}
-
-/// Convert a buffered change context into a [`TxnOp`] for the local backend's
-/// commit protocol. Payload values are JSON-encoded; the `group_id` marker is
-/// injected so searches scoped by `(tag, field)` work identically to qdrant.
-/// Plain string representation of a vertex id without the quoting used by
-/// `Display` for string ids (which would leak quotes into point ids).
-fn vertex_id_repr(vid: &VertexId) -> String {
-    if let Some(i) = vid.as_int64() {
-        i.to_string()
-    } else if let Some(s) = vid.as_str() {
-        s.to_string()
-    } else {
-        format!("{:?}", vid.as_bytes())
-    }
-}
-
-/// Plain JSON payload value for a vertex id (number for int ids, string
-/// otherwise) so `on_vertex_deleted`'s `format!("{}", value)` filter matches.
-fn vertex_id_payload(vid: &VertexId) -> serde_json::Value {
-    if let Some(i) = vid.as_int64() {
-        serde_json::Value::from(i)
-    } else if let Some(s) = vid.as_str() {
-        serde_json::Value::String(s.to_string())
-    } else {
-        serde_json::Value::Null
-    }
-}
-
-fn to_txn_op(ctx: &VectorChangeContext) -> TxnOp {
-    let collection_name = ctx.location.to_collection_name();
-    let point_id = ctx.data.id.to_string();
-
-    match ctx.change_type {
-        VectorChangeType::Insert => {
-            let mut json_payload: HashMap<String, serde_json::Value> = ctx
-                .data
-                .payload
-                .iter()
-                .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|json| (k.clone(), json)))
-                .collect();
-
-            json_payload.insert(
-                "group_id".to_string(),
-                serde_json::to_value(ctx.location.group_id()).unwrap_or(serde_json::Value::Null),
-            );
-
-            let point =
-                VectorPoint::new(point_id, ctx.data.vector.clone()).with_payload(json_payload);
-            TxnOp::Upsert {
-                collection: collection_name,
-                point,
-            }
-        }
-        VectorChangeType::Delete => TxnOp::Delete {
-            collection: collection_name,
-            point_id,
-        },
-    }
 }

@@ -12,6 +12,7 @@ mod outbox;
 pub mod outbox_recovery;
 pub mod receiver;
 pub mod retry;
+pub mod runtime;
 pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
@@ -44,7 +45,7 @@ pub use outbox_recovery::{
 };
 #[cfg(feature = "fulltext-search")]
 pub use receiver::FulltextReceiver;
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "vector")]
 pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
@@ -56,9 +57,8 @@ pub use types::{IndexOpKey, IndexOperation};
 
 #[cfg(feature = "vector")]
 pub use vector_sync::{
-    PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorEngineState,
-    VectorIndexLocation, VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer,
-    VectorTransactionBufferConfig,
+    VectorChangeContext, VectorChangeType, VectorEngineState, VectorIndexLocation, VectorPointData,
+    VectorSyncCoordinator,
 };
 
 #[cfg(feature = "vector")]

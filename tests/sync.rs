@@ -38,6 +38,3 @@ mod two_pc_protocol;
 #[cfg(feature = "vector-qdrant")]
 #[path = "sync/vector_sync.rs"]
 mod vector_sync;
-#[cfg(feature = "vector-qdrant")]
-#[path = "sync/vector_transaction.rs"]
-mod vector_transaction;

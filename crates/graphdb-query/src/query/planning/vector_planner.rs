@@ -223,10 +223,14 @@ impl VectorSearchPlanner {
         let output_fields = self.parse_output_fields(&search.yield_clause);
 
         // Convert WHERE clause to VectorFilter
-        let filter = search
+        let filter = match search
             .where_clause
             .as_ref()
-            .and_then(|where_clause| self.convert_where_clause_to_filter(where_clause));
+            .map(|where_clause| self.convert_where_clause_to_filter(where_clause))
+        {
+            Some(filter) => filter?,
+            None => None,
+        };
 
         // Pre-resolve tag_name and field_name from metadata context if available
         let (tag_name, field_name) = if let Some(ref metadata_context) = self.metadata_context {
@@ -368,16 +372,27 @@ impl VectorSearchPlanner {
     ///
     /// This method transforms the contextual expression into a VectorFilter that can
     /// be used by the vector search engine (e.g., Qdrant).
+    ///
+    /// Returns `Ok(None)` when the WHERE clause carries no expression, and an
+    /// error when the expression uses constructs that cannot be represented as
+    /// a vector payload filter — silently dropping the predicate would widen
+    /// the result set, so unsupported forms must fail loudly.
     fn convert_where_clause_to_filter(
         &self,
         where_clause: &ContextualExpression,
-    ) -> Option<VectorFilter> {
-        let expr = where_clause.get_expression()?;
-        self.convert_expression_to_filter(&expr)
+    ) -> Result<Option<VectorFilter>, PlannerError> {
+        match where_clause.get_expression() {
+            Some(expr) => self.convert_expression_to_filter(&expr).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Recursively convert an Expression to VectorFilter
-    fn convert_expression_to_filter(&self, expr: &Expression) -> Option<VectorFilter> {
+    fn convert_expression_to_filter(
+        &self,
+        expr: &Expression,
+    ) -> Result<VectorFilter, PlannerError> {
+        let unsupported = |detail: String| Err(PlannerError::UnsupportedVectorFilter(detail));
         match expr {
             Expression::Binary { left, op, right } => match op {
                 BinaryOperator::And => {
@@ -385,14 +400,14 @@ impl VectorSearchPlanner {
                     let right_filter = self.convert_expression_to_filter(right)?;
 
                     // Merge filters: AND means both conditions must be met
-                    Some(self.merge_filters_must(left_filter, right_filter))
+                    Ok(self.merge_filters_must(left_filter, right_filter))
                 }
                 BinaryOperator::Or => {
                     let left_filter = self.convert_expression_to_filter(left)?;
                     let right_filter = self.convert_expression_to_filter(right)?;
 
                     // Merge filters: OR means either condition can be met
-                    Some(self.merge_filters_should(left_filter, right_filter))
+                    Ok(self.merge_filters_should(left_filter, right_filter))
                 }
                 BinaryOperator::Equal
                 | BinaryOperator::NotEqual
@@ -402,7 +417,10 @@ impl VectorSearchPlanner {
                 | BinaryOperator::GreaterThanOrEqual => {
                     self.convert_comparison_to_filter(left, op, right)
                 }
-                _ => None,
+                other => unsupported(format!(
+                    "unsupported operator in vector search WHERE clause: {}",
+                    other
+                )),
             },
             Expression::Unary {
                 op: UnaryOperator::Not,
@@ -410,9 +428,12 @@ impl VectorSearchPlanner {
             } => {
                 let inner_filter = self.convert_expression_to_filter(operand)?;
                 // Negate the filter: must_not
-                Some(self.negate_filter(inner_filter))
+                Ok(self.negate_filter(inner_filter))
             }
-            _ => None,
+            _ => unsupported(
+                "vector search WHERE clause only supports comparisons combined with AND/OR/NOT"
+                    .to_string(),
+            ),
         }
     }
 
@@ -422,13 +443,28 @@ impl VectorSearchPlanner {
         left: &Expression,
         op: &BinaryOperator,
         right: &Expression,
-    ) -> Option<VectorFilter> {
-        let field = self.expression_to_field_name(left)?;
+    ) -> Result<VectorFilter, PlannerError> {
+        let field = self.expression_to_field_name(left).ok_or_else(|| {
+            PlannerError::UnsupportedVectorFilter(
+                "left side of a vector filter comparison must be a variable or property"
+                    .to_string(),
+            )
+        })?;
         let value = match right {
             Expression::Literal(value) => value,
-            _ => return None,
+            _ => {
+                return Err(PlannerError::UnsupportedVectorFilter(format!(
+                    "right side of a vector filter comparison must be a literal, got {:?}",
+                    right
+                )))
+            }
         };
-        let value_str = self.value_to_string(value)?;
+        let value_str = self.value_to_string(value).ok_or_else(|| {
+            PlannerError::UnsupportedVectorFilter(format!(
+                "literal value {:?} cannot be used in a vector filter",
+                value
+            ))
+        })?;
 
         let condition = match op {
             BinaryOperator::Equal => {
@@ -440,20 +476,30 @@ impl VectorSearchPlanner {
                     field,
                     ConditionType::Match { value: value_str },
                 ));
-                return Some(filter);
+                return Ok(filter);
             }
             BinaryOperator::LessThan
             | BinaryOperator::LessThanOrEqual
             | BinaryOperator::GreaterThan
             | BinaryOperator::GreaterThanOrEqual => {
-                // Range condition
-                let range = self.create_range_condition(op, &value_str)?;
+                // Range condition; non-numeric literals are rejected instead of dropped.
+                let range = self.create_range_condition(op, &value_str).ok_or_else(|| {
+                    PlannerError::UnsupportedVectorFilter(format!(
+                        "range comparison requires a numeric literal, got {:?}",
+                        value_str
+                    ))
+                })?;
                 FilterCondition::new(field, ConditionType::Range(range))
             }
-            _ => return None,
+            _ => {
+                return Err(PlannerError::UnsupportedVectorFilter(format!(
+                    "unsupported comparison operator in vector filter: {}",
+                    op
+                )))
+            }
         };
 
-        Some(VectorFilter::new().must(condition))
+        Ok(VectorFilter::new().must(condition))
     }
 
     /// Convert an expression to a payload field name
@@ -597,10 +643,14 @@ impl VectorSearchPlanner {
         let output_fields = self.parse_output_fields(&search.yield_clause);
 
         // Convert WHERE clause to VectorFilter
-        let filter = search
+        let filter = match search
             .where_clause
             .as_ref()
-            .and_then(|where_clause| self.convert_where_clause_to_filter(where_clause));
+            .map(|where_clause| self.convert_where_clause_to_filter(where_clause))
+        {
+            Some(filter) => filter?,
+            None => None,
+        };
 
         // Pre-resolve tag_name and field_name from metadata context
         let (tag_name, field_name) = match metadata_context.get_index_metadata(&search.index_name) {
@@ -717,6 +767,7 @@ mod tests {
     use super::*;
     use crate::core::types::expr::{create_contextual_expression, Expression};
     use crate::core::types::span::Span;
+    use crate::core::value::Value;
     use crate::query::parser::ast::vector::{
         VectorIndexConfig, VectorYieldClause, VectorYieldItem,
     };
@@ -808,5 +859,120 @@ mod tests {
             planner.value_to_string(&crate::core::Value::Bool(true)),
             Some("true".to_string())
         );
+    }
+
+    fn comparison(field: &str, op: BinaryOperator, value: Expression) -> Expression {
+        Expression::Binary {
+            left: Box::new(Expression::variable(field)),
+            op,
+            right: Box::new(value),
+        }
+    }
+
+    #[test]
+    fn filter_conversion_accepts_supported_forms() {
+        let planner = VectorSearchPlanner::new();
+
+        let equal = comparison(
+            "status",
+            BinaryOperator::Equal,
+            Expression::Literal(Value::string("active")),
+        );
+        let filter = planner.convert_expression_to_filter(&equal).unwrap();
+        assert!(filter.must.is_some());
+
+        let range = comparison(
+            "age",
+            BinaryOperator::GreaterThanOrEqual,
+            Expression::Literal(Value::Int(18)),
+        );
+        let filter = planner.convert_expression_to_filter(&range).unwrap();
+        assert!(filter.must.is_some());
+
+        let conjunction = Expression::Binary {
+            left: Box::new(equal),
+            op: BinaryOperator::And,
+            right: Box::new(range),
+        };
+        planner
+            .convert_expression_to_filter(&conjunction)
+            .expect("AND of supported comparisons must convert");
+
+        let negation = Expression::Unary {
+            op: UnaryOperator::Not,
+            operand: Box::new(comparison(
+                "status",
+                BinaryOperator::Equal,
+                Expression::Literal(Value::string("inactive")),
+            )),
+        };
+        let filter = planner.convert_expression_to_filter(&negation).unwrap();
+        assert!(filter.must_not.is_some() || filter.must.is_some());
+    }
+
+    #[test]
+    fn filter_conversion_rejects_unsupported_operator() {
+        let planner = VectorSearchPlanner::new();
+
+        let like = comparison(
+            "name",
+            BinaryOperator::Like,
+            Expression::Literal(Value::string("%a%")),
+        );
+        let error = planner
+            .convert_expression_to_filter(&like)
+            .err()
+            .expect("LIKE must be rejected instead of silently dropped");
+        assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
+
+        let list = comparison(
+            "status",
+            BinaryOperator::In,
+            Expression::Literal(Value::string("a")),
+        );
+        let error = planner
+            .convert_expression_to_filter(&list)
+            .err()
+            .expect("IN must be rejected instead of silently dropped");
+        assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
+    }
+
+    #[test]
+    fn filter_conversion_rejects_non_literal_rhs() {
+        let planner = VectorSearchPlanner::new();
+
+        let variable_rhs = comparison("age", BinaryOperator::Equal, Expression::variable("limit"));
+        let error = planner
+            .convert_expression_to_filter(&variable_rhs)
+            .err()
+            .expect("non-literal right side must be rejected");
+        assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
+
+        let non_field_lhs = Expression::Binary {
+            left: Box::new(Expression::Literal(Value::Int(1))),
+            op: BinaryOperator::Equal,
+            right: Box::new(Expression::Literal(Value::Int(2))),
+        };
+        let error = planner
+            .convert_expression_to_filter(&non_field_lhs)
+            .err()
+            .expect("literal left side must be rejected");
+        assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
+    }
+
+    #[test]
+    fn filter_conversion_rejects_non_numeric_range_literal() {
+        let planner = VectorSearchPlanner::new();
+
+        let range = comparison(
+            "age",
+            BinaryOperator::LessThan,
+            Expression::Literal(Value::string("abc")),
+        );
+        let error = planner
+            .convert_expression_to_filter(&range)
+            .err()
+            .expect("non-numeric range literal must be rejected instead of dropped");
+        assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
     }
 }

@@ -266,3 +266,98 @@ pub trait VectorEngine: Send + Sync + std::fmt::Debug {
         ))
     }
 }
+
+/// Build the engine selected by `config`.
+///
+/// The wire transport is taken from [`crate::config::ConnectionConfig::transport`];
+/// requesting a transport whose feature is not compiled in is a loud error
+/// rather than a silent fallback.
+pub async fn create_engine(
+    config: crate::config::VectorClientConfig,
+) -> Result<std::sync::Arc<dyn VectorEngine>> {
+    use crate::config::{EngineType, QdrantTransport};
+
+    match config.engine {
+        EngineType::Qdrant => {
+            #[cfg(feature = "qdrant-grpc")]
+            if config.connection.transport == QdrantTransport::Grpc {
+                let engine = QdrantGrpcEngine::new(config.clone()).await?;
+                return Ok(std::sync::Arc::new(engine));
+            }
+
+            #[cfg(feature = "qdrant-http")]
+            if config.connection.transport == QdrantTransport::Http {
+                let engine = QdrantEngine::new(config.clone()).await?;
+                return Ok(std::sync::Arc::new(engine));
+            }
+
+            Err(VectorClientError::EngineNotAvailable(format!(
+                "{:?} transport is not available in this build",
+                config.connection.transport
+            )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod disabled_tests {
+    use super::DisabledEngine;
+    use crate::engine::VectorEngine;
+    use crate::types::*;
+
+    #[tokio::test]
+    async fn disabled_engine_health_check_is_unhealthy() {
+        let engine = DisabledEngine;
+        let health = engine.health_check().await.unwrap();
+        assert!(!health.is_healthy);
+        assert_eq!(health.engine_name, "disabled");
+    }
+
+    #[tokio::test]
+    async fn disabled_engine_rejects_collections_and_points() {
+        let engine = DisabledEngine;
+        assert!(engine
+            .create_collection("c", CollectionConfig::default())
+            .await
+            .is_err());
+        assert!(engine.delete_collection("c").await.is_err());
+        assert!(engine
+            .upsert("c", VectorPoint::new(1u64, vec![1.0]))
+            .await
+            .is_err());
+        assert!(engine.upsert_batch("c", vec![]).await.is_err());
+        assert!(engine.delete("c", "1").await.is_err());
+        assert!(engine.delete_batch("c", vec!["1"]).await.is_err());
+        assert!(engine
+            .delete_by_filter("c", VectorFilter::new())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn disabled_engine_rejects_reads_and_admin_ops() {
+        let engine = DisabledEngine;
+        assert!(engine
+            .search("c", SearchQuery::new(vec![1.0], 10))
+            .await
+            .is_err());
+        assert!(engine.get("c", "1").await.is_err());
+        assert!(engine.count("c").await.is_err());
+        assert!(engine.collection_exists("c").await.is_err());
+        assert!(engine.collection_info("c").await.is_err());
+        assert!(engine.scroll("c", 10, None, None, None).await.is_err());
+
+        let payload = std::collections::HashMap::from([("k".to_string(), serde_json::json!("v"))]);
+        assert!(engine.set_payload("c", vec!["1"], payload).await.is_err());
+        assert!(engine
+            .delete_payload("c", vec!["1"], vec!["k"])
+            .await
+            .is_err());
+        assert!(engine
+            .create_payload_index("c", "f", PayloadSchemaType::Keyword)
+            .await
+            .is_err());
+        assert!(engine.delete_payload_index("c", "f").await.is_err());
+        assert!(engine.list_payload_indexes("c").await.is_err());
+    }
+}

@@ -396,7 +396,8 @@ impl TestDb {
                 isolation_level: None,
             };
             let storage = self.bound_auto_commit_storage()?;
-            self.query_api.execute_with_operation_storage(query, ctx, storage)
+            self.query_api
+                .execute_with_operation_storage(query, ctx, storage)
         };
         let result = result?;
 

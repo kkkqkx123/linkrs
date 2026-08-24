@@ -220,9 +220,12 @@ fn test_compact_with_payloads_and_no_auto_trigger() {
     store.upsert(&p2).unwrap();
 
     assert!(store.delete(&PointId::Num(1)).unwrap());
-    // 1/2 > 20% -> auto-compacted
+    // The tombstone is visible immediately and reclaimed by an explicit
+    // compaction (the engine schedules the same work in the background).
     let meta = store.meta();
-    assert_eq!(meta.tombstone_count, 0);
+    assert_eq!(meta.tombstone_count, 1);
+    store.compact().unwrap();
+    assert_eq!(store.meta().tombstone_count, 0);
 
     let got = store.get(&PointId::Num(2)).unwrap().unwrap();
     assert_eq!(got.payload, Some(payload2.clone()));
@@ -245,7 +248,8 @@ fn test_compact_checkpoint_truncates_wal() {
     for i in 0..2u64 {
         assert!(store.delete(&PointId::Num(i)).unwrap());
     }
-    // 2/6 > 20%: auto-compacted on the second delete; WAL must be truncated.
+    store.compact().unwrap();
+    // A compaction checkpoint truncates the WAL.
     let wal = Wal::open_or_create(&store_dir.join("wal.bin")).unwrap();
     let last = wal.replay(|_| Ok(())).unwrap();
     assert_eq!(last, 0, "WAL must be empty after compaction");

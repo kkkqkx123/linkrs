@@ -3,7 +3,7 @@
 //! Provide the GraphDatabase structure as the main entry point for the embedded API.
 
 use crate::api::core::{CoreError, CoreResult, QueryApi, SchemaApi, SpaceConfig};
-use crate::api::embedded::config::DatabaseConfig;
+use crate::api::embedded::config::{DatabaseConfig, EmbeddedVectorEngine};
 use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
@@ -48,26 +48,55 @@ fn create_vector_manager(
     Ok(vector_manager)
 }
 
-/// Build the vector backend from default configuration (enabled only when a
-/// backend is configured/available).
+/// Derive the default local vector data directory from the database file path
+/// (`<db_file>_vector` next to the database).
 #[cfg(feature = "vector")]
-fn create_vector_backend(runtime: &tokio::runtime::Handle) -> CoreResult<Option<VectorBackend>> {
-    #[cfg(feature = "vector-qdrant")]
-    {
-        let vector_config = VectorClientConfig::default();
-        if !vector_config.enabled {
-            return Ok(None);
-        }
-        let vector_manager = create_vector_manager(&vector_config, runtime)?;
-        Ok(Some(VectorBackend::Qdrant(vector_manager)))
+fn default_local_vector_dir(db_path: &Path) -> std::path::PathBuf {
+    let mut name = db_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push("_vector");
+    db_path.with_file_name(name)
+}
+
+/// Build the vector backend from the embedded database configuration.
+///
+/// Returns `Ok(None)` only for explicit disablement (master switch off, a
+/// disabled Qdrant client config, or an in-memory database without an explicit
+/// local directory); engine construction failures are hard errors.
+#[cfg(feature = "vector")]
+fn create_vector_backend(
+    config: &DatabaseConfig,
+    runtime: &tokio::runtime::Handle,
+) -> CoreResult<Option<VectorBackend>> {
+    use std::path::PathBuf;
+
+    if !config.vector.enabled {
+        return Ok(None);
     }
-    #[cfg(not(feature = "vector-qdrant"))]
-    {
-        let engine =
-            vector_search::LocalVectorEngine::open("data/graphdb/vector").map_err(|e| {
+    match &config.vector.engine {
+        EmbeddedVectorEngine::Local => {
+            let data_dir: PathBuf = match (&config.vector.local_data_dir, config.path()) {
+                (Some(dir), _) => dir.clone(),
+                (None, Some(path)) => default_local_vector_dir(path),
+                // In-memory databases have no on-disk home; vectors stay off
+                // unless an explicit directory is configured.
+                (None, None) => return Ok(None),
+            };
+            let engine = vector_search::LocalVectorEngine::open(&data_dir).map_err(|e| {
                 CoreError::Internal(format!("Failed to initialize local vector engine: {}", e))
             })?;
-        Ok(Some(VectorBackend::Local(Arc::new(engine))))
+            Ok(Some(VectorBackend::Local(Arc::new(engine))))
+        }
+        #[cfg(feature = "vector-qdrant")]
+        EmbeddedVectorEngine::Qdrant(client_config) => {
+            if !client_config.enabled {
+                return Ok(None);
+            }
+            let manager = create_vector_manager(client_config, runtime)?;
+            Ok(Some(VectorBackend::Qdrant(manager)))
+        }
     }
 }
 
@@ -75,9 +104,10 @@ fn create_vector_backend(runtime: &tokio::runtime::Handle) -> CoreResult<Option<
 #[cfg(feature = "vector")]
 fn attach_vector_coordinator(
     mut sync: SyncManager,
+    config: &DatabaseConfig,
     runtime: &tokio::runtime::Handle,
 ) -> CoreResult<SyncManager> {
-    if let Some(backend) = create_vector_backend(runtime)? {
+    if let Some(backend) = create_vector_backend(config, runtime)? {
         let vector_coordinator = Arc::new(
             crate::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
                 backend,
@@ -97,8 +127,11 @@ type InitManagers = (Option<Arc<()>>, Option<Arc<SyncManager>>);
 /// Full init path when vector is enabled but fulltext is not: create a sync manager
 /// that only hosts the vector coordinator.
 #[cfg(all(feature = "vector", not(feature = "fulltext-search")))]
-fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
-    let Some(backend) = create_vector_backend(runtime)? else {
+fn setup_sync_with_vector_only(
+    config: &DatabaseConfig,
+    runtime: &tokio::runtime::Handle,
+) -> CoreResult<InitManagers> {
+    let Some(backend) = create_vector_backend(config, runtime)? else {
         return Ok((None, None));
     };
     let vector_coordinator = Arc::new(
@@ -115,8 +148,11 @@ fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<I
 
 /// Full init path when both vector and fulltext are enabled.
 #[cfg(all(feature = "vector", feature = "fulltext-search"))]
-fn setup_sync_with_vector_only(runtime: &tokio::runtime::Handle) -> CoreResult<InitManagers> {
-    let Some(backend) = create_vector_backend(runtime)? else {
+fn setup_sync_with_vector_only(
+    config: &DatabaseConfig,
+    runtime: &tokio::runtime::Handle,
+) -> CoreResult<InitManagers> {
+    let Some(backend) = create_vector_backend(config, runtime)? else {
         return Ok((None, None));
     };
     let vector_coordinator = Arc::new(
@@ -271,7 +307,7 @@ impl GraphDatabase<GraphStorage> {
                 let sync = SyncManager::with_sync_config(sync_coordinator.clone(), sync_config);
 
                 #[cfg(feature = "vector")]
-                let sync = attach_vector_coordinator(sync, vector_runtime.handle())?;
+                let sync = attach_vector_coordinator(sync, &config, vector_runtime.handle())?;
 
                 let sync = Arc::new(sync);
                 (Some(manager), Some(sync))
@@ -280,7 +316,7 @@ impl GraphDatabase<GraphStorage> {
             {
                 #[cfg(feature = "vector")]
                 {
-                    setup_sync_with_vector_only(vector_runtime.handle())?
+                    setup_sync_with_vector_only(&config, vector_runtime.handle())?
                 }
                 #[cfg(not(feature = "vector"))]
                 {
@@ -290,7 +326,7 @@ impl GraphDatabase<GraphStorage> {
         } else {
             #[cfg(feature = "vector")]
             {
-                setup_sync_with_vector_only(vector_runtime.handle())?
+                setup_sync_with_vector_only(&config, vector_runtime.handle())?
             }
             #[cfg(not(feature = "vector"))]
             {
@@ -539,5 +575,47 @@ mod tests {
 
         let config = DatabaseConfig::file("/tmp/test.db");
         assert!(!config.is_memory());
+    }
+
+    #[cfg(feature = "vector")]
+    #[test]
+    fn vector_backend_respects_explicit_disable() {
+        let config = DatabaseConfig::file("/tmp/some.db").with_vector_enabled(false);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let backend = create_vector_backend(&config, runtime.handle()).unwrap();
+        assert!(backend.is_none(), "master switch off must disable vectors");
+    }
+
+    #[cfg(feature = "vector")]
+    #[test]
+    fn vector_backend_derives_local_dir_from_database_path() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let db_path = directory.path().join("graph.db");
+        let config = DatabaseConfig::file(&db_path);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let backend = create_vector_backend(&config, runtime.handle())
+            .expect("local engine construction must succeed");
+        let Some(VectorBackend::Local(_engine)) = backend else {
+            panic!("file databases default to the local engine");
+        };
+
+        let expected_dir = directory.path().join("graph.db_vector");
+        assert!(
+            expected_dir.exists(),
+            "the local engine data directory must be derived as <db_file>_vector"
+        );
+    }
+
+    #[cfg(feature = "vector")]
+    #[test]
+    fn vector_backend_stays_off_for_memory_database_without_directory() {
+        let config = DatabaseConfig::memory();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let backend = create_vector_backend(&config, runtime.handle()).unwrap();
+        assert!(
+            backend.is_none(),
+            "in-memory databases have no on-disk home for vectors unless configured explicitly"
+        );
     }
 }

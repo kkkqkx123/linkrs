@@ -9,10 +9,8 @@ use std::sync::Arc;
 
 use vector_search::{
     CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, PayloadSchemaType,
-    SearchQuery, SearchResult, TxnOp, VectorFilter, VectorPoint,
+    SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
-
-use crate::core::types::TransactionId;
 
 #[allow(unused_imports)]
 use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
@@ -319,32 +317,6 @@ impl VectorBackend {
                 let results = manager.search(collection, query).await?;
                 Ok(results)
             }
-        }
-    }
-
-    // ---- coordinated commits ----
-
-    /// Commit a coordinated transaction to the engine.
-    ///
-    /// Only the local backend uses the WAL commit protocol; the qdrant backend
-    /// delivers buffered changes through the outbox instead
-    /// ([`super::vector_sync::VectorSyncCoordinator::on_vector_change_batch`]).
-    pub async fn apply_txn(
-        &self,
-        txn_id: TransactionId,
-        ops: Vec<TxnOp>,
-    ) -> VectorCoordinatorResult<()> {
-        match self {
-            VectorBackend::Local(engine) => {
-                engine
-                    .apply_txn(txn_id.into(), ops)
-                    .map_err(VectorError::from)?;
-                Ok(())
-            }
-            #[cfg(feature = "vector-qdrant")]
-            VectorBackend::Qdrant(_) => Err(VectorCoordinatorError::InvalidOperation(
-                "apply_txn is only supported by the local backend".to_string(),
-            )),
         }
     }
 }

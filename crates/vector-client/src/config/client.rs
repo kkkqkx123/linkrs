@@ -9,6 +9,17 @@ pub enum EngineType {
     Qdrant,
 }
 
+/// Wire transport used to reach a Qdrant service.
+///
+/// Both transports may be compiled in at once; this selects the one used at
+/// runtime. The default follows the historical behavior (gRPC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QdrantTransport {
+    #[default]
+    Grpc,
+    Http,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorClientConfig {
     pub enabled: bool,
@@ -46,6 +57,7 @@ impl VectorClientConfig {
                 api_key: None,
                 connect_timeout_secs: 5,
                 http_port: Some(http_port),
+                transport: QdrantTransport::default(),
             },
             timeout: TimeoutConfig::default(),
             embedding: None,
@@ -92,6 +104,10 @@ pub struct ConnectionConfig {
     pub api_key: Option<String>,
     pub connect_timeout_secs: u64,
     pub http_port: Option<u16>,
+    /// Which wire transport to use; requires the matching feature to be
+    /// compiled in.
+    #[serde(default)]
+    pub transport: QdrantTransport,
 }
 
 impl ConnectionConfig {
@@ -103,6 +119,7 @@ impl ConnectionConfig {
             api_key: None,
             connect_timeout_secs: 5,
             http_port: None,
+            transport: QdrantTransport::default(),
         }
     }
 
@@ -118,6 +135,7 @@ impl ConnectionConfig {
             api_key: None,
             connect_timeout_secs: 5,
             http_port: Some(http_port),
+            transport: QdrantTransport::default(),
         }
     }
 
@@ -128,6 +146,12 @@ impl ConnectionConfig {
 
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Select the wire transport used to reach Qdrant.
+    pub fn with_transport(mut self, transport: QdrantTransport) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -281,6 +305,15 @@ mod validation_tests {
     fn test_connection_config_to_grpc_url() {
         let config = ConnectionConfig::new("qdrant.example.com", 6334);
         assert_eq!(config.to_grpc_url(), "http://qdrant.example.com:6334");
+    }
+
+    #[test]
+    fn test_connection_config_transport_selection() {
+        let grpc = ConnectionConfig::localhost(6334);
+        assert_eq!(grpc.transport, QdrantTransport::Grpc);
+
+        let http = ConnectionConfig::localhost(6333).with_transport(QdrantTransport::Http);
+        assert_eq!(http.transport, QdrantTransport::Http);
     }
 
     #[test]

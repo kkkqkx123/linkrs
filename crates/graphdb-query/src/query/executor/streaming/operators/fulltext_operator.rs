@@ -235,18 +235,15 @@ impl FulltextOperator {
                         } => {
                             if let Some(manager) = fulltext_manager {
                                 for field_name in fields {
-                                    futures::executor::block_on(manager.create_index(
-                                        *space_id,
-                                        schema_name,
-                                        field_name,
-                                        None,
-                                    ))
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "Fulltext create failed: {}",
-                                            e
-                                        ))
-                                    })?;
+                                    crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                        "Fulltext create",
+                                        manager.create_index(
+                                            *space_id,
+                                            schema_name,
+                                            field_name,
+                                            None,
+                                        ),
+                                    )?;
                                 }
                                 Some(make_manage_result(
                                     Arc::clone(&self.output_layout),
@@ -280,17 +277,14 @@ impl FulltextOperator {
                                     )));
                                 }
                                 for metadata in matching {
-                                    futures::executor::block_on(manager.drop_index(
-                                        metadata.space_id,
-                                        &metadata.tag_name,
-                                        &metadata.field_name,
-                                    ))
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "Fulltext drop failed: {}",
-                                            e
-                                        ))
-                                    })?;
+                                    crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                        "Fulltext drop",
+                                        manager.drop_index(
+                                            metadata.space_id,
+                                            &metadata.tag_name,
+                                            &metadata.field_name,
+                                        ),
+                                    )?;
                                 }
                                 Some(make_manage_result(
                                     Arc::clone(&self.output_layout),
@@ -453,16 +447,11 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 {
                     if let Some(manager) = fulltext_manager {
-                        let search_results = futures::executor::block_on(manager.search(
-                            *space_id,
-                            tag_name,
-                            field_name,
-                            search_query,
-                            100,
-                        ))
-                        .map_err(|e| {
-                            QueryError::execution(format!("Fulltext search failed: {}", e))
-                        })?;
+                        let search_results =
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext search",
+                                manager.search(*space_id, tag_name, field_name, search_query, 100),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -506,16 +495,11 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 {
                     if let Some(manager) = fulltext_manager {
-                        let search_results = futures::executor::block_on(manager.search(
-                            *space_id,
-                            tag_name,
-                            field_name,
-                            search_query,
-                            100,
-                        ))
-                        .map_err(|e| {
-                            QueryError::execution(format!("Fulltext lookup failed: {}", e))
-                        })?;
+                        let search_results =
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext lookup",
+                                manager.search(*space_id, tag_name, field_name, search_query, 100),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -561,12 +545,11 @@ impl FulltextOperator {
                     if let Some(manager) = fulltext_manager {
                         let expr_str = format!("{:?}", match_expr);
                         let space_id = 0;
-                        let search_results = futures::executor::block_on(
-                            manager.search(space_id, tag_name, field_name, &expr_str, 100),
-                        )
-                        .map_err(|e| {
-                            QueryError::execution(format!("Fulltext match failed: {}", e))
-                        })?;
+                        let search_results =
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext match",
+                                manager.search(space_id, tag_name, field_name, &expr_str, 100),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);

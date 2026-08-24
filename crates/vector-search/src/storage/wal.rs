@@ -1,10 +1,13 @@
 //! `wal.bin` — append-only transaction log per collection.
 //!
-//! Each record is `[u32 len][postcard(WalTxn)]`. Appends are fsync'ed before
-//! the caller applies the transaction to memory. Replay is idempotent: upserts overwrite by point id, deletes of
-//! missing points are no-ops, and `Compact` checkpoints only advance the water
-//! mark. A truncated trailing record (crash mid-append) is tolerated and
-//! treated as end of log.
+//! Each record is `[u32 len][u32 crc32][postcard(WalTxn)]`; the checksum covers
+//! the encoded payload so a torn or bit-rotted record cannot be mistaken for a
+//! committed transaction. Appends are fsync'ed before the caller applies the
+//! transaction to memory. Replay is idempotent: upserts overwrite by point id,
+//! deletes of missing points are no-ops, and `Compact` checkpoints only advance
+//! the water mark. A truncated or checksum-failed final record (crash
+//! mid-append) stops the replay silently and is treated as end of log;
+//! anything else malformed is reported as `CorruptData`.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -101,7 +104,7 @@ impl Wal {
         })
     }
 
-    /// Append a transaction: `[u32 len][postcard(txn)]`, then fsync.
+    /// Append a transaction: `[u32 len][u32 crc32][payload]`, then fsync.
     pub fn append(&self, txn: &WalTxn) -> Result<()> {
         let bytes = postcard::to_stdvec(txn)?;
         if bytes.len() > MAX_RECORD_LEN as usize {
@@ -110,8 +113,9 @@ impl Wal {
                 bytes.len()
             )));
         }
-        let mut record = Vec::with_capacity(4 + bytes.len());
+        let mut record = Vec::with_capacity(8 + bytes.len());
         record.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        record.extend_from_slice(&crc32fast::hash(&bytes).to_le_bytes());
         record.extend_from_slice(&bytes);
 
         let mut file = self.file.lock();
@@ -123,20 +127,21 @@ impl Wal {
     /// Replay all records in order, invoking `f` for each decoded transaction.
     ///
     /// Returns the highest `txn_id` seen. A truncated final record (crash
-    /// mid-append) stops the replay silently; anything else that is malformed
-    /// is reported as `CorruptData`.
+    /// mid-append) or a checksum mismatch on the final record stops the replay
+    /// silently — nothing after a torn record can be trusted; anything else
+    /// that is malformed is reported as `CorruptData`.
     pub fn replay(&self, mut f: impl FnMut(&WalTxn) -> Result<()>) -> Result<u64> {
         let mut file = self.file.lock();
         file.rewind()?;
         let mut last_txn = 0u64;
-        let mut len_buf = [0u8; 4];
+        let mut header_buf = [0u8; 8];
         loop {
-            match file.read_exact(&mut len_buf) {
+            match file.read_exact(&mut header_buf) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(e.into()),
             }
-            let len = u32::from_le_bytes(len_buf);
+            let len = u32::from_le_bytes(header_buf[0..4].try_into().expect("len slice"));
             if len == 0 {
                 return Err(VectorSearchError::CorruptData(
                     "wal record with zero length".to_string(),
@@ -147,12 +152,18 @@ impl Wal {
                     "wal record length {len} exceeds limit"
                 )));
             }
+            let expected_crc = u32::from_le_bytes(header_buf[4..8].try_into().expect("crc slice"));
             let mut bytes = vec![0u8; len as usize];
             if let Err(e) = file.read_exact(&mut bytes) {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     break; // truncated trailing record from a crash
                 }
                 return Err(e.into());
+            }
+            if crc32fast::hash(&bytes) != expected_crc {
+                // Torn write or bit rot: stop at this record. Because the log
+                // is append-only, no later record can be valid anyway.
+                break;
             }
             let txn: WalTxn = postcard::from_bytes(&bytes)?;
             f(&txn)?;
@@ -239,6 +250,40 @@ mod tests {
             let mut f = OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(&100u32.to_le_bytes()).unwrap();
             f.sync_all().unwrap();
+        }
+
+        let mut seen = Vec::new();
+        let last = wal
+            .replay(|t| {
+                seen.push(t.txn_id);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(last, 1);
+        assert_eq!(seen, vec![1]);
+    }
+
+    #[test]
+    fn test_replay_stops_at_checksum_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wal.bin");
+        let wal = Wal::open_or_create(&path).unwrap();
+        wal.append(&txn(1, 10)).unwrap();
+        wal.append(&txn(2, 20)).unwrap();
+
+        // Flip one payload byte of the second record: the length prefix still
+        // parses but the checksum no longer matches, so the replay must stop
+        // after the first record instead of applying torn data.
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            use std::io::{Seek, SeekFrom, Write};
+            f.seek(SeekFrom::Start(file_len - 1)).unwrap();
+            f.write_all(&[0xFFu8]).unwrap();
         }
 
         let mut seen = Vec::new();

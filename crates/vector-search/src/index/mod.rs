@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use bitvec::prelude::BitVec;
 use memmap2::Mmap;
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -244,12 +243,12 @@ impl IvfIndex {
         &self,
         start: u32,
         end: u32,
-        tombstones: &bitvec::prelude::BitVec,
+        tombstones: &crate::storage::TombstoneBits,
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) {
         for slot in start..end {
-            if tombstones[slot as usize] {
+            if tombstones.bit(slot as usize) {
                 continue;
             }
             if let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim) {
@@ -267,7 +266,7 @@ impl IvfIndex {
         query: &[f32],
         nprobe: usize,
         extra_slots: &[u32],
-        tombstones: &bitvec::prelude::BitVec,
+        tombstones: &crate::storage::TombstoneBits,
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) -> Result<Vec<(f32, u32)>> {
@@ -292,7 +291,7 @@ impl IvfIndex {
         let scored: Vec<(f32, u32)> = candidates
             .par_iter()
             .copied()
-            .filter(|&s| !tombstones[s as usize])
+            .filter(|&s| !tombstones.bit(s as usize))
             .filter_map(|s| {
                 let v = Vectors::read_slot(vectors, s as u64, segment_slots, self.dim)?;
                 let dist = crate::distance::distance(self.metric, query, v);
@@ -311,7 +310,7 @@ impl IvfIndex {
     pub(crate) fn drift_ratio(
         &self,
         sample_slots: &[u32],
-        tombstones: &BitVec,
+        tombstones: &crate::storage::TombstoneBits,
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) -> f64 {
@@ -319,7 +318,7 @@ impl IvfIndex {
         let mut total = 0f64;
         let mut counted = 0usize;
         for &slot in sample_slots {
-            if tombstones[slot as usize] {
+            if tombstones.bit(slot as usize) {
                 continue;
             }
             let Some(&list) = slot_map.get(slot as usize) else {
@@ -328,8 +327,7 @@ impl IvfIndex {
             if list == UNASSIGNED || list as usize >= self.centroids.len() {
                 continue;
             }
-            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
-            else {
+            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim) else {
                 continue;
             };
             total +=
@@ -344,7 +342,11 @@ impl IvfIndex {
         // Degenerate baselines (all points on centroids) cannot express
         // relative growth; cap instead of dividing by zero.
         if baseline <= 1e-9 {
-            return if current <= 1e-9 { 0.0 } else { DRIFT_RATIO_CAP };
+            return if current <= 1e-9 {
+                0.0
+            } else {
+                DRIFT_RATIO_CAP
+            };
         }
         ((current - baseline) / baseline).clamp(0.0, DRIFT_RATIO_CAP)
     }
@@ -496,8 +498,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut tombstones = bitvec::bitvec![0; data.len()];
-        tombstones.set(0, true);
+        let mut bits = bitvec::bitvec![0; data.len()];
+        bits.set(0, true);
+        let tombstones = crate::storage::TombstoneBits::from_bits(bits);
 
         let query = vec![0.0f32; 8];
         let candidates = index
@@ -534,7 +537,8 @@ mod tests {
         // A slot unknown to the index but passed via `extra_slots` must show
         // up in probe results.
         let extra = vec![vectors.len() as u32 - 1];
-        let mut tombstones = bitvec::bitvec![0; vectors.len()];
+        let tombstones =
+            crate::storage::TombstoneBits::from_bits(bitvec::bitvec![0; vectors.len()]);
         let candidates = index
             .probe_candidates(&[50.0; 8], 4, &extra, &tombstones, &mmaps, 16)
             .unwrap();
@@ -542,7 +546,10 @@ mod tests {
             .iter()
             .any(|&(_, s)| s == vectors.len() as u32 - 1));
 
-        tombstones.set(vectors.len() - 1, true);
+        // Rebuild the tombstone table with the extra slot marked deleted.
+        let mut bits = bitvec::bitvec![0; vectors.len()];
+        bits.set(vectors.len() - 1, true);
+        let tombstones = crate::storage::TombstoneBits::from_bits(bits);
         let candidates = index
             .probe_candidates(&[50.0; 8], 4, &extra, &tombstones, &mmaps, 16)
             .unwrap();
@@ -567,7 +574,8 @@ mod tests {
         )
         .unwrap();
 
-        let tombstones = bitvec::bitvec![0; vectors.len()];
+        let tombstones =
+            crate::storage::TombstoneBits::from_bits(bitvec::bitvec![0; vectors.len()]);
         index.adopt_range(4, vectors.len() as u32, &tombstones, &mmaps, 16);
         let total: usize = index.lists.iter().map(|l| l.read().len()).sum();
         assert_eq!(total, vectors.len());
@@ -590,7 +598,8 @@ mod tests {
         .unwrap();
 
         let samples = IvfIndex::sample_plan(1024, vectors.len() as u32);
-        let tombstones = bitvec::bitvec![0; vectors.len()];
+        let tombstones =
+            crate::storage::TombstoneBits::from_bits(bitvec::bitvec![0; vectors.len()]);
         let clean = index.drift_ratio(&samples, &tombstones, &mmaps, 16);
         assert_eq!(clean, 0.0, "assignments straight after build have no drift");
 

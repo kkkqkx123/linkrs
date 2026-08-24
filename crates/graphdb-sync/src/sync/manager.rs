@@ -14,7 +14,7 @@ use crate::sync::outbox::OutboxPayload;
 use crate::sync::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::sync::types::ChangeType;
 use dashmap::DashMap;
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "vector")]
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ pub struct SyncManager {
     running: Arc<std::sync::atomic::AtomicBool>,
     dead_letter_queue: Option<Arc<crate::sync::DeadLetterQueue>>,
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::sync::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     stats_manager: Option<Arc<StatsManager>>,
@@ -95,7 +95,7 @@ impl Clone for SyncManager {
             running: self.running.clone(),
             dead_letter_queue: self.dead_letter_queue.clone(),
             sqlite_outbox: self.sqlite_outbox.clone(),
-            #[cfg(feature = "vector-qdrant")]
+            #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             stats_manager: self.stats_manager.clone(),
@@ -117,7 +117,7 @@ impl std::fmt::Debug for SyncManager {
 }
 
 #[cfg_attr(
-    not(any(feature = "fulltext-search", feature = "vector-qdrant")),
+    not(any(feature = "fulltext-search", feature = "vector")),
     allow(unused_variables)
 )]
 impl SyncManager {
@@ -183,7 +183,7 @@ impl SyncManager {
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             dead_letter_queue: None,
             sqlite_outbox: None,
-            #[cfg(feature = "vector-qdrant")]
+            #[cfg(feature = "vector")]
             vector_receiver: None,
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             stats_manager: None,
@@ -305,7 +305,7 @@ impl SyncManager {
             Err(error) => return Err(error),
         };
         self.sqlite_outbox = Some(Arc::new(outbox));
-        #[cfg(feature = "vector-qdrant")]
+        #[cfg(feature = "vector")]
         {
             self.vector_receiver = Some(Arc::new(crate::sync::VectorReceiver::open(
                 work_dir.join("vector_receiver"),
@@ -376,7 +376,10 @@ impl SyncManager {
                 .map_err(SyncError::PersistenceError)?;
             let mut processed = 0usize;
             for target in targets {
-                while processed < self.outbox_consumer.batch_size {
+                // Each delivery target owns its full batch budget so a hot
+                // target cannot starve the others until the next poll cycle.
+                let mut target_processed = 0usize;
+                while target_processed < self.outbox_consumer.batch_size {
                     let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
                     let Some(event) = outbox
                         .claim_next(
@@ -433,6 +436,7 @@ impl SyncManager {
                         }
                     }
                     processed = processed.saturating_add(1);
+                    target_processed = target_processed.saturating_add(1);
                 }
             }
             if let Some(stats) = &stats_manager {
@@ -477,7 +481,7 @@ impl SyncManager {
                 self.apply_fulltext_mutation(mutation, commit_lsn, &payload)
                     .await
             }
-            #[cfg(feature = "vector-qdrant")]
+            #[cfg(feature = "vector")]
             "vector" => {
                 self.apply_vector_mutation(mutation, commit_lsn, &payload)
                     .await
@@ -680,7 +684,7 @@ impl SyncManager {
         Ok(())
     }
 
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "vector")]
     async fn apply_vector_mutation(
         &self,
         mutation: &crate::core::wal::IndexMutation,
@@ -1159,34 +1163,8 @@ impl SyncManager {
         Fut: std::future::Future<Output = Result<T, SyncError>> + Send,
         T: Send,
     {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return match handle.runtime_flavor() {
-                tokio::runtime::RuntimeFlavor::MultiThread => {
-                    tokio::task::block_in_place(|| handle.block_on(f()))
-                }
-                tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
-                    let join = scope.spawn(|| {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .map_err(|error| SyncError::Internal(error.to_string()))?;
-                        runtime.block_on(f())
-                    });
-                    join.join().map_err(|_| {
-                        SyncError::Internal("Synchronous async operation panicked".to_string())
-                    })?
-                }),
-                _ => handle.block_on(f()),
-            };
-        }
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                SyncError::Internal(format!("Failed to create sync runtime: {}", error))
-            })?;
-        runtime.block_on(f())
+        crate::sync::runtime::block_on_ambient(f())
+            .map_err(|error| SyncError::Internal(error.to_string()))?
     }
 
     #[cfg(feature = "fulltext-search")]

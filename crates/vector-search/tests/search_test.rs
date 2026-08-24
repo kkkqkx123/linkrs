@@ -274,7 +274,10 @@ fn test_search_after_compaction() {
     for i in 0..5u64 {
         store.delete(&PointId::Num(i)).unwrap();
     }
-    // 5/20 = 25% > 20%: auto-compacted.
+    // Tombstoned slots stay invisible immediately; physical reclamation is
+    // explicit here (the engine schedules it in the background).
+    assert_eq!(store.meta().tombstone_count, 5);
+    store.compact().unwrap();
     assert_eq!(store.meta().tombstone_count, 0);
 
     let query = unit(6, 8).vector;

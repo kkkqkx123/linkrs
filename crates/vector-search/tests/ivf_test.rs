@@ -146,10 +146,13 @@ fn restart_applies_runtime_config_to_published_index() {
     // The rehydrated index starts from `IvfConfig::default()`; its nprobe 8
     // is clamped to the collection's 4 lists.
     assert_eq!(
-        reopened.collection_info("col").unwrap().index.unwrap().nprobe_default,
-        IvfConfig::default()
-            .default_nprobe
-            .clamp(1, 4)
+        reopened
+            .collection_info("col")
+            .unwrap()
+            .index
+            .unwrap()
+            .nprobe_default,
+        IvfConfig::default().default_nprobe.clamp(1, 4)
     );
 
     // Injecting runtime settings must reach the already-published index,
@@ -469,5 +472,8 @@ fn drift_triggers_rebuild() {
             .expect("index info present")
             .built_at_live_count;
     }
-    assert_eq!(after, 70, "drift above threshold must trigger an automatic rebuild");
+    assert_eq!(
+        after, 70,
+        "drift above threshold must trigger an automatic rebuild"
+    );
 }

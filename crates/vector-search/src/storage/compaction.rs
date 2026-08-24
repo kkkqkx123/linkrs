@@ -10,7 +10,6 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-use bitvec::prelude::*;
 use memmap2::Mmap;
 
 use crate::error::{Result, VectorSearchError};
@@ -27,17 +26,18 @@ pub(crate) struct DirEntry {
 
 /// Compute the old-slot -> new-slot mapping for all live slots.
 ///
-/// Returns the new capacity (segment-aligned, at least one segment) and the
-/// mapping array: `map[old_slot] = new_slot` for live slots.
+/// `is_live(slot)` reports whether the slot survives compaction. Returns the
+/// new capacity (segment-aligned, at least one segment) and the mapping array:
+/// `map[old_slot] = new_slot` for live slots.
 pub(crate) fn plan_slots(
-    tombstones: &BitVec,
+    mut is_live: impl FnMut(usize) -> bool,
     next_slot: u64,
     segment_slots: u32,
 ) -> (u64, Vec<u32>) {
     let mut map = vec![u32::MAX; next_slot as usize];
     let mut live = 0u32;
     for slot in 0..next_slot as usize {
-        if !tombstones[slot] {
+        if is_live(slot) {
             map[slot] = live;
             live += 1;
         }

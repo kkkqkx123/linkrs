@@ -263,7 +263,8 @@ impl VectorOperator {
                                         vector_search::DistanceMetric::Dot
                                     }
                                 };
-                                let res = futures::executor::block_on(
+                                let res = crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                    "Vector create",
                                     coordinator.create_vector_index(
                                         *space_id,
                                         tag_name,
@@ -271,10 +272,7 @@ impl VectorOperator {
                                         *vector_size,
                                         distance,
                                     ),
-                                )
-                                .map_err(|e| {
-                                    QueryError::execution(format!("Vector create failed: {}", e))
-                                });
+                                );
                                 match res {
                                     Ok(_) => {
                                         // Record the statement-level name so
@@ -293,12 +291,9 @@ impl VectorOperator {
                                     Err(e) => Err(e),
                                 }
                             } else {
-                                Ok(Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "create_vector_index",
-                                    Some(index_name.as_str()),
-                                    "no-coordinator",
-                                )))
+                                Err(QueryError::execution(
+                                    "CREATE VECTOR INDEX cannot execute: no vector coordinator is configured",
+                                ))
                             }
                         }
                         #[cfg(not(feature = "vector"))]
@@ -349,13 +344,11 @@ impl VectorOperator {
                             }
                             match vector_coordinator {
                                 Some(coordinator) => {
-                                    futures::executor::block_on(
+                                    crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                        "Vector drop",
                                         coordinator
                                             .drop_vector_index(*space_id, tag_name, field_name),
-                                    )
-                                    .map_err(|e| {
-                                        QueryError::execution(format!("Vector drop failed: {}", e))
-                                    })?;
+                                    )?;
                                     Ok(Some(make_manage_result(
                                         Arc::clone(&self.output_layout),
                                         "drop_vector_index",
@@ -363,12 +356,9 @@ impl VectorOperator {
                                         "dropped",
                                     )))
                                 }
-                                None => Ok(Some(make_manage_result(
-                                    Arc::clone(&self.output_layout),
-                                    "drop_vector_index",
-                                    Some(index_name.as_str()),
-                                    "no-coordinator",
-                                ))),
+                                None => Err(QueryError::execution(
+                                    "DROP VECTOR INDEX cannot execute: no vector coordinator is configured",
+                                )),
                             }
                         }
                         #[cfg(not(feature = "vector"))]
@@ -421,10 +411,10 @@ impl VectorOperator {
                             options.filter = Some(filter.clone());
                         }
                         let search_results =
-                            futures::executor::block_on(coordinator.search_with_options(options))
-                                .map_err(|e| {
-                                QueryError::execution(format!("Vector search failed: {}", e))
-                            })?;
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector search",
+                                coordinator.search_with_options(options),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results.into_iter().skip(*offset) {
                             rows.push(vec![
@@ -442,12 +432,13 @@ impl VectorOperator {
                         };
                     }
 
-                    // No coordinator configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("VectorSearch");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    // A missing coordinator is a configuration error, not an
+                    // empty result: fail loudly instead of silently returning
+                    // nothing (or unrelated input rows).
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "SEARCH VECTOR cannot execute: no vector coordinator is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "vector"))]
@@ -496,10 +487,10 @@ impl VectorOperator {
                             *top_k as usize,
                         );
                         let search_results =
-                            futures::executor::block_on(coordinator.search_with_options(options))
-                                .map_err(|e| {
-                                QueryError::execution(format!("Vector lookup failed: {}", e))
-                            })?;
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector lookup",
+                                coordinator.search_with_options(options),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![
@@ -517,12 +508,10 @@ impl VectorOperator {
                         };
                     }
 
-                    // No coordinator configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("VectorSearch");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "LOOKUP VECTOR cannot execute: no vector coordinator is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "vector"))]
@@ -547,17 +536,17 @@ impl VectorOperator {
                     if let Some(coordinator) = vector_coordinator {
                         let thr = threshold.unwrap_or(0.5);
                         let search_results =
-                            futures::executor::block_on(coordinator.search_with_threshold(
-                                *space_id,
-                                tag_name,
-                                field_name,
-                                query_vector.clone(),
-                                DEFAULT_MATCH_TOP_K,
-                                thr,
-                            ))
-                            .map_err(|e| {
-                                QueryError::execution(format!("Vector match failed: {}", e))
-                            })?;
+                            crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector match",
+                                coordinator.search_with_threshold(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    query_vector.clone(),
+                                    DEFAULT_MATCH_TOP_K,
+                                    thr,
+                                ),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![
@@ -575,12 +564,10 @@ impl VectorOperator {
                         };
                     }
 
-                    // No coordinator configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("VectorSearch");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "MATCH VECTOR cannot execute: no vector coordinator is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "vector"))]

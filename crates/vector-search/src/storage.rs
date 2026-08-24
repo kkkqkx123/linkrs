@@ -43,13 +43,93 @@ use crate::types::{
 };
 
 use self::compaction::{plan_slots, write_dir_file, write_vectors_file, DirEntry};
-use self::directory::{KEY_REC_SIZE, SLOT_REC_SIZE};
+use self::directory::{DirView, KEY_REC_SIZE, SLOT_REC_SIZE};
 use self::keys::Keys;
 use self::payloads::Payloads;
 use self::vectors::Vectors;
 
 /// Tombstone ratio above which deletes trigger compaction.
 const COMPACTION_THRESHOLD: f64 = 0.20;
+
+/// Bits per tombstone chunk (8 KiB of bitmap).
+const TOMBSTONE_CHUNK_BITS: usize = 1 << 16;
+
+/// Lock-free tombstone table held as fixed-size immutable chunks.
+///
+/// Setting one bit clones a single 8 KiB chunk instead of the whole bitmap,
+/// whose size grows with collection capacity; readers snapshot the chunk list
+/// through an [`ArcSwap`] exactly as before, so scan cost is unchanged.
+#[derive(Debug, Default)]
+pub(crate) struct TombstoneBits {
+    chunks: Vec<Arc<BitVec>>,
+}
+
+impl TombstoneBits {
+    fn new(slot_capacity: usize) -> Self {
+        let chunk_count = slot_capacity.div_ceil(TOMBSTONE_CHUNK_BITS).max(1);
+        Self {
+            chunks: (0..chunk_count)
+                .map(|_| Arc::new(bitvec::bitvec![0; TOMBSTONE_CHUNK_BITS]))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn from_bits(bits: BitVec) -> Self {
+        let mut chunks = Vec::new();
+        for chunk in bits.chunks(TOMBSTONE_CHUNK_BITS) {
+            chunks.push(Arc::new(chunk.to_bitvec()));
+        }
+        if chunks.is_empty() {
+            chunks.push(Arc::new(bitvec::bitvec![0; TOMBSTONE_CHUNK_BITS]));
+        }
+        Self { chunks }
+    }
+
+    pub(crate) fn bit(&self, slot: usize) -> bool {
+        let (chunk, offset) = (slot / TOMBSTONE_CHUNK_BITS, slot % TOMBSTONE_CHUNK_BITS);
+        match self.chunks.get(chunk) {
+            Some(c) => c.as_bitslice()[offset],
+            None => false,
+        }
+    }
+
+    fn count_ones(&self) -> u64 {
+        self.chunks
+            .iter()
+            .map(|c| c.as_bitslice().count_ones() as u64)
+            .sum()
+    }
+
+    /// Copy-on-write single-bit update: only the affected chunk is cloned.
+    fn with_slot(&self, slot: usize, value: bool) -> Self {
+        let (chunk, offset) = (slot / TOMBSTONE_CHUNK_BITS, slot % TOMBSTONE_CHUNK_BITS);
+        let mut next = Self {
+            chunks: Vec::with_capacity(self.chunks.len()),
+        };
+        for (index, existing) in self.chunks.iter().enumerate() {
+            if index == chunk {
+                let mut copy = (**existing).clone();
+                if offset < copy.len() {
+                    copy.set(offset, value);
+                }
+                next.chunks.push(Arc::new(copy));
+            } else {
+                next.chunks.push(Arc::clone(existing));
+            }
+        }
+        next
+    }
+
+    /// Grow or shrink to `slot_capacity` slots, preserving existing bits.
+    fn resized(&self, slot_capacity: usize) -> Self {
+        let mut bits = BitVec::with_capacity(slot_capacity);
+        for chunk in &self.chunks {
+            bits.extend_from_bitslice(chunk.as_bitslice());
+        }
+        bits.resize(slot_capacity, false);
+        Self::from_bits(bits)
+    }
+}
 
 /// In-memory mutable state, guarded by the store's `RwLock`.
 struct StoreInner {
@@ -66,7 +146,7 @@ pub struct CollectionStore {
     dir: PathBuf,
     inner: RwLock<StoreInner>,
     /// Tombstone mirror (slot -> deleted) for lock-free scans.
-    tombstones: ArcSwap<BitVec>,
+    tombstones: ArcSwap<TombstoneBits>,
     vectors: Vectors,
     keys: Keys,
     payloads: Payloads,
@@ -143,7 +223,7 @@ impl CollectionStore {
         let keys = Keys::create(&dir.join("keys.bin"), meta.slot_capacity)?;
         let payloads = Payloads::create(&dir.join("payloads.bin"), meta.slot_capacity)?;
 
-        let tombstones = ArcSwap::from(Arc::new(bitvec::bitvec![0; meta.slot_capacity as usize]));
+        let tombstones = ArcSwap::from(Arc::new(TombstoneBits::new(meta.slot_capacity as usize)));
         let wal = Wal::open_or_create(&dir.join("wal.bin"))?;
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -206,7 +286,7 @@ impl CollectionStore {
                 ivf_config: None,
                 last_drift_ratio: None,
             }),
-            tombstones: ArcSwap::from(Arc::new(tombstones)),
+            tombstones: ArcSwap::from(Arc::new(TombstoneBits::from_bits(tombstones))),
             vectors,
             keys,
             payloads,
@@ -260,7 +340,7 @@ impl CollectionStore {
             let tombstones = self.tombstones.load();
             let mut pending = self.pending.write();
             for slot in covered..next_slot as usize {
-                if slot < capacity && !tombstones[slot] {
+                if slot < capacity && !tombstones.bit(slot) {
                     pending.push(slot as u32);
                 }
             }
@@ -293,18 +373,15 @@ impl CollectionStore {
     /// Delete a point by id (tombstone; physical removal happens on
     /// compaction). Returns whether the point existed.
     pub fn delete(&self, id: &PointId) -> Result<bool> {
-        let should_compact = {
-            let mut inner = self.inner.write();
-            let slot = match inner.reverse.remove(id) {
-                Some(slot) => slot,
-                None => return Ok(false),
-            };
-            self.apply_delete_slot_locked(&mut inner, slot)?;
-            threshold_met(&inner.meta)
+        let mut inner = self.inner.write();
+        let slot = match inner.reverse.remove(id) {
+            Some(slot) => slot,
+            None => return Ok(false),
         };
-        if should_compact {
-            self.compact()?;
-        }
+        self.apply_delete_slot_locked(&mut inner, slot)?;
+        // Physical reclamation is scheduled by the engine's maintenance
+        // worker once the tombstone ratio crosses the compaction threshold;
+        // reads already filter tombstoned slots.
         Ok(true)
     }
 
@@ -318,7 +395,7 @@ impl CollectionStore {
     /// On success the caller's buffer may be drained; on failure nothing was
     /// applied in memory and the call may be retried (replay is idempotent).
     pub fn apply_txn(&self, txn: &WalTxn) -> Result<()> {
-        let should_compact = {
+        {
             let mut inner = self.inner.write();
             for op in &txn.ops {
                 if let WalRecord::Upsert { point } = op {
@@ -332,10 +409,6 @@ impl CollectionStore {
             // the last applied id (replay is idempotent, so this is safe).
             inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(txn.txn_id);
             inner.meta.save(&self.dir)?;
-            threshold_met(&inner.meta)
-        };
-        if should_compact {
-            self.compact()?;
         }
         Ok(())
     }
@@ -364,7 +437,7 @@ impl CollectionStore {
             let psnap = self.payloads.snapshot();
             let mut point_ids = Vec::new();
             for slot in 0..inner.meta.next_slot as usize {
-                if tombstones[slot] {
+                if tombstones.bit(slot) {
                     continue;
                 }
                 let key = Keys::read_key(&keysnap, slot)?.ok_or_else(|| {
@@ -400,7 +473,7 @@ impl CollectionStore {
         let mut inner = self.inner.write();
         inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(last);
         let live = inner.reverse.len() as u64;
-        let tomb = self.tombstones.load().count_ones() as u64;
+        let tomb = self.tombstones.load().count_ones();
         let changed = inner.meta.live_count != live || inner.meta.tombstone_count != tomb;
         inner.meta.live_count = live;
         inner.meta.tombstone_count = tomb;
@@ -496,8 +569,7 @@ impl CollectionStore {
             Some(slot) => *slot as u64,
             None => return Ok(None),
         };
-        let tombstones = self.tombstones.load();
-        if tombstones[slot as usize] {
+        if self.tombstones.load().bit(slot as usize) {
             return Ok(None);
         }
         let dim = inner.meta.vector_size;
@@ -520,6 +592,15 @@ impl CollectionStore {
         self.inner.read().meta.live_count
     }
 
+    /// Whether the tombstone ratio has crossed the compaction threshold.
+    ///
+    /// The engine polls this after mutations and schedules a background
+    /// compaction; visibility of data never depends on compaction having run.
+    pub fn needs_compaction(&self) -> bool {
+        let inner = self.inner.read();
+        threshold_met(&inner.meta)
+    }
+
     /// Grow storage to accommodate `needed_slots` slots (0-indexed high water).
     fn ensure_capacity(&self, meta: &mut Meta, needed_slots: u64) -> Result<()> {
         if needed_slots <= meta.slot_capacity {
@@ -530,9 +611,7 @@ impl CollectionStore {
         self.keys.grow_to(new_capacity)?;
         self.payloads.grow_to(new_capacity)?;
 
-        let old = self.tombstones.load();
-        let mut next = (**old).clone();
-        next.resize(new_capacity as usize, false);
+        let next = self.tombstones.load().resized(new_capacity as usize);
         self.tombstones.store(Arc::new(next));
 
         meta.slot_capacity = new_capacity;
@@ -540,9 +619,7 @@ impl CollectionStore {
     }
 
     fn update_tombstone_bit(&self, slot: usize, value: bool) {
-        let old = self.tombstones.load();
-        let mut next = (**old).clone();
-        next.set(slot, value);
+        let next = self.tombstones.load().with_slot(slot, value);
         self.tombstones.store(Arc::new(next));
     }
 
@@ -573,7 +650,8 @@ impl CollectionStore {
         let segment_slots = inner.meta.segment_slots;
 
         let tombstones = self.tombstones.load();
-        let (new_capacity, map) = plan_slots(&tombstones, inner.meta.next_slot, segment_slots);
+        let (new_capacity, map) =
+            plan_slots(|s| !tombstones.bit(s), inner.meta.next_slot, segment_slots);
         let live_count = map.iter().filter(|s| **s != u32::MAX).count() as u64;
         drop(tombstones);
 
@@ -638,7 +716,7 @@ impl CollectionStore {
 
         // 4. in-memory rebuild + meta.bin
         self.tombstones
-            .store(Arc::new(bitvec![0; new_capacity as usize]));
+            .store(Arc::new(TombstoneBits::new(new_capacity as usize)));
         inner.reverse.clear();
         {
             let keys_view = self.keys.snapshot();
@@ -705,7 +783,7 @@ impl CollectionStore {
         let live: Vec<u32> = {
             let tombstones = self.tombstones.load();
             (0..snapshot_next_slot as u32)
-                .filter(|&s| !tombstones[s as usize])
+                .filter(|&s| !tombstones.bit(s as usize))
                 .collect()
         };
         if (live.len() as u64) < config.min_build_points.max(1) || live.is_empty() {
@@ -751,7 +829,7 @@ impl CollectionStore {
                 segment_slots,
             );
             for slot in pending.drain(..) {
-                if !tombstones[slot as usize] {
+                if !tombstones.bit(slot as usize) {
                     if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
                         index.assign_slot(slot, v);
                     }
@@ -861,7 +939,12 @@ impl CollectionStore {
     /// offset/limit) through [`Self::finish_candidates`], so scores and
     /// semantics are path-independent.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
-        let (dim, metric, segment_slots, next_slot) = {
+        // Take the metadata and all per-file views inside one read-lock
+        // acquisition so a concurrent background compaction (which swaps
+        // every file under the write lock) cannot produce a mixed-generation
+        // view. Only the atomic loads happen under the lock; the actual scan
+        // runs on immutable snapshots.
+        let (dim, metric, segment_slots, next_slot, tombstones, vsnap, keysnap, paysnap, ivf) = {
             let inner = self.inner.read();
             if query.vector.len() != inner.meta.vector_size {
                 return Err(VectorSearchError::InvalidVectorDimension {
@@ -874,14 +957,15 @@ impl CollectionStore {
                 inner.meta.distance,
                 inner.meta.segment_slots,
                 inner.meta.next_slot,
+                self.tombstones.load(),
+                self.vectors.snapshot(),
+                self.keys.snapshot(),
+                self.payloads.snapshot(),
+                self.ivf.load(),
             )
         };
-        let tombstones = self.tombstones.load();
-        let vsnap = self.vectors.snapshot();
-
-        let ivf = self.ivf.load();
         if let Some(index) = ivf.as_ref() {
-            return self.search_ivf(
+            let results = self.search_ivf(
                 index.as_ref(),
                 query,
                 dim,
@@ -890,14 +974,18 @@ impl CollectionStore {
                 next_slot,
                 &tombstones,
                 &vsnap,
+                &keysnap,
+                &paysnap,
             );
+            drop(ivf);
+            return results;
         }
         drop(ivf);
 
         // 1. Parallel exact scan, skipping tombstones.
         let candidates: Vec<(f32, u32)> = (0..next_slot as u32)
             .into_par_iter()
-            .filter(|s| !tombstones[*s as usize])
+            .filter(|s| !tombstones.bit(*s as usize))
             .map(|s| {
                 let v =
                     Vectors::read_slot(&vsnap, s as u64, segment_slots, dim).ok_or_else(|| {
@@ -908,7 +996,17 @@ impl CollectionStore {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        self.finish_candidates(candidates, query, dim, metric, segment_slots)
+        self.finish_candidates(
+            candidates,
+            query,
+            dim,
+            metric,
+            segment_slots,
+            &tombstones,
+            &vsnap,
+            &keysnap,
+            &paysnap,
+        )
     }
 
     /// IVF path: probe the `nprobe` closest lists (+ pending slots), then
@@ -925,8 +1023,10 @@ impl CollectionStore {
         metric: DistanceMetric,
         segment_slots: u32,
         next_slot: u64,
-        tombstones: &BitVec,
+        tombstones: &TombstoneBits,
         vsnap: &[Arc<memmap2::Mmap>],
+        keysnap: &DirView,
+        paysnap: &DirView,
     ) -> Result<Vec<SearchResult>> {
         let _ = (dim, metric, next_slot);
         let lists = index.list_count();
@@ -941,7 +1041,17 @@ impl CollectionStore {
             vsnap,
             segment_slots,
         )?;
-        let results = self.finish_candidates(candidates, query, dim, metric, segment_slots)?;
+        let results = self.finish_candidates(
+            candidates,
+            query,
+            dim,
+            metric,
+            segment_slots,
+            tombstones,
+            vsnap,
+            keysnap,
+            paysnap,
+        )?;
 
         let short = query.filter.is_some() && results.len() < query.limit;
         if !short || nprobe >= lists {
@@ -957,7 +1067,17 @@ impl CollectionStore {
             vsnap,
             segment_slots,
         )?;
-        self.finish_candidates(candidates, query, dim, metric, segment_slots)
+        self.finish_candidates(
+            candidates,
+            query,
+            dim,
+            metric,
+            segment_slots,
+            tombstones,
+            vsnap,
+            keysnap,
+            paysnap,
+        )
     }
 
     /// Shared post-processing for both search paths: payload post-filter,
@@ -969,18 +1089,22 @@ impl CollectionStore {
         dim: usize,
         _metric: DistanceMetric,
         segment_slots: u32,
+        tombstones: &TombstoneBits,
+        vsnap: &[Arc<memmap2::Mmap>],
+        keysnap: &DirView,
+        paysnap: &DirView,
     ) -> Result<Vec<SearchResult>> {
-        // 2. Post-filter on payload.
+        let _ = tombstones;
+        // 2. Post-filter on payload, against the snapshots taken by the
+        // caller (one compaction generation).
         if let Some(filter) = &query.filter {
-            let psnap = self.payloads.snapshot();
-            let keysnap = self.keys.snapshot();
             let mut kept = Vec::with_capacity(candidates.len());
             for (score, slot) in candidates {
                 let key = Keys::read_key(&keysnap, slot as usize)?.ok_or_else(|| {
                     VectorSearchError::CorruptData(format!("slot {slot} has no key"))
                 })?;
                 let id = PointId::from(key);
-                let payload = Payloads::read_payload(&psnap, slot as usize)?;
+                let payload = Payloads::read_payload(paysnap, slot as usize)?;
                 if crate::filter::matches(filter, &id, payload.as_ref())? {
                     kept.push((score, slot));
                 }
@@ -1017,12 +1141,9 @@ impl CollectionStore {
             v
         };
 
-        // 5. Assemble results (payload/vector only when requested).
+        // 5. Assemble results against the same snapshots the scan used.
         let with_payload = query.with_payload.unwrap_or(false);
         let with_vector = query.with_vector.unwrap_or(false);
-        let psnap = self.payloads.snapshot();
-        let keysnap = self.keys.snapshot();
-        let vsnap = self.vectors.snapshot();
         let mut results = Vec::new();
         for (score, slot) in top
             .into_iter()
@@ -1033,7 +1154,7 @@ impl CollectionStore {
                 .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
             let mut result = SearchResult::new(PointId::from(key), score);
             if with_payload {
-                if let Some(payload) = Payloads::read_payload(&psnap, slot as usize)? {
+                if let Some(payload) = Payloads::read_payload(paysnap, slot as usize)? {
                     result = result.with_payload(payload);
                 }
             }
@@ -1263,9 +1384,11 @@ mod tests {
         );
         assert!(store.get(&PointId::Num(2)).unwrap().is_none());
         assert_eq!(store.count(), 2);
-        // 1 tombstone out of 3 slots exceeds the 20% threshold, so the delete
-        // triggers compaction immediately: tombstone_count is back to zero and
-        // slot numbering is compacted.
+        // The tombstone stays pending until compaction runs (the engine
+        // schedules it in the background); visibility never depends on it.
+        let meta = store.meta();
+        assert_eq!(meta.tombstone_count, 1);
+        store.compact().unwrap();
         let meta = store.meta();
         assert_eq!(meta.tombstone_count, 0);
         assert_eq!(meta.next_slot, 2);
@@ -1292,14 +1415,17 @@ mod tests {
         store.upsert(&point(1, 4)).unwrap();
         assert!(store.delete(&PointId::Num(1)).unwrap());
 
-        // The single-slot delete crosses the 20% threshold and compacts to an
-        // empty collection; the re-insert takes slot 0 of the compacted
-        // layout (tombstoned slots are only reused by compaction).
+        // Without an intervening compaction the re-insert takes a fresh slot:
+        // the stale tombstone stays pending and flags the collection for
+        // background compaction, while visibility is already correct.
         store.upsert(&point(1, 4)).unwrap();
         assert_eq!(store.count(), 1);
         let meta = store.meta();
-        assert_eq!(meta.tombstone_count, 0);
-        assert_eq!(meta.next_slot, 1);
+        assert_eq!(meta.next_slot, 2);
+        assert_eq!(meta.tombstone_count, 1);
+        assert!(store.needs_compaction());
+        store.compact().unwrap();
+        assert!(!store.needs_compaction());
         assert!(store.get(&PointId::Num(1)).unwrap().is_some());
     }
 

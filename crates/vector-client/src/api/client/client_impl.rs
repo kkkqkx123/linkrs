@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(any(feature = "qdrant-http", feature = "qdrant-grpc"))]
-use crate::config::EngineType;
 use crate::config::VectorClientConfig;
 use crate::embedding::{EmbeddingConfig, EmbeddingService};
 use crate::engine::{DisabledEngine, VectorEngine};
@@ -25,33 +23,8 @@ impl VectorClient {
             });
         }
 
-        #[cfg(any(feature = "qdrant-http", feature = "qdrant-grpc"))]
-        {
-            let engine: Arc<dyn VectorEngine> = match config.engine {
-                EngineType::Qdrant => {
-                    #[cfg(feature = "qdrant-grpc")]
-                    {
-                        let e = crate::engine::QdrantGrpcEngine::new(config.clone()).await?;
-                        Arc::new(e)
-                    }
-                    #[cfg(all(not(feature = "qdrant-grpc"), feature = "qdrant-http"))]
-                    {
-                        let e = crate::engine::QdrantEngine::new(config.clone()).await?;
-                        Arc::new(e)
-                    }
-                }
-            };
-
-            Ok(Self { engine })
-        }
-
-        #[cfg(not(any(feature = "qdrant-http", feature = "qdrant-grpc")))]
-        {
-            let _ = config;
-            Err(crate::error::VectorClientError::EngineNotAvailable(
-                "no qdrant engine feature enabled".to_string(),
-            ))
-        }
+        let engine = crate::engine::create_engine(config).await?;
+        Ok(Self { engine })
     }
 
     pub fn engine(&self) -> &dyn VectorEngine {

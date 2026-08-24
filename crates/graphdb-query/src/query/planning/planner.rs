@@ -663,6 +663,9 @@ pub enum PlannerError {
     #[error("Index not found: {0}")]
     IndexNotFound(String),
 
+    #[error("Unsupported vector filter: {0}")]
+    UnsupportedVectorFilter(String),
+
     #[error("Tag not found: {0}")]
     TagNotFound(String),
 

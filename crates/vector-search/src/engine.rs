@@ -45,6 +45,8 @@ pub enum TxnOp {
 enum MaintenanceJob {
     /// Build (or rebuild) the IVF index of a collection.
     Build(String),
+    /// Physically reclaim tombstoned slots in a collection.
+    Compact(String),
     /// Stop the worker (sent on engine drop).
     Shutdown,
 }
@@ -263,7 +265,9 @@ impl LocalVectorEngine {
         let store = self.store(collection)?;
         store.apply_ops(&[WalRecord::Upsert {
             point: WalPoint::from_point(&point)?,
-        }])
+        }])?;
+        self.maybe_schedule_compaction(collection, &store);
+        Ok(())
     }
 
     /// Upsert a batch of points (WAL-backed, single transaction).
@@ -277,7 +281,9 @@ impl LocalVectorEngine {
                 })
             })
             .collect();
-        store.apply_ops(&ops?)
+        store.apply_ops(&ops?)?;
+        self.maybe_schedule_compaction(collection, &store);
+        Ok(())
     }
 
     /// Delete a point by id (WAL-backed). Deleting a missing id is a no-op.
@@ -285,7 +291,9 @@ impl LocalVectorEngine {
         let store = self.store(collection)?;
         store.apply_ops(&[WalRecord::Delete {
             point_id: point_id.to_string(),
-        }])
+        }])?;
+        self.maybe_schedule_compaction(collection, &store);
+        Ok(())
     }
 
     /// Delete a batch of points (WAL-backed, single transaction).
@@ -293,12 +301,17 @@ impl LocalVectorEngine {
         let store = self.store(collection)?;
         store.apply_ops(&[WalRecord::DeleteBatch {
             point_ids: point_ids.to_vec(),
-        }])
+        }])?;
+        self.maybe_schedule_compaction(collection, &store);
+        Ok(())
     }
 
     /// Delete every point matching `filter`. Returns the number deleted.
     pub fn delete_by_filter(&self, collection: &str, filter: &VectorFilter) -> Result<u64> {
-        self.store(collection)?.delete_by_filter(filter)
+        let store = self.store(collection)?;
+        let deleted = store.delete_by_filter(filter)?;
+        self.maybe_schedule_compaction(collection, &store);
+        Ok(deleted)
     }
 
     /// Exact full-scan search. Scores follow Qdrant semantics:
@@ -351,6 +364,7 @@ impl LocalVectorEngine {
             let ops = by_collection.remove(&name).expect("key present");
             let store = self.store(&name)?;
             store.apply_txn(&WalTxn { txn_id, ops })?;
+            self.maybe_schedule_compaction(&name, &store);
         }
         Ok(())
     }
@@ -361,6 +375,30 @@ impl LocalVectorEngine {
             .get(collection)
             .cloned()
             .ok_or_else(|| VectorSearchError::CollectionNotFound(collection.to_string()))
+    }
+
+    /// Schedule a background compaction for `collection` once its tombstone
+    /// ratio crosses the threshold. Deduplicated through the in-flight set so
+    /// bursts of mutations do not flood the maintenance queue.
+    fn maybe_schedule_compaction(&self, collection: &str, store: &CollectionStore) {
+        let Some(jobs) = self.jobs.as_ref() else {
+            return;
+        };
+        if !store.needs_compaction() {
+            return;
+        }
+        let key = format!("compact:{collection}");
+        let mut guard = self.in_flight.lock();
+        if guard.contains(&key) {
+            return;
+        }
+        guard.insert(key.clone());
+        if jobs
+            .send(MaintenanceJob::Compact(collection.to_string()))
+            .is_err()
+        {
+            guard.remove(&key);
+        }
     }
 
     /// Run one maintenance sweep immediately: post-compaction rebuilds,
@@ -418,6 +456,24 @@ fn maintenance_loop(
                     }
                 }
                 in_flight.lock().remove(&name);
+            }
+            Ok(MaintenanceJob::Compact(name)) => {
+                let store = collections.read().get(&name).cloned();
+                if let Some(store) = store {
+                    match store.compact() {
+                        Ok(live) => tracing::debug!(
+                            collection = %name,
+                            live,
+                            "maintenance compaction done"
+                        ),
+                        Err(e) => tracing::warn!(
+                            collection = %name,
+                            error = %e,
+                            "maintenance compaction failed"
+                        ),
+                    }
+                }
+                in_flight.lock().remove(&format!("compact:{name}"));
             }
             Err(RecvTimeoutError::Timeout) => {
                 maintenance_sweep(&collections, &jobs, &in_flight);
@@ -505,6 +561,34 @@ mod tests {
     fn engine() -> LocalVectorEngine {
         let dir = tempfile::tempdir().unwrap();
         LocalVectorEngine::open(dir.path().join("vec")).unwrap()
+    }
+
+    #[test]
+    fn test_deletes_schedule_background_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vec");
+        let engine = LocalVectorEngine::open(&root).unwrap();
+        engine.create_collection("col", &config(4)).unwrap();
+        for i in 0..10u64 {
+            engine.upsert("col", point(i, 4)).unwrap();
+        }
+        // 3/10 live-slot ratio crosses the 20% threshold: the mutation path
+        // must enqueue a background compaction without blocking.
+        engine.delete("col", "0").unwrap();
+        engine.delete("col", "1").unwrap();
+        engine.delete("col", "2").unwrap();
+
+        let store = engine.store("col").unwrap();
+        assert!(store.needs_compaction());
+
+        // The maintenance worker drains the queue promptly; poll briefly so
+        // the test does not depend on exact thread scheduling.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while store.meta().tombstone_count > 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(store.meta().tombstone_count, 0, "background compaction ran");
+        assert_eq!(store.count(), 7);
     }
 
     #[test]

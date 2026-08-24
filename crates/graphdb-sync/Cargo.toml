@@ -24,7 +24,7 @@ parking_lot.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
-vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+vector-client = { path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
 vector-search = { path = "../vector-search", optional = true }
 tracing.workspace = true
 tokio.workspace = true

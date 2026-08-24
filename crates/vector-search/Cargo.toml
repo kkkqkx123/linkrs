@@ -20,6 +20,7 @@ bitvec.workspace = true
 arc-swap.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+crc32fast.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

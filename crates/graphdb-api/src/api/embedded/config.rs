@@ -42,6 +42,45 @@ pub struct DatabaseConfig {
     pub read_only: bool,
     /// Should it be created if it does not exist?
     pub create_if_missing: bool,
+    /// Vector subsystem configuration.
+    pub vector: VectorConfig,
+}
+
+/// Which vector engine the embedded database should use.
+#[derive(Debug, Clone, Default)]
+pub enum EmbeddedVectorEngine {
+    /// Built-in disk-backed local engine (default).
+    #[default]
+    Local,
+    /// Remote Qdrant service; requires the `vector-qdrant` feature.
+    #[cfg(feature = "vector-qdrant")]
+    Qdrant(vector_client::VectorClientConfig),
+}
+
+/// Vector subsystem configuration for the embedded database.
+///
+/// Defaults to the local engine with a data directory derived from the
+/// database path (`<db_file>_vector`). In-memory databases have no on-disk
+/// home, so their vectors stay disabled unless an explicit directory is set.
+#[derive(Debug, Clone)]
+pub struct VectorConfig {
+    /// Master switch for the vector subsystem.
+    pub enabled: bool,
+    /// Engine selection.
+    pub engine: EmbeddedVectorEngine,
+    /// Explicit storage directory for the local engine;
+    /// derived from the database path when unset.
+    pub local_data_dir: Option<PathBuf>,
+}
+
+impl Default for VectorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            engine: EmbeddedVectorEngine::Local,
+            local_data_dir: None,
+        }
+    }
 }
 
 /// Synchronization Mode
@@ -67,6 +106,7 @@ impl DatabaseConfig {
             sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
+            vector: VectorConfig::default(),
         }
     }
 
@@ -80,6 +120,7 @@ impl DatabaseConfig {
             sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
+            vector: VectorConfig::default(),
         }
     }
 
@@ -121,6 +162,25 @@ impl DatabaseConfig {
     /// Should a setting be created if it does not exist?
     pub fn with_create_if_missing(mut self, create: bool) -> Self {
         self.create_if_missing = create;
+        self
+    }
+
+    /// Enable or disable the vector subsystem.
+    pub fn with_vector_enabled(mut self, enabled: bool) -> Self {
+        self.vector.enabled = enabled;
+        self
+    }
+
+    /// Set an explicit data directory for the local vector engine.
+    pub fn with_vector_local_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.vector.local_data_dir = Some(dir.into());
+        self
+    }
+
+    /// Select the remote Qdrant engine; requires the `vector-qdrant` feature.
+    #[cfg(feature = "vector-qdrant")]
+    pub fn with_vector_qdrant(mut self, config: vector_client::VectorClientConfig) -> Self {
+        self.vector.engine = EmbeddedVectorEngine::Qdrant(config);
         self
     }
 
