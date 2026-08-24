@@ -568,9 +568,7 @@ mod tests {
 
         // Plain LOOKUP ON TAG must not be swallowed by LOOKUP VECTOR.
         let mut parser = Parser::new("LOOKUP ON TAG player");
-        let lookup_result = parser
-            .parse()
-            .expect("plain LOOKUP ON TAG should parse");
+        let lookup_result = parser.parse().expect("plain LOOKUP ON TAG should parse");
         assert!(
             matches!(lookup_result.ast.stmt(), Stmt::Lookup(_)),
             "plain LOOKUP stays a util lookup"

@@ -16,10 +16,10 @@ use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult}
 
 #[cfg(feature = "vector-qdrant")]
 use vector_client::EmbeddingService;
-pub use vector_search::types::{
-    DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint,
+pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
+use vector_search::{
+    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, TxnOp, VectorFilter,
 };
-use vector_search::{CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, TxnOp, VectorFilter};
 
 /// Runtime state of the vector engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1069,6 +1069,26 @@ impl VectorSyncCoordinator {
     pub fn index_exists(&self, space_id: u64, tag_name: &str, field_name: &str) -> bool {
         let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
         self.logical_indexes.contains_key(&logical_key)
+    }
+
+    /// Attach a statement-level logical index name to an existing
+    /// `(space_id, tag, field)` index.
+    ///
+    /// SQL `CREATE VECTOR INDEX <name>` resolves to a physical location; the
+    /// name is recorded here so later statements (SEARCH / LOOKUP / DROP) can
+    /// resolve `<name>` back to its location during planning.
+    /// Best-effort: a missing logical index leaves the map untouched.
+    pub fn set_index_name(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        index_name: &str,
+    ) {
+        let logical_key = Self::logical_index_key(space_id, tag_name, field_name);
+        if let Some(mut meta) = self.logical_indexes.get_mut(&logical_key) {
+            meta.index_name = Some(index_name.to_string());
+        }
     }
 
     /// Get logical index metadata for a tag/field combination

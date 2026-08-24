@@ -276,12 +276,20 @@ impl VectorOperator {
                                     QueryError::execution(format!("Vector create failed: {}", e))
                                 });
                                 match res {
-                                    Ok(_) => Ok(Some(make_manage_result(
-                                        Arc::clone(&self.output_layout),
-                                        "create_vector_index",
-                                        Some(index_name.as_str()),
-                                        "created",
-                                    ))),
+                                    Ok(_) => {
+                                        // Record the statement-level name so
+                                        // later SEARCH/LOOKUP/DROP statements
+                                        // resolve it back to (space, tag, field).
+                                        coordinator.set_index_name(
+                                            *space_id, tag_name, field_name, index_name,
+                                        );
+                                        Ok(Some(make_manage_result(
+                                            Arc::clone(&self.output_layout),
+                                            "create_vector_index",
+                                            Some(index_name.as_str()),
+                                            "created",
+                                        )))
+                                    }
                                     Err(e) => Err(e),
                                 }
                             } else {
@@ -341,16 +349,12 @@ impl VectorOperator {
                             }
                             match vector_coordinator {
                                 Some(coordinator) => {
-                                    futures::executor::block_on(coordinator.drop_vector_index(
-                                        *space_id,
-                                        tag_name,
-                                        field_name,
-                                    ))
+                                    futures::executor::block_on(
+                                        coordinator
+                                            .drop_vector_index(*space_id, tag_name, field_name),
+                                    )
                                     .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "Vector drop failed: {}",
-                                            e
-                                        ))
+                                        QueryError::execution(format!("Vector drop failed: {}", e))
                                     })?;
                                     Ok(Some(make_manage_result(
                                         Arc::clone(&self.output_layout),
@@ -370,12 +374,7 @@ impl VectorOperator {
                         #[cfg(not(feature = "vector"))]
                         {
                             let _ = (
-                                storage,
-                                space_name,
-                                index_name,
-                                if_exists,
-                                space_id,
-                                tag_name,
+                                storage, space_name, index_name, if_exists, space_id, tag_name,
                                 field_name,
                             );
                             Err(QueryError::feature_disabled("vector", "DROP VECTOR INDEX"))
@@ -421,12 +420,11 @@ impl VectorOperator {
                         if let Some(filter) = filter {
                             options.filter = Some(filter.clone());
                         }
-                        let search_results = futures::executor::block_on(
-                            coordinator.search_with_options(options),
-                        )
-                        .map_err(|e| {
-                            QueryError::execution(format!("Vector search failed: {}", e))
-                        })?;
+                        let search_results =
+                            futures::executor::block_on(coordinator.search_with_options(options))
+                                .map_err(|e| {
+                                QueryError::execution(format!("Vector search failed: {}", e))
+                            })?;
                         let mut rows = Vec::new();
                         for result in search_results.into_iter().skip(*offset) {
                             rows.push(vec![

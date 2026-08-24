@@ -523,6 +523,29 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
 
+        // Vector indexes live in the sync coordinator's logical-index registry,
+        // not in the storage property-index manager. Statement-level names are
+        // recorded there at CREATE time so they can be resolved back to their
+        // (space_id, tag, field) location during planning.
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = &self.vector_coordinator {
+            for wrapper in coordinator.list_indexes() {
+                if let Some(name) = wrapper.index_name {
+                    if wrapper.space_id != space_id || wrapper.tag_name.is_empty() {
+                        continue;
+                    }
+                    let index_metadata = IndexMetadata::new(
+                        name.clone(),
+                        space_id,
+                        wrapper.tag_name,
+                        wrapper.field_name,
+                        IndexType::Vector,
+                    );
+                    metadata.set_index_metadata(name, index_metadata);
+                }
+            }
+        }
+
         let tag_names: Vec<String> = metadata
             .get_all_tags()
             .map(|t| t.tag_name.clone())
