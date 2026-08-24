@@ -135,7 +135,8 @@ impl TombstoneBits {
 struct StoreInner {
     meta: Meta,
     reverse: HashMap<PointId, u32>,
-    /// IVF configuration (not persisted; supplied by the engine).
+    /// IVF configuration. Persisted in `meta.bin` since format v2; the
+    /// engine may still override it at runtime via [`CollectionStore::set_ivf_config`].
     ivf_config: Option<IvfConfig>,
     /// Last measured drift ratio, exposed via `CollectionInfo`.
     last_drift_ratio: Option<f64>,
@@ -165,6 +166,16 @@ pub struct CollectionStore {
     /// Compaction invalidated a published index and a rebuild should be
     /// scheduled by the engine maintenance worker.
     needs_rebuild: AtomicBool,
+}
+
+/// Snapshot of the immutable views used by a single search pass.
+struct SearchSnapshot<'a> {
+    dim: usize,
+    segment_slots: u32,
+    tombstones: &'a TombstoneBits,
+    vsnap: &'a [Arc<memmap2::Mmap>],
+    keysnap: &'a DirView,
+    paysnap: &'a DirView,
 }
 
 impl CollectionStore {
@@ -207,12 +218,13 @@ impl CollectionStore {
         }
         std::fs::create_dir_all(dir)?;
 
-        let meta = Meta::new_with_segment_slots(
+        let mut meta = Meta::new_with_segment_slots(
             collection,
             config.vector_size,
             config.distance,
             segment_slots,
         );
+        meta.ivf_config = config.ivf_config.clone();
         meta.save(dir)?;
 
         let vectors = Vectors::create(
@@ -281,9 +293,9 @@ impl CollectionStore {
         let store = Self {
             dir: dir.to_path_buf(),
             inner: RwLock::new(StoreInner {
+                ivf_config: meta.ivf_config.clone(),
                 meta,
                 reverse,
-                ivf_config: None,
                 last_drift_ratio: None,
             }),
             tombstones: ArcSwap::from(Arc::new(TombstoneBits::from_bits(tombstones))),
@@ -302,10 +314,11 @@ impl CollectionStore {
         Ok(store)
     }
 
-    /// Supply the IVF configuration after open (the config is not persisted;
-    /// the engine passes it from graphdb-config). Applies both to future
-    /// builds and to any published index, so a rehydrated index — which
-    /// starts with default settings — immediately honors the runtime config.
+    /// Supply the IVF configuration after open. Collections created since
+    /// format v2 persist their effective config, but the engine-provided
+    /// runtime configuration takes precedence. Applies both to future builds
+    /// and to any published index, so a rehydrated index immediately honors
+    /// the runtime config.
     pub fn set_ivf_config(&self, config: IvfConfig) {
         self.inner.write().ivf_config = Some(config.clone());
         if let Some(index) = self.ivf.load().as_ref() {
@@ -999,13 +1012,14 @@ impl CollectionStore {
         self.finish_candidates(
             candidates,
             query,
-            dim,
-            metric,
-            segment_slots,
-            &tombstones,
-            &vsnap,
-            &keysnap,
-            &paysnap,
+            &SearchSnapshot {
+                dim,
+                segment_slots,
+                tombstones: &tombstones,
+                vsnap: &vsnap,
+                keysnap: &keysnap,
+                paysnap: &paysnap,
+            },
         )
     }
 
@@ -1028,7 +1042,7 @@ impl CollectionStore {
         keysnap: &DirView,
         paysnap: &DirView,
     ) -> Result<Vec<SearchResult>> {
-        let _ = (dim, metric, next_slot);
+        let _ = (metric, next_slot);
         let lists = index.list_count();
         let mut nprobe = index.clamp_nprobe(query.nprobe);
         let pending = self.pending.read().clone();
@@ -1044,13 +1058,14 @@ impl CollectionStore {
         let results = self.finish_candidates(
             candidates,
             query,
-            dim,
-            metric,
-            segment_slots,
-            tombstones,
-            vsnap,
-            keysnap,
-            paysnap,
+            &SearchSnapshot {
+                dim,
+                segment_slots,
+                tombstones,
+                vsnap,
+                keysnap,
+                paysnap,
+            },
         )?;
 
         let short = query.filter.is_some() && results.len() < query.limit;
@@ -1070,13 +1085,14 @@ impl CollectionStore {
         self.finish_candidates(
             candidates,
             query,
-            dim,
-            metric,
-            segment_slots,
-            tombstones,
-            vsnap,
-            keysnap,
-            paysnap,
+            &SearchSnapshot {
+                dim,
+                segment_slots,
+                tombstones,
+                vsnap,
+                keysnap,
+                paysnap,
+            },
         )
     }
 
@@ -1086,21 +1102,23 @@ impl CollectionStore {
         &self,
         mut candidates: Vec<(f32, u32)>,
         query: &SearchQuery,
-        dim: usize,
-        _metric: DistanceMetric,
-        segment_slots: u32,
-        tombstones: &TombstoneBits,
-        vsnap: &[Arc<memmap2::Mmap>],
-        keysnap: &DirView,
-        paysnap: &DirView,
+        snap: &SearchSnapshot,
     ) -> Result<Vec<SearchResult>> {
+        let SearchSnapshot {
+            dim,
+            segment_slots,
+            tombstones,
+            vsnap,
+            keysnap,
+            paysnap,
+        } = snap;
         let _ = tombstones;
         // 2. Post-filter on payload, against the snapshots taken by the
         // caller (one compaction generation).
         if let Some(filter) = &query.filter {
             let mut kept = Vec::with_capacity(candidates.len());
             for (score, slot) in candidates {
-                let key = Keys::read_key(&keysnap, slot as usize)?.ok_or_else(|| {
+                let key = Keys::read_key(keysnap, slot as usize)?.ok_or_else(|| {
                     VectorSearchError::CorruptData(format!("slot {slot} has no key"))
                 })?;
                 let id = PointId::from(key);
@@ -1142,7 +1160,9 @@ impl CollectionStore {
         };
 
         // 5. Assemble results against the same snapshots the scan used.
-        let with_payload = query.with_payload.unwrap_or(false);
+        let with_payload = query
+            .with_payload
+            .unwrap_or(crate::types::DEFAULT_WITH_PAYLOAD);
         let with_vector = query.with_vector.unwrap_or(false);
         let mut results = Vec::new();
         for (score, slot) in top
@@ -1150,7 +1170,7 @@ impl CollectionStore {
             .skip(query.offset.unwrap_or(0))
             .take(query.limit)
         {
-            let key = Keys::read_key(&keysnap, slot as usize)?
+            let key = Keys::read_key(keysnap, slot as usize)?
                 .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
             let mut result = SearchResult::new(PointId::from(key), score);
             if with_payload {
@@ -1159,7 +1179,7 @@ impl CollectionStore {
                 }
             }
             if with_vector {
-                let v = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim).ok_or_else(
+                let v = Vectors::read_slot(vsnap, slot as u64, *segment_slots, *dim).ok_or_else(
                     || {
                         VectorSearchError::CorruptData(format!(
                             "slot {slot} out of vectors.bin range"

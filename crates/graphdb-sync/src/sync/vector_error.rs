@@ -104,6 +104,12 @@ pub enum VectorCoordinatorError {
     #[error("Vector coordinator is shutting down")]
     ShuttingDown,
 
+    #[error(
+        "Vector engine is disabled by configuration; \
+         enable the vector engine (or check VectorEngineState) before issuing vector operations"
+    )]
+    EngineDisabled,
+
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 

@@ -49,12 +49,21 @@ impl From<&str> for PointId {
 
 pub type CollectionName = String;
 
+/// Default for `with_payload` when a query leaves it unset.
+///
+/// Both backends must agree on this: the local engine and the Qdrant
+/// transports all resolve `None` through this constant so an explicit
+/// `None` cannot fork behavior between engines.
+pub const DEFAULT_WITH_PAYLOAD: bool = true;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DistanceMetric {
     #[default]
     Cosine,
     Euclid,
     Dot,
+    /// Not supported by any backend. Kept as a variant so stored configs
+    /// deserialize; every creation entry point rejects it up front.
     Manhattan,
 }
 
@@ -596,6 +605,8 @@ pub struct MinShouldCondition {
     pub min_count: usize,
 }
 
+/// A single filter condition. Translated to backend-specific representations
+/// by each engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterCondition {
     pub field: String,
@@ -663,17 +674,40 @@ impl FilterCondition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConditionType {
-    Match { value: String },
-    MatchAny { values: Vec<PayloadValue> },
+    /// Match a scalar field value.
+    ///
+    /// The local engine compares stringified values (a numeric payload `42`
+    /// matches `"42"`). Remote Qdrant receives a *typed* match: integer- and
+    /// boolean-shaped strings translate to integer/boolean match conditions,
+    /// everything else to keyword matching. A string payload holding
+    /// digits therefore only matches locally — keep filter values aligned
+    /// with the stored payload type.
+    Match {
+        value: String,
+    },
+    /// Match any of the given values (OR semantics). Values are translated
+    /// by their actual JSON type: pure integer lists map to integer matching,
+    /// pure boolean lists to an OR over singular boolean matches, and mixed
+    /// lists degrade to the shared stringified representation on remote
+    /// backends.
+    MatchAny {
+        values: Vec<PayloadValue>,
+    },
     Range(RangeCondition),
     IsEmpty,
     IsNull,
-    HasId { ids: Vec<String> },
-    Nested { filter: Box<VectorFilter> },
+    HasId {
+        ids: Vec<String>,
+    },
+    Nested {
+        filter: Box<VectorFilter>,
+    },
     GeoRadius(GeoRadius),
     GeoBoundingBox(GeoBoundingBox),
     ValuesCount(ValuesCountCondition),
-    Contains { value: String },
+    Contains {
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -822,12 +856,20 @@ pub enum UpsertStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteResult {
     pub operation_id: Option<u64>,
+    /// Best-effort estimate of the number of deleted points.
+    ///
+    /// The local engine reports exact counts. Remote backends report the
+    /// requested batch size once the server acknowledges completion, and a
+    /// status-only estimate (1/0) for filter deletes; callers must not rely
+    /// on this value for accounting.
     pub deleted_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SearchMode {
     TopK(usize),
+    /// HNSW-style kNN search; `ef_search` is the only recall knob remote
+    /// (Qdrant) backends honor — `nprobe` is ignored there.
     KNN {
         k: usize,
         ef_search: Option<usize>,
@@ -843,10 +885,15 @@ pub struct SearchQuery {
     pub vector: Vec<f32>,
     pub limit: usize,
     pub offset: Option<usize>,
+    /// Similarity lower bound: results with `score >= score_threshold` are
+    /// kept. Scores are "higher is better" on every backend.
     pub score_threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
     pub with_payload: Option<bool>,
     pub with_vector: Option<bool>,
+    /// Number of IVF cells probed per search. Only the local engine's IVF
+    /// tier consumes this; remote HNSW backends ignore it. For HNSW recall
+    /// control use `SearchMode::KNN.ef_search` instead.
     pub nprobe: Option<usize>,
     pub search_mode: Option<SearchMode>,
 }

@@ -1,3 +1,7 @@
+//! Shared request-parameter extraction for both Qdrant transports.
+
+use tracing::warn;
+
 use crate::types::*;
 
 pub struct ExtractedSearchParams {
@@ -6,10 +10,23 @@ pub struct ExtractedSearchParams {
     pub score_threshold: Option<f32>,
 }
 
+/// Extract transport-independent search parameters from a [`SearchQuery`].
+///
+/// Only `SearchMode::KNN.ef_search` feeds HNSW's `ef`: `nprobe` is an IVF
+/// concept consumed by the local engine only, and is deliberately *not*
+/// mapped onto `ef`. Setting an `ef`-less `nprobe` on a remote query is
+/// almost always a configuration mistake, so it is logged.
 pub fn extract_search_params(query: &SearchQuery) -> ExtractedSearchParams {
+    let hnsw_ef = query.hnsw_ef();
+    if query.nprobe.is_some() && hnsw_ef.is_none() {
+        warn!(
+            nprobe = ?query.nprobe,
+            "SearchQuery.nprobe is IVF-only and ignored by remote HNSW backends; set SearchMode::KNN.ef_search instead"
+        );
+    }
     ExtractedSearchParams {
         limit: query.effective_limit(),
-        hnsw_ef: query.nprobe.or(query.hnsw_ef()),
+        hnsw_ef,
         score_threshold: query.score_threshold.or(query.score_threshold()),
     }
 }
@@ -28,27 +45,27 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_search_params_with_nprobe() {
+    fn test_extract_search_params_nprobe_not_mapped_to_ef() {
+        // nprobe is IVF-only and must not leak into the remote ef parameter.
         let q = SearchQuery::new(vec![1.0], 10).with_nprobe(64);
         let params = extract_search_params(&q);
-        assert_eq!(params.hnsw_ef, Some(64));
+        assert_eq!(params.hnsw_ef, None);
     }
 
     #[test]
     fn test_extract_search_params_with_knn_ef() {
         let q = SearchQuery::new(vec![1.0], 10).with_knn(5, Some(128));
         let params = extract_search_params(&q);
-        // nprobe takes priority over hnsw_ef from search mode
-        assert!(params.hnsw_ef.is_none() || params.hnsw_ef == Some(128));
+        assert_eq!(params.hnsw_ef, Some(128));
     }
 
     #[test]
-    fn test_extract_search_params_nprobe_overrides_knn_ef() {
+    fn test_extract_search_params_nprobe_does_not_override_knn_ef() {
         let q = SearchQuery::new(vec![1.0], 10)
             .with_knn(5, Some(128))
             .with_nprobe(200);
         let params = extract_search_params(&q);
-        assert_eq!(params.hnsw_ef, Some(200));
+        assert_eq!(params.hnsw_ef, Some(128));
     }
 
     #[test]

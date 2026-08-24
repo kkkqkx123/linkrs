@@ -4,7 +4,7 @@ pub use index::IndexMetadata;
 
 use std::sync::Arc;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use tracing::{debug, info, warn};
 
 use crate::config::VectorClientConfig;
@@ -14,7 +14,13 @@ use crate::types::{CollectionConfig, SearchQuery, SearchResult, VectorFilter, Ve
 
 pub struct VectorManager {
     engine: Arc<dyn VectorEngine>,
+    /// Indexes created through this manager, with full metadata.
     indexes: DashMap<String, IndexMetadata>,
+    /// Collections known to exist on the server (warmed from
+    /// `list_collections` at startup). Keeps `index_exists` truthful for
+    /// collections created by earlier processes that were never registered
+    /// in this one.
+    known_collections: DashSet<String>,
 }
 
 impl std::fmt::Debug for VectorManager {
@@ -56,10 +62,37 @@ impl VectorManager {
             }
         }
 
-        Ok(Self {
+        let manager = Self {
             engine,
             indexes: DashMap::new(),
-        })
+            known_collections: DashSet::new(),
+        };
+
+        // Best-effort warmup: discover collections that already exist on the
+        // server so existence checks survive process restarts. Failures are
+        // logged and retried lazily on the next create.
+        if enabled {
+            let engine = manager.engine.clone();
+            let known = manager.known_collections.clone();
+            tokio::spawn(async move {
+                match engine.list_collections().await {
+                    Ok(names) => {
+                        debug!(
+                            "Warmed collection registry with {} existing collections",
+                            names.len()
+                        );
+                        for name in names {
+                            known.insert(name);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to prewarm collection registry: {}", e);
+                    }
+                }
+            });
+        }
+
+        Ok(manager)
     }
 
     pub fn engine(&self) -> &Arc<dyn VectorEngine> {
@@ -76,6 +109,7 @@ impl VectorManager {
 
         let metadata = IndexMetadata::new(name.to_string(), config);
         self.indexes.insert(name.to_string(), metadata);
+        self.known_collections.insert(name.to_string());
 
         info!("Vector index created: {}", name);
         Ok(())
@@ -87,6 +121,7 @@ impl VectorManager {
             self.engine.delete_collection(name).await?;
             info!("Vector index dropped: {}", name);
         }
+        self.known_collections.remove(name);
         Ok(())
     }
 
@@ -98,10 +133,11 @@ impl VectorManager {
 
     pub fn register_index(&self, name: &str, metadata: IndexMetadata) {
         self.indexes.insert(name.to_string(), metadata);
+        self.known_collections.insert(name.to_string());
     }
 
     pub fn index_exists(&self, name: &str) -> bool {
-        self.indexes.contains_key(name)
+        self.indexes.contains_key(name) || self.known_collections.contains(name)
     }
 
     pub fn get_index_metadata(&self, name: &str) -> Option<IndexMetadata> {

@@ -240,7 +240,7 @@ impl VectorOperator {
                 #[cfg(feature = "vector")]
                 let _ = (&storage, &space_name);
 
-                let result = match command {
+                match command {
                     VectorManageCommand::Create {
                         index_name,
                         tag_name,
@@ -370,9 +370,7 @@ impl VectorOperator {
                             Err(QueryError::feature_disabled("vector", "DROP VECTOR INDEX"))
                         }
                     }
-                };
-
-                result
+                }
             }
 
             VectorOperatorKind::VectorSearch {
@@ -454,7 +452,7 @@ impl VectorOperator {
                         &offset,
                         input,
                     );
-                    return Err(QueryError::feature_disabled("vector", "VECTOR SEARCH"));
+                    Err(QueryError::feature_disabled("vector", "VECTOR SEARCH"))
                 }
             }
 
@@ -517,7 +515,7 @@ impl VectorOperator {
                 #[cfg(not(feature = "vector"))]
                 {
                     let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
-                    return Err(QueryError::feature_disabled("vector", "VECTOR LOOKUP"));
+                    Err(QueryError::feature_disabled("vector", "VECTOR LOOKUP"))
                 }
             }
 
@@ -580,7 +578,7 @@ impl VectorOperator {
                         &threshold,
                         input,
                     );
-                    return Err(QueryError::feature_disabled("vector", "VECTOR MATCH"));
+                    Err(QueryError::feature_disabled("vector", "VECTOR MATCH"))
                 }
             }
         }

@@ -1296,7 +1296,7 @@ fn test_auto_physical_merge_on_high_deletion_density() {
     let segment_edges: u64 = table
         .out_segments
         .iter()
-        .map(|s| s.csr.read().edge_count() as u64)
+        .map(|s| s.csr.read().edge_count())
         .sum();
     assert_eq!(segment_edges, 80);
     assert!(table.mvcc.is_tombstoned(EdgeId(0), 300));
@@ -1343,7 +1343,7 @@ fn test_auto_physical_merge_reclaims_when_snapshot_released() {
     let segment_edges: u64 = table
         .out_segments
         .iter()
-        .map(|s| s.csr.read().edge_count() as u64)
+        .map(|s| s.csr.read().edge_count())
         .sum();
     assert_eq!(segment_edges, 40);
     // Tombstone metadata is retained for GC even after physical deletion.
@@ -1355,8 +1355,10 @@ fn test_auto_physical_merge_reclaims_when_snapshot_released() {
 #[test]
 fn test_region_metadata_builds_on_freeze() {
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    config.region_vertex_count = 1024;
+    let config = EdgeTableConfig {
+        region_vertex_count: 1024,
+        ..Default::default()
+    };
     let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
     // Insert edges spanning 3 regions (src 0, 1500, 3000)
@@ -1387,8 +1389,10 @@ fn test_region_metadata_builds_on_freeze() {
 #[test]
 fn test_region_deletion_ratio_and_persist_roundtrip() {
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    config.region_vertex_count = 10;
+    let config = EdgeTableConfig {
+        region_vertex_count: 10,
+        ..Default::default()
+    };
     let mut table = TimeTravelEdgeStore::with_config(schema, config.clone()).unwrap();
 
     // Two regions: src 0-9 and 10-19 (with properties to keep row_count consistent)
@@ -1418,7 +1422,7 @@ fn test_region_deletion_ratio_and_persist_roundtrip() {
     let seg = &table.out_segments[0];
     assert_eq!(
         seg.regions.len(),
-        (seg.csr.read().vertex_capacity() + 9) / 10
+        (seg.csr.read().vertex_capacity().div_ceil(10))
     );
     // Delete 3 edges in first region
     for src in 0..3u32 {
@@ -1457,8 +1461,10 @@ fn test_region_deletion_ratio_and_persist_roundtrip() {
 #[test]
 fn test_compact_regions_skips_clean() {
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    config.region_vertex_count = 1024;
+    let config = EdgeTableConfig {
+        region_vertex_count: 1024,
+        ..Default::default()
+    };
     let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
     // Insert edges in two far apart regions

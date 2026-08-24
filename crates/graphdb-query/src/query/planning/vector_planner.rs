@@ -921,8 +921,7 @@ mod tests {
         );
         let error = planner
             .convert_expression_to_filter(&like)
-            .err()
-            .expect("LIKE must be rejected instead of silently dropped");
+            .expect_err("LIKE must be rejected instead of silently dropped");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
 
         let list = comparison(
@@ -932,8 +931,7 @@ mod tests {
         );
         let error = planner
             .convert_expression_to_filter(&list)
-            .err()
-            .expect("IN must be rejected instead of silently dropped");
+            .expect_err("IN must be rejected instead of silently dropped");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
     }
 
@@ -944,8 +942,7 @@ mod tests {
         let variable_rhs = comparison("age", BinaryOperator::Equal, Expression::variable("limit"));
         let error = planner
             .convert_expression_to_filter(&variable_rhs)
-            .err()
-            .expect("non-literal right side must be rejected");
+            .expect_err("non-literal right side must be rejected");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
 
         let non_field_lhs = Expression::Binary {
@@ -955,8 +952,7 @@ mod tests {
         };
         let error = planner
             .convert_expression_to_filter(&non_field_lhs)
-            .err()
-            .expect("literal left side must be rejected");
+            .expect_err("literal left side must be rejected");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
     }
 
@@ -971,8 +967,7 @@ mod tests {
         );
         let error = planner
             .convert_expression_to_filter(&range)
-            .err()
-            .expect("non-numeric range literal must be rejected instead of dropped");
+            .expect_err("non-numeric range literal must be rejected instead of dropped");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
     }
 }

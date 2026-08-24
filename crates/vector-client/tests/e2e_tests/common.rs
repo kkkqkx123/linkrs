@@ -9,7 +9,9 @@ const QDRANT_GRPC_PORT: u16 = 6334;
 fn qdrant_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let url = format!("http://localhost:{}/healthz", QDRANT_HTTP_PORT);
+        // `/readyz` is the same readiness probe the engine's health check
+        // uses; e2e availability must match server-side semantics.
+        let url = format!("http://localhost:{}/readyz", QDRANT_HTTP_PORT);
         let log_url = url.clone();
         let result = std::thread::spawn(move || {
             let client = reqwest::blocking::Client::builder()

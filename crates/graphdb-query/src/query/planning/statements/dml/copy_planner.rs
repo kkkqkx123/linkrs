@@ -110,6 +110,7 @@ impl Default for CopyPlanner {
 }
 
 #[cfg(test)]
+#[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;

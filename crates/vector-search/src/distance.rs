@@ -1,8 +1,11 @@
 //! Distance kernels and score conversion.
 //!
 //! The local engine ranks by an internal *distance* (smaller is nearer) and
-//! converts it to a Qdrant-compatible *score* for output, so downstream
-//! `score_threshold` semantics stay identical to the qdrant path:
+//! converts it to a *similarity* score for output. That score **is** the
+//! crate-wide contract: higher is better, and `score_threshold` is a lower
+//! bound on it. Remote Qdrant collections with the Euclid metric return raw
+//! distances; the qdrant client normalizes them back to this contract at its
+//! boundary (`engine/common/distance_utils.rs`).
 //!
 //! | metric   | internal distance          | output score        |
 //! |----------|----------------------------|---------------------|

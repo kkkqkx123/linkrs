@@ -167,7 +167,10 @@ impl ConnectionConfig {
 
 impl Default for ConnectionConfig {
     fn default() -> Self {
-        Self::localhost(6333)
+        // The default transport is gRPC (see [`QdrantTransport`]), so the
+        // default port follows Qdrant's gRPC convention. The HTTP engine
+        // falls back to its own conventional 6333 when `http_port` is unset.
+        Self::localhost(6334)
     }
 }
 

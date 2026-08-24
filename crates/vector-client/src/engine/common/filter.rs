@@ -3,6 +3,109 @@ use serde_json::Value;
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
 
+/// Typed representation of a shared [`ConditionType::Match`] value.
+///
+/// The local engine matches stringified values; remote Qdrant matches by
+/// payload type. Classifying here lets every transport pick the matching
+/// variant that real Qdrant evaluates against the stored payload type:
+/// `"42"` becomes an integer match, `"true"` a boolean match.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassifiedMatch {
+    Integer(i64),
+    Boolean(bool),
+    Keyword(String),
+}
+
+/// Classify a shared match value into its wire representation.
+///
+/// Only canonical spellings are type-promoted (`"42"` → integer match);
+/// non-canonical forms such as `"042"` or `"True"` stay keyword matches so
+/// remote evaluation matches the local engine's stringified comparison,
+/// where `"042"` does not equal the numeric payload `42`.
+pub fn classify_match_value(value: &str) -> ClassifiedMatch {
+    if let Ok(parsed) = value.parse::<i64>() {
+        if parsed.to_string() == value {
+            return ClassifiedMatch::Integer(parsed);
+        }
+    }
+    if let Ok(parsed) = value.parse::<bool>() {
+        return ClassifiedMatch::Boolean(parsed);
+    }
+    ClassifiedMatch::Keyword(value.to_string())
+}
+
+/// Homogeneous typing of a shared [`ConditionType::MatchAny`] list.
+///
+/// Mixed-type (or non-scalar) lists have no single Qdrant variant; they
+/// degrade to [`ClassifiedMatchAny::Strings`] holding stringified elements,
+/// mirroring the local engine's stringified comparison for scalars.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassifiedMatchAny {
+    Strings(Vec<String>),
+    Integers(Vec<i64>),
+    Booleans(Vec<bool>),
+}
+
+/// Partition a `match_any` value list by element type.
+///
+/// A list of pure JSON strings maps to string matching, a list of pure
+/// integers to integer matching, and a list of pure booleans to boolean
+/// matching; anything mixed (or containing floats, nulls, objects) degrades
+/// to the stringified representation.
+pub fn classify_match_any(values: &[Value]) -> ClassifiedMatchAny {
+    let mut strings = Vec::with_capacity(values.len());
+    let mut integers = Vec::with_capacity(values.len());
+    let mut booleans = Vec::with_capacity(values.len());
+    let mut all_integers = true;
+    let mut all_booleans = true;
+
+    for v in values {
+        match v {
+            Value::String(s) => {
+                strings.push(s.clone());
+                all_integers = false;
+                all_booleans = false;
+            }
+            Value::Number(n) => {
+                strings.push(n.to_string());
+                match n.as_i64() {
+                    Some(i) => integers.push(i),
+                    None => all_integers = false,
+                }
+                all_booleans = false;
+            }
+            Value::Bool(b) => {
+                strings.push(b.to_string());
+                booleans.push(*b);
+                all_integers = false;
+            }
+            _ => {
+                return ClassifiedMatchAny::Strings(
+                    values.iter().filter_map(stringify_json).collect(),
+                )
+            }
+        }
+    }
+
+    if all_booleans && !booleans.is_empty() {
+        ClassifiedMatchAny::Booleans(booleans)
+    } else if all_integers && !integers.is_empty() {
+        ClassifiedMatchAny::Integers(integers)
+    } else {
+        // Covers pure-string lists and every degraded case alike.
+        ClassifiedMatchAny::Strings(strings)
+    }
+}
+
+fn stringify_json(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 pub trait ConditionHandler {
     type Condition;
     type Filter;
@@ -93,7 +196,97 @@ fn handle_condition<H: ConditionHandler>(c: &FilterCondition, handler: &H) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use serde_json::json;
+
+    #[test]
+    fn test_classify_match_value_integer() {
+        assert_eq!(classify_match_value("42"), ClassifiedMatch::Integer(42));
+        assert_eq!(classify_match_value("-7"), ClassifiedMatch::Integer(-7));
+    }
+
+    #[test]
+    fn test_classify_match_value_boolean() {
+        assert_eq!(classify_match_value("true"), ClassifiedMatch::Boolean(true));
+        assert_eq!(
+            classify_match_value("false"),
+            ClassifiedMatch::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn test_classify_match_value_keyword() {
+        // Non-canonical spellings must stay keyword matches.
+        assert_eq!(
+            classify_match_value("red"),
+            ClassifiedMatch::Keyword("red".to_string())
+        );
+        assert_eq!(
+            classify_match_value("042"),
+            ClassifiedMatch::Keyword("042".to_string())
+        );
+        assert_eq!(
+            classify_match_value("True"),
+            ClassifiedMatch::Keyword("True".to_string())
+        );
+        assert_eq!(
+            classify_match_value("3.5"),
+            ClassifiedMatch::Keyword("3.5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_strings() {
+        let values = vec![json!("a"), json!("b")];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Strings(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_integers() {
+        let values = vec![json!(1), json!(-2)];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Integers(vec![1, -2])
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_booleans() {
+        let values = vec![json!(true), json!(false)];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Booleans(vec![true, false])
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_mixed_degrades_to_stringified() {
+        let values = vec![json!("a"), json!(1), json!(true)];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Strings(vec!["a".to_string(), "1".to_string(), "true".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_bool_with_string_degrades_to_stringified() {
+        let values = vec![json!(true), json!("on")];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Strings(vec!["true".to_string(), "on".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_classify_match_any_floats_degrade_to_stringified() {
+        let values = vec![json!(1.5), json!(2.5)];
+        assert_eq!(
+            classify_match_any(&values),
+            ClassifiedMatchAny::Strings(vec!["1.5".to_string(), "2.5".to_string()])
+        );
+    }
 
     struct TestCondition {
         field: String,

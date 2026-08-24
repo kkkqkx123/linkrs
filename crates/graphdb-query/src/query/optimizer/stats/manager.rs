@@ -80,6 +80,11 @@ impl StatisticsManager {
         self.space_versions.get(space).map(|v| *v)
     }
 
+    /// The schema version recorded for `space` at its last collection, if any.
+    pub fn space_version(&self, space: &str) -> Option<u64> {
+        self.space_stamp(space).map(|stamp| stamp.0)
+    }
+
     /// Record the composite stamp at which `space` was last collected.
     pub fn set_space_stamp(&self, space: &str, schema_version: u64, data_epoch: u64) {
         self.space_versions

@@ -6,7 +6,7 @@ use crate::types::*;
 pub mod common;
 
 #[cfg(feature = "qdrant-http")]
-mod http;
+pub mod http;
 
 #[cfg(feature = "qdrant-http")]
 pub use http::QdrantEngine;
@@ -44,6 +44,9 @@ impl VectorEngine for DisabledEngine {
         self.err().await
     }
     async fn collection_exists(&self, _name: &str) -> Result<bool> {
+        self.err().await
+    }
+    async fn list_collections(&self) -> Result<Vec<String>> {
         self.err().await
     }
     async fn collection_info(&self, _name: &str) -> Result<CollectionInfo> {
@@ -158,6 +161,12 @@ pub trait VectorEngine: Send + Sync + std::fmt::Debug {
     async fn create_collection(&self, name: &str, config: CollectionConfig) -> Result<()>;
     async fn delete_collection(&self, name: &str) -> Result<()>;
     async fn collection_exists(&self, name: &str) -> Result<bool>;
+    /// Names of all collections known to the server.
+    async fn list_collections(&self) -> Result<Vec<String>> {
+        Err(VectorClientError::NotSupported(
+            "list_collections".to_string(),
+        ))
+    }
     async fn collection_info(&self, name: &str) -> Result<CollectionInfo>;
 
     async fn upsert(&self, collection: &str, point: VectorPoint) -> Result<UpsertResult>;

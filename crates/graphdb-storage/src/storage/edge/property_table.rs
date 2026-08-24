@@ -991,7 +991,7 @@ mod olap_phase1_tests {
         for i in 0..5 {
             table
                 .insert(
-                    &[("age".to_string(), Value::Int((i as i32 + 1) * 10))],
+                    &[("age".to_string(), Value::Int((i + 1) * 10))],
                     100 + i as u64,
                 )
                 .unwrap();
@@ -1027,7 +1027,7 @@ mod olap_phase1_tests {
             .unwrap();
         for i in 0..20 {
             table
-                .insert(&[("status".to_string(), Value::Int((i % 3) as i32))], 100)
+                .insert(&[("status".to_string(), Value::Int(i % 3))], 100)
                 .unwrap();
         }
         // Apply RLE encoding (good for repetitive values)

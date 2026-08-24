@@ -1,7 +1,10 @@
 use crate::error::VectorClientError;
 use crate::types::*;
 
-use super::super::common::filter::{process_filter, ConditionHandler};
+use super::super::common::filter::{
+    classify_match_any, classify_match_value, process_filter, ClassifiedMatch, ClassifiedMatchAny,
+    ConditionHandler,
+};
 use super::proto;
 
 pub fn filter_to_proto(filter: &VectorFilter) -> Result<Option<proto::Filter>, VectorClientError> {
@@ -52,10 +55,18 @@ impl ConditionHandler for ProtoConditionHandler {
     type Filter = proto::Filter;
 
     fn handle_match(&self, field: &str, value: &str) -> proto::Condition {
+        // Typed matching: real Qdrant matches by payload type, so an
+        // integer/boolean-shaped string must not degrade to keyword matching
+        // (which would miss integer payloads and fork from the local engine).
+        let match_value = match classify_match_value(value) {
+            ClassifiedMatch::Integer(i) => proto::r#match::MatchValue::Integer(i),
+            ClassifiedMatch::Boolean(b) => proto::r#match::MatchValue::Boolean(b),
+            ClassifiedMatch::Keyword(k) => proto::r#match::MatchValue::Keyword(k),
+        };
         field_condition(
             field.to_string(),
             Some(proto::Match {
-                match_value: Some(proto::r#match::MatchValue::Keyword(value.to_string())),
+                match_value: Some(match_value),
             }),
             None,
             None,
@@ -65,16 +76,52 @@ impl ConditionHandler for ProtoConditionHandler {
     }
 
     fn handle_match_any(&self, field: &str, values: &[serde_json::Value]) -> proto::Condition {
-        let keywords: Vec<String> = values
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect();
+        // Preserve every element's type instead of silently dropping
+        // non-strings; mixed lists degrade to stringified keywords.
+        let match_value = match classify_match_any(values) {
+            ClassifiedMatchAny::Integers(integers) => {
+                proto::r#match::MatchValue::Integers(proto::RepeatedIntegers { integers })
+            }
+            ClassifiedMatchAny::Strings(strings) => {
+                proto::r#match::MatchValue::Keywords(proto::RepeatedStrings { strings })
+            }
+            ClassifiedMatchAny::Booleans(booleans) => {
+                // Upstream Qdrant has no repeated-boolean match variant, so a
+                // pure-boolean list is expressed as an OR over singular
+                // boolean matches inside a bare filter condition — the same
+                // semantics the local engine's stringified comparison yields
+                // for boolean payloads.
+                let should = booleans
+                    .into_iter()
+                    .map(|b| {
+                        field_condition(
+                            field.to_string(),
+                            Some(proto::Match {
+                                match_value: Some(proto::r#match::MatchValue::Boolean(b)),
+                            }),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    })
+                    .collect();
+                return proto::Condition {
+                    condition_one_of: Some(proto::condition::ConditionOneOf::Filter(
+                        proto::Filter {
+                            should,
+                            must: Vec::new(),
+                            must_not: Vec::new(),
+                            min_should: None,
+                        },
+                    )),
+                };
+            }
+        };
         field_condition(
             field.to_string(),
             Some(proto::Match {
-                match_value: Some(proto::r#match::MatchValue::Keywords(
-                    proto::RepeatedStrings { strings: keywords },
-                )),
+                match_value: Some(match_value),
             }),
             None,
             None,

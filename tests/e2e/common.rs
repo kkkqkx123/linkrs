@@ -25,7 +25,7 @@ use graphdb::search::{FulltextConfig, FulltextIndexManager};
 use graphdb::sync::SyncConfig;
 
 #[cfg(feature = "vector-qdrant")]
-use graphdb::sync::vector_sync::HealthStatus;
+use graphdb::sync::HealthStatus;
 #[cfg(feature = "vector-qdrant")]
 use graphdb::sync::{VectorClientConfig, VectorManager};
 

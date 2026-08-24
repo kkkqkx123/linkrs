@@ -561,82 +561,6 @@ fn parse_copy_value(s: &str) -> Value {
     Value::string(s)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn headers(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn vertex_header_mapping_locates_vid_and_properties() {
-        let h = headers(&["name", "vid", "age"]);
-        let m = build_column_mapping(&h, true, None, KeyLayout::Vertex).expect("mapping");
-        assert_eq!(m.vid_index, 1);
-        assert_eq!(
-            m.property_indices,
-            vec![(0, "name".to_string()), (2, "age".to_string())]
-        );
-        assert_eq!(m.expected_width, 3);
-    }
-
-    #[test]
-    fn vertex_header_without_id_column_errors() {
-        let h = headers(&["name", "age"]);
-        assert!(build_column_mapping(&h, true, None, KeyLayout::Vertex).is_err());
-    }
-
-    #[test]
-    fn edge_header_named_endpoints() {
-        let h = headers(&["since", "dst", "src"]);
-        let m = build_column_mapping(&h, true, None, KeyLayout::Edge).expect("mapping");
-        assert_eq!(m.src_index, 2);
-        assert_eq!(m.dst_index, 1);
-        assert_eq!(m.property_indices, vec![(0, "since".to_string())]);
-    }
-
-    #[test]
-    fn edge_header_only_src_named_errors() {
-        let h = headers(&["src", "since"]);
-        assert!(build_column_mapping(&h, true, None, KeyLayout::Edge).is_err());
-    }
-
-    #[test]
-    fn edge_header_no_named_endpoints_falls_back_positional() {
-        let h = headers(&["a", "b", "since"]);
-        let m = build_column_mapping(&h, true, None, KeyLayout::Edge).expect("mapping");
-        assert_eq!(m.src_index, 0);
-        assert_eq!(m.dst_index, 1);
-        assert_eq!(m.property_indices, vec![(2, "since".to_string())]);
-    }
-
-    #[test]
-    fn positional_layout_uses_schema_order() {
-        let schema = vec!["name".to_string(), "age".to_string()];
-        let m =
-            build_column_mapping(&[], false, Some(&schema), KeyLayout::Vertex).expect("mapping");
-        assert_eq!(m.vid_index, 0);
-        assert_eq!(
-            m.property_indices,
-            vec![(1, "name".to_string()), (2, "age".to_string())]
-        );
-        assert_eq!(m.expected_width, 3);
-    }
-
-    #[test]
-    fn parse_value_inference() {
-        assert_eq!(
-            parse_copy_value(""),
-            Value::Null(crate::core::value::NullType::Null)
-        );
-        assert_eq!(parse_copy_value("true"), Value::Bool(true));
-        assert_eq!(parse_copy_value("42"), Value::BigInt(42));
-        assert_eq!(parse_copy_value("4.5"), Value::Double(4.5));
-        assert_eq!(parse_copy_value("hello"), Value::string("hello"));
-    }
-}
-
 // ── COPY TO: CSV export ──────────────────────────────────────────────────────
 
 /// Execute a COPY TO statement and return the number of rows exported.
@@ -770,4 +694,80 @@ fn write_csv_line<W: std::io::Write>(
     writer
         .write_all(line.as_bytes())
         .map_err(|e| QueryError::execution(format!("COPY TO: write failed: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn vertex_header_mapping_locates_vid_and_properties() {
+        let h = headers(&["name", "vid", "age"]);
+        let m = build_column_mapping(&h, true, None, KeyLayout::Vertex).expect("mapping");
+        assert_eq!(m.vid_index, 1);
+        assert_eq!(
+            m.property_indices,
+            vec![(0, "name".to_string()), (2, "age".to_string())]
+        );
+        assert_eq!(m.expected_width, 3);
+    }
+
+    #[test]
+    fn vertex_header_without_id_column_errors() {
+        let h = headers(&["name", "age"]);
+        assert!(build_column_mapping(&h, true, None, KeyLayout::Vertex).is_err());
+    }
+
+    #[test]
+    fn edge_header_named_endpoints() {
+        let h = headers(&["since", "dst", "src"]);
+        let m = build_column_mapping(&h, true, None, KeyLayout::Edge).expect("mapping");
+        assert_eq!(m.src_index, 2);
+        assert_eq!(m.dst_index, 1);
+        assert_eq!(m.property_indices, vec![(0, "since".to_string())]);
+    }
+
+    #[test]
+    fn edge_header_only_src_named_errors() {
+        let h = headers(&["src", "since"]);
+        assert!(build_column_mapping(&h, true, None, KeyLayout::Edge).is_err());
+    }
+
+    #[test]
+    fn edge_header_no_named_endpoints_falls_back_positional() {
+        let h = headers(&["a", "b", "since"]);
+        let m = build_column_mapping(&h, true, None, KeyLayout::Edge).expect("mapping");
+        assert_eq!(m.src_index, 0);
+        assert_eq!(m.dst_index, 1);
+        assert_eq!(m.property_indices, vec![(2, "since".to_string())]);
+    }
+
+    #[test]
+    fn positional_layout_uses_schema_order() {
+        let schema = vec!["name".to_string(), "age".to_string()];
+        let m =
+            build_column_mapping(&[], false, Some(&schema), KeyLayout::Vertex).expect("mapping");
+        assert_eq!(m.vid_index, 0);
+        assert_eq!(
+            m.property_indices,
+            vec![(1, "name".to_string()), (2, "age".to_string())]
+        );
+        assert_eq!(m.expected_width, 3);
+    }
+
+    #[test]
+    fn parse_value_inference() {
+        assert_eq!(
+            parse_copy_value(""),
+            Value::Null(crate::core::value::NullType::Null)
+        );
+        assert_eq!(parse_copy_value("true"), Value::Bool(true));
+        assert_eq!(parse_copy_value("42"), Value::BigInt(42));
+        assert_eq!(parse_copy_value("4.5"), Value::Double(4.5));
+        assert_eq!(parse_copy_value("hello"), Value::string("hello"));
+    }
 }

@@ -108,7 +108,6 @@ enum Distance {
   Cosine = 1;
   Euclid = 2;
   Dot = 3;
-  Manhattan = 4;
 }
 
 enum CollectionStatus {

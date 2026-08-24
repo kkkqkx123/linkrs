@@ -13,7 +13,7 @@ use tracing::{debug, info};
 
 use crate::core::Value;
 use crate::sync::backend::VectorBackend;
-use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult};
+use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
 #[cfg(feature = "vector-qdrant")]
 use vector_client::EmbeddingService;
@@ -22,11 +22,30 @@ use vector_search::{
     CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, VectorFilter,
 };
 
+/// Validate a distance metric at the index-creation entry points.
+///
+/// Only metrics every backend supports are accepted here so requests fail
+/// fast with one consistent error instead of deep inside a specific engine
+/// or on the remote server.
+fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
+    match distance {
+        DistanceMetric::Cosine | DistanceMetric::Euclid | DistanceMetric::Dot => Ok(()),
+        other => Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+            format!(
+                "distance metric {:?} is not supported; supported metrics: Cosine, Euclid, Dot",
+                other
+            ),
+        ))),
+    }
+}
+
 /// Runtime state of the vector engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VectorEngineState {
-    /// Engine is disabled; all mutation/search operations are no-op.
-    /// Logical index metadata is still tracked for schema correctness.
+    /// Engine is disabled: user-facing vector operations fail with
+    /// [`VectorCoordinatorError::EngineDisabled`]; delivery-plane batches are
+    /// skipped and counted. Logical index metadata is still tracked for
+    /// schema correctness.
     Disabled,
     /// Engine is active; mutations and searches execute against the backend.
     Active,
@@ -175,6 +194,9 @@ pub struct VectorSyncCoordinator {
     embedding_service: Option<Arc<EmbeddingService>>,
     /// Tracks registered logical indexes by key "space_{space_id}_{tag}_{field}" -> metadata
     logical_indexes: DashMap<VectorIndexLocation, IndexMetadata>,
+    /// Vector change items skipped because the engine is disabled (delivery
+    /// plane). Observable accounting for silent degradation.
+    disabled_skips: std::sync::atomic::AtomicU64,
     /// Tokio runtime handle for blocking async operations from sync context.
     /// Using `Handle` instead of `&Runtime` avoids lifetime issues while allowing
     /// the caller (API layer or tests) to control the runtime lifecycle.
@@ -200,9 +222,12 @@ impl VectorSyncCoordinator {
 
     /// Returns the runtime state of the underlying vector engine.
     ///
-    /// - `Disabled`: engine is not available; all mutation/search operations act as no-op.
-    ///   Index metadata is still tracked logically so that queries referencing vector indexes
-    ///   do not produce schema errors.
+    /// - `Disabled`: engine is not available; user-facing vector operations
+    ///   fail with [`VectorCoordinatorError::EngineDisabled`], while
+    ///   delivery-plane batches are skipped and accounted (see
+    ///   [`Self::disabled_skip_count`]). Index metadata is still tracked
+    ///   logically so that queries referencing vector indexes do not produce
+    ///   schema errors.
     /// - `Active`: engine is operational; mutations and searches execute normally.
     pub fn engine_state(&self) -> VectorEngineState {
         if self.is_disabled_engine() {
@@ -210,6 +235,13 @@ impl VectorSyncCoordinator {
         } else {
             VectorEngineState::Active
         }
+    }
+
+    /// Total number of vector change items skipped because the engine was
+    /// disabled. Non-zero values mean vector data currently diverges from
+    /// graph data.
+    pub fn disabled_skip_count(&self) -> u64 {
+        self.disabled_skips.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Create a new vector sync coordinator with an explicit runtime handle.
@@ -227,6 +259,7 @@ impl VectorSyncCoordinator {
             #[cfg(feature = "vector-qdrant")]
             embedding_service,
             logical_indexes: DashMap::new(),
+            disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
         }
     }
@@ -271,6 +304,8 @@ impl VectorSyncCoordinator {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> VectorCoordinatorResult<String> {
+        validate_metric(distance)?;
+
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
 
@@ -403,11 +438,26 @@ impl VectorSyncCoordinator {
     }
 
     /// Handle batch vector changes
+    ///
+    /// Delivery-plane semantics: when the engine is disabled the batch is
+    /// *skipped and accounted* — logged with a warning, counted in
+    /// [`Self::disabled_skip_count`] — instead of failing. Failing here would
+    /// stall replication (the sync pipeline only records its LSN after this
+    /// returns), while silently pretending success is invisible; the skip is
+    /// observable through logs and the counter.
     pub async fn on_vector_change_batch(
         &self,
         contexts: Vec<VectorChangeContext>,
     ) -> VectorCoordinatorResult<()> {
         if self.is_disabled_engine() {
+            self.disabled_skips
+                .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!(
+                count = contexts.len(),
+                total_skipped = self.disabled_skips.load(std::sync::atomic::Ordering::Relaxed),
+                "vector engine disabled: skipped delivering vector changes; \
+                 vector data diverges from graph data until re-synced"
+            );
             return Ok(());
         }
 
@@ -489,7 +539,7 @@ impl VectorSyncCoordinator {
         query: SearchQuery,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
-            return Ok(Vec::new());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
         let results = self.backend.search(collection, query).await?;
         Ok(results)
@@ -501,7 +551,7 @@ impl VectorSyncCoordinator {
         options: SearchOptions,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
-            return Ok(Vec::new());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
         let collection_name =
             VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name)
@@ -533,7 +583,7 @@ impl VectorSyncCoordinator {
         limit: usize,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
-            return Ok(Vec::new());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -557,7 +607,7 @@ impl VectorSyncCoordinator {
         threshold: f32,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
-            return Ok(Vec::new());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -583,7 +633,7 @@ impl VectorSyncCoordinator {
         filter: VectorFilter,
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
-            return Ok(Vec::new());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -691,6 +741,8 @@ impl VectorSyncCoordinator {
         field_name: &str,
         config: CollectionConfig,
     ) -> VectorCoordinatorResult<String> {
+        validate_metric(config.distance)?;
+
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
 

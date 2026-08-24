@@ -14,8 +14,13 @@ pub mod interceptor;
 pub mod streaming;
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::time::Duration;
+use tokio::sync::RwLock;
+use tonic::metadata::Ascii;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
+use tonic::Request;
 use tracing::{debug, info, warn};
 
 use super::VectorEngine;
@@ -26,16 +31,21 @@ use crate::types::*;
 use convert::{
     collection_config_to_create, collection_info_from_proto, point_id_to_proto,
     point_struct_to_proto, retrieved_point_from_proto, scored_point_from_proto,
-    search_query_to_proto, upsert_result_from_proto,
+    search_query_to_proto, update_result_completed, upsert_result_from_proto,
 };
 use filter::filter_to_proto;
-use interceptor::GrpcInterceptor;
+use interceptor::{attach_api_key, parse_api_key};
 
 const QDRANT_GRPC_VERSION: &str = "1.12.x (gRPC)";
 
 pub struct QdrantGrpcEngine {
     channel: Channel,
     config: VectorClientConfig,
+    /// Parsed `api-key` metadata; `None` when the connection is anonymous.
+    api_key: Option<MetadataValue<Ascii>>,
+    /// Distance metric per collection, cached so Euclid scores/thresholds can
+    /// be normalized at this boundary. Populated on create/info/search.
+    metrics: RwLock<HashMap<String, DistanceMetric>>,
 }
 
 impl std::fmt::Debug for QdrantGrpcEngine {
@@ -59,6 +69,13 @@ impl QdrantGrpcEngine {
 
         info!("Connecting to Qdrant gRPC API at {}", addr);
 
+        // Fail loudly here rather than silently dropping authentication on
+        // every request at runtime.
+        let api_key = match config.connection.api_key.as_deref() {
+            Some(key) => Some(parse_api_key(key).map_err(VectorClientError::InvalidConfig)?),
+            None => None,
+        };
+
         let timeout = config.timeout.request_duration();
 
         let endpoint = Channel::from_shared(addr)
@@ -71,11 +88,12 @@ impl QdrantGrpcEngine {
             .await
             .map_err(|e| VectorClientError::ConnectionFailed(e.to_string()))?;
 
-        let interceptor = GrpcInterceptor::new(config.connection.api_key.clone(), true, true);
-
-        let channel = interceptor.apply_to_channel(channel);
-
-        let engine = Self { channel, config };
+        let engine = Self {
+            channel,
+            config,
+            api_key,
+            metrics: RwLock::new(HashMap::new()),
+        };
 
         match engine.health_check().await {
             Ok(health) => {
@@ -94,7 +112,7 @@ impl QdrantGrpcEngine {
     }
 
     pub fn streaming(&self) -> streaming::StreamingEngine {
-        streaming::StreamingEngine::new(self.channel.clone())
+        streaming::StreamingEngine::new(self.channel.clone(), self.api_key.clone())
     }
 
     fn points(&self) -> proto::points_client::PointsClient<Channel> {
@@ -103,6 +121,97 @@ impl QdrantGrpcEngine {
 
     fn collections(&self) -> proto::collections_client::CollectionsClient<Channel> {
         proto::collections_client::CollectionsClient::new(self.channel.clone())
+    }
+
+    /// Wrap an outgoing message into a request carrying the api key.
+    #[allow(clippy::wrong_self_convention)]
+    fn into_request<T>(&self, message: T) -> Request<T> {
+        into_request_with_key(&self.api_key, message)
+    }
+
+    /// Resolve the distance metric of a collection.
+    ///
+    /// Cached per collection; a cache miss pulls the config from the server
+    /// once. Unknown metrics leave Euclid values untouched (with a warning)
+    /// because guessing would be worse than passing through.
+    async fn metric_for(&self, collection: &str) -> Option<DistanceMetric> {
+        if let Some(metric) = self.metrics.read().await.get(collection) {
+            return Some(*metric);
+        }
+        match self.collection_info(collection).await {
+            Ok(info) => {
+                let metric = info.config.distance;
+                self.metrics
+                    .write()
+                    .await
+                    .insert(collection.to_string(), metric);
+                Some(metric)
+            }
+            Err(e) => {
+                warn!(
+                    "Could not resolve distance metric for collection '{}' ({}); \
+                     Euclid scores and thresholds are passed through unconverted",
+                    collection, e
+                );
+                None
+            }
+        }
+    }
+
+    async fn search_internal(
+        &self,
+        collection: &str,
+        query: SearchQuery,
+    ) -> Result<Vec<SearchResult>> {
+        debug!("Searching in collection '{}' via gRPC", collection);
+
+        let metric = self.metric_for(collection).await;
+        let request = search_query_to_proto(collection, &query, metric)?;
+
+        let response = self.points().search(self.into_request(request)).await?;
+        let scored_points = response.into_inner().result;
+
+        Ok(scored_points
+            .into_iter()
+            .map(|point| scored_point_from_proto(point, metric))
+            .collect())
+    }
+
+    async fn search_batch_internal(
+        &self,
+        collection: &str,
+        queries: Vec<SearchQuery>,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        debug!("Batch searching {} queries via gRPC", queries.len());
+
+        let metric = self.metric_for(collection).await;
+        let search_points: Result<Vec<proto::SearchPoints>> = queries
+            .iter()
+            .map(|q| search_query_to_proto(collection, q, metric))
+            .collect();
+        let request = proto::SearchBatchPoints {
+            collection_name: collection.to_string(),
+            search_points: search_points?,
+            read_consistency: None,
+            timeout: None,
+        };
+
+        let response = self
+            .points()
+            .search_batch(self.into_request(request))
+            .await?;
+        let batch_results = response.into_inner().result;
+
+        Ok(batch_results
+            .into_iter()
+            .map(|batch| {
+                batch
+                    .result
+                    .into_iter()
+                    .map(|point| scored_point_from_proto(point, metric))
+                    .collect()
+            })
+            .collect())
     }
 }
 
@@ -119,7 +228,7 @@ impl VectorEngine for QdrantGrpcEngine {
     async fn health_check(&self) -> Result<HealthStatus> {
         match self
             .collections()
-            .list(proto::ListCollectionsRequest {})
+            .list(self.into_request(proto::ListCollectionsRequest {}))
             .await
         {
             Ok(_) => Ok(HealthStatus::healthy(self.name(), self.version())),
@@ -134,8 +243,15 @@ impl VectorEngine for QdrantGrpcEngine {
     async fn create_collection(&self, name: &str, cfg: CollectionConfig) -> Result<()> {
         debug!("Creating collection '{}' via gRPC", name);
 
-        let request = collection_config_to_create(name, &cfg);
-        self.collections().create(request).await?;
+        let request = collection_config_to_create(name, &cfg)?;
+        self.collections()
+            .create(self.into_request(request))
+            .await?;
+
+        self.metrics
+            .write()
+            .await
+            .insert(name.to_string(), cfg.distance);
 
         info!("Collection '{}' created successfully via gRPC", name);
         Ok(())
@@ -149,7 +265,11 @@ impl VectorEngine for QdrantGrpcEngine {
             timeout: None,
         };
 
-        self.collections().delete(request).await?;
+        self.collections()
+            .delete(self.into_request(request))
+            .await?;
+
+        self.metrics.write().await.remove(name);
 
         info!("Collection '{}' deleted successfully via gRPC", name);
         Ok(())
@@ -160,7 +280,10 @@ impl VectorEngine for QdrantGrpcEngine {
             collection_name: name.to_string(),
         };
 
-        let response = self.collections().collection_exists(request).await?;
+        let response = self
+            .collections()
+            .collection_exists(self.into_request(request))
+            .await?;
 
         Ok(response
             .into_inner()
@@ -169,19 +292,38 @@ impl VectorEngine for QdrantGrpcEngine {
             .unwrap_or(false))
     }
 
+    async fn list_collections(&self) -> Result<Vec<String>> {
+        let response = self
+            .collections()
+            .list(self.into_request(proto::ListCollectionsRequest {}))
+            .await?;
+
+        Ok(response
+            .into_inner()
+            .collections
+            .into_iter()
+            .map(|c| c.name)
+            .collect())
+    }
+
     async fn collection_info(&self, name: &str) -> Result<CollectionInfo> {
         let request = proto::GetCollectionInfoRequest {
             collection_name: name.to_string(),
         };
 
-        let response = self.collections().get(request).await?;
+        let response = self.collections().get(self.into_request(request)).await?;
 
         let info = response
             .into_inner()
             .result
             .ok_or_else(|| VectorClientError::CollectionNotFound(name.to_string()))?;
 
-        collection_info_from_proto(info, name)
+        let parsed = collection_info_from_proto(info, name)?;
+        self.metrics
+            .write()
+            .await
+            .insert(name.to_string(), parsed.config.distance);
+        Ok(parsed)
     }
 
     async fn upsert(&self, collection: &str, point: VectorPoint) -> Result<UpsertResult> {
@@ -195,7 +337,7 @@ impl VectorEngine for QdrantGrpcEngine {
             points: vec![point_struct_to_proto(&point)],
         };
 
-        let response = self.points().upsert(request).await?;
+        let response = self.points().upsert(self.into_request(request)).await?;
         let result = response
             .into_inner()
             .result
@@ -222,7 +364,7 @@ impl VectorEngine for QdrantGrpcEngine {
             points: proto_points,
         };
 
-        let response = self.points().upsert(request).await?;
+        let response = self.points().upsert(self.into_request(request)).await?;
         let result = response
             .into_inner()
             .result
@@ -250,7 +392,7 @@ impl VectorEngine for QdrantGrpcEngine {
             shard_key_selector: None,
         };
 
-        let response = self.points().delete(request).await?;
+        let response = self.points().delete(self.into_request(request)).await?;
         let result = response
             .into_inner()
             .result
@@ -258,7 +400,7 @@ impl VectorEngine for QdrantGrpcEngine {
 
         Ok(DeleteResult {
             operation_id: result.operation_id,
-            deleted_count: if result.status() == proto::UpdateStatus::Completed {
+            deleted_count: if update_result_completed(&result) {
                 1
             } else {
                 0
@@ -285,15 +427,23 @@ impl VectorEngine for QdrantGrpcEngine {
             shard_key_selector: None,
         };
 
-        let response = self.points().delete(request).await?;
+        let response = self.points().delete(self.into_request(request)).await?;
         let result = response
             .into_inner()
             .result
             .ok_or_else(|| VectorClientError::InternalError("missing delete result".into()))?;
 
+        // Only report the requested size when the server acknowledges full
+        // completion; otherwise the count is unknown (best-effort contract).
+        let deleted_count = if update_result_completed(&result) {
+            point_ids.len() as u64
+        } else {
+            0
+        };
+
         Ok(DeleteResult {
             operation_id: result.operation_id,
-            deleted_count: point_ids.len() as u64,
+            deleted_count,
         })
     }
 
@@ -321,7 +471,7 @@ impl VectorEngine for QdrantGrpcEngine {
             shard_key_selector: None,
         };
 
-        let response = self.points().delete(request).await?;
+        let response = self.points().delete(self.into_request(request)).await?;
         let result = response
             .into_inner()
             .result
@@ -329,7 +479,7 @@ impl VectorEngine for QdrantGrpcEngine {
 
         Ok(DeleteResult {
             operation_id: result.operation_id,
-            deleted_count: if result.status() == proto::UpdateStatus::Completed {
+            deleted_count: if update_result_completed(&result) {
                 1
             } else {
                 0
@@ -338,19 +488,7 @@ impl VectorEngine for QdrantGrpcEngine {
     }
 
     async fn search(&self, collection: &str, query: SearchQuery) -> Result<Vec<SearchResult>> {
-        debug!("Searching in collection '{}' via gRPC", collection);
-
-        let request = search_query_to_proto(collection, &query);
-
-        let response = self.points().search(request).await?;
-        let scored_points = response.into_inner().result;
-
-        let results: Vec<SearchResult> = scored_points
-            .into_iter()
-            .map(scored_point_from_proto)
-            .collect();
-
-        Ok(results)
+        self.search_internal(collection, query).await
     }
 
     async fn search_batch(
@@ -358,35 +496,7 @@ impl VectorEngine for QdrantGrpcEngine {
         collection: &str,
         queries: Vec<SearchQuery>,
     ) -> Result<Vec<Vec<SearchResult>>> {
-        debug!("Batch searching {} queries via gRPC", queries.len());
-
-        let search_points: Vec<proto::SearchPoints> = queries
-            .iter()
-            .map(|q| search_query_to_proto(collection, q))
-            .collect();
-
-        let request = proto::SearchBatchPoints {
-            collection_name: collection.to_string(),
-            search_points,
-            read_consistency: None,
-            timeout: None,
-        };
-
-        let response = self.points().search_batch(request).await?;
-        let batch_results = response.into_inner().result;
-
-        let results: Vec<Vec<SearchResult>> = batch_results
-            .into_iter()
-            .map(|batch| {
-                batch
-                    .result
-                    .into_iter()
-                    .map(scored_point_from_proto)
-                    .collect()
-            })
-            .collect();
-
-        Ok(results)
+        self.search_batch_internal(collection, queries).await
     }
 
     async fn get(&self, collection: &str, point_id: &str) -> Result<Option<VectorPoint>> {
@@ -406,7 +516,7 @@ impl VectorEngine for QdrantGrpcEngine {
             timeout: None,
         };
 
-        let response = self.points().get(request).await?;
+        let response = self.points().get(self.into_request(request)).await?;
         let retrieved = response.into_inner().result;
 
         match retrieved.into_iter().next() {
@@ -438,7 +548,7 @@ impl VectorEngine for QdrantGrpcEngine {
             timeout: None,
         };
 
-        let response = self.points().get(request).await?;
+        let response = self.points().get(self.into_request(request)).await?;
         let retrieved_map: std::collections::HashMap<String, proto::RetrievedPoint> = response
             .into_inner()
             .result
@@ -470,7 +580,7 @@ impl VectorEngine for QdrantGrpcEngine {
             timeout: None,
         };
 
-        let response = self.points().count(request).await?;
+        let response = self.points().count(self.into_request(request)).await?;
         let count_result = response.into_inner().result;
 
         Ok(count_result.map(|r| r.count).unwrap_or(0))
@@ -503,7 +613,9 @@ impl VectorEngine for QdrantGrpcEngine {
             key: None,
         };
 
-        self.points().set_payload(request).await?;
+        self.points()
+            .set_payload(self.into_request(request))
+            .await?;
         Ok(())
     }
 
@@ -536,7 +648,9 @@ impl VectorEngine for QdrantGrpcEngine {
             shard_key_selector: None,
         };
 
-        self.points().delete_payload(request).await?;
+        self.points()
+            .delete_payload(self.into_request(request))
+            .await?;
         Ok(())
     }
 
@@ -559,7 +673,7 @@ impl VectorEngine for QdrantGrpcEngine {
             limit: Some(limit as u32),
             with_payload: Some(proto::WithPayloadSelector {
                 selector_options: Some(proto::with_payload_selector::SelectorOptions::Enable(
-                    with_payload.unwrap_or(true),
+                    with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD),
                 )),
             }),
             with_vectors: Some(proto::WithVectorsSelector {
@@ -573,7 +687,7 @@ impl VectorEngine for QdrantGrpcEngine {
             timeout: None,
         };
 
-        let response = self.points().scroll(request).await?;
+        let response = self.points().scroll(self.into_request(request)).await?;
         let scroll_result = response.into_inner();
 
         let points: Vec<VectorPoint> = scroll_result
@@ -608,7 +722,9 @@ impl VectorEngine for QdrantGrpcEngine {
             ordering: None,
         };
 
-        self.points().create_field_index(request).await?;
+        self.points()
+            .create_field_index(self.into_request(request))
+            .await?;
 
         info!(
             "Payload index created for field '{}' in collection '{}'",
@@ -627,7 +743,9 @@ impl VectorEngine for QdrantGrpcEngine {
             ordering: None,
         };
 
-        self.points().delete_field_index(request).await?;
+        self.points()
+            .delete_field_index(self.into_request(request))
+            .await?;
 
         info!(
             "Payload index deleted for field '{}' in collection '{}'",
@@ -644,7 +762,7 @@ impl VectorEngine for QdrantGrpcEngine {
             collection_name: collection.to_string(),
         };
 
-        let response = self.collections().get(request).await?;
+        let response = self.collections().get(self.into_request(request)).await?;
         let info = response
             .into_inner()
             .result
@@ -665,6 +783,15 @@ fn point_id_to_string(id: &proto::PointId) -> String {
         Some(proto::point_id::PointIdOptions::Num(n)) => n.to_string(),
         Some(proto::point_id::PointIdOptions::Uuid(u)) => u.clone(),
         None => String::new(),
+    }
+}
+
+/// Attach the api key (when configured) to an outgoing request.
+fn into_request_with_key<T>(api_key: &Option<MetadataValue<Ascii>>, message: T) -> Request<T> {
+    let request = Request::new(message);
+    match api_key {
+        Some(key) => attach_api_key(request, key),
+        None => request,
     }
 }
 
@@ -694,5 +821,24 @@ mod tests {
             point_id_options: None,
         };
         assert_eq!(point_id_to_string(&id), "");
+    }
+
+    #[test]
+    fn test_into_request_carries_api_key() {
+        let key = parse_api_key("secret-key").expect("valid key");
+        let request = into_request_with_key(&Some(key.clone()), proto::CountPoints::default());
+        assert_eq!(
+            request.metadata().get(interceptor::API_KEY_HEADER),
+            Some(&key)
+        );
+    }
+
+    #[test]
+    fn test_into_request_without_api_key_has_no_metadata() {
+        let request = into_request_with_key(&None, proto::CountPoints::default());
+        assert!(request
+            .metadata()
+            .get(interceptor::API_KEY_HEADER)
+            .is_none());
     }
 }

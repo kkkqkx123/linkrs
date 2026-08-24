@@ -11,6 +11,18 @@ use vector_search::{
     CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
 
+/// Metrics every backend accepts at index-creation time; anything else is
+/// rejected up front instead of failing deep inside one engine.
+fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
+    match distance {
+        DistanceMetric::Cosine | DistanceMetric::Euclid | DistanceMetric::Dot => Ok(()),
+        other => Err(CoreError::VectorError(format!(
+            "distance metric {:?} is not supported; supported metrics: Cosine, Euclid, Dot",
+            other
+        ))),
+    }
+}
+
 /// Vector search result
 #[derive(Debug, Clone)]
 pub struct VectorSearchResult {
@@ -65,6 +77,8 @@ impl VectorApi {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> CoreResult<String> {
+        validate_metric(distance)?;
+
         if let Some(coordinator) = &self.coordinator {
             coordinator
                 .create_vector_index(space_id, tag_name, field_name, vector_size, distance)

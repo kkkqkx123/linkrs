@@ -10,21 +10,28 @@ use crate::error::{Result, VectorClientError};
 use crate::types::*;
 
 use super::common::convert::extract_search_params;
+use super::common::distance_utils::{inbound_result_score, outbound_score_threshold};
 use super::common::utils::point_id_to_json;
 
 mod config;
-mod filter;
+pub mod filter;
 mod utils;
 
 use config::{
     build_create_collection_body, build_create_payload_index_body, build_delete_by_filter_body,
     build_delete_by_ids_body, build_delete_payload_body, build_get_body, build_scroll_body,
     build_search_batch_body, build_search_body, build_set_payload_body, build_upsert_body,
+    distance_from_qdrant,
 };
 use filter::convert_filter;
 use utils::{parse_payload, QdrantSearchResult, QdrantUpsertResult, VectorValue};
 
 const QDRANT_VERSION: &str = "1.12.x (HTTP REST)";
+
+/// Qdrant exposes two ports on the same host: the gRPC port lives in
+/// [`ConnectionConfig::port`], while the REST API keeps its conventional
+/// 6333 default here.
+const DEFAULT_HTTP_PORT: u16 = 6333;
 
 fn parse_collection_status(status: Option<&str>) -> CollectionStatus {
     match status.map(|value| value.to_ascii_lowercase()).as_deref() {
@@ -63,7 +70,7 @@ impl std::fmt::Debug for QdrantEngine {
 
 impl QdrantEngine {
     pub async fn new(config: VectorClientConfig) -> Result<Self> {
-        let http_port = config.connection.http_port.unwrap_or(6333);
+        let http_port = config.connection.http_port.unwrap_or(DEFAULT_HTTP_PORT);
         let scheme = if config.connection.use_tls {
             "https"
         } else {
@@ -207,6 +214,199 @@ impl QdrantEngine {
             ))
         })
     }
+
+    /// Fetch the collection configuration from the server.
+    ///
+    /// Reads back size, distance, HNSW and quantization settings so callers
+    /// never fall back to invented defaults.
+    async fn fetch_remote_collection_config(
+        &self,
+        collection: &str,
+    ) -> Result<Option<CollectionConfig>> {
+        #[derive(serde::Deserialize)]
+        struct RawVectors {
+            #[serde(default)]
+            size: Option<u64>,
+            #[serde(default)]
+            distance: Option<String>,
+            #[serde(default)]
+            hnsw_config: Option<RawHnsw>,
+            #[serde(default)]
+            quantization_config: Option<Value>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawHnsw {
+            #[serde(default)]
+            m: Option<u64>,
+            #[serde(default)]
+            ef_construct: Option<u64>,
+            #[serde(default)]
+            full_scan_threshold: Option<u64>,
+            #[serde(default)]
+            max_indexing_threads: Option<u64>,
+            #[serde(default)]
+            on_disk: Option<bool>,
+            #[serde(default)]
+            payload_m: Option<u64>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawParams {
+            #[serde(default)]
+            vectors: Option<RawVectors>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct RawConfig {
+            #[serde(default)]
+            params: Option<RawParams>,
+        }
+
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("/collections/{}", collection),
+            )
+            .await?;
+        let raw: Value = self.parse_result(response).await?;
+
+        let config: Option<RawConfig> = serde_json::from_value(raw).map_err(|e| {
+            VectorClientError::InternalError(format!("Failed to parse collection config: {}", e))
+        })?;
+
+        Ok(config
+            .and_then(|c| c.params)
+            .and_then(|p| p.vectors)
+            .and_then(|v| {
+                v.distance
+                    .as_deref()
+                    .and_then(distance_from_qdrant)
+                    .map(|distance| CollectionConfig {
+                        vector_size: v.size.unwrap_or_default() as usize,
+                        distance,
+                        index_type: Some(IndexType::HNSW),
+                        hnsw_config: v.hnsw_config.map(|h| HnswConfig {
+                            m: h.m.unwrap_or_default() as usize,
+                            ef_construct: h.ef_construct.unwrap_or_default() as usize,
+                            full_scan_threshold: h.full_scan_threshold.map(|x| x as usize),
+                            max_indexing_threads: h.max_indexing_threads.map(|x| x as usize),
+                            on_disk: h.on_disk,
+                            payload_m: h.payload_m.map(|x| x as usize),
+                        }),
+                        quantization_config: v
+                            .quantization_config
+                            .as_ref()
+                            .map(parse_quantization_json),
+                        ..Default::default()
+                    })
+            }))
+    }
+}
+
+/// Rebuild a shared quantization config from its REST representation.
+fn parse_quantization_json(qc: &Value) -> QuantizationConfig {
+    let quant_type = qc
+        .get("scalar")
+        .map(|scalar| QuantizationType::Scalar {
+            quantile: scalar
+                .get("quantile")
+                .and_then(Value::as_f64)
+                .map(|q| q as f32),
+            always_ram: scalar.get("always_ram").and_then(Value::as_bool),
+        })
+        .or_else(|| {
+            qc.get("product").map(|product| {
+                let compression = product
+                    .get("compression")
+                    .and_then(Value::as_u64)
+                    .map(|c| match c {
+                        8 => CompressionRatio::X8,
+                        16 => CompressionRatio::X16,
+                        32 => CompressionRatio::X32,
+                        64 => CompressionRatio::X64,
+                        _ => CompressionRatio::X4,
+                    })
+                    .unwrap_or(CompressionRatio::X4);
+                QuantizationType::Product {
+                    compression,
+                    always_ram: product.get("always_ram").and_then(Value::as_bool),
+                }
+            })
+        })
+        .or_else(|| {
+            qc.get("binary").map(|binary| QuantizationType::Binary {
+                always_ram: binary.get("always_ram").and_then(Value::as_bool),
+            })
+        });
+
+    QuantizationConfig {
+        enabled: true,
+        quant_type,
+    }
+}
+
+impl QdrantEngine {
+    /// Resolve the distance metric of a collection.
+    ///
+    /// Cached per collection; a cache miss pulls the config from the server
+    /// once. Unknown metrics leave Euclid values untouched (with a warning)
+    /// because guessing would be worse than passing through.
+    async fn metric_for(&self, collection: &str) -> Option<DistanceMetric> {
+        self.cached_collection_config(collection)
+            .await
+            .map(|config| config.distance)
+    }
+
+    /// Collection configuration from cache or server; `None` when the server
+    /// does not expose one.
+    async fn cached_collection_config(&self, name: &str) -> Option<CollectionConfig> {
+        if let Some(config) = self.collections.read().await.get(name) {
+            return Some(config.clone());
+        }
+        match self.fetch_remote_collection_config(name).await {
+            Ok(Some(config)) => {
+                self.collections
+                    .write()
+                    .await
+                    .insert(name.to_string(), config.clone());
+                Some(config)
+            }
+            Ok(None) => {
+                warn!(
+                    "Server did not report a vector config for collection '{}'; \
+                     Euclid scores and thresholds are passed through unconverted",
+                    name
+                );
+                None
+            }
+            Err(e) => {
+                warn!(
+                    "Could not fetch collection config for '{}' ({}); \
+                     Euclid scores and thresholds are passed through unconverted",
+                    name, e
+                );
+                None
+            }
+        }
+    }
+
+    /// Convert search results, normalizing Euclid raw distances into the
+    /// shared similarity contract for the resolved metric.
+    fn to_search_results(
+        results: Vec<QdrantSearchResult>,
+        metric: Option<DistanceMetric>,
+    ) -> Vec<SearchResult> {
+        results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                score: inbound_result_score(metric, r.score),
+                payload: parse_payload(r.payload),
+                vector: r.vector.and_then(|v| v.into_vec()),
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -254,7 +454,7 @@ impl VectorEngine for QdrantEngine {
             cfg.shard_number,
             cfg.replication_factor,
             cfg.write_consistency_factor,
-        );
+        )?;
 
         let response = self
             .request_json(
@@ -289,6 +489,17 @@ impl VectorEngine for QdrantEngine {
         Ok(response.status().is_success())
     }
 
+    async fn list_collections(&self) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct RawCollection {
+            name: String,
+        }
+
+        let response = self.request(reqwest::Method::GET, "/collections").await?;
+        let raw: Vec<RawCollection> = self.parse_result(response).await?;
+        Ok(raw.into_iter().map(|c| c.name).collect())
+    }
+
     async fn collection_info(&self, name: &str) -> Result<CollectionInfo> {
         let response = self
             .request(reqwest::Method::GET, &format!("/collections/{}", name))
@@ -305,13 +516,14 @@ impl VectorEngine for QdrantEngine {
 
         let raw: RawCollectionInfo = self.parse_result(response).await?;
 
-        let config = self
-            .collections
-            .read()
-            .await
-            .get(name)
-            .cloned()
-            .unwrap_or_default();
+        // No invented defaults: a collection whose config cannot be read back
+        // is an error, not a 1536/Cosine lookalike.
+        let config = self.cached_collection_config(name).await.ok_or_else(|| {
+            VectorClientError::InternalError(format!(
+                "collection '{}' exists but its configuration could not be read",
+                name
+            ))
+        })?;
 
         Ok(CollectionInfo {
             name: name.to_string(),
@@ -446,11 +658,19 @@ impl VectorEngine for QdrantEngine {
                 body,
             )
             .await?;
-        self.check_response(response).await?;
+        let result: QdrantUpsertResult = self.parse_result(response).await?;
+
+        // Only report the requested size when the server acknowledges full
+        // completion; otherwise the count is unknown (best-effort contract).
+        let deleted_count = if result.status.as_deref() == Some("completed") {
+            point_ids.len() as u64
+        } else {
+            0
+        };
 
         Ok(DeleteResult {
-            operation_id: None,
-            deleted_count: point_ids.len() as u64,
+            operation_id: result.operation_id,
+            deleted_count,
         })
     }
 
@@ -495,13 +715,17 @@ impl VectorEngine for QdrantEngine {
             None
         };
 
+        let metric = self.metric_for(collection).await;
         let params = extract_search_params(&query);
+        let score_threshold = params
+            .score_threshold
+            .and_then(|t| outbound_score_threshold(metric, t));
 
         let body = build_search_body(
             query.vector,
             params.limit,
             query.offset,
-            params.score_threshold,
+            score_threshold,
             filter_json,
             query.with_payload,
             query.with_vector,
@@ -517,18 +741,7 @@ impl VectorEngine for QdrantEngine {
             .await?;
 
         let results: Vec<QdrantSearchResult> = self.parse_result(response).await?;
-
-        let search_results = results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.id,
-                score: r.score,
-                payload: parse_payload(r.payload),
-                vector: r.vector.and_then(|v| v.into_vec()),
-            })
-            .collect();
-
-        Ok(search_results)
+        Ok(Self::to_search_results(results, metric))
     }
 
     async fn search_batch(
@@ -542,8 +755,9 @@ impl VectorEngine for QdrantEngine {
             collection
         );
 
+        let metric = self.metric_for(collection).await;
         let searches: Result<Vec<Value>> = queries
-            .into_iter()
+            .iter()
             .map(|query| {
                 let filter_json = if let Some(ref filter) = query.filter {
                     convert_filter(filter)?
@@ -551,13 +765,16 @@ impl VectorEngine for QdrantEngine {
                     None
                 };
 
-                let params = extract_search_params(&query);
+                let params = extract_search_params(query);
+                let score_threshold = params
+                    .score_threshold
+                    .and_then(|t| outbound_score_threshold(metric, t));
 
                 Ok(build_search_body(
-                    query.vector,
+                    query.vector.clone(),
                     params.limit,
                     query.offset,
-                    params.score_threshold,
+                    score_threshold,
                     filter_json,
                     query.with_payload,
                     query.with_vector,
@@ -578,22 +795,10 @@ impl VectorEngine for QdrantEngine {
 
         let batch_results: Vec<Vec<QdrantSearchResult>> = self.parse_result(response).await?;
 
-        let results = batch_results
+        Ok(batch_results
             .into_iter()
-            .map(|results| {
-                results
-                    .into_iter()
-                    .map(|r| SearchResult {
-                        id: r.id,
-                        score: r.score,
-                        payload: parse_payload(r.payload),
-                        vector: r.vector.and_then(|v| v.into_vec()),
-                    })
-                    .collect()
-            })
-            .collect();
-
-        Ok(results)
+            .map(|results| Self::to_search_results(results, metric))
+            .collect())
     }
 
     async fn get(&self, collection: &str, point_id: &str) -> Result<Option<VectorPoint>> {

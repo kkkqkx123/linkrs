@@ -36,9 +36,9 @@ pub(crate) fn plan_slots(
 ) -> (u64, Vec<u32>) {
     let mut map = vec![u32::MAX; next_slot as usize];
     let mut live = 0u32;
-    for slot in 0..next_slot as usize {
+    for (slot, entry) in map.iter_mut().enumerate() {
         if is_live(slot) {
-            map[slot] = live;
+            *entry = live;
             live += 1;
         }
     }

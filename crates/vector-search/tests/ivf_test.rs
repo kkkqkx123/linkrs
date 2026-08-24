@@ -143,8 +143,9 @@ fn restart_applies_runtime_config_to_published_index() {
 
     let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
     assert!(reopened.has_index("col"));
-    // The rehydrated index starts from `IvfConfig::default()`; its nprobe 8
-    // is clamped to the collection's 4 lists.
+    // Since meta.bin format v2 the effective creation-time config is
+    // persisted, so the rehydrated index restores `ivf_config()`
+    // (`default_nprobe = 2`) instead of falling back to `IvfConfig::default()`.
     assert_eq!(
         reopened
             .collection_info("col")
@@ -152,7 +153,8 @@ fn restart_applies_runtime_config_to_published_index() {
             .index
             .unwrap()
             .nprobe_default,
-        IvfConfig::default().default_nprobe.clamp(1, 4)
+        2,
+        "published index must restore the persisted IVF config after restart"
     );
 
     // Injecting runtime settings must reach the already-published index,

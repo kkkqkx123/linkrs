@@ -4,6 +4,7 @@ use crate::error::VectorClientError;
 use crate::types::*;
 
 use super::super::common::convert::extract_search_params;
+use super::super::common::distance_utils::{inbound_result_score, outbound_score_threshold};
 
 impl From<Status> for VectorClientError {
     fn from(status: Status) -> Self {
@@ -152,17 +153,27 @@ fn proto_value_to_json_value(v: &proto::Value) -> serde_json::Value {
     }
 }
 
-pub fn distance_to_proto(distance: DistanceMetric) -> proto::Distance {
+/// Translate a shared metric into its proto enum value.
+///
+/// Only metrics Qdrant actually supports are accepted; anything else must be
+/// rejected at the API entry points before reaching a transport.
+pub fn distance_to_proto(distance: DistanceMetric) -> Result<proto::Distance, VectorClientError> {
     match distance {
-        DistanceMetric::Cosine => proto::Distance::Cosine,
-        DistanceMetric::Euclid => proto::Distance::Euclid,
-        DistanceMetric::Dot => proto::Distance::Dot,
-        DistanceMetric::Manhattan => proto::Distance::Manhattan,
+        DistanceMetric::Cosine => Ok(proto::Distance::Cosine),
+        DistanceMetric::Euclid => Ok(proto::Distance::Euclid),
+        DistanceMetric::Dot => Ok(proto::Distance::Dot),
+        other => Err(VectorClientError::NotSupported(format!(
+            "distance metric {:?} is not supported by Qdrant",
+            other
+        ))),
     }
 }
 
-pub fn collection_config_to_create(name: &str, cfg: &CollectionConfig) -> proto::CreateCollection {
-    let distance = distance_to_proto(cfg.distance);
+pub fn collection_config_to_create(
+    name: &str,
+    cfg: &CollectionConfig,
+) -> Result<proto::CreateCollection, VectorClientError> {
+    let distance = distance_to_proto(cfg.distance)?;
 
     let hnsw_config: Option<proto::HnswConfigDiff> =
         cfg.hnsw_config.as_ref().map(|hnsw| proto::HnswConfigDiff {
@@ -226,6 +237,7 @@ pub fn collection_config_to_create(name: &str, cfg: &CollectionConfig) -> proto:
         config: Some(proto::vectors_config::Config::Params(proto::VectorParams {
             size: cfg.vector_size as u64,
             distance: distance as i32,
+            // Nested per-vector params mirror the collection-level values.
             hnsw_config,
             quantization_config,
             on_disk: None,
@@ -234,7 +246,7 @@ pub fn collection_config_to_create(name: &str, cfg: &CollectionConfig) -> proto:
         })),
     };
 
-    proto::CreateCollection {
+    Ok(proto::CreateCollection {
         collection_name: name.to_string(),
         hnsw_config,
         wal_config: None,
@@ -250,7 +262,7 @@ pub fn collection_config_to_create(name: &str, cfg: &CollectionConfig) -> proto:
         sharding_method: None,
         sparse_vectors_config: None,
         strict_mode_config: None,
-    }
+    })
 }
 
 pub fn upsert_result_from_proto(result: proto::UpdateResult) -> UpsertResult {
@@ -262,6 +274,14 @@ pub fn upsert_result_from_proto(result: proto::UpdateResult) -> UpsertResult {
             UpsertStatus::Acknowledged
         },
     }
+}
+
+/// Whether an update result acknowledges completion of the whole batch.
+///
+/// Used to report delete counts honestly: only `Completed` means every
+/// requested id was processed.
+pub fn update_result_completed(result: &proto::UpdateResult) -> bool {
+    result.status() == proto::UpdateStatus::Completed
 }
 
 fn extract_point_core(
@@ -291,11 +311,19 @@ fn extract_point_core(
     (id, payload, vector)
 }
 
-pub fn scored_point_from_proto(point: proto::ScoredPoint) -> SearchResult {
+/// Convert a scored point into a [`SearchResult`].
+///
+/// `metric` is the collection's distance as resolved by the engine (`None`
+/// = unknown); Euclid raw distances from Qdrant are normalized into the
+/// shared "higher is better" similarity contract here.
+pub fn scored_point_from_proto(
+    point: proto::ScoredPoint,
+    metric: Option<DistanceMetric>,
+) -> SearchResult {
     let (id, payload, vector) = extract_point_core(&point.id, &point.payload, &point.vectors);
     SearchResult {
         id: id.into(),
-        score: point.score,
+        score: inbound_result_score(metric, point.score),
         payload,
         vector,
     }
@@ -318,14 +346,29 @@ fn point_id_to_string(id: &proto::PointId) -> String {
     }
 }
 
-pub fn search_query_to_proto(collection: &str, query: &SearchQuery) -> proto::SearchPoints {
-    let filter = query
-        .filter
-        .as_ref()
-        .and_then(|f| super::filter::filter_to_proto(f).ok())
-        .flatten();
+/// Build a gRPC search request.
+///
+/// `metric` is the collection's distance as resolved by the engine (`None` =
+/// unknown); Euclid similarity thresholds are converted into Qdrant's raw
+/// distance upper bounds here.
+///
+/// Filter translation failures propagate: a request that cannot carry its
+/// authorization constraints must fail instead of silently running unfiltered.
+pub fn search_query_to_proto(
+    collection: &str,
+    query: &SearchQuery,
+    metric: Option<DistanceMetric>,
+) -> Result<proto::SearchPoints, VectorClientError> {
+    let filter = match query.filter.as_ref() {
+        Some(filter) => super::filter::filter_to_proto(filter)?,
+        None => None,
+    };
 
     let extracted = extract_search_params(query);
+
+    let score_threshold = extracted
+        .score_threshold
+        .and_then(|threshold| outbound_score_threshold(metric, threshold));
 
     let params = proto::SearchParams {
         hnsw_ef: extracted.hnsw_ef.map(|v| v as u64),
@@ -334,18 +377,18 @@ pub fn search_query_to_proto(collection: &str, query: &SearchQuery) -> proto::Se
         indexed_only: None,
     };
 
-    proto::SearchPoints {
+    Ok(proto::SearchPoints {
         collection_name: collection.to_string(),
         vector: query.vector.clone(),
         filter,
         limit: extracted.limit as u64,
         with_payload: Some(proto::WithPayloadSelector {
             selector_options: Some(proto::with_payload_selector::SelectorOptions::Enable(
-                query.with_payload.unwrap_or(true),
+                query.with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD),
             )),
         }),
         params: Some(params),
-        score_threshold: query.score_threshold,
+        score_threshold,
         offset: query.offset.map(|v| v as u64),
         vector_name: None,
         with_vectors: Some(proto::WithVectorsSelector {
@@ -357,15 +400,14 @@ pub fn search_query_to_proto(collection: &str, query: &SearchQuery) -> proto::Se
         timeout: None,
         shard_key_selector: None,
         sparse_indices: None,
-    }
+    })
 }
 
 fn distance_from_proto(d: i32) -> DistanceMetric {
-    match d {
-        1 => DistanceMetric::Cosine,
-        2 => DistanceMetric::Euclid,
-        3 => DistanceMetric::Dot,
-        4 => DistanceMetric::Manhattan,
+    match proto::Distance::try_from(d) {
+        Ok(proto::Distance::Cosine) => DistanceMetric::Cosine,
+        Ok(proto::Distance::Euclid) => DistanceMetric::Euclid,
+        Ok(proto::Distance::Dot) => DistanceMetric::Dot,
         _ => DistanceMetric::Cosine,
     }
 }
@@ -384,6 +426,51 @@ fn extract_vector_config(cfg: &proto::CollectionConfig) -> (usize, DistanceMetri
         .unwrap_or((1536, DistanceMetric::Cosine))
 }
 
+fn hnsw_config_from_proto(diff: Option<&proto::HnswConfigDiff>) -> Option<HnswConfig> {
+    diff.map(|hnsw| HnswConfig {
+        m: hnsw.m.unwrap_or_default() as usize,
+        ef_construct: hnsw.ef_construct.unwrap_or_default() as usize,
+        full_scan_threshold: hnsw.full_scan_threshold.map(|v| v as usize),
+        max_indexing_threads: hnsw.max_indexing_threads.map(|v| v as usize),
+        on_disk: hnsw.on_disk,
+        payload_m: hnsw.payload_m.map(|v| v as usize),
+    })
+}
+
+fn quantization_config_from_proto(
+    config: Option<&proto::QuantizationConfig>,
+) -> Option<QuantizationConfig> {
+    config.map(|qc| QuantizationConfig {
+        enabled: true,
+        quant_type: qc.quantization.as_ref().map(|q| match q {
+            proto::quantization_config::Quantization::Scalar(scalar) => QuantizationType::Scalar {
+                quantile: scalar.quantile,
+                always_ram: scalar.always_ram,
+            },
+            proto::quantization_config::Quantization::Product(product) => {
+                let compression = match product.compression() {
+                    proto::CompressionRatio::X8 => CompressionRatio::X8,
+                    proto::CompressionRatio::X16 => CompressionRatio::X16,
+                    proto::CompressionRatio::X32 => CompressionRatio::X32,
+                    proto::CompressionRatio::X64 => CompressionRatio::X64,
+                    _ => CompressionRatio::X4,
+                };
+                QuantizationType::Product {
+                    compression,
+                    always_ram: product.always_ram,
+                }
+            }
+            proto::quantization_config::Quantization::Binary(binary) => QuantizationType::Binary {
+                always_ram: binary.always_ram,
+            },
+        }),
+    })
+}
+
+/// Rebuild collection configuration from the server-reported info.
+///
+/// Reads back everything the server exposes so config-conflict checks run on
+/// real data instead of defaults.
 pub fn collection_info_from_proto(
     info: proto::CollectionInfo,
     name: &str,
@@ -401,13 +488,18 @@ pub fn collection_info_from_proto(
         .map(extract_vector_config)
         .unwrap_or((1536, DistanceMetric::Cosine));
 
-    let params = info.config.as_ref().and_then(|c| c.params.as_ref());
+    let proto_config = info.config.as_ref();
+    let params = proto_config.and_then(|c| c.params.as_ref());
+    // Qdrant indexes with HNSW; reflect that instead of reporting "unknown".
+    let index_type = proto_config.map(|_| IndexType::HNSW);
     let config = CollectionConfig {
         vector_size,
         distance,
-        index_type: None,
-        hnsw_config: None,
-        quantization_config: None,
+        index_type,
+        hnsw_config: hnsw_config_from_proto(proto_config.and_then(|c| c.hnsw_config.as_ref())),
+        quantization_config: quantization_config_from_proto(
+            proto_config.and_then(|c| c.quantization_config.as_ref()),
+        ),
         replication_factor: params.and_then(|p| p.replication_factor.map(|v| v as usize)),
         write_consistency_factor: params
             .and_then(|p| p.write_consistency_factor.map(|v| v as usize)),

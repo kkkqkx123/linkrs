@@ -1,186 +1,75 @@
-//! Distance Calculation Utilities
+//! Score and threshold normalization at the Qdrant client boundary.
 //!
-//! This module provides distance and similarity calculation functions
-//! for various distance metrics that may not be directly supported by
-//! the underlying vector database engine.
+//! Crate-wide contract (shared with the local engine in `vector-search`):
+//! every [`crate::types::SearchResult`] score is a *similarity* — higher is
+//! better — and every `score_threshold` is a *lower bound* on that similarity
+//! (`score >= threshold` keeps a candidate).
 //!
-//! # Qdrant Support
+//! Modern Qdrant (>= 1.10) returns **raw distances** for Euclid collections
+//! (lower = nearer) and interprets `score_threshold` as an upper bound on the
+//! distance. Cosine/Dot scores already follow the similarity contract on both
+//! sides, so only Euclid needs conversion, in both directions:
 //!
-//! Qdrant natively supports:
-//! - Cosine distance
-//! - Euclidean distance
-//! - Dot product
+//! | direction | conversion                              |
+//! |-----------|-----------------------------------------|
+//! | response  | raw distance `d` → score `1/(1+d)`      |
+//! | request   | similarity bound `t` → distance `1/t-1` |
 //!
-//! For other distance metrics (Manhattan, Hamming, Jaccard, Pearson),
-//! custom implementation is required. These utilities can be used for:
-//! - Pre-filtering vectors before storage
-//! - Post-processing search results
-//! - Custom scoring functions
+//! These helpers are the single source of truth for the conversions; both the
+//! gRPC and the HTTP engine must go through them.
 
-/// Calculate Manhattan distance (L1 distance) between two vectors
+use tracing::warn;
+
+use crate::types::DistanceMetric;
+
+/// Convert a raw Euclid distance into the shared similarity score.
 ///
-/// Formula: sum(|a_i - b_i|)
-pub fn manhattan_distance(v1: &[f32], v2: &[f32]) -> f32 {
-    if v1.len() != v2.len() {
-        panic!("Vector dimensions must match: {} vs {}", v1.len(), v2.len());
-    }
-
-    v1.iter().zip(v2.iter()).map(|(&a, &b)| (a - b).abs()).sum()
+/// Distances are non-negative; negative inputs are clamped to 0 (perfect
+/// match) instead of producing inverted scores.
+pub fn euclid_distance_to_score(distance: f32) -> f32 {
+    1.0 / (1.0 + distance.max(0.0))
 }
 
-/// Calculate Chebyshev distance (L∞ distance) between two vectors
+/// Convert a similarity lower-bound threshold into Qdrant's raw-distance
+/// upper bound for Euclid collections (`d_max = 1/t - 1`).
 ///
-/// Formula: max(|a_i - b_i|)
-pub fn chebyshev_distance(v1: &[f32], v2: &[f32]) -> f32 {
-    if v1.len() != v2.len() {
-        panic!("Vector dimensions must match: {} vs {}", v1.len(), v2.len());
+/// Returns `None` when no constraint should be sent to the server:
+/// - NaN or `t <= 0`: every point satisfies `score >= t`;
+/// - `t > 1` is clamped down to the maximum achievable score of 1 (exact
+///   matches only) before converting.
+pub fn euclid_score_threshold_to_distance_threshold(threshold: f32) -> Option<f32> {
+    if threshold.is_nan() || threshold <= 0.0 {
+        return None;
     }
-
-    v1.iter()
-        .zip(v2.iter())
-        .map(|(&a, &b)| (a - b).abs())
-        .fold(0.0f32, f32::max)
+    Some(1.0 / threshold.min(1.0) - 1.0)
 }
 
-/// Calculate Hamming distance between two binary vectors
-///
-/// Counts the number of positions where the corresponding bits differ.
-/// Assumes binary vectors where values > 0.5 are considered 1, otherwise 0.
-pub fn hamming_distance(v1: &[f32], v2: &[f32]) -> usize {
-    if v1.len() != v2.len() {
-        panic!("Vector dimensions must match: {} vs {}", v1.len(), v2.len());
+/// Normalize a score returned by Qdrant for a collection with the given
+/// metric (as resolved by the engine, `None` = unknown) into the shared
+/// "higher is better" similarity contract.
+pub fn inbound_result_score(metric: Option<DistanceMetric>, qdrant_score: f32) -> f32 {
+    match metric {
+        Some(DistanceMetric::Euclid) => euclid_distance_to_score(qdrant_score),
+        _ => qdrant_score,
     }
-
-    v1.iter()
-        .zip(v2.iter())
-        .filter(|(&a, &b)| {
-            let b1 = if a > 0.5 { 1 } else { 0 };
-            let b2 = if b > 0.5 { 1 } else { 0 };
-            b1 != b2
-        })
-        .count()
 }
 
-/// Calculate Jaccard similarity between two sets represented as binary vectors
-///
-/// Formula: |A ∩ B| / |A ∪ B|
-/// Assumes binary vectors where values > 0.5 indicate membership in the set.
-pub fn jaccard_similarity(set1: &[f32], set2: &[f32]) -> f32 {
-    if set1.len() != set2.len() {
-        panic!(
-            "Vector dimensions must match: {} vs {}",
-            set1.len(),
-            set2.len()
-        );
-    }
-
-    let mut intersection = 0;
-    let mut union = 0;
-
-    for (&a, &b) in set1.iter().zip(set2.iter()) {
-        let in_set1 = a > 0.5;
-        let in_set2 = b > 0.5;
-
-        if in_set1 && in_set2 {
-            intersection += 1;
+/// Convert the shared similarity lower-bound threshold into the value to send
+/// for a collection with the given metric (as resolved by the engine, `None`
+/// = unknown). Returns `None` when nothing should be sent.
+pub fn outbound_score_threshold(metric: Option<DistanceMetric>, threshold: f32) -> Option<f32> {
+    match metric {
+        Some(DistanceMetric::Euclid) => {
+            if threshold > 1.0 {
+                warn!(
+                    threshold,
+                    "Euclid similarity threshold exceeds the maximum score of 1.0; clamping to exact-match distance"
+                );
+            }
+            euclid_score_threshold_to_distance_threshold(threshold)
         }
-
-        if in_set1 || in_set2 {
-            union += 1;
-        }
+        _ => Some(threshold),
     }
-
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f32 / union as f32
-    }
-}
-
-/// Calculate Jaccard distance (1 - similarity)
-pub fn jaccard_distance(set1: &[f32], set2: &[f32]) -> f32 {
-    1.0 - jaccard_similarity(set1, set2)
-}
-
-/// Calculate Pearson correlation coefficient between two vectors
-///
-/// Formula: cov(X,Y) / (σ_X * σ_Y)
-/// Returns a value in [-1, 1], where 1 is perfect positive correlation
-pub fn pearson_correlation(v1: &[f32], v2: &[f32]) -> f32 {
-    if v1.len() != v2.len() {
-        panic!("Vector dimensions must match: {} vs {}", v1.len(), v2.len());
-    }
-
-    let n = v1.len() as f32;
-
-    // Calculate sums
-    let sum1: f32 = v1.iter().sum();
-    let sum2: f32 = v2.iter().sum();
-
-    // Calculate sum of squares
-    let sum1_sq: f32 = v1.iter().map(|x| x * x).sum();
-    let sum2_sq: f32 = v2.iter().map(|x| x * x).sum();
-
-    // Calculate product sum
-    let product_sum: f32 = v1.iter().zip(v2.iter()).map(|(&a, &b)| a * b).sum();
-
-    // Calculate numerator and denominator
-    let numerator = product_sum - (sum1 * sum2 / n);
-    let denominator = ((sum1_sq - sum1.powi(2) / n) * (sum2_sq - sum2.powi(2) / n)).sqrt();
-
-    if denominator == 0.0 {
-        0.0
-    } else {
-        numerator / denominator
-    }
-}
-
-/// Calculate Spearman rank correlation coefficient
-///
-/// Non-parametric measure of rank correlation.
-pub fn spearman_correlation(v1: &[f32], v2: &[f32]) -> f32 {
-    if v1.len() != v2.len() {
-        panic!("Vector dimensions must match: {} vs {}", v1.len(), v2.len());
-    }
-
-    // Convert to ranks
-    let ranks1 = compute_ranks(v1);
-    let ranks2 = compute_ranks(v2);
-
-    // Calculate Pearson correlation of ranks
-    pearson_correlation(&ranks1, &ranks2)
-}
-
-/// Compute ranks for a vector
-fn compute_ranks(values: &[f32]) -> Vec<f32> {
-    let n = values.len();
-    let mut indexed: Vec<(usize, f32)> = values.iter().copied().enumerate().collect();
-
-    // Sort by value
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Assign ranks (average ranks for ties)
-    let mut ranks = vec![0.0f32; n];
-    let mut i = 0;
-
-    while i < n {
-        let mut j = i;
-        // Find all elements with the same value
-        while j < n && indexed[j].1 == indexed[i].1 {
-            j += 1;
-        }
-
-        // Average rank for tied values
-        let avg_rank = (i as f32 + j as f32 + 1.0) / 2.0;
-
-        for k in i..j {
-            ranks[indexed[k].0] = avg_rank;
-        }
-
-        i = j;
-    }
-
-    ranks
 }
 
 #[cfg(test)]
@@ -188,50 +77,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_manhattan_distance() {
-        let v1 = vec![1.0, 2.0, 3.0];
-        let v2 = vec![4.0, 5.0, 6.0];
-        let distance = manhattan_distance(&v1, &v2);
-        assert_eq!(distance, 9.0);
+    fn test_euclid_distance_to_score() {
+        assert!((euclid_distance_to_score(0.0) - 1.0).abs() < f32::EPSILON);
+        // d=3 -> 1/4
+        assert!((euclid_distance_to_score(3.0) - 0.25).abs() < 1e-6);
+        // Monotonically decreasing in the distance.
+        assert!(euclid_distance_to_score(1.0) > euclid_distance_to_score(2.0));
+        // Negative distances are clamped to a perfect match.
+        assert!((euclid_distance_to_score(-5.0) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn test_chebyshev_distance() {
-        let v1 = vec![1.0, 5.0, 3.0];
-        let v2 = vec![4.0, 2.0, 6.0];
-        let distance = chebyshev_distance(&v1, &v2);
-        assert_eq!(distance, 3.0);
+    fn test_euclid_threshold_round_trip() {
+        // t=0.8 -> d_max=0.25; a point at exactly d_max converts back to t.
+        let d_max = euclid_score_threshold_to_distance_threshold(0.8).unwrap();
+        assert!((d_max - 0.25).abs() < 1e-6);
+        assert!((euclid_distance_to_score(d_max) - 0.8).abs() < 1e-6);
+
+        // t=1 -> exact matches only.
+        let d_max = euclid_score_threshold_to_distance_threshold(1.0).unwrap();
+        assert_eq!(d_max, 0.0);
     }
 
     #[test]
-    fn test_hamming_distance() {
-        let v1 = vec![1.0, 0.0, 1.0, 1.0];
-        let v2 = vec![1.0, 1.0, 0.0, 1.0];
-        let distance = hamming_distance(&v1, &v2);
-        assert_eq!(distance, 2);
+    fn test_euclid_threshold_vacuous_values_send_nothing() {
+        assert!(euclid_score_threshold_to_distance_threshold(0.0).is_none());
+        assert!(euclid_score_threshold_to_distance_threshold(-0.5).is_none());
+        assert!(euclid_score_threshold_to_distance_threshold(f32::NAN).is_none());
+        // t > 1 clamps to exact match rather than being dropped.
+        assert_eq!(euclid_score_threshold_to_distance_threshold(2.0), Some(0.0));
     }
 
     #[test]
-    fn test_jaccard_similarity() {
-        let set1 = vec![1.0, 1.0, 0.0, 0.0];
-        let set2 = vec![1.0, 0.0, 1.0, 0.0];
-        let similarity = jaccard_similarity(&set1, &set2);
-        assert!((similarity - 0.333).abs() < 0.01);
+    fn test_inbound_result_score_by_metric() {
+        // Euclid is normalized, other metrics pass through untouched.
+        let converted = inbound_result_score(Some(DistanceMetric::Euclid), 3.0);
+        assert!((converted - 0.25).abs() < 1e-6);
+
+        let passthrough_cosine = inbound_result_score(Some(DistanceMetric::Cosine), 3.0);
+        assert_eq!(passthrough_cosine, 3.0);
+
+        let passthrough_dot = inbound_result_score(Some(DistanceMetric::Dot), -12.5);
+        assert_eq!(passthrough_dot, -12.5);
+
+        // Unknown metric must not guess.
+        let unknown = inbound_result_score(None, 3.0);
+        assert_eq!(unknown, 3.0);
     }
 
     #[test]
-    fn test_pearson_correlation() {
-        let v1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let v2 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
-        let correlation = pearson_correlation(&v1, &v2);
-        assert!((correlation - 1.0).abs() < 0.001);
-    }
+    fn test_outbound_score_threshold_by_metric() {
+        let converted = outbound_score_threshold(Some(DistanceMetric::Euclid), 0.8).unwrap();
+        assert!((converted - 0.25).abs() < 1e-6);
 
-    #[test]
-    fn test_spearman_correlation() {
-        let v1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let v2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
-        let correlation = spearman_correlation(&v1, &v2);
-        assert!((correlation + 1.0).abs() < 0.001);
+        // Vacuous Euclid thresholds are dropped entirely.
+        assert!(outbound_score_threshold(Some(DistanceMetric::Euclid), 0.0).is_none());
+
+        // Other metrics keep the similarity threshold as-is.
+        let passthrough = outbound_score_threshold(Some(DistanceMetric::Cosine), 0.8).unwrap();
+        assert_eq!(passthrough, 0.8);
+
+        let unknown = outbound_score_threshold(None, 0.8).unwrap();
+        assert_eq!(unknown, 0.8);
     }
 }

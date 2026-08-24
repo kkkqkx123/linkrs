@@ -297,9 +297,14 @@ mod tests {
     #[test]
     fn hash_spec_rejects_empty_key() {
         assert_eq!(
-            PartitionSpec::try_new_hash("", vec![0..10], test_source(), None)
-                .map(|_| ())
-                .unwrap_err(),
+            PartitionSpec::try_new_hash(
+                "",
+                std::iter::once(0..10i64).collect(),
+                test_source(),
+                None
+            )
+            .map(|_| ())
+            .unwrap_err(),
             PartitionSpecError::EmptyHashKey
         );
     }

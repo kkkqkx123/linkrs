@@ -1,16 +1,34 @@
 use serde_json::{json, Value};
 
+use crate::error::VectorClientError;
 use crate::types::{
     CompressionRatio, DistanceMetric, HnswConfig, IndexType, PayloadSchemaType, QuantizationConfig,
-    QuantizationType,
+    QuantizationType, DEFAULT_WITH_PAYLOAD,
 };
 
-pub fn distance_to_qdrant(distance: DistanceMetric) -> &'static str {
+/// Translate a shared metric into Qdrant's REST spelling.
+///
+/// Only metrics Qdrant actually supports are accepted; anything else must be
+/// rejected at the API entry points before reaching a transport.
+pub fn distance_to_qdrant(distance: DistanceMetric) -> Result<&'static str, VectorClientError> {
     match distance {
-        DistanceMetric::Cosine => "Cosine",
-        DistanceMetric::Euclid => "Euclid",
-        DistanceMetric::Dot => "Dot",
-        DistanceMetric::Manhattan => "Manhattan",
+        DistanceMetric::Cosine => Ok("Cosine"),
+        DistanceMetric::Euclid => Ok("Euclid"),
+        DistanceMetric::Dot => Ok("Dot"),
+        other => Err(VectorClientError::NotSupported(format!(
+            "distance metric {:?} is not supported by Qdrant",
+            other
+        ))),
+    }
+}
+
+/// Parse a REST distance name back into the shared metric.
+pub fn distance_from_qdrant(name: &str) -> Option<DistanceMetric> {
+    match name.to_ascii_lowercase().as_str() {
+        "cosine" => Some(DistanceMetric::Cosine),
+        "euclid" => Some(DistanceMetric::Euclid),
+        "dot" => Some(DistanceMetric::Dot),
+        _ => None,
     }
 }
 
@@ -32,8 +50,8 @@ fn build_vectors_json(
     index_type: Option<IndexType>,
     hnsw_config: &Option<HnswConfig>,
     quantization_config: &Option<QuantizationConfig>,
-) -> Value {
-    let distance_str = distance_to_qdrant(distance);
+) -> Result<Value, VectorClientError> {
+    let distance_str = distance_to_qdrant(distance)?;
     let mut vectors = json!({
         "size": vector_size,
         "distance": distance_str
@@ -60,7 +78,7 @@ fn build_vectors_json(
         }
     }
 
-    vectors
+    Ok(vectors)
 }
 
 fn build_hnsw_json(hnsw: &HnswConfig) -> Value {
@@ -136,14 +154,14 @@ pub fn build_create_collection_body(
     shard_number: Option<usize>,
     replication_factor: Option<usize>,
     write_consistency_factor: Option<usize>,
-) -> Value {
+) -> Result<Value, VectorClientError> {
     let vectors = build_vectors_json(
         vector_size,
         distance,
         index_type,
         hnsw_config,
         quantization_config,
-    );
+    )?;
 
     let mut body = serde_json::Map::new();
     body.insert("vectors".to_string(), vectors);
@@ -164,7 +182,7 @@ pub fn build_create_collection_body(
         body.insert("write_consistency_factor".to_string(), json!(wcf));
     }
 
-    Value::Object(body)
+    Ok(Value::Object(body))
 }
 
 pub fn build_upsert_body(points_json: Value) -> Value {
@@ -201,7 +219,7 @@ pub fn build_search_body(
     body.insert("limit".to_string(), json!(limit));
     body.insert(
         "with_payload".to_string(),
-        json!(with_payload.unwrap_or(true)),
+        json!(with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD)),
     );
     body.insert(
         "with_vector".to_string(),
@@ -240,7 +258,7 @@ pub fn build_get_body(
     body.insert("ids".to_string(), json!(ids));
     body.insert(
         "with_payload".to_string(),
-        json!(with_payload.unwrap_or(true)),
+        json!(with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD)),
     );
     body.insert(
         "with_vector".to_string(),
@@ -259,7 +277,7 @@ pub fn build_scroll_body(
     body.insert("limit".to_string(), json!(limit));
     body.insert(
         "with_payload".to_string(),
-        json!(with_payload.unwrap_or(true)),
+        json!(with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD)),
     );
     body.insert(
         "with_vector".to_string(),
@@ -306,10 +324,25 @@ mod tests {
 
     #[test]
     fn test_distance_to_qdrant() {
-        assert_eq!(distance_to_qdrant(DistanceMetric::Cosine), "Cosine");
-        assert_eq!(distance_to_qdrant(DistanceMetric::Euclid), "Euclid");
-        assert_eq!(distance_to_qdrant(DistanceMetric::Dot), "Dot");
-        assert_eq!(distance_to_qdrant(DistanceMetric::Manhattan), "Manhattan");
+        assert_eq!(
+            distance_to_qdrant(DistanceMetric::Cosine).unwrap(),
+            "Cosine"
+        );
+        assert_eq!(
+            distance_to_qdrant(DistanceMetric::Euclid).unwrap(),
+            "Euclid"
+        );
+        assert_eq!(distance_to_qdrant(DistanceMetric::Dot).unwrap(), "Dot");
+        // Unsupported metrics are rejected instead of forwarded.
+        assert!(distance_to_qdrant(DistanceMetric::Manhattan).is_err());
+    }
+
+    #[test]
+    fn test_distance_from_qdrant() {
+        assert_eq!(distance_from_qdrant("Cosine"), Some(DistanceMetric::Cosine));
+        assert_eq!(distance_from_qdrant("euclid"), Some(DistanceMetric::Euclid));
+        assert_eq!(distance_from_qdrant("DOT"), Some(DistanceMetric::Dot));
+        assert_eq!(distance_from_qdrant("Manhattan"), None);
     }
 
     #[test]
@@ -339,10 +372,29 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .unwrap();
         let vectors = body.get("vectors").unwrap();
         assert_eq!(vectors.get("size").unwrap().as_u64(), Some(384));
         assert_eq!(vectors.get("distance").unwrap().as_str(), Some("Cosine"));
+    }
+
+    #[test]
+    fn test_build_create_collection_body_rejects_unsupported_metric() {
+        let err = build_create_collection_body(
+            "test",
+            64,
+            DistanceMetric::Manhattan,
+            None,
+            &None,
+            &None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Manhattan"));
     }
 
     #[test]
@@ -359,7 +411,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .unwrap();
         let vectors = body.get("vectors").unwrap();
         let hnsw_json = vectors.get("hnsw_config").unwrap();
         assert_eq!(hnsw_json.get("m").unwrap().as_u64(), Some(32));
@@ -380,7 +433,8 @@ mod tests {
             Some(3),
             None,
             None,
-        );
+        )
+        .unwrap();
         assert_eq!(body.get("shard_number").unwrap().as_u64(), Some(3));
     }
 
@@ -397,7 +451,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .unwrap();
         assert_eq!(body.get("on_disk_payload").unwrap().as_bool(), Some(true));
     }
 
@@ -414,7 +469,8 @@ mod tests {
             None,
             Some(2),
             Some(1),
-        );
+        )
+        .unwrap();
         assert_eq!(body.get("replication_factor").unwrap().as_u64(), Some(2));
         assert_eq!(
             body.get("write_consistency_factor").unwrap().as_u64(),

@@ -21,7 +21,9 @@ use vector_client::VectorManager;
 /// The active vector engine.
 #[derive(Clone)]
 pub enum VectorBackend {
-    /// Built-in local engine (synchronous, disk-backed).
+    /// Built-in local engine (synchronous, disk-backed). Always operational
+    /// when constructed: it fails hard on real errors rather than
+    /// degrading silently.
     Local(Arc<LocalVectorEngine>),
     /// Remote qdrant client.
     #[cfg(feature = "vector-qdrant")]
@@ -46,8 +48,11 @@ impl VectorBackend {
 
     /// Whether the engine is unavailable (qdrant disabled engine).
     ///
-    /// The local engine is never disabled: it is process-local and fails hard
-    /// instead of degrading silently.
+    /// A disabled engine fails user-facing operations loudly: the coordinator
+    /// turns queries into [`VectorCoordinatorError::EngineDisabled`] instead
+    /// of returning empty results that would be indistinguishable from
+    /// "no matching data". Only delivery-plane batches (background sync) are
+    /// skipped-and-accounted, because failing those would stall replication.
     pub fn is_disabled(&self) -> bool {
         match self {
             VectorBackend::Local(_) => false,

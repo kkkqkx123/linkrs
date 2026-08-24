@@ -2,15 +2,15 @@
 //!
 //! These tests exercise the public coordinator surface against the remote
 //! backend shell (a disabled Qdrant manager) and therefore require
-//! `vector-qdrant`. The disabled engine must keep serving logical index
-//! metadata while degrading mutations and searches to no-ops.
+//! `vector-qdrant`. Disabled-engine contract: user-facing operations fail
+//! with `EngineDisabled`, delivery-plane batches are skipped and accounted,
+//! logical index metadata keeps working.
 #![cfg(feature = "vector-qdrant")]
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphdb::core::Value;
-use graphdb::sync::vector_sync::DistanceMetric;
 use graphdb::sync::{
     VectorBackend, VectorChangeContext, VectorChangeType, VectorClientConfig, VectorIndexLocation,
     VectorManager, VectorPointData, VectorSyncCoordinator,
@@ -38,8 +38,9 @@ async fn disabled_engine_reports_disabled_state() {
 }
 
 #[tokio::test]
-async fn disabled_engine_no_ops_batch_delivery_and_search() {
+async fn disabled_engine_skips_delivery_and_fails_searches() {
     let coordinator = disabled_coordinator().await;
+    assert_eq!(coordinator.disabled_skip_count(), 0);
 
     // Register logical indexes so delivery has real targets to skip.
     coordinator
@@ -78,12 +79,21 @@ async fn disabled_engine_no_ops_batch_delivery_and_search() {
             },
         ),
     ];
+    // Delivery plane: skipped, but accounted and reported as Ok so the sync
+    // pipeline keeps recording its LSN.
     coordinator
         .on_vector_change_batch(contexts)
         .await
-        .expect("delivery to a disabled engine is a successful no-op");
+        .expect("delivery to a disabled engine is a skip-and-account no-op");
+    assert_eq!(
+        coordinator.disabled_skip_count(),
+        2,
+        "every skipped item must be counted"
+    );
 
-    let results = coordinator
+    // Query plane: loud typed error instead of an empty set that would be
+    // indistinguishable from "no matching data".
+    let error = coordinator
         .search_with_options(graphdb::sync::vector_sync::SearchOptions::new(
             1,
             "docs",
@@ -92,10 +102,10 @@ async fn disabled_engine_no_ops_batch_delivery_and_search() {
             10,
         ))
         .await
-        .unwrap();
+        .expect_err("searches against a disabled engine must fail loudly");
     assert!(
-        results.is_empty(),
-        "searches against a disabled engine return no rows"
+        error.to_string().contains("disabled"),
+        "error should identify the disabled engine: {error}"
     );
 }
 
@@ -163,5 +173,10 @@ async fn multiple_locations_deliver_in_one_batch() {
     coordinator
         .on_vector_change_batch(contexts)
         .await
-        .expect("multi-collection delivery succeeds even on a disabled engine");
+        .expect("multi-location delivery is a skip-and-account no-op on a disabled engine");
+    assert_eq!(
+        coordinator.disabled_skip_count(),
+        locations.len() as u64,
+        "skips from every location must be counted"
+    );
 }

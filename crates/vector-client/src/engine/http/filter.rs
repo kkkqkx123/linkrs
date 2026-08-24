@@ -3,7 +3,10 @@ use serde_json::{json, Value};
 use crate::error::Result;
 use crate::types::*;
 
-use super::super::common::filter::{process_filter, ConditionHandler};
+use super::super::common::filter::{
+    classify_match_any, classify_match_value, process_filter, ClassifiedMatch, ClassifiedMatchAny,
+    ConditionHandler,
+};
 
 pub fn convert_filter(filter: &VectorFilter) -> Result<Option<Value>> {
     let handler = JsonConditionHandler;
@@ -17,17 +20,41 @@ impl ConditionHandler for JsonConditionHandler {
     type Filter = Value;
 
     fn handle_match(&self, field: &str, value: &str) -> Value {
+        // Typed matching mirrors the gRPC translation so both transports
+        // evaluate identically against real Qdrant payloads.
+        let match_body = match classify_match_value(value) {
+            ClassifiedMatch::Integer(i) => json!({ "value": i }),
+            ClassifiedMatch::Boolean(b) => json!({ "value": b }),
+            ClassifiedMatch::Keyword(k) => json!({ "value": k }),
+        };
         json!({
             "key": field,
-            "match": { "value": value }
+            "match": match_body
         })
     }
 
     fn handle_match_any(&self, field: &str, values: &[serde_json::Value]) -> Value {
-        json!({
-            "key": field,
-            "match_any": { "any": values }
-        })
+        // Element types are preserved exactly like the gRPC translation.
+        match classify_match_any(values) {
+            ClassifiedMatchAny::Integers(integers) => json!({
+                "key": field,
+                "match": { "any": integers }
+            }),
+            ClassifiedMatchAny::Strings(strings) => json!({
+                "key": field,
+                "match": { "any": strings }
+            }),
+            ClassifiedMatchAny::Booleans(booleans) => {
+                // Mirror the gRPC translation: upstream Match has no
+                // repeated-boolean variant, so the list becomes an OR over
+                // singular boolean matches inside a bare filter condition.
+                let should: Vec<Value> = booleans
+                    .into_iter()
+                    .map(|b| json!({ "key": field, "match": { "value": b } }))
+                    .collect();
+                json!({ "filter": { "should": should } })
+            }
+        }
     }
 
     fn handle_range(&self, field: &str, range: &RangeCondition) -> Value {
@@ -138,11 +165,19 @@ impl ConditionHandler for JsonConditionHandler {
             filter_obj.insert("must_not".to_string(), Value::Array(must_not));
         }
 
-        if let Some((conditions, min_count)) = min_should {
-            filter_obj.insert("should".to_string(), Value::Array(conditions));
-            filter_obj.insert("min_should".to_string(), json!({ "conditions": min_count }));
-        } else if !should.is_empty() {
+        if !should.is_empty() {
             filter_obj.insert("should".to_string(), Value::Array(should));
+        }
+
+        if let Some((conditions, min_count)) = min_should {
+            // min_should carries its own condition list; serializing the
+            // count in its place breaks semantics. `should` and `min_should`
+            // are independent clauses and must both survive translation
+            // (the gRPC translator keeps both as well).
+            filter_obj.insert(
+                "min_should".to_string(),
+                json!({ "conditions": conditions, "min_count": min_count }),
+            );
         }
 
         if filter_obj.is_empty() {

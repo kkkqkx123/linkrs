@@ -8,10 +8,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VectorSearchError};
-use crate::types::DistanceMetric;
+use crate::types::{DistanceMetric, IvfConfig};
 
 /// Current on-disk format version.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+///
+/// v2 adds `ivf_config` so the effective index configuration survives
+/// restarts. Development stage: no backward compatibility is maintained.
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Default number of slots per `vectors.bin` segment.
 pub(crate) const SEGMENT_SLOTS_DEFAULT: u32 = 8192;
@@ -23,6 +26,9 @@ pub struct Meta {
     pub collection: String,
     pub vector_size: usize,
     pub distance: DistanceMetric,
+    /// Effective IVF configuration in force when the collection was created
+    /// (engine defaults already applied). `None` = exact scan only.
+    pub ivf_config: Option<IvfConfig>,
     pub segment_slots: u32,
     /// Allocated slots (grows in segment steps).
     pub slot_capacity: u64,
@@ -52,6 +58,7 @@ impl Meta {
             collection: collection.to_string(),
             vector_size,
             distance,
+            ivf_config: None,
             segment_slots,
             slot_capacity: segment_slots as u64,
             next_slot: 0,

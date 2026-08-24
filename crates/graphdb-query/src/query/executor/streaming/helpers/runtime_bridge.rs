@@ -5,10 +5,12 @@
 //! reactor and timers, so blocking waits must go through the shared
 //! runtime-aware helper instead of a bare executor block-on.
 
+#[cfg(feature = "vector")]
 use crate::core::error::QueryError;
 
 /// Drive `future` to completion on the calling thread, mapping both the
 /// bridging failure and the operation failure into a labeled query error.
+#[cfg(feature = "vector")]
 pub(crate) fn wait<F, T, E>(label: &str, future: F) -> Result<T, QueryError>
 where
     F: std::future::Future<Output = Result<T, E>> + Send,

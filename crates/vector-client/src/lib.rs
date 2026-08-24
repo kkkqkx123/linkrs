@@ -22,9 +22,7 @@ pub use engine::QdrantGrpcEngine;
 pub use engine::grpc::streaming::StreamingEngine;
 
 #[cfg(feature = "qdrant-grpc")]
-pub use engine::grpc::interceptor::{
-    CircuitBreaker, CircuitBreakerConfig, GrpcInterceptor, RetryConfig,
-};
+pub use engine::grpc::interceptor::{attach_api_key, parse_api_key, API_KEY_HEADER};
 
 pub use api::VectorClient;
 pub use api::{CollectionApi, PointApi, SearchApi};

@@ -23,6 +23,25 @@
 > - 配置入口：`[vector.local.ivf]`（`auto_promotion` 默认关闭，
 >   待 bench 结论后调整）。
 
+> **双引擎分数契约与降级语义（已落地，代码级验收见
+> `docs/issue/vector-engine-qdrant-parity.md`）**：
+>
+> 1. **分数契约**：任意后端返回的 `SearchResult.score` 一律是"越大越好"
+>    的相似度，`score_threshold` 一律为相似度下界（`score >= threshold`
+>    才保留）。本地引擎的输出即该契约；现代 Qdrant（>= 1.10）对 Euclid
+>    集合返回原始距离，由 qdrant 客户端边界做双向归一化：
+>    响应侧 `d → 1/(1+d)`，请求侧阈值 `t → 1/t - 1`（唯一换算出处：
+>    `crates/vector-client/src/engine/common/distance_utils.rs`）。Cosine/Dot
+>    两侧天然一致，不转换。
+> 2. **过滤翻译契约**：共享 `VectorFilter` 在 gRPC 与 HTTP 两条传输上的
+>    翻译必须语义等价（类型化 match、完整 min_should），翻译失败必须报错，
+>    不允许静默去过滤。一致性测试：`crates/vector-client/tests/filter_translation.rs`。
+> 3. **Disabled 引擎语义**：向量功能被禁用（DisabledEngine）时，查询恒返回
+>    空集、变更为 no-op——这是嵌入式场景下的刻意设计而非错误。调用方需要
+>    区分"无结果"与"无引擎"时使用 `VectorBackend::is_disabled()`。
+> 4. **鉴权**：配置 `api_key` 后 gRPC 与 HTTP 的每个请求（含 streaming 子
+>    引擎）都携带凭证；非法 key 在连接建立时即报错。
+
 ## 2. 架构设计
 
 ### 2.1 分层架构
@@ -438,26 +457,33 @@ async fn create_collection(&self, name: &str, config: CollectionConfig) -> Resul
 
 #### 5.3.3 搜索实现
 
+> 以下示例已按「双引擎分数契约」更新：阈值发送前转为距离上界，响应分数
+> 归一化回相似度（Euclid），实际实现见
+> `crates/vector-client/src/engine/{grpc,http}`。
+
 ```rust
 async fn search(&self, collection: &str, query: SearchQuery) -> Result<Vec<SearchResult>> {
-    // 构建搜索点
+    // 解析集合的度量类型（带缓存；未知时透传并记 warn）
+    let metric = self.metric_for(collection).await;
+
     let mut search_points = SearchPointsBuilder::new(
         collection,
         query.vector,
         query.limit as u64
     )
-    .with_payload(query.with_payload.unwrap_or(true))
+    .with_payload(query.with_payload.unwrap_or(DEFAULT_WITH_PAYLOAD))
     .with_vector(query.with_vector.unwrap_or(false));
 
-    // 添加过滤条件
+    // 添加过滤条件：翻译失败必须报错（? 上抛），不允许静默去过滤
     if let Some(filter) = query.filter {
-        let qdrant_filter = self.filter_to_qdrant(filter);
+        let qdrant_filter = self.filter_to_qdrant(filter)?;
         search_points.filter(qdrant_filter);
     }
 
-    // 添加分数阈值
+    // 添加分数阈值：共享契约是相似度下界；现代 Qdrant 对 Euclid 把
+    // score_threshold 解释为距离上界，故发送前换算 d_max = 1/t - 1
     if let Some(threshold) = query.score_threshold {
-        search_points.score_threshold(threshold);
+        search_points.score_threshold(outbound_score_threshold(metric, threshold));
     }
 
     // 添加偏移量
@@ -468,24 +494,24 @@ async fn search(&self, collection: &str, query: SearchQuery) -> Result<Vec<Searc
     // 执行搜索
     let result = self.client.search_points(search_points).await?;
 
-    // 转换结果
+    // 转换结果：Euclid 原始距离归一化为相似度 1/(1+d)，其余指标透传
     let results = result.result
         .into_iter()
-        .map(self.from_qdrant_result)
+        .map(|p| self.from_qdrant_result(p, metric))
         .collect();
 
     Ok(results)
 }
 
-fn filter_to_qdrant(&self, filter: VectorFilter) -> qdrant_client::qdrant::Filter {
+fn filter_to_qdrant(&self, filter: VectorFilter) -> Result<qdrant_client::qdrant::Filter> {
     // 实现过滤条件转换逻辑
     // ...
 }
 
-fn from_qdrant_result(&self, point: ScoredPoint) -> SearchResult {
+fn from_qdrant_result(&self, point: ScoredPoint, metric: Option<DistanceMetric>) -> SearchResult {
     SearchResult {
         id: point.id.to_string(),
-        score: point.score,
+        score: inbound_result_score(metric, point.score),
         payload: Some(point.payload),
         vector: None,  // 根据需要提取
     }

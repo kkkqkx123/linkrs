@@ -229,13 +229,16 @@ impl LocalVectorEngine {
 
     /// Collection configuration, or `None` if the collection does not exist.
     ///
-    /// The local engine persists only dimension + distance; the remaining
-    /// [`CollectionConfig`] fields (HNSW/quantization/etc.) are not stored.
+    /// Dimension, distance and the effective IVF configuration are read back
+    /// from the persisted metadata; remote-only fields (HNSW/quantization)
+    /// are not stored locally.
     pub fn collection_config(&self, name: &str) -> Result<Option<CollectionConfig>> {
         let collections = self.collections.read();
         Ok(collections.get(name).map(|store| {
             let meta = store.meta();
-            CollectionConfig::new(meta.vector_size, meta.distance)
+            let mut config = CollectionConfig::new(meta.vector_size, meta.distance);
+            config.ivf_config = meta.ivf_config.clone();
+            config
         }))
     }
 
@@ -248,13 +251,15 @@ impl LocalVectorEngine {
         let meta = store.meta();
         let live = store.count();
         let segments = (meta.next_slot as usize).div_ceil(meta.segment_slots as usize);
+        let mut config = CollectionConfig::new(meta.vector_size, meta.distance);
+        config.ivf_config = meta.ivf_config.clone();
         Ok(CollectionInfo {
             name: meta.collection.clone(),
             vector_count: live,
             indexed_vector_count: live,
             points_count: live,
             segments_count: segments as u64,
-            config: CollectionConfig::new(meta.vector_size, meta.distance),
+            config,
             status: CollectionStatus::Green,
             index: store.index_info(),
         })
@@ -314,8 +319,12 @@ impl LocalVectorEngine {
         Ok(deleted)
     }
 
-    /// Exact full-scan search. Scores follow Qdrant semantics:
-    /// cosine similarity, inner product and 1/(1+distance) for euclid.
+    /// Exact full-scan search.
+    ///
+    /// Output scores follow the crate-wide contract: higher is better
+    /// (cosine similarity, inner product, and `1/(1+distance)` for euclid).
+    /// Remote Qdrant engines normalize their raw Euclid distances to the
+    /// same contract at the client boundary.
     pub fn search(&self, collection: &str, query: &SearchQuery) -> Result<Vec<SearchResult>> {
         self.store(collection)?.search(query)
     }
