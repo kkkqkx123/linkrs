@@ -33,7 +33,7 @@ mod wal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -91,6 +91,10 @@ pub struct CollectionStore {
     /// Compaction invalidated a published index and a rebuild should be
     /// scheduled by the engine maintenance worker.
     needs_rebuild: AtomicBool,
+    /// Monotonic counter bumped on every applied mutation batch. Compaction
+    /// uses it to detect that no write raced its temp-file rewrite phase, so
+    /// the commit can swap the files without re-validating every slot.
+    mutations: AtomicU64,
 }
 
 impl CollectionStore {
@@ -123,6 +127,14 @@ impl CollectionStore {
             DistanceMetric::Cosine | DistanceMetric::Euclid | DistanceMetric::Dot
         ) {
             return Err(VectorSearchError::UnsupportedMetric(config.distance));
+        }
+        if matches!(
+            config.index_type.unwrap_or(IndexType::HNSW),
+            IndexType::HNSW
+        ) {
+            if let Some(hnsw) = &config.hnsw_config {
+                hnsw.validate()?;
+            }
         }
 
         let dir = dir.as_ref();
@@ -185,6 +197,7 @@ impl CollectionStore {
             maintenance: Mutex::new(()),
             building: AtomicBool::new(false),
             needs_rebuild: AtomicBool::new(false),
+            mutations: AtomicU64::new(0),
         })
     }
 
@@ -238,6 +251,7 @@ impl CollectionStore {
             maintenance: Mutex::new(()),
             building: AtomicBool::new(false),
             needs_rebuild: AtomicBool::new(false),
+            mutations: AtomicU64::new(0),
         };
         store.replay_wal()?;
         store.load_index()?;
@@ -384,6 +398,9 @@ impl CollectionStore {
     }
 
     fn apply_records_locked(&self, inner: &mut StoreInner, ops: &[WalRecord]) -> Result<()> {
+        // One bump per batch: compaction compares this counter across its
+        // temp-file rewrite phase to prove no write raced it.
+        self.mutations.fetch_add(1, AtomicOrdering::Relaxed);
         for op in ops {
             match op {
                 WalRecord::Upsert { point } => {

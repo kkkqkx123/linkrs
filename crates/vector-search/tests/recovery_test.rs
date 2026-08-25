@@ -2,10 +2,14 @@
 
 use vector_search::storage::CollectionStore;
 use vector_search::storage::{Wal, WalPoint, WalRecord, WalTxn};
-use vector_search::types::{CollectionConfig, DistanceMetric, PointId, VectorPoint};
+use vector_search::types::{CollectionConfig, DistanceMetric, PointId, SearchQuery, VectorPoint};
 
 fn config() -> CollectionConfig {
     CollectionConfig::new(4, DistanceMetric::Cosine)
+}
+
+fn euclid_config() -> CollectionConfig {
+    CollectionConfig::new(4, DistanceMetric::Euclid)
 }
 
 fn point(id: u64) -> VectorPoint {
@@ -221,4 +225,54 @@ fn test_replay_reconciles_stale_meta_counts() {
     let store = CollectionStore::open(&store_dir).unwrap();
     assert_eq!(store.count(), 2, "live_count must be reconciled from slots");
     assert_eq!(store.meta().last_applied_txn, 2);
+}
+
+#[test]
+fn test_hnsw_pending_slots_visible_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join("col");
+
+    {
+        let store = CollectionStore::create(&store_dir, "col", &euclid_config()).unwrap();
+        let points: Vec<VectorPoint> = (0..60u64)
+            .map(|i| VectorPoint::new(i, vec![i as f32, (i % 7) as f32 * 0.1, 1.0, 2.0]))
+            .collect();
+        let ops: Vec<WalRecord> = points
+            .iter()
+            .map(|p| WalRecord::Upsert {
+                point: WalPoint::from_point(p).unwrap(),
+            })
+            .collect();
+        store.apply_ops(&ops).unwrap();
+        assert!(store.build_index().unwrap(), "index published");
+
+        // Late writes after publication land in the pending queue and are
+        // not part of hnsw.bin's coverage.
+        for l in 0..5u64 {
+            let v = vec![-100.0 - l as f32, 0.0, 0.0, 0.0];
+            let p = VectorPoint::new(format!("late{l}"), v);
+            store
+                .apply_ops(&[WalRecord::Upsert {
+                    point: WalPoint::from_point(&p).unwrap(),
+                }])
+                .unwrap();
+        }
+    }
+
+    // Reopen: hnsw.bin covers only the first 60 slots; WAL replay restores
+    // the late ones into pending, and approximate search must still see
+    // them via the exact-scored pending path.
+    let reopened = CollectionStore::open(&store_dir).unwrap();
+    assert!(reopened.has_index(), "hnsw.bin rehydrated");
+    assert_eq!(reopened.count(), 65);
+    for l in 0..5u64 {
+        let q = vec![-100.0 - l as f32, 0.0, 0.0, 0.0];
+        let hits = reopened.search(&SearchQuery::new(q, 1)).unwrap();
+        assert_eq!(hits.len(), 1, "no hit for late{l}");
+        assert_eq!(
+            hits[0].id.to_string(),
+            format!("late{l}"),
+            "post-restart ANN must surface the late write"
+        );
+    }
 }

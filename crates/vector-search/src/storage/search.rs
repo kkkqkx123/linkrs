@@ -9,7 +9,7 @@
 //! therefore path-independent.
 
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -201,6 +201,10 @@ impl CollectionStore {
     /// `SearchMode::KNN.ef_search`, falling back to the index default. With a
     /// payload filter that leaves fewer than `limit` results, `ef` is doubled
     /// once as a bounded accuracy fallback (mirroring the IVF nprobe retry).
+    ///
+    /// Pending slots (not yet incorporated into the graph) are scored by
+    /// brute force and merged with graph candidates, ensuring visibility
+    /// matches the IVF path's `extra_slots` semantics.
     #[allow(clippy::too_many_arguments)]
     fn search_hnsw(
         &self,
@@ -222,7 +226,7 @@ impl CollectionStore {
             paysnap,
         };
         let mut ef = query.hnsw_ef().unwrap_or_else(|| index.default_ef());
-        let candidates = index.probe_candidates(
+        let mut candidates = index.probe_candidates(
             &query.vector,
             ef,
             query.effective_limit(),
@@ -230,6 +234,33 @@ impl CollectionStore {
             vsnap,
             segment_slots,
         )?;
+
+        // Merge pending slots (exact brute-force scoring) so points
+        // inserted after the index was published remain visible.
+        let pending = self.pending.read().clone();
+        if !pending.is_empty() {
+            let metric = self.inner.read().meta.distance;
+            let pending_scored: Vec<(f32, u32)> = pending
+                .par_iter()
+                .copied()
+                .filter(|&s| !tombstones.bit(s as usize))
+                .filter_map(|s| {
+                    let v = Vectors::read_slot(vsnap, s as u64, segment_slots, dim)?;
+                    let dist = crate::distance::distance(metric, &query.vector, v);
+                    Some((crate::distance::to_score(metric, dist), s))
+                })
+                .collect();
+            // Deduplicate: if a slot appears in both graph results and
+            // pending, keep the better score (pending uses the live vector
+            // so scores are equivalent; just avoid duplicates).
+            let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
+            for scored @ (_, slot) in pending_scored {
+                if seen.insert(slot) {
+                    candidates.push(scored);
+                }
+            }
+        }
+
         let results = self.finish_candidates(candidates, query, &snap)?;
 
         let short = query.filter.is_some() && results.len() < query.limit;
@@ -243,7 +274,7 @@ impl CollectionStore {
             return Ok(results);
         }
         ef = (ef * 2).min(cap);
-        let candidates = index.probe_candidates(
+        let mut candidates = index.probe_candidates(
             &query.vector,
             ef,
             query.effective_limit(),
@@ -251,6 +282,27 @@ impl CollectionStore {
             vsnap,
             segment_slots,
         )?;
+        // Re-merge pending on retry.
+        let pending = self.pending.read().clone();
+        if !pending.is_empty() {
+            let metric = self.inner.read().meta.distance;
+            let pending_scored: Vec<(f32, u32)> = pending
+                .par_iter()
+                .copied()
+                .filter(|&s| !tombstones.bit(s as usize))
+                .filter_map(|s| {
+                    let v = Vectors::read_slot(vsnap, s as u64, segment_slots, dim)?;
+                    let dist = crate::distance::distance(metric, &query.vector, v);
+                    Some((crate::distance::to_score(metric, dist), s))
+                })
+                .collect();
+            let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
+            for scored @ (_, slot) in pending_scored {
+                if seen.insert(slot) {
+                    candidates.push(scored);
+                }
+            }
+        }
         self.finish_candidates(candidates, query, &snap)
     }
 

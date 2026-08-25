@@ -151,6 +151,9 @@ impl From<vector_search::VectorSearchError> for VectorError {
             vector_search::VectorSearchError::InvalidCollectionName(name) => {
                 VectorError::ConfigError(format!("Invalid collection name: {}", name))
             }
+            vector_search::VectorSearchError::InvalidConfig(msg) => {
+                VectorError::ConfigError(msg)
+            }
             vector_search::VectorSearchError::InvalidVectorDimension { expected, actual } => {
                 VectorError::DimensionMismatch { expected, actual }
             }

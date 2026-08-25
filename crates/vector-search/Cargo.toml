@@ -34,3 +34,11 @@ harness = false
 [[bench]]
 name = "ivf_bench"
 harness = false
+
+[[bench]]
+name = "hnsw_build_bench"
+harness = false
+
+[[bench]]
+name = "hnsw_ingest_bench"
+harness = false

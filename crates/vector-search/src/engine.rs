@@ -59,6 +59,12 @@ const MAINTENANCE_TICK: Duration = Duration::from_secs(30);
 /// default) when the config leaves it unset.
 const HNSW_PROMOTION_DEFAULT: usize = 10_000;
 
+/// Pending-slot backlog at which mutations synchronously drain the HNSW
+/// graph instead of waiting for the next maintenance tick. Purely a
+/// guardrail against extreme write storms leaving the graph far behind; the
+/// brute-force pending path in search keeps results correct either way.
+const PENDING_DRAIN_GUARDRAIL: usize = 65_536;
+
 /// The built-in (local) vector engine.
 ///
 /// All operations are synchronous; the graphdb-sync coordinator serializes
@@ -239,6 +245,14 @@ impl LocalVectorEngine {
         self.store(collection)?.compact()
     }
 
+    /// Drain slots waiting in the HNSW pending queue into the published
+    /// graph immediately, instead of waiting for the next maintenance tick.
+    /// No-op when no HNSW index is published or nothing is pending.
+    pub fn drain_pending(&self, collection: &str) -> Result<()> {
+        self.store(collection)?.drain_pending_hnsw();
+        Ok(())
+    }
+
     /// Drop a collection and delete its directory.
     pub fn delete_collection(&self, name: &str) -> Result<()> {
         let dir = {
@@ -305,7 +319,7 @@ impl LocalVectorEngine {
         store.apply_ops(&[WalRecord::Upsert {
             point: WalPoint::from_point(&point)?,
         }])?;
-        self.maybe_schedule_compaction(collection, &store);
+        self.after_mutation(collection, &store);
         Ok(())
     }
 
@@ -321,7 +335,7 @@ impl LocalVectorEngine {
             })
             .collect();
         store.apply_ops(&ops?)?;
-        self.maybe_schedule_compaction(collection, &store);
+        self.after_mutation(collection, &store);
         Ok(())
     }
 
@@ -331,7 +345,7 @@ impl LocalVectorEngine {
         store.apply_ops(&[WalRecord::Delete {
             point_id: point_id.to_string(),
         }])?;
-        self.maybe_schedule_compaction(collection, &store);
+        self.after_mutation(collection, &store);
         Ok(())
     }
 
@@ -341,7 +355,7 @@ impl LocalVectorEngine {
         store.apply_ops(&[WalRecord::DeleteBatch {
             point_ids: point_ids.to_vec(),
         }])?;
-        self.maybe_schedule_compaction(collection, &store);
+        self.after_mutation(collection, &store);
         Ok(())
     }
 
@@ -349,7 +363,7 @@ impl LocalVectorEngine {
     pub fn delete_by_filter(&self, collection: &str, filter: &VectorFilter) -> Result<u64> {
         let store = self.store(collection)?;
         let deleted = store.delete_by_filter(filter)?;
-        self.maybe_schedule_compaction(collection, &store);
+        self.after_mutation(collection, &store);
         Ok(deleted)
     }
 
@@ -444,6 +458,16 @@ impl LocalVectorEngine {
         }
     }
 
+    /// Post-mutation hook, run after the store locks are released: drain an
+    /// extreme pending backlog synchronously (guardrail) and schedule a
+    /// background compaction when warranted.
+    fn after_mutation(&self, collection: &str, store: &Arc<CollectionStore>) {
+        if store.pending_len() >= PENDING_DRAIN_GUARDRAIL {
+            store.drain_pending_hnsw();
+        }
+        self.maybe_schedule_compaction(collection, store);
+    }
+
     /// Run one maintenance sweep immediately: post-compaction rebuilds,
     /// drift-triggered rebuilds and exact-scan-to-IVF promotion. Normally
     /// driven by the worker's idle tick; also useful for administrative
@@ -519,6 +543,18 @@ fn maintenance_loop(
                 in_flight.lock().remove(&format!("compact:{name}"));
             }
             Err(RecvTimeoutError::Timeout) => {
+                // Drain pending HNSW slots into the graph before the
+                // sweep, so that freshly inserted points are incorporated
+                // into the graph structure (the sweep may then decide
+                // whether a full rebuild is warranted).
+                {
+                    let stores = collections.read().clone();
+                    for store in stores.values() {
+                        if let IndexType::HNSW = store.meta().index_type {
+                            store.drain_pending_hnsw();
+                        }
+                    }
+                }
                 maintenance_sweep(&collections, &jobs, &in_flight);
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -594,21 +630,53 @@ fn sweep_ivf(
 }
 
 /// HNSW maintenance: promote from exact scan once the collection outgrows
-/// `full_scan_threshold` (Qdrant semantics: automatic, no separate switch).
-/// The published graph itself needs no drift upkeep — inserts are
-/// incremental and distances always read the live vectors.
+/// `full_scan_threshold` (Qdrant semantics: automatic, no separate switch);
+/// keep a published graph fresh by scheduling rebuilds while pending slots
+/// remain, or when overwrite-driven staleness crosses
+/// `HnswConfig::stale_rebuild_ratio`. Overwrite upserts keep the node's old
+/// graph position and only erode recall slowly, so the ratio is an optional
+/// trigger rather than a correctness requirement.
 fn sweep_hnsw(
     name: &str,
     store: &Arc<CollectionStore>,
     jobs: &Sender<MaintenanceJob>,
     in_flight: &Arc<Mutex<HashSet<String>>>,
 ) {
-    if store.has_index() {
-        return;
-    }
     let Some(config) = store.hnsw_config_opt() else {
         return;
     };
+    if store.has_index() {
+        // Index is published but slots are not incorporated into the graph
+        // yet (fresh writes routed to pending, or gaps found on open).
+        if store.pending_len() > 0 {
+            tracing::debug!(
+                collection = %name,
+                pending = store.pending_len(),
+                "HNSW index published with pending slots; scheduling rebuild"
+            );
+            LocalVectorEngine::schedule_build(name, jobs, in_flight);
+            return;
+        }
+        // Staleness upkeep: overwrite upserts since the build, relative to
+        // the live count at build time.
+        if let (Some(threshold), Some(info)) = (config.stale_rebuild_ratio, store.index_info()) {
+            if info.built_at_live_count > 0 {
+                let ratio = info.stale_overwrite_count as f64 / info.built_at_live_count as f64;
+                if ratio > threshold {
+                    tracing::info!(
+                        collection = %name,
+                        stale = info.stale_overwrite_count,
+                        built_at = info.built_at_live_count,
+                        ratio,
+                        threshold,
+                        "stale overwrite ratio exceeded; scheduling HNSW rebuild"
+                    );
+                    LocalVectorEngine::schedule_build(name, jobs, in_flight);
+                }
+            }
+        }
+        return;
+    }
     let threshold = config
         .full_scan_threshold
         .unwrap_or(HNSW_PROMOTION_DEFAULT)

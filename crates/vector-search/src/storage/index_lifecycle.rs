@@ -14,6 +14,7 @@
 //!   record its slot nowhere; with this order it still lands in `pending`,
 //!   which every publication path drains.
 
+use std::collections::HashSet;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
 
@@ -48,6 +49,7 @@ impl CollectionStore {
     /// parameters in at build time, so changes only affect the next rebuild
     /// and memory must stay consistent with disk.
     pub fn set_hnsw_config(&self, config: HnswConfig) -> Result<()> {
+        config.validate()?;
         let mut inner = self.inner.write();
         inner.meta.hnsw_config = Some(config);
         inner.meta.save(&self.dir)
@@ -141,6 +143,9 @@ impl CollectionStore {
                     pending.push(slot as u32);
                 }
             }
+            if !pending.is_empty() {
+                self.needs_rebuild.store(true, AtomicOrdering::Relaxed);
+            }
         }
         self.index
             .store(Arc::new(Some(PublishedIndex::Hnsw(index))));
@@ -148,11 +153,17 @@ impl CollectionStore {
     }
 
     /// Route a freshly written slot into the published index (nearest IVF
-    /// list / incremental HNSW insert) or, when no index is published but one
+    /// list / pending for HNSW) or, when no index is published but one
     /// is being built, into the pending set so approximate search never
     /// misses it. Runs under the store write lock; `segment_slots` is passed
     /// in because `inner` is already mutably borrowed by the caller.
-    pub(super) fn register_slot(&self, slot: u32, vector: &[f32], segment_slots: u32) {
+    ///
+    /// For published HNSW the slot is pushed to `pending` rather than
+    /// inserted inline into the graph, so the upsert critical section stays
+    /// O(1) instead of O(ef_construct) graph search.  Pending slots are
+    /// scored by brute force in `search_hnsw` for correct visibility, and
+    /// drained into the graph by the maintenance worker on each tick.
+    pub(super) fn register_slot(&self, slot: u32, vector: &[f32], _segment_slots: u32) {
         let published = self.index.load();
         match published.as_ref() {
             Some(PublishedIndex::Ivf(index)) => {
@@ -160,9 +171,11 @@ impl CollectionStore {
                 index.note_upsert();
                 return;
             }
-            Some(PublishedIndex::Hnsw(index)) => {
-                let vsnap = self.vectors.snapshot();
-                index.insert(slot, vector, &vsnap, segment_slots);
+            Some(PublishedIndex::Hnsw(_)) => {
+                // Defer graph insertion to the maintenance worker; the
+                // brute-force pending path in search_hnsw guarantees
+                // correct visibility in the interim.
+                self.pending.write().push(slot);
                 return;
             }
             None => {}
@@ -258,11 +271,17 @@ impl CollectionStore {
         // matching `register_slot`'s order), so concurrent upserts either ran
         // before (and are adopted here) or run after (and see the published
         // graph directly).
+        //
+        // Slots appended during the build sit in both the appended range and
+        // `pending`; the range pass wins and the pending drain skips them, so
+        // each node is inserted exactly once (a repeated insert would be
+        // miscounted as an overwrite-staleness event).
         {
             let inner = self.inner.write();
             let mut pending = self.pending.write();
             let tombstones = self.tombstones.load();
             let vsnap = self.vectors.snapshot();
+            let mut adopted: HashSet<u32> = HashSet::new();
             for slot in snapshot_next_slot..inner.meta.next_slot {
                 let slot = slot as u32;
                 if tombstones.bit(slot as usize) {
@@ -270,13 +289,15 @@ impl CollectionStore {
                 }
                 if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
                     index.insert(slot, v, &vsnap, segment_slots);
+                    adopted.insert(slot);
                 }
             }
             for slot in pending.drain(..) {
-                if !tombstones.bit(slot as usize) {
-                    if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
-                        index.insert(slot, v, &vsnap, segment_slots);
-                    }
+                if adopted.contains(&slot) || tombstones.bit(slot as usize) {
+                    continue;
+                }
+                if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
+                    index.insert(slot, v, &vsnap, segment_slots);
                 }
             }
         }
@@ -411,9 +432,66 @@ impl CollectionStore {
         Ok(())
     }
 
+    /// Drain pending slots into the published HNSW index in batch.
+    ///
+    /// Called by the maintenance worker on each idle tick.  Acquires only the
+    /// `maintenance` mutex (not the store write lock) so concurrent upserts
+    /// and searches are unblocked; new slots that arrive during the drain
+    /// are left for the next tick.  If no HNSW index is published or pending
+    /// is empty this is a no-op.
+    pub(crate) fn drain_pending_hnsw(&self) {
+        let published = self.index.load();
+        let Some(PublishedIndex::Hnsw(index)) = published.as_ref() else {
+            return;
+        };
+        let pending: Vec<u32> = {
+            let mut p = self.pending.write();
+            if p.is_empty() {
+                return;
+            }
+            // Take a snapshot and clear; new arrivals during drain go to
+            // the next tick.
+            std::mem::take(&mut *p)
+        };
+        // Hold maintenance only — excludes compaction and build, so the
+        // graph structure is stable.  The store write lock is NOT held,
+        // so upserts and searches continue concurrently.
+        let _guard = self.maintenance.lock();
+        let (dim, segment_slots) = {
+            let inner = self.inner.read();
+            (inner.meta.vector_size, inner.meta.segment_slots)
+        };
+        let tombstones = self.tombstones.load();
+        let vsnap = self.vectors.snapshot();
+        let mut drained = 0u64;
+        for slot in pending {
+            if tombstones.bit(slot as usize) {
+                continue;
+            }
+            if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
+                index.insert(slot, v, &vsnap, segment_slots);
+                drained += 1;
+            }
+        }
+        if drained > 0 {
+            tracing::debug!(
+                collection = %self.inner.read().meta.collection,
+                drained,
+                "HNSW pending slots drained"
+            );
+        }
+    }
+
     /// Whether an index is published.
     pub fn has_index(&self) -> bool {
         self.index.load().is_some()
+    }
+
+    /// Number of slots waiting in the pending queue (not yet incorporated
+    /// into the published index). Used by the sweep to schedule rebuilds
+    /// when the index is published but has pending gaps.
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.read().len()
     }
 
     /// Swap-and-reset the post-compaction rebuild flag.
@@ -478,6 +556,7 @@ impl CollectionStore {
                 ef_construct: 0,
                 ef_search_default: 0,
                 built_at_live_count: index.built_at_live_count(),
+                stale_overwrite_count: 0,
                 last_drift_ratio: self.inner.read().last_drift_ratio,
             }),
             Some(PublishedIndex::Hnsw(index)) => Some(IndexInfo {
@@ -488,6 +567,7 @@ impl CollectionStore {
                 ef_construct: index.ef_construct(),
                 ef_search_default: index.default_ef(),
                 built_at_live_count: index.built_at_live_count(),
+                stale_overwrite_count: index.overwrites_since_build(),
                 last_drift_ratio: None,
             }),
             None => {
@@ -505,6 +585,7 @@ impl CollectionStore {
                         ef_construct: 0,
                         ef_search_default: 0,
                         built_at_live_count: 0,
+                        stale_overwrite_count: 0,
                         last_drift_ratio: None,
                     })
                 }

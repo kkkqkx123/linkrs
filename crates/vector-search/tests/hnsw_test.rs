@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use vector_search::{
     CollectionConfig, DistanceMetric, FilterCondition, HnswConfig, LocalVectorEngine, SearchMode,
-    SearchQuery, VectorFilter, VectorPoint,
+    SearchQuery, VectorFilter, VectorPoint, VectorSearchError,
 };
 
 const DIM: usize = 8;
@@ -277,4 +277,120 @@ fn knn_mode_controls_recall_width() {
         wide[0].score,
         narrow[0].score
     );
+}
+
+#[test]
+fn rejects_ef_construct_below_two_m() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+    let bad = HnswConfig {
+        m: 16,
+        ef_construct: 20,
+        ..HnswConfig::default()
+    };
+    let err = engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid).with_hnsw(bad),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, VectorSearchError::InvalidConfig(_)),
+        "expected InvalidConfig, got {err:?}"
+    );
+
+    // The boundary itself is accepted.
+    let boundary = HnswConfig {
+        m: 8,
+        ef_construct: 16,
+        ..HnswConfig::default()
+    };
+    engine
+        .create_collection(
+            "ok",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid).with_hnsw(boundary),
+        )
+        .unwrap();
+
+    // Runtime config updates are validated too.
+    let store = vector_search::storage::CollectionStore::create(
+        dir.path().join("store"),
+        "store",
+        &CollectionConfig::new(DIM, DistanceMetric::Euclid),
+    )
+    .unwrap();
+    let err = store
+        .set_hnsw_config(HnswConfig {
+            m: 16,
+            ef_construct: 10,
+            ..HnswConfig::default()
+        })
+        .unwrap_err();
+    assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+}
+
+#[test]
+fn stale_ratio_triggers_background_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+    let cfg = HnswConfig {
+        m: 8,
+        ef_construct: 64,
+        full_scan_threshold: Some(10),
+        stale_rebuild_ratio: Some(0.05),
+        ..HnswConfig::default()
+    };
+    engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid)
+                .with_index_type(vector_search::IndexType::HNSW)
+                .with_hnsw(cfg),
+        )
+        .unwrap();
+    let points: Vec<VectorPoint> = (0..25u64)
+        .map(|i| VectorPoint::new(i, vec![(i % 7) as f32 * 0.3 + 1.0; DIM]))
+        .collect();
+    engine.upsert_batch("col", &points).unwrap();
+
+    engine.run_maintenance_sweep();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !engine.has_index("col") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        engine.run_maintenance_sweep();
+    }
+    assert!(engine.has_index("col"), "promotion built the graph");
+
+    // Overwrite one point repeatedly: each overwrite keeps its old graph
+    // position and accumulates staleness (routed through pending).
+    for i in 0..30u64 {
+        let mut v = vec![0.5f32; DIM];
+        v[(i as usize) % DIM] += i as f32 * 0.01;
+        engine.upsert("col", VectorPoint::new(0u64, v)).unwrap();
+    }
+    engine.drain_pending("col").unwrap();
+    let info_before = engine.collection_info("col").unwrap().index.unwrap();
+    assert_eq!(info_before.index_kind, 2);
+    assert!(
+        info_before.stale_overwrite_count > 0,
+        "overwrites must be observable"
+    );
+
+    // The sweep compares the ratio against `stale_rebuild_ratio` and
+    // schedules a rebuild; a rebuilt graph starts with a fresh counter.
+    engine.run_maintenance_sweep();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let info = engine.collection_info("col").unwrap().index.unwrap();
+        if info.stale_overwrite_count == 0 {
+            assert_eq!(
+                info.built_at_live_count, 25,
+                "rebuild republished over the live set"
+            );
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "rebuild never ran");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        engine.run_maintenance_sweep();
+    }
 }

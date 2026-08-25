@@ -13,6 +13,13 @@
 //! | Dot      | `-Σ(a·b)`                  | `Σ(a·b)`            |
 //! | Cosine   | `1 - similarity` clamped to `[-1,1]` | `similarity` |
 //!
+//! Cosine deliberately computes norms on the fly instead of normalizing at
+//! insert time. `vectors.bin` is the single copy of the data and
+//! `get()`/`with_vector` must return the original bytes, so pgvector's
+//! dual-copy layout (raw heap tuple + normalized index copy) does not apply
+//! here; the cost is one norm per distance evaluation, traded against a
+//! second storage copy and an indirection on every point read.
+//!
 //! The active kernel is selected once per process by [`kernel::selected`]
 //! (best available SIMD implementation with a naive fallback); the naive
 //! path serves as the correctness baseline and is always exercised by the

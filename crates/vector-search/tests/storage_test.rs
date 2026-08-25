@@ -282,3 +282,62 @@ fn test_grow_after_compact() {
         );
     }
 }
+
+#[test]
+fn compaction_under_concurrent_writes_stays_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join("col");
+    let store =
+        std::sync::Arc::new(CollectionStore::create(&store_dir, "col", &config(4)).unwrap());
+
+    // Writer: each round appends 8 fresh ids then deletes the first 4 of the
+    // same round, so tombstones keep triggering compactions while appends
+    // race them. Final live set is deterministic: ids with `id % 8 >= 4`.
+    const ROUNDS: u64 = 60;
+    let writer = {
+        let store = std::sync::Arc::clone(&store);
+        std::thread::spawn(move || {
+            for r in 0..ROUNDS {
+                for j in 0..8u64 {
+                    store.upsert(&point(r * 8 + j, 4)).unwrap();
+                }
+                for j in 0..4u64 {
+                    assert!(store.delete(&PointId::Num(r * 8 + j)).unwrap());
+                }
+            }
+        })
+    };
+
+    // Concurrent compactions: both the lock-free retry path and the
+    // contended fallback must preserve visibility and data integrity.
+    for _ in 0..6 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        store.compact().unwrap();
+    }
+    writer.join().unwrap();
+
+    let expected: Vec<u64> = (0..ROUNDS * 8).filter(|id| id % 8 >= 4).collect();
+    assert_eq!(store.count(), expected.len() as u64);
+    for id in &expected {
+        assert!(
+            store.get(&PointId::Num(*id)).unwrap().is_some(),
+            "live point {id} lost"
+        );
+        assert_eq!(
+            store.get(&PointId::Num(*id)).unwrap().unwrap().vector,
+            point(*id, 4).vector,
+            "point {id} corrupted by a racing compaction"
+        );
+    }
+    for r in 0..ROUNDS {
+        assert!(store.get(&PointId::Num(r * 8)).unwrap().is_none());
+    }
+
+    // One final compaction on the quiesced store must be a clean no-op-ish
+    // pass that keeps every remaining point intact.
+    let live = store.compact().unwrap();
+    assert_eq!(live, expected.len() as u64);
+    drop(store);
+    let reopened = CollectionStore::open(&store_dir).unwrap();
+    assert_eq!(reopened.count(), expected.len() as u64);
+}

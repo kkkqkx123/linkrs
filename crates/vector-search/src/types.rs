@@ -7,6 +7,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{Result, VectorSearchError};
+
 pub type Payload = HashMap<String, serde_json::Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,17 +86,43 @@ impl DistanceMetric {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
+    /// Maximum connections per layer above the ground layer; the ground
+    /// layer uses `2 * m`. Mirrors pgvector's `m` reloption.
     pub m: usize,
+    /// Build-time candidate list size. Must satisfy `ef_construct >=
+    /// max(2*m, 4)` (the same floor pgvector enforces); checked by
+    /// [`HnswConfig::validate`] at collection creation, config update and
+    /// index build time.
     pub ef_construct: usize,
+    /// Live-point threshold above which an exact-scan collection is promoted
+    /// to a published graph. `None` = engine default.
     pub full_scan_threshold: Option<usize>,
+    /// Build parallelism for local graph builds. `None`/0 = sequential
+    /// insertion on the global rayon pool; 1 = sequential on a dedicated
+    /// single-thread pool; n >= 2 = n workers insert disjoint slot subsets
+    /// into the shared graph concurrently (nondeterministic topology, same
+    /// recall invariants).
     pub max_indexing_threads: Option<usize>,
+    /// Qdrant-compat field, reserved and not wired locally: the local engine
+    /// keeps hot indexes fully in memory and never spills them to disk.
+    #[serde(default)]
     pub on_disk: Option<bool>,
+    /// Qdrant-compat field, reserved and not wired locally: per-layer
+    /// connection caps are derived from `m` (ground layer `2 * m`).
+    #[serde(default)]
     pub payload_m: Option<usize>,
     /// Default `ef` for layer-0 graph search when a query leaves
     /// `SearchMode::KNN.ef_search` unset. Local engine only; remote backends
     /// apply their server-side default.
     #[serde(default = "default_hnsw_ef_search")]
     pub ef_search: usize,
+    /// Staleness rebuild trigger: when the ratio of overwrite upserts since
+    /// the last build to the built-at live count exceeds this value, the
+    /// maintenance sweep schedules a rebuild (overwrite upserts keep their
+    /// stale graph position, which slowly erodes recall). `None` disables
+    /// staleness-triggered rebuilds.
+    #[serde(default)]
+    pub stale_rebuild_ratio: Option<f64>,
 }
 
 fn default_hnsw_ef_search() -> usize {
@@ -111,6 +139,7 @@ impl Default for HnswConfig {
             on_disk: None,
             payload_m: None,
             ef_search: 40,
+            stale_rebuild_ratio: None,
         }
     }
 }
@@ -122,6 +151,21 @@ impl HnswConfig {
             ef_construct,
             ..Self::default()
         }
+    }
+
+    /// Validate the graph parameters. Mirrors pgvector's CREATE INDEX
+    /// reloption checks: `ef_construct` must be at least `max(2*m, 4)`
+    /// so the beam search can never be narrower than one node's full
+    /// neighborhood.
+    pub fn validate(&self) -> Result<()> {
+        let min_ef = self.m.saturating_mul(2).max(4);
+        if self.ef_construct < min_ef {
+            return Err(VectorSearchError::InvalidConfig(format!(
+                "hnsw ef_construct {} must be >= max(2*m, 4) = {min_ef} (m = {})",
+                self.ef_construct, self.m
+            )));
+        }
+        Ok(())
     }
 
     pub fn with_full_scan_threshold(mut self, threshold: usize) -> Self {
@@ -146,6 +190,11 @@ impl HnswConfig {
 
     pub fn with_ef_search(mut self, ef_search: usize) -> Self {
         self.ef_search = ef_search;
+        self
+    }
+
+    pub fn with_stale_rebuild_ratio(mut self, ratio: f64) -> Self {
+        self.stale_rebuild_ratio = Some(ratio);
         self
     }
 }
@@ -390,6 +439,10 @@ pub struct IndexInfo {
     /// HNSW only: default layer-0 search width.
     pub ef_search_default: usize,
     pub built_at_live_count: u64,
+    /// HNSW only: overwrite upserts observed since the graph was built (or
+    /// reloaded). Combined with `built_at_live_count` this yields the stale
+    /// position ratio consumed by `HnswConfig::stale_rebuild_ratio`.
+    pub stale_overwrite_count: u64,
     /// IVF only: last measured cluster drift ratio.
     pub last_drift_ratio: Option<f64>,
 }
@@ -1206,6 +1259,19 @@ mod tests {
         assert_eq!(cfg.max_indexing_threads, Some(4));
         assert_eq!(cfg.on_disk, Some(true));
         assert_eq!(cfg.payload_m, Some(8));
+    }
+
+    #[test]
+    fn test_hnsw_config_validate() {
+        assert!(HnswConfig::default().validate().is_ok());
+        // Boundary: ef_construct == max(2m, 4) is accepted.
+        assert!(HnswConfig::new(8, 16).validate().is_ok());
+        assert!(HnswConfig::new(2, 4).validate().is_ok());
+        assert!(HnswConfig::new(1, 4).validate().is_ok());
+
+        let err = HnswConfig::new(16, 20).validate().unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+        assert!(HnswConfig::new(2, 3).validate().is_err());
     }
 
     #[test]

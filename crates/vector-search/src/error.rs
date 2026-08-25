@@ -11,6 +11,8 @@ pub enum VectorSearchError {
     CollectionAlreadyExists(String),
     #[error("invalid collection name: {0}")]
     InvalidCollectionName(String),
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
     #[error("invalid vector dimension: expected {expected}, got {actual}")]
     InvalidVectorDimension { expected: usize, actual: usize },
     #[error("invalid point id: {0}")]

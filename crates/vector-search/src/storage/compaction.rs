@@ -1,8 +1,17 @@
 //! Collection compaction plus the file-rewriting helpers it relies on.
 //!
-//! Compaction runs under the store's write lock. It builds temp files, fsyncs
-//! them, then atomically renames each over the live file (the `replace_from`
+//! Compaction rewrites every collection file into temp files, fsyncs them,
+//! then atomically renames each over the live file (the `replace_from`
 //! path), which is invisible to readers holding old mmap snapshots.
+//!
+//! The heavy rewrite phase runs under the `maintenance` mutex only — the
+//! store write lock is *not* held, so searches and upserts proceed on the
+//! old files. A mutation counter guards the commit: the swap happens under
+//! the write lock only if no transaction raced the rewrite; otherwise the
+//! attempt is retried on a fresh snapshot. Under sustained write pressure
+//! the compaction falls back to rewriting while holding the write lock, so
+//! progress is always guaranteed. In both paths the `maintenance` mutex
+//! excludes index builds/drains, keeping slot numbers stable for the index.
 
 use std::fs::File;
 use std::io::Write;
@@ -16,12 +25,46 @@ use super::directory::{KEY_REC_SIZE, SLOT_REC_SIZE};
 use super::keys::Keys;
 use super::payloads::Payloads;
 use super::tombstones::TombstoneBits;
-use super::{CollectionStore, WalRecord, WalTxn};
+use super::{CollectionStore, Meta, WalRecord, WalTxn};
 use crate::error::{Result, VectorSearchError};
 use crate::types::PointId;
 
 const HEADER_LEN: usize = 24;
 const FILE_VERSION: u32 = 1;
+
+/// How often the lock-free rewrite is retried when a write races it before
+/// falling back to the whole-rewrite critical section.
+const COMMIT_ATTEMPTS: usize = 4;
+
+/// Everything one compaction attempt needs, captured from an immutable view.
+struct CompactionPlan {
+    dim: usize,
+    segment_slots: u32,
+    /// Slot high-water mark the plan covers.
+    next_slot: u64,
+    /// Tombstone count at planning time (commit validates it is unchanged).
+    tombstone_count: u64,
+    new_capacity: u64,
+    /// `map[old_slot] = new_slot` for live slots; `u32::MAX` = dropped.
+    map: Vec<u32>,
+    live_count: u64,
+}
+
+/// Compute the plan from a metadata snapshot and the current tombstone bits.
+fn build_plan(meta: &Meta, tombstones: &TombstoneBits) -> CompactionPlan {
+    let (new_capacity, map) =
+        plan_slots(|s| !tombstones.bit(s), meta.next_slot, meta.segment_slots);
+    let live_count = map.iter().filter(|s| **s != u32::MAX).count() as u64;
+    CompactionPlan {
+        dim: meta.vector_size,
+        segment_slots: meta.segment_slots,
+        next_slot: meta.next_slot,
+        tombstone_count: meta.tombstone_count,
+        new_capacity,
+        map,
+        live_count,
+    }
+}
 
 /// One entry of a rebuilt directory file: blob for `slot` with `flags`.
 pub(crate) struct DirEntry {
@@ -157,49 +200,85 @@ impl CollectionStore {
     /// Physically remove tombstoned slots and rebuild all files with compacted
     /// slot numbering `0..live_count`.
     ///
-    /// Runs under the store's write lock (blocking searches, acceptable for a
-    /// single-node deployment) and holds the `maintenance` mutex, so an index
-    /// build cannot run concurrently and observe torn slot numbers.
-    /// Procedure:
-    /// 1. write `vectors_tmp.bin`/`keys_tmp.bin`/`payloads_tmp.bin`;
-    /// 2. fsync each and rename over the live file (atomic swap);
-    /// 3. rebuild mmap snapshots, `reverse` map and tombstone bitmap;
-    /// 4. rewrite `meta.bin`;
-    /// 5. drop any published IVF index (slot numbers changed wholesale) and
-    ///    flag the engine maintenance worker for a rebuild;
-    /// 6. append a `Compact` checkpoint to the WAL and truncate it.
+    /// Holds the `maintenance` mutex throughout, so an index build cannot run
+    /// concurrently and observe torn slot numbers. The temp-file rewrite runs
+    /// without the store write lock; the commit (rename swap + in-memory
+    /// rebuild + meta rewrite + WAL checkpoint) is the only section holding
+    /// it, and only when no transaction raced the rewrite. Under sustained
+    /// write pressure a bounded fallback rewrites while holding the write
+    /// lock, so compaction always makes progress.
     ///
     /// Returns the number of live points after compaction.
     pub fn compact(&self) -> Result<u64> {
         let _guard = self.maintenance.lock();
-        let had_index = self.index.load().is_some();
+
+        // Lock-free attempts: plan on an immutable snapshot, write temps,
+        // then commit only if the mutation counter proves nothing raced.
+        for _ in 0..COMMIT_ATTEMPTS {
+            let plan = {
+                let inner = self.inner.read();
+                if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
+                    return Ok(inner.meta.live_count);
+                }
+                let tombstones = self.tombstones.load();
+                build_plan(&inner.meta, &tombstones)
+            };
+            let version = self.mutations.load(AtomicOrdering::Relaxed);
+            self.write_temp_files(&plan)?;
+            {
+                let mut inner = self.inner.write();
+                let raced = self.mutations.load(AtomicOrdering::Relaxed) != version
+                    || inner.meta.next_slot != plan.next_slot
+                    || inner.meta.tombstone_count != plan.tombstone_count;
+                if !raced {
+                    return self.commit_compaction(&mut inner, &plan);
+                }
+            }
+            tracing::debug!(
+                collection = %self.inner.read().meta.collection,
+                "compaction raced concurrent writes; retrying"
+            );
+        }
+
+        // Contended fallback: the whole rewrite inside the store write lock.
+        // Queries pause for the duration, but progress is guaranteed.
         let mut inner = self.inner.write();
         if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
             return Ok(inner.meta.live_count);
         }
-        let dim = inner.meta.vector_size;
-        let segment_slots = inner.meta.segment_slots;
-
         let tombstones = self.tombstones.load();
-        let (new_capacity, map) =
-            plan_slots(|s| !tombstones.bit(s), inner.meta.next_slot, segment_slots);
-        let live_count = map.iter().filter(|s| **s != u32::MAX).count() as u64;
+        let plan = build_plan(&inner.meta, &tombstones);
         drop(tombstones);
+        self.write_temp_files(&plan)?;
+        self.commit_compaction(&mut inner, &plan)
+    }
 
+    /// Write the three compacted temp files from immutable snapshots.
+    ///
+    /// Requires no store locks: every input is either an `ArcSwap` snapshot
+    /// or captured in `plan`. Callers must validate via the mutation counter
+    /// that no write raced the reads before committing these files.
+    fn write_temp_files(&self, plan: &CompactionPlan) -> Result<()> {
         // 1. vectors.bin
         let tmp_vectors = self.dir.join("vectors_tmp.bin");
         {
             let vsnap = self.vectors.snapshot();
-            write_vectors_file(&tmp_vectors, dim, segment_slots, new_capacity, &vsnap, &map)?;
+            write_vectors_file(
+                &tmp_vectors,
+                plan.dim,
+                plan.segment_slots,
+                plan.new_capacity,
+                &vsnap,
+                &plan.map,
+            )?;
         }
-        self.vectors.replace_from(&tmp_vectors)?;
 
         // 2. keys.bin
         let tmp_keys = self.dir.join("keys_tmp.bin");
         {
             let keys_view = self.keys.snapshot();
-            let mut entries = Vec::with_capacity(live_count as usize);
-            for (old_slot, new_slot) in map.iter().enumerate() {
+            let mut entries = Vec::with_capacity(plan.live_count as usize);
+            for (old_slot, new_slot) in plan.map.iter().enumerate() {
                 if *new_slot == u32::MAX {
                     continue;
                 }
@@ -212,16 +291,21 @@ impl CollectionStore {
                     flags: 0,
                 });
             }
-            write_dir_file(&tmp_keys, *b"VKEY", KEY_REC_SIZE, new_capacity, &entries)?;
+            write_dir_file(
+                &tmp_keys,
+                *b"VKEY",
+                KEY_REC_SIZE,
+                plan.new_capacity,
+                &entries,
+            )?;
         }
-        self.keys.replace_from(&tmp_keys)?;
 
         // 3. payloads.bin
         let tmp_payloads = self.dir.join("payloads_tmp.bin");
         {
             let payloads_view = self.payloads.snapshot();
-            let mut entries = Vec::with_capacity(live_count as usize);
-            for (old_slot, new_slot) in map.iter().enumerate() {
+            let mut entries = Vec::with_capacity(plan.live_count as usize);
+            for (old_slot, new_slot) in plan.map.iter().enumerate() {
                 if *new_slot == u32::MAX {
                     continue;
                 }
@@ -239,33 +323,52 @@ impl CollectionStore {
                 &tmp_payloads,
                 *b"VPLD",
                 SLOT_REC_SIZE,
-                new_capacity,
+                plan.new_capacity,
                 &entries,
             )?;
         }
-        self.payloads.replace_from(&tmp_payloads)?;
+        Ok(())
+    }
 
-        // 4. in-memory rebuild + meta.bin
+    /// Commit a validated plan: swap the files, rebuild the in-memory state,
+    /// rewrite meta, invalidate the published ANN index and checkpoint the
+    /// WAL. The caller must hold the store write lock and guarantee (mutation
+    /// counter / lock ownership) that the plan still describes reality.
+    fn commit_compaction(
+        &self,
+        inner: &mut super::StoreInner,
+        plan: &CompactionPlan,
+    ) -> Result<u64> {
+        // Swap the files over their live names; readers keep viewing old
+        // snapshots until each ArcSwap store below.
+        self.vectors
+            .replace_from(&self.dir.join("vectors_tmp.bin"))?;
+        self.keys.replace_from(&self.dir.join("keys_tmp.bin"))?;
+        self.payloads
+            .replace_from(&self.dir.join("payloads_tmp.bin"))?;
+
+        // In-memory rebuild against the new files.
         self.tombstones
-            .store(Arc::new(TombstoneBits::new(new_capacity as usize)));
+            .store(Arc::new(TombstoneBits::new(plan.new_capacity as usize)));
         inner.reverse.clear();
         {
             let keys_view = self.keys.snapshot();
-            for slot in 0..live_count as usize {
+            for slot in 0..plan.live_count as usize {
                 let key = Keys::read_key(&keys_view, slot)?.ok_or_else(|| {
                     VectorSearchError::CorruptData(format!("live slot {slot} has no key"))
                 })?;
                 inner.reverse.insert(PointId::from(key), slot as u32);
             }
         }
-        inner.meta.slot_capacity = new_capacity;
-        inner.meta.next_slot = live_count;
-        inner.meta.live_count = live_count;
+        inner.meta.slot_capacity = plan.new_capacity;
+        inner.meta.next_slot = plan.live_count;
+        inner.meta.live_count = plan.live_count;
         inner.meta.tombstone_count = 0;
         inner.meta.save(&self.dir)?;
 
-        // 5. Invalidate the published ANN index: slot numbering changed
-        // wholesale.
+        // Invalidate the published ANN index: slot numbering changed
+        // wholesale. A rebuild is scheduled by the maintenance worker.
+        let had_index = self.index.load().is_some();
         self.index.store(Arc::new(None));
         self.pending.write().clear();
         self.building.store(false, AtomicOrdering::Relaxed);
@@ -274,13 +377,13 @@ impl CollectionStore {
         }
         self.discard_index_files();
 
-        // 6. WAL checkpoint + truncate
+        // WAL checkpoint + truncate.
         self.wal.append(&WalTxn {
             txn_id: inner.meta.last_applied_txn,
             ops: vec![WalRecord::Compact],
         })?;
         self.wal.truncate()?;
 
-        Ok(live_count)
+        Ok(plan.live_count)
     }
 }

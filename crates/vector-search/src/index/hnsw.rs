@@ -16,13 +16,17 @@
 //!   no drift maintenance. Overwriting an existing slot keeps its position
 //!   in the graph; distances are always computed against the live vector in
 //!   `vectors.bin`, so a stale position only costs recall until the next
-//!   compaction-driven rebuild fixes the topology.
+//!   rebuild fixes the topology. Overwrites are counted
+//!   ([`HnswIndex::overwrites_since_build`]) so the optional ratio-based
+//!   rebuild policy (`HnswConfig::stale_rebuild_ratio`) can observe and
+//!   react to staleness instead of waiting for a compaction.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
+use rayon::prelude::*;
 
 use crate::error::{Result, VectorSearchError};
 use crate::index::persist::{PersistedHnsw, PersistedNodeRecord};
@@ -127,10 +131,13 @@ impl PartialOrd for Cand {
 
 /// In-memory HNSW index for one collection.
 ///
-/// Mutation paths (insert) run serialized under the store write lock; search
-/// paths take short per-node/per-layer locks and an atomic entry-point load,
-/// so concurrent searches never block mutations beyond individual list
-/// updates.
+/// Incremental mutation paths run serialized under the store write lock.
+/// Builds may instead run several workers over disjoint slot ranges against
+/// one shared instance; that path relies on the per-layer/per-node locks,
+/// the mutex-guarded RNG, and [`Self::promote_lock`] serializing entry-point
+/// publication (see `insert`). Search paths take short locks and an atomic
+/// entry-point load, so concurrent searches never block mutations beyond
+/// individual list updates.
 pub(crate) struct HnswIndex {
     dim: usize,
     metric: DistanceMetric,
@@ -148,7 +155,19 @@ pub(crate) struct HnswIndex {
     nodes: RwLock<Vec<Option<Arc<Node>>>>,
     entry: RwLock<Option<EntryPoint>>,
     rng: Mutex<SplitMix64>,
+    /// Serializes entry-point publication during concurrent builds (the
+    /// counterpart of pgvector's `entryLock`). Unlike pgvector no second
+    /// reader-facing lock is needed: the new entry is fully linked before
+    /// its pointer becomes visible, and readers either observe the previous
+    /// entry (still valid) or the new one with complete adjacency lists.
+    promote_lock: Mutex<()>,
     built_at_live_count: AtomicU64,
+    /// Overwrite upserts observed since this instance was created (build or
+    /// reload). Each overwrite keeps the node's old graph position, so this
+    /// is a staleness proxy: combined with `built_at_live_count` it feeds
+    /// `HnswConfig::stale_rebuild_ratio`. It resets when a persisted graph
+    /// is reloaded, i.e. the baseline restarts with the process.
+    overwrites_since_build: AtomicU64,
 }
 
 impl HnswIndex {
@@ -165,13 +184,22 @@ impl HnswIndex {
             nodes: RwLock::new(Vec::new()),
             entry: RwLock::new(None),
             rng: Mutex::new(SplitMix64::new(seed)),
+            promote_lock: Mutex::new(()),
             built_at_live_count: AtomicU64::new(0),
+            overwrites_since_build: AtomicU64::new(0),
         }
     }
 
-    /// Build a fresh index by inserting the given live slots sequentially
-    /// (off the store lock; `slots` must be sorted ascending). Sequential
-    /// insertion is exactly how pgvector materializes CREATE INDEX.
+    /// Build a fresh index by inserting the given live slots (off the store
+    /// lock; `slots` must be sorted ascending).
+    ///
+    /// `HnswConfig::max_indexing_threads` selects the build shape:
+    /// - unset/0: sequential insertion on the global rayon pool;
+    /// - 1: sequential insertion on a dedicated single-thread pool;
+    /// - n >= 2: n workers insert disjoint round-robin slot subsets into the
+    ///   shared graph concurrently (entry-point publication serialized by
+    ///   [`Self::promote_lock`]). Topology then depends on interleaving, so
+    ///   only recall invariants hold — asserted by the multi-worker tests.
     pub(crate) fn build(
         config: &HnswConfig,
         collection: &str,
@@ -181,6 +209,7 @@ impl HnswIndex {
         vectors: &[Arc<memmap2::Mmap>],
         segment_slots: u32,
     ) -> Result<Self> {
+        config.validate()?;
         let mut seed = collection.len() as u64;
         for b in collection.as_bytes() {
             seed = seed.wrapping_mul(0x100_0000_01b3) ^ (*b as u64);
@@ -189,11 +218,54 @@ impl HnswIndex {
         seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
 
         let index = Self::new(dim, metric, config, seed);
-        for &slot in slots {
-            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, dim) else {
-                continue;
-            };
-            index.insert(slot, v, vectors, segment_slots);
+        let insert_one = |index: &Self, slot: u32| {
+            if let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, dim) {
+                index.insert(slot, v, vectors, segment_slots);
+            }
+        };
+
+        let workers = match config.max_indexing_threads {
+            Some(threads) if threads >= 2 => threads.min(slots.len().max(1)),
+            _ => 1,
+        };
+        if workers > 1 {
+            // Concurrent workers share one pool sized to their count; the
+            // per-insert distance fan-outs also land on this pool. Pool
+            // tasks are pure distance math and never take graph locks, so
+            // nested joins cannot deadlock against worker progress.
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .map_err(|e| VectorSearchError::Internal(format!("hnsw build thread pool: {e}")))?;
+            std::thread::scope(|scope| {
+                let index_ref = &index;
+                let pool_ref = &pool;
+                for w in 0..workers {
+                    scope.spawn(move || {
+                        pool_ref.install(|| {
+                            for (i, &slot) in slots.iter().enumerate() {
+                                if i % workers == w {
+                                    insert_one(index_ref, slot);
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+        } else if matches!(config.max_indexing_threads, Some(threads) if threads == 1) {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .map_err(|e| VectorSearchError::Internal(format!("hnsw build thread pool: {e}")))?;
+            pool.install(|| {
+                for &slot in slots {
+                    insert_one(&index, slot);
+                }
+            });
+        } else {
+            for &slot in slots {
+                insert_one(&index, slot);
+            }
         }
         index
             .built_at_live_count
@@ -311,6 +383,11 @@ impl HnswIndex {
         self.built_at_live_count.load(Ordering::Relaxed)
     }
 
+    /// Overwrite upserts observed since this instance was built or reloaded.
+    pub(crate) fn overwrites_since_build(&self) -> u64 {
+        self.overwrites_since_build.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn default_ef(&self) -> usize {
         self.ef_search
     }
@@ -349,8 +426,15 @@ impl HnswIndex {
     /// Paper Algorithm 1 (insert). `vector` is the freshly written value of
     /// `slot`; all other node values come from the mmap snapshots.
     ///
-    /// Inserting an already-present slot is a no-op: overwrite upserts keep
-    /// their graph position (see the module docs for the trade-off).
+    /// Inserting an already-present slot is a counted no-op: overwrite
+    /// upserts keep their graph position (see the module docs for the
+    /// trade-off) and bump [`Self::overwrites_since_build`].
+    ///
+    /// Safe to call concurrently for disjoint slots: node registration and
+    /// adjacency updates take their own locks, and both entry-point
+    /// transitions (first node, higher-level promotion) run under
+    /// [`Self::promote_lock`] with a fresh re-read so concurrent builders
+    /// can neither orphan a first node nor clobber an already-higher entry.
     pub(crate) fn insert(
         &self,
         slot: u32,
@@ -359,6 +443,7 @@ impl HnswIndex {
         segment_slots: u32,
     ) {
         if self.node(slot).is_some() {
+            self.overwrites_since_build.fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -372,8 +457,21 @@ impl HnswIndex {
             nodes[slot as usize] = Some(Arc::clone(&node));
         }
 
+        // First node in the graph: claim it under the promotion lock so a
+        // racing builder cannot leave two unlinked roots.
+        if self.entry.read().is_none() {
+            let claim = self.promote_lock.lock();
+            if self.entry.read().is_none() {
+                *self.entry.write() = Some(EntryPoint { slot, level });
+                return;
+            }
+            drop(claim);
+        }
+
+        // Snapshot the entry once. It may move upward while this insert is
+        // running; descending from the stale (still valid) snapshot only
+        // risks missing newer shortcuts, never correctness.
         let Some(entry) = *self.entry.read() else {
-            *self.entry.write() = Some(EntryPoint { slot, level });
             return;
         };
 
@@ -417,7 +515,14 @@ impl HnswIndex {
         }
 
         if level > entry.level {
-            *self.entry.write() = Some(EntryPoint { slot, level });
+            // Publish the new higher entry under the promotion lock,
+            // re-reading the latest state: another builder may have promoted
+            // an even-higher entry in the meantime, and clobbering it would
+            // strand its upper layers.
+            let _publish = self.promote_lock.lock();
+            if self.entry.read().as_ref().is_none_or(|e| level > e.level) {
+                *self.entry.write() = Some(EntryPoint { slot, level });
+            }
         }
     }
 
@@ -527,9 +632,17 @@ impl HnswIndex {
                     results.push(cand);
                     if live(slot) {
                         live_results += 1;
-                        if live_results > ef {
-                            // Evict the furthest tracked element.
-                            results.pop();
+                    }
+                    // Trim back to the `ef` budget. The evicted element may
+                    // be dead; adjust the live counter by its actual
+                    // liveness so `live_results` never undercounts (which
+                    // would make the termination test below fire early) and
+                    // the result heap never grows past `ef` entries.
+                    while results.len() > ef {
+                        let Some(evicted) = results.pop() else {
+                            break;
+                        };
+                        if live(evicted.slot) {
                             live_results -= 1;
                         }
                     }
@@ -572,7 +685,11 @@ impl HnswIndex {
             else {
                 continue;
             };
-            let closer = selected.iter().all(|s| {
+            // The pairwise checks are independent per already-selected
+            // neighbor, so the distance fan-out runs on rayon. Each check
+            // performs the same float ops as the sequential version, so the
+            // selection (and therefore the built topology) is identical.
+            let closer = selected.par_iter().all(|s| {
                 let Some(rv) = Vectors::read_slot(vectors, s.slot as u64, segment_slots, self.dim)
                 else {
                     return false;
@@ -621,12 +738,15 @@ impl HnswIndex {
             return;
         }
 
-        // Overflow: reselect around the neighbor's own vector.
+        // Overflow: reselect around the neighbor's own vector. The pool
+        // distances are independent per adjacency entry; the parallel
+        // collect preserves order, so the reselection matches the
+        // sequential result exactly.
         let Some(nv) = Vectors::read_slot(vectors, neighbor as u64, segment_slots, self.dim) else {
             return;
         };
         let mut pool: Vec<Cand> = adj
-            .iter()
+            .par_iter()
             .filter_map(|&s| {
                 let v = Vectors::read_slot(vectors, s as u64, segment_slots, self.dim)?;
                 Some(Cand {
@@ -851,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overwrite_insert_is_noop() {
+    fn test_overwrite_insert_counts_staleness() {
         let data = blobs(6);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
@@ -866,9 +986,201 @@ mod tests {
             64,
         )
         .unwrap();
+        assert_eq!(index.overwrites_since_build(), 0);
+
         let before = index.node_count();
-        index.insert(0, &vectors[0], &mmaps, 64);
-        assert_eq!(index.node_count(), before);
+        for _ in 0..3 {
+            index.insert(0, &vectors[0], &mmaps, 64);
+        }
+        assert_eq!(index.node_count(), before, "overwrite keeps the position");
+        assert_eq!(
+            index.overwrites_since_build(),
+            3,
+            "each overwrite must bump the staleness counter"
+        );
+    }
+
+    #[test]
+    fn test_search_layer_result_never_exceeds_ef_with_dead_nodes() {
+        // Tombstone almost all of blob 1 and probe its center: the search
+        // explores many dead nodes around the entry. The eviction accounting
+        // must keep the tracked candidate set within `ef` while still
+        // returning only live elements.
+        let data = blobs(40);
+        let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..data.len() as u32).collect();
+        let index = HnswIndex::build(
+            &config(),
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            128,
+        )
+        .unwrap();
+
+        let mut bits = bitvec::bitvec![0; data.len()];
+        for slot in 20..data.len() - 2 {
+            bits.set(slot, true);
+        }
+        let dead: HashSet<u32> = (20..data.len() - 2).map(|s| s as u32).collect();
+        let tombstones = TombstoneBits::from_bits(bits);
+
+        let out = index.search_layer(
+            &[50.0; DIM],
+            &[Cand {
+                dist: index.distance(&[50.0; DIM], &vectors[39]),
+                slot: 39,
+            }],
+            4,
+            0,
+            &mmaps,
+            128,
+            Some(&tombstones),
+        );
+        assert!(
+            out.len() <= 4,
+            "tracked results must stay within ef, got {}",
+            out.len()
+        );
+        assert!(out.iter().all(|c| !dead.contains(&c.slot)));
+    }
+
+    #[test]
+    fn test_dedicated_pool_build_matches_sequential_topology() {
+        let data = blobs(30);
+        let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..data.len() as u32).collect();
+
+        let sequential = HnswIndex::build(
+            &config(),
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            128,
+        )
+        .unwrap();
+        let threaded_cfg = HnswConfig {
+            max_indexing_threads: Some(1),
+            ..config()
+        };
+        let threaded = HnswIndex::build(
+            &threaded_cfg,
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            128,
+        )
+        .unwrap();
+
+        type Topology = (Option<(u32, i32)>, Vec<(u32, u8, Vec<Vec<u32>>)>);
+        fn topology(index: &HnswIndex) -> Topology {
+            let p = index.to_persisted();
+            (
+                p.entry,
+                p.nodes
+                    .into_iter()
+                    .map(|n| (n.slot, n.level, n.neighbors))
+                    .collect(),
+            )
+        }
+        assert_eq!(
+            topology(&sequential),
+            topology(&threaded),
+            "a dedicated single-thread pool must not change the built graph"
+        );
+    }
+
+    #[test]
+    fn test_multiworker_build_registers_all_and_keeps_recall() {
+        let n = 400;
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut state = SplitMix64::new(7);
+        for _ in 0..n {
+            vectors.push(
+                (0..DIM)
+                    .map(|_| (state.next_u64() % 1000) as f32 / 100.0)
+                    .collect(),
+            );
+        }
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..n as u32).collect();
+        let workers_cfg = HnswConfig {
+            max_indexing_threads: Some(4),
+            ..config()
+        };
+        let index = HnswIndex::build(
+            &workers_cfg,
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(
+            index.node_count(),
+            n,
+            "every slot must be registered exactly once"
+        );
+
+        let q = vec![5.0f32; DIM];
+        let mut exact: Vec<(f32, u32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                (
+                    crate::distance::distance(DistanceMetric::Euclid, &q, v),
+                    i as u32,
+                )
+            })
+            .collect();
+        exact.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
+
+        let hits = index
+            .probe_candidates(&q, 48, 10, &all_live(n), &mmaps, 1024)
+            .unwrap();
+        let found = hits.iter().filter(|&&(_, s)| truth.contains(&s)).count();
+        assert!(
+            found >= 7,
+            "concurrent build must keep the recall bar, got {found}/10"
+        );
+    }
+
+    #[test]
+    fn test_multiworker_build_with_more_workers_than_points() {
+        let data = blobs(12);
+        let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..data.len() as u32).collect();
+        let workers_cfg = HnswConfig {
+            max_indexing_threads: Some(8),
+            ..config()
+        };
+        let index = HnswIndex::build(
+            &workers_cfg,
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            128,
+        )
+        .unwrap();
+        assert_eq!(index.node_count(), data.len());
+        assert!(
+            index.to_persisted().entry.is_some(),
+            "exactly one entry point must survive concurrent first inserts"
+        );
     }
 
     #[test]
