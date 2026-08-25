@@ -9,6 +9,11 @@ pub enum VectorSearchError {
     CollectionNotFound(String),
     #[error("collection already exists: {0}")]
     CollectionAlreadyExists(String),
+    #[error("collection incomplete (missing {file}): {dir}", dir = dir.display(), file = file)]
+    CollectionIncomplete {
+        dir: std::path::PathBuf,
+        file: String,
+    },
     #[error("invalid collection name: {0}")]
     InvalidCollectionName(String),
     #[error("invalid configuration: {0}")]

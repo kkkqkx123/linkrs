@@ -64,8 +64,9 @@ pub enum DistanceMetric {
     Cosine,
     Euclid,
     Dot,
-    /// Not supported by any backend. Kept as a variant so stored configs
-    /// deserialize; every creation entry point rejects it up front.
+    /// Supported for ad-hoc query evaluation (`manhattan_distance` function)
+    /// but not for ANN index construction. Kept as a variant so stored
+    /// configs deserialize; every index creation entry point rejects it.
     Manhattan,
 }
 
@@ -325,7 +326,7 @@ impl Default for IvfConfig {
             lists: None,
             min_build_points: 100_000,
             sample_limit: 65_536,
-            kmeans_max_iter: 10,
+            kmeans_max_iter: 64,
             drift_threshold: 0.10,
             drift_check_interval: 25_000,
             default_nprobe: 8,
@@ -443,6 +444,9 @@ pub struct IndexInfo {
     /// reloaded). Combined with `built_at_live_count` this yields the stale
     /// position ratio consumed by `HnswConfig::stale_rebuild_ratio`.
     pub stale_overwrite_count: u64,
+    /// HNSW only: combined staleness ratio `max(count_ratio, delta_ratio)`.
+    /// When present, preferred over raw `stale_overwrite_count / built_at_live_count`.
+    pub stale_ratio: Option<f64>,
     /// IVF only: last measured cluster drift ratio.
     pub last_drift_ratio: Option<f64>,
 }

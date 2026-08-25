@@ -22,6 +22,7 @@
 
 mod compaction;
 mod directory;
+mod filter_bitmap;
 mod index_lifecycle;
 mod keys;
 mod meta;
@@ -44,16 +45,22 @@ pub(crate) use meta::Meta;
 pub(crate) use tombstones::TombstoneBits;
 pub use wal::{Wal, WalPoint, WalRecord, WalTxn};
 
-use crate::error::{Result, VectorSearchError};
-use crate::types::{CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, VectorPoint};
-
+use self::filter_bitmap::FilterBitmap;
 use self::index_lifecycle::PublishedIndex;
 use self::keys::Keys;
 use self::payloads::Payloads;
 use self::vectors::Vectors;
 
+use crate::error::{Result, VectorSearchError};
+use crate::types::{CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, VectorPoint};
+
 /// Tombstone ratio above which deletes trigger compaction.
 const COMPACTION_THRESHOLD: f64 = 0.20;
+
+/// How many WAL transactions between meta.bin saves. The WAL is always
+/// fsynced on every transaction, so crash safety is preserved; meta.bin
+/// is an optimization that reduces replay time on restart.
+const META_SAVE_INTERVAL: u64 = 64;
 
 /// In-memory mutable state, guarded by the store's `RwLock`.
 struct StoreInner {
@@ -65,6 +72,8 @@ struct StoreInner {
     ivf_config: Option<IvfConfig>,
     /// Last measured drift ratio, exposed via `CollectionInfo`.
     last_drift_ratio: Option<f64>,
+    /// Slot-indexed pre-filter bitmap for equality payload conditions.
+    filter_bitmap: FilterBitmap,
 }
 
 /// A single opened collection.
@@ -82,10 +91,11 @@ pub struct CollectionStore {
     /// Slots inserted while no index was published and a build was in
     /// flight; drained into the index on publish so probe search never
     /// misses them.
-    pending: RwLock<Vec<u32>>,
-    /// Serializes compaction vs index build/rebuild. Lock order:
-    /// maintenance -> inner.write; never taken while holding inner.write.
-    maintenance: Mutex<()>,
+    pending: ArcSwap<Vec<u32>>,
+    /// Serializes index build/drain vs compaction. Lock order:
+    /// build_mutex or compact_mutex (never both held simultaneously).
+    build_mutex: Mutex<()>,
+    compact_mutex: Mutex<()>,
     /// Set while an index build is in flight (routes inserts to `pending`).
     building: AtomicBool,
     /// Compaction invalidated a published index and a rebuild should be
@@ -95,6 +105,9 @@ pub struct CollectionStore {
     /// uses it to detect that no write raced its temp-file rewrite phase, so
     /// the commit can swap the files without re-validating every slot.
     mutations: AtomicU64,
+    /// Transactions since the last meta.bin save. Used to amortize fsync
+    /// cost; the WAL guarantees crash safety independently.
+    txns_since_last_save: AtomicU64,
 }
 
 impl CollectionStore {
@@ -178,6 +191,7 @@ impl CollectionStore {
         let payloads = Payloads::create(&dir.join("payloads.bin"), meta.slot_capacity)?;
 
         let tombstones = ArcSwap::from(Arc::new(TombstoneBits::new(meta.slot_capacity as usize)));
+        let slot_capacity = meta.slot_capacity;
         let wal = Wal::open_or_create(&dir.join("wal.bin"))?;
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -186,6 +200,7 @@ impl CollectionStore {
                 reverse: HashMap::new(),
                 ivf_config: config.ivf_config.clone(),
                 last_drift_ratio: None,
+                filter_bitmap: FilterBitmap::with_capacity(slot_capacity as usize),
             }),
             tombstones,
             vectors,
@@ -193,11 +208,13 @@ impl CollectionStore {
             payloads,
             wal,
             index: ArcSwap::from(Arc::new(None)),
-            pending: RwLock::new(Vec::new()),
-            maintenance: Mutex::new(()),
+            pending: ArcSwap::from(Arc::new(Vec::new())),
+            build_mutex: Mutex::new(()),
+            compact_mutex: Mutex::new(()),
             building: AtomicBool::new(false),
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
+            txns_since_last_save: AtomicU64::new(0),
         })
     }
 
@@ -205,6 +222,15 @@ impl CollectionStore {
     /// replaying the WAL (idempotent).
     pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
+        for name in &["meta.bin", "vectors.bin", "keys.bin", "payloads.bin"] {
+            let path = dir.join(name);
+            if !path.exists() {
+                return Err(VectorSearchError::CollectionIncomplete {
+                    dir: dir.to_path_buf(),
+                    file: name.to_string(),
+                });
+            }
+        }
         let meta = Meta::load(dir)?;
 
         let vectors = Vectors::open(
@@ -218,6 +244,7 @@ impl CollectionStore {
 
         let mut reverse = HashMap::new();
         let mut tombstones = bitvec![0; meta.slot_capacity as usize];
+        let mut filter_bitmap = FilterBitmap::with_capacity(meta.slot_capacity as usize);
         {
             let keys_view = keys.snapshot();
             let payloads_view = payloads.snapshot();
@@ -229,6 +256,9 @@ impl CollectionStore {
                 if let Some(key) = Keys::read_key(&keys_view, slot)? {
                     let id = PointId::from(key);
                     reverse.insert(id, slot as u32);
+                    if let Ok(Some(p)) = Payloads::read_payload(&payloads_view, slot) {
+                        filter_bitmap.register_slot(slot as u32, Some(&p));
+                    }
                 }
             }
         }
@@ -240,6 +270,7 @@ impl CollectionStore {
                 meta,
                 reverse,
                 last_drift_ratio: None,
+                filter_bitmap,
             }),
             tombstones: ArcSwap::from(Arc::new(TombstoneBits::from_bits(tombstones))),
             vectors,
@@ -247,11 +278,13 @@ impl CollectionStore {
             payloads,
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
             index: ArcSwap::from(Arc::new(None)),
-            pending: RwLock::new(Vec::new()),
-            maintenance: Mutex::new(()),
+            pending: ArcSwap::from(Arc::new(Vec::new())),
+            build_mutex: Mutex::new(()),
+            compact_mutex: Mutex::new(()),
             building: AtomicBool::new(false),
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
+            txns_since_last_save: AtomicU64::new(0),
         };
         store.replay_wal()?;
         store.load_index()?;
@@ -312,12 +345,23 @@ impl CollectionStore {
                     validate_point(&inner.meta, &point)?;
                 }
             }
+            let prev_next_slot = inner.meta.next_slot;
+            let prev_capacity = inner.meta.slot_capacity;
             self.wal.append(txn)?;
             self.apply_records_locked(&mut inner, &txn.ops)?;
             // Monotonic water mark: late/duplicated txn ids must not regress
             // the last applied id (replay is idempotent, so this is safe).
             inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(txn.txn_id);
-            inner.meta.save(&self.dir)?;
+            let slot_changed =
+                inner.meta.next_slot != prev_next_slot || inner.meta.slot_capacity != prev_capacity;
+            let count = self
+                .txns_since_last_save
+                .fetch_add(1, AtomicOrdering::Relaxed)
+                + 1;
+            if slot_changed || count >= META_SAVE_INTERVAL {
+                inner.meta.save(&self.dir)?;
+                self.txns_since_last_save.store(0, AtomicOrdering::Relaxed);
+            }
         }
         Ok(())
     }
@@ -374,20 +418,21 @@ impl CollectionStore {
     /// covers the crash window where the WAL was fsync'ed but `meta.bin` was
     /// not yet written.
     fn replay_wal(&self) -> Result<()> {
-        let last = self.wal.replay(|txn| {
+        let (txns, last) = self.wal.read_all()?;
+        if !txns.is_empty() {
             let mut inner = self.inner.write();
-            self.apply_records_locked(&mut inner, &txn.ops)?;
-            Ok(())
-        })?;
-        let mut inner = self.inner.write();
-        inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(last);
-        let live = inner.reverse.len() as u64;
-        let tomb = self.tombstones.load().count_ones();
-        let changed = inner.meta.live_count != live || inner.meta.tombstone_count != tomb;
-        inner.meta.live_count = live;
-        inner.meta.tombstone_count = tomb;
-        if changed {
-            inner.meta.save(&self.dir)?;
+            for txn in &txns {
+                self.apply_records_locked(&mut inner, &txn.ops)?;
+            }
+            inner.meta.last_applied_txn = inner.meta.last_applied_txn.max(last);
+            let live = inner.reverse.len() as u64;
+            let tomb = self.tombstones.load().count_ones();
+            let changed = inner.meta.live_count != live || inner.meta.tombstone_count != tomb;
+            inner.meta.live_count = live;
+            inner.meta.tombstone_count = tomb;
+            if changed {
+                inner.meta.save(&self.dir)?;
+            }
         }
         Ok(())
     }
@@ -427,7 +472,7 @@ impl CollectionStore {
             *slot as u64
         } else {
             let slot = inner.meta.next_slot;
-            self.ensure_capacity(&mut inner.meta, slot + 1)?;
+            self.ensure_capacity(inner, slot + 1)?;
             self.keys.append_key(slot as usize, &point.id.to_string())?;
             inner.reverse.insert(point.id.clone(), slot as u32);
             inner.meta.next_slot += 1;
@@ -439,6 +484,9 @@ impl CollectionStore {
         self.payloads
             .append_payload(slot as usize, point.payload.as_ref())?;
         self.register_slot(slot as u32, &point.vector, inner.meta.segment_slots);
+        inner
+            .filter_bitmap
+            .register_slot(slot as u32, point.payload.as_ref());
         Ok(())
     }
 
@@ -453,6 +501,7 @@ impl CollectionStore {
     fn apply_delete_slot_locked(&self, inner: &mut StoreInner, slot: u32) -> Result<()> {
         self.payloads.set_tombstone(slot as usize, true)?;
         self.update_tombstone_bit(slot as usize, true);
+        inner.filter_bitmap.unregister_slot(slot);
         inner.meta.live_count = inner.meta.live_count.saturating_sub(1);
         inner.meta.tombstone_count += 1;
         Ok(())
@@ -497,8 +546,35 @@ impl CollectionStore {
         threshold_met(&inner.meta)
     }
 
+    /// Incrementally repair the HNSW graph by removing references to
+    /// tombstoned slots from adjacency lists.
+    ///
+    /// This is an alternative to full rebuild after compaction: instead of
+    /// invalidating the entire index, only nodes with stale references are
+    /// touched. The repair is idempotent and can be called repeatedly as
+    /// tombstones accumulate.
+    ///
+    /// Returns the number of nodes whose adjacency lists were modified,
+    /// or 0 if no index is published or no repair was needed.
+    pub fn repair_hnsw(&self) -> Result<usize> {
+        let index = self.index.load();
+        let Some(published) = index.as_ref() else {
+            return Ok(0);
+        };
+        let PublishedIndex::Hnsw(hnsw) = published else {
+            return Ok(0);
+        };
+
+        let tombstones = self.tombstones.load();
+        let vsnap = self.vectors.snapshot();
+        let segment_slots = self.inner.read().meta.segment_slots;
+
+        Ok(hnsw.repair(&tombstones, &vsnap, segment_slots))
+    }
+
     /// Grow storage to accommodate `needed_slots` slots (0-indexed high water).
-    fn ensure_capacity(&self, meta: &mut Meta, needed_slots: u64) -> Result<()> {
+    fn ensure_capacity(&self, inner: &mut StoreInner, needed_slots: u64) -> Result<()> {
+        let meta = &mut inner.meta;
         if needed_slots <= meta.slot_capacity {
             return Ok(());
         }
@@ -511,6 +587,7 @@ impl CollectionStore {
         self.tombstones.store(Arc::new(next));
 
         meta.slot_capacity = new_capacity;
+        inner.filter_bitmap.resize(new_capacity as usize);
         Ok(())
     }
 

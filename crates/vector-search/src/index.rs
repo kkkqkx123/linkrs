@@ -25,6 +25,8 @@ use crate::index::persist::PersistedIvf;
 use crate::storage::vectors::Vectors;
 use crate::types::{DistanceMetric, IvfConfig};
 
+use bitvec::prelude::*;
+
 /// Sentinel list id for "not assigned".
 pub(crate) const UNASSIGNED: u32 = u32::MAX;
 
@@ -33,19 +35,35 @@ pub(crate) const UNASSIGNED: u32 = u32::MAX;
 pub(crate) const DRIFT_RATIO_CAP: f64 = 1.0e6;
 
 /// Mean distance from a sample of vectors to their nearest centroid; the
-/// drift baseline recorded at build time.
+/// drift baseline recorded at build time. For Cosine/Dot metrics the
+/// centroids are on the unit sphere, so samples are normalized first.
 fn baseline_distance(metric: DistanceMetric, sample: &[&[f32]], centroids: &[Vec<f32>]) -> f32 {
     if sample.is_empty() || centroids.is_empty() {
         return 0.0;
     }
+    let is_spherical = matches!(metric, DistanceMetric::Cosine | DistanceMetric::Dot);
     let total: f64 = sample
         .iter()
         .map(|v| {
-            let nearest = kmeans::nearest_centroid(metric, v, centroids);
-            crate::distance::distance(metric, v, &centroids[nearest]) as f64
+            let q = if is_spherical {
+                let mut nv = v.to_vec();
+                kmeans::normalize_l2(&mut nv);
+                nv
+            } else {
+                v.to_vec()
+            };
+            let nearest = kmeans::nearest_centroid(metric, &q, centroids);
+            crate::distance::distance(metric, &q, &centroids[nearest]) as f64
         })
         .sum();
     (total / sample.len() as f64) as f32
+}
+
+pub(crate) struct IvfSearchContext<'a> {
+    pub tombstones: &'a crate::storage::TombstoneBits,
+    pub vectors: &'a [Arc<Mmap>],
+    pub segment_slots: u32,
+    pub filter_mask: Option<&'a BitVec>,
 }
 
 /// In-memory IVFFlat index for one collection.
@@ -82,12 +100,31 @@ impl IvfIndex {
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) -> Result<Self> {
-        // Stride sampling keeps memory bounded and is deterministic.
-        let stride = slots.len().div_ceil(config.sample_limit.max(1));
-        let sample_slots: Vec<u32> = if stride <= 1 {
+        // Reservoir sampling: uniform random sample of up to `sample_limit`
+        // slots, matching pgvector's sampling strategy. This is unbiased
+        // regardless of slot distribution and uses O(sample_limit) memory.
+        let sample_limit = config.sample_limit.max(1);
+        let sample_slots: Vec<u32> = if slots.len() <= sample_limit {
             slots.to_vec()
         } else {
-            slots.iter().step_by(stride).copied().collect()
+            // Deterministic reservoir sampling with a seeded PRNG.
+            let mut seed = collection.len() as u64;
+            for b in collection.as_bytes() {
+                seed = seed.wrapping_mul(0x100_0000_01b3) ^ (*b as u64);
+            }
+            seed ^= slots.len() as u64;
+            seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut rng = crate::index::kmeans::XorShift::new(seed);
+
+            let mut reservoir: Vec<u32> = slots[..sample_limit].to_vec();
+            for (i, &slot) in slots.iter().enumerate().skip(sample_limit) {
+                // Reservoir sampling: replace element j with probability k/(i+1)
+                let j = (rng.next_u64() as usize) % (i + 1);
+                if j < sample_limit {
+                    reservoir[j] = slot;
+                }
+            }
+            reservoir
         };
         let sample: Vec<&[f32]> = sample_slots
             .iter()
@@ -103,7 +140,6 @@ impl IvfIndex {
 
         let opts = kmeans::KmeansOptions {
             k: config.effective_lists(slots.len() as u64),
-            dim,
             max_iter: config.kmeans_max_iter.max(1),
             seed,
         };
@@ -218,10 +254,24 @@ impl IvfIndex {
         }
     }
 
+    /// Normalize a query vector for centroid comparison. For Cosine/Dot
+    /// metrics the centroids live on the unit sphere (spherical k-means),
+    /// so the query must be normalized before distance computation.
+    fn normalize_query_for_probe(query: &[f32], metric: DistanceMetric) -> Vec<f32> {
+        if matches!(metric, DistanceMetric::Cosine | DistanceMetric::Dot) {
+            let mut q = query.to_vec();
+            kmeans::normalize_l2(&mut q);
+            q
+        } else {
+            query.to_vec()
+        }
+    }
+
     /// Assign (or reassign) one slot to its nearest centroid. Reassignments
     /// swap-remove the slot from its previous list.
     pub(crate) fn assign_slot(&self, slot: u32, vector: &[f32]) {
-        let new_list = kmeans::nearest_centroid(self.metric, vector, &self.centroids) as u32;
+        let q = Self::normalize_query_for_probe(vector, self.metric);
+        let new_list = kmeans::nearest_centroid(self.metric, &q, &self.centroids) as u32;
         let old_list = {
             let mut slot_map = self.slot_list.write();
             if slot as usize >= slot_map.len() {
@@ -264,25 +314,32 @@ impl IvfIndex {
     /// Probe search over the `nprobe` closest lists plus any unassigned
     /// slots. Returns `(score, slot)` candidates in output-score space;
     /// filtering, thresholding and top-K stay in `CollectionStore` so both
-    /// search paths share identical semantics.
+    /// search paths share identical semantics. `filter_mask` is an optional
+    /// pre-filter bitmap that prunes non-matching candidates before they
+    /// are scored.
     pub(crate) fn probe_candidates(
         &self,
         query: &[f32],
         nprobe: usize,
         extra_slots: &[u32],
-        tombstones: &crate::storage::TombstoneBits,
-        vectors: &[Arc<Mmap>],
-        segment_slots: u32,
+        ctx: &IvfSearchContext<'_>,
     ) -> Result<Vec<(f32, u32)>> {
         // 1. Rank centroids, keep the closest nprobe lists.
+        // Normalize query for Cosine/Dot since centroids are on unit sphere.
+        let normalized = Self::normalize_query_for_probe(query, self.metric);
         let mut ranked: Vec<(f32, usize)> = self
             .centroids
             .iter()
             .enumerate()
-            .map(|(i, c)| (crate::distance::distance(self.metric, query, c), i))
+            .map(|(i, c)| (crate::distance::distance(self.metric, &normalized, c), i))
             .collect();
         ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         let probed = &ranked[..nprobe.min(ranked.len())];
+
+        let matches_mask = |s: u32| {
+            ctx.filter_mask
+                .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
+        };
 
         // 2. Gather candidate slots (short lock hold per list).
         let mut candidates: Vec<u32> = Vec::new();
@@ -295,16 +352,15 @@ impl IvfIndex {
         let scored: Vec<(f32, u32)> = candidates
             .par_iter()
             .copied()
-            .filter(|&s| !tombstones.bit(s as usize))
+            .filter(|&s| !ctx.tombstones.bit(s as usize) && matches_mask(s))
             .filter_map(|s| {
-                let v = Vectors::read_slot(vectors, s as u64, segment_slots, self.dim)?;
+                let v = Vectors::read_slot(ctx.vectors, s as u64, ctx.segment_slots, self.dim)?;
                 let dist = crate::distance::distance(self.metric, query, v);
                 Some((crate::distance::to_score(self.metric, dist), s))
             })
             .collect();
         Ok(scored)
     }
-
     /// Relative growth of the mean distance from sampled live points to
     /// their assigned centroid, versus the training-time baseline. Points
     /// drifting away from stale centroids raise the current mean, so a ratio
@@ -318,6 +374,10 @@ impl IvfIndex {
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) -> f64 {
+        let is_spherical = matches!(
+            self.metric,
+            DistanceMetric::Cosine | DistanceMetric::Dot
+        );
         let slot_map = self.slot_list.read();
         let mut total = 0f64;
         let mut counted = 0usize;
@@ -331,11 +391,19 @@ impl IvfIndex {
             if list == UNASSIGNED || list as usize >= self.centroids.len() {
                 continue;
             }
-            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim) else {
+            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
+            else {
                 continue;
             };
-            total +=
-                crate::distance::distance(self.metric, v, &self.centroids[list as usize]) as f64;
+            let q = if is_spherical {
+                let mut nv = v.to_vec();
+                kmeans::normalize_l2(&mut nv);
+                nv
+            } else {
+                v.to_vec()
+            };
+            total += crate::distance::distance(self.metric, &q, &self.centroids[list as usize])
+                as f64;
             counted += 1;
         }
         if counted == 0 {
@@ -508,14 +576,34 @@ mod tests {
 
         let query = vec![0.0f32; 8];
         let candidates = index
-            .probe_candidates(&query, 4, &[], &tombstones, &mmaps, 16)
+            .probe_candidates(
+                &query,
+                4,
+                &[],
+                &IvfSearchContext {
+                    tombstones: &tombstones,
+                    vectors: &mmaps,
+                    segment_slots: 16,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert_eq!(candidates.len(), data.len() - 1, "tombstoned slot skipped");
         assert!(!candidates.iter().any(|&(_, s)| s == 0));
 
         // nprobe clamped to lists; probing everything covers every live point.
         let exact = index
-            .probe_candidates(&query, 99, &[], &tombstones, &mmaps, 16)
+            .probe_candidates(
+                &query,
+                99,
+                &[],
+                &IvfSearchContext {
+                    tombstones: &tombstones,
+                    vectors: &mmaps,
+                    segment_slots: 16,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert_eq!(exact.len(), candidates.len());
     }
@@ -544,7 +632,17 @@ mod tests {
         let tombstones =
             crate::storage::TombstoneBits::from_bits(bitvec::bitvec![0; vectors.len()]);
         let candidates = index
-            .probe_candidates(&[50.0; 8], 4, &extra, &tombstones, &mmaps, 16)
+            .probe_candidates(
+                &[50.0; 8],
+                4,
+                &extra,
+                &IvfSearchContext {
+                    tombstones: &tombstones,
+                    vectors: &mmaps,
+                    segment_slots: 16,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert!(candidates
             .iter()
@@ -555,7 +653,17 @@ mod tests {
         bits.set(vectors.len() - 1, true);
         let tombstones = crate::storage::TombstoneBits::from_bits(bits);
         let candidates = index
-            .probe_candidates(&[50.0; 8], 4, &extra, &tombstones, &mmaps, 16)
+            .probe_candidates(
+                &[50.0; 8],
+                4,
+                &extra,
+                &IvfSearchContext {
+                    tombstones: &tombstones,
+                    vectors: &mmaps,
+                    segment_slots: 16,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert!(!candidates
             .iter()

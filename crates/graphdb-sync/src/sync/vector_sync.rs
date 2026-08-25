@@ -241,7 +241,8 @@ impl VectorSyncCoordinator {
     /// disabled. Non-zero values mean vector data currently diverges from
     /// graph data.
     pub fn disabled_skip_count(&self) -> u64 {
-        self.disabled_skips.load(std::sync::atomic::Ordering::Relaxed)
+        self.disabled_skips
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Create a new vector sync coordinator with an explicit runtime handle.
@@ -454,7 +455,9 @@ impl VectorSyncCoordinator {
                 .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!(
                 count = contexts.len(),
-                total_skipped = self.disabled_skips.load(std::sync::atomic::Ordering::Relaxed),
+                total_skipped = self
+                    .disabled_skips
+                    .load(std::sync::atomic::Ordering::Relaxed),
                 "vector engine disabled: skipped delivering vector changes; \
                  vector data diverges from graph data until re-synced"
             );

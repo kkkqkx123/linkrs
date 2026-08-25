@@ -4,13 +4,13 @@
 //! then atomically renames each over the live file (the `replace_from`
 //! path), which is invisible to readers holding old mmap snapshots.
 //!
-//! The heavy rewrite phase runs under the `maintenance` mutex only — the
+//! The heavy rewrite phase runs under the `compact_mutex` only — the
 //! store write lock is *not* held, so searches and upserts proceed on the
 //! old files. A mutation counter guards the commit: the swap happens under
 //! the write lock only if no transaction raced the rewrite; otherwise the
 //! attempt is retried on a fresh snapshot. Under sustained write pressure
 //! the compaction falls back to rewriting while holding the write lock, so
-//! progress is always guaranteed. In both paths the `maintenance` mutex
+//! progress is always guaranteed. In both paths the `compact_mutex`
 //! excludes index builds/drains, keeping slot numbers stable for the index.
 
 use std::fs::File;
@@ -200,7 +200,7 @@ impl CollectionStore {
     /// Physically remove tombstoned slots and rebuild all files with compacted
     /// slot numbering `0..live_count`.
     ///
-    /// Holds the `maintenance` mutex throughout, so an index build cannot run
+    /// Holds the `compact_mutex` throughout, so an index build cannot run
     /// concurrently and observe torn slot numbers. The temp-file rewrite runs
     /// without the store write lock; the commit (rename swap + in-memory
     /// rebuild + meta rewrite + WAL checkpoint) is the only section holding
@@ -210,7 +210,7 @@ impl CollectionStore {
     ///
     /// Returns the number of live points after compaction.
     pub fn compact(&self) -> Result<u64> {
-        let _guard = self.maintenance.lock();
+        let _guard = self.compact_mutex.lock();
 
         // Lock-free attempts: plan on an immutable snapshot, write temps,
         // then commit only if the mutation counter proves nothing raced.
@@ -364,13 +364,25 @@ impl CollectionStore {
         inner.meta.next_slot = plan.live_count;
         inner.meta.live_count = plan.live_count;
         inner.meta.tombstone_count = 0;
+        {
+            let payloads_view = self.payloads.snapshot();
+            inner.filter_bitmap.rebuild(
+                plan.new_capacity as usize,
+                |slot| {
+                    Payloads::read_payload(&payloads_view, slot as usize)
+                        .ok()
+                        .flatten()
+                },
+                0..plan.live_count as u32,
+            );
+        }
         inner.meta.save(&self.dir)?;
 
         // Invalidate the published ANN index: slot numbering changed
         // wholesale. A rebuild is scheduled by the maintenance worker.
         let had_index = self.index.load().is_some();
         self.index.store(Arc::new(None));
-        self.pending.write().clear();
+        self.pending.store(Arc::new(Vec::new()));
         self.building.store(false, AtomicOrdering::Relaxed);
         if had_index {
             self.needs_rebuild.store(true, AtomicOrdering::Relaxed);

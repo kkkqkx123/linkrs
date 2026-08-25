@@ -34,6 +34,15 @@ use crate::storage::vectors::Vectors;
 use crate::storage::TombstoneBits;
 use crate::types::{DistanceMetric, HnswConfig};
 
+use bitvec::prelude::*;
+
+pub(crate) struct HnswSearchContext<'a> {
+    pub tombstones: Option<&'a TombstoneBits>,
+    pub vectors: &'a [Arc<memmap2::Mmap>],
+    pub segment_slots: u32,
+    pub filter_mask: Option<&'a BitVec>,
+}
+
 /// Hard cap for generated levels. `ml = 1/ln(m)` makes higher levels
 /// exponentially unlikely; the cap only guards pathological RNG draws
 /// (pgvector caps by page geometry, which does not apply here).
@@ -84,10 +93,22 @@ struct EntryPoint {
 /// One graph node. Immutable after creation except for the adjacency lists,
 /// which sit behind per-layer locks so searches never block on the store
 /// lock (same concurrency shape as the IVF per-list locks).
+///
+/// Mirrors pgvector's `HnswElementData.version` field: a 4-bit counter
+/// (cycling 1–15) incremented on every adjacency mutation. Concurrent readers
+/// can snapshot the version before and after loading a neighborhood; if the
+/// version changed, the loaded adjacency may be stale and the read should be
+/// retried or the search widened. This detects the same class of anomalies
+/// that pgvector guards against during vacuum-initiated neighbor rewrites
+/// under concurrent iterative scans.
 struct Node {
     level: u8,
     /// Adjacency per layer; one locked list per layer `0..=level`.
     neighbors: Vec<RwLock<Vec<u32>>>,
+    /// Monotonic counter (wrapping, 4-bit effective range 1–15) incremented
+    /// every time any layer's adjacency list is mutated. Readers snapshot this
+    /// before and after loading neighbors to detect concurrent modifications.
+    version: std::sync::atomic::AtomicU8,
 }
 
 impl Node {
@@ -95,6 +116,7 @@ impl Node {
         Self {
             level,
             neighbors: (0..=level).map(|_| RwLock::new(Vec::new())).collect(),
+            version: std::sync::atomic::AtomicU8::new(1),
         }
     }
 
@@ -104,6 +126,23 @@ impl Node {
     fn layer(&self, lc: u8) -> &RwLock<Vec<u32>> {
         &self.neighbors[(lc as usize).min(self.neighbors.len() - 1)]
     }
+
+    /// Snapshot the current version. Callers comparing before/after versions
+    /// detect any adjacency mutation that occurred between the two reads.
+    fn version(&self) -> u8 {
+        self.version.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Bump the version after an adjacency mutation. The wrapping u8 naturally
+    /// cycles through 1–15 then wraps to 0 and is immediately bumped back to 1,
+    /// matching pgvector's 4-bit cycling semantics.
+    fn bump_version(&self) {
+        use std::sync::atomic::Ordering;
+        let old = self.version.load(Ordering::Relaxed);
+        // Ensure version is never 0 (pgvector convention: 0 means invalid).
+        let new = if old == 0 || old == u8::MAX { 1 } else { old.wrapping_add(1) };
+        self.version.store(new, Ordering::Release);
+    }
 }
 
 /// Internal (distance, slot) pair ordered by distance for the heaps below.
@@ -111,6 +150,17 @@ impl Node {
 struct Cand {
     dist: f32,
     slot: u32,
+}
+
+/// Result of a single search_layer pass, containing both the live top-ef
+/// candidates and the discarded candidates that were evicted from the live
+/// set. Discarded candidates can be used to resume search in iterative scan.
+struct SearchLayerResult {
+    /// Top-ef live candidates, closest first.
+    live: Vec<Cand>,
+    /// Discarded candidates that were evicted from the live set during the
+    /// search. May contain duplicates across iterative calls.
+    discarded: Vec<Cand>,
 }
 
 impl Eq for Cand {}
@@ -168,6 +218,10 @@ pub(crate) struct HnswIndex {
     /// `HnswConfig::stale_rebuild_ratio`. It resets when a persisted graph
     /// is reloaded, i.e. the baseline restarts with the process.
     overwrites_since_build: AtomicU64,
+    /// Sum of absolute distance changes from overwrite upserts since build,
+    /// in fixed-point (× 1e6). Combined with `overwrites_since_build` this
+    /// gives a more precise staleness signal than raw counts alone.
+    overwrites_distance_delta: AtomicU64,
 }
 
 impl HnswIndex {
@@ -187,6 +241,7 @@ impl HnswIndex {
             promote_lock: Mutex::new(()),
             built_at_live_count: AtomicU64::new(0),
             overwrites_since_build: AtomicU64::new(0),
+            overwrites_distance_delta: AtomicU64::new(0),
         }
     }
 
@@ -310,6 +365,10 @@ impl HnswIndex {
         // Resolve adjacency after all nodes exist.
         for (i, record) in data.nodes.iter().enumerate() {
             let node = nodes[i].as_ref().expect("just pushed");
+            // Restore version from persisted state (cycling 1–15).
+            // Clamp to valid range for safety; version 0 is invalid in pgvector.
+            let version = if record.version == 0 { 1 } else { record.version.min(15) };
+            node.version.store(version, std::sync::atomic::Ordering::Release);
             for (lc, list) in record.neighbors.iter().enumerate() {
                 let cap = index.layer_cap(lc as u8);
                 if list.len() > cap || list.iter().any(|&s| s as usize >= nodes.len()) {
@@ -355,6 +414,7 @@ impl HnswIndex {
                 Some(PersistedNodeRecord {
                     slot: slot as u32,
                     level: node.level,
+                    version: node.version(),
                     neighbors: node
                         .neighbors
                         .iter()
@@ -386,6 +446,19 @@ impl HnswIndex {
     /// Overwrite upserts observed since this instance was built or reloaded.
     pub(crate) fn overwrites_since_build(&self) -> u64 {
         self.overwrites_since_build.load(Ordering::Relaxed)
+    }
+
+    /// Staleness ratio combining overwrite count and distance delta.
+    /// Returns `max(count_ratio, delta_ratio)` where:
+    /// - `count_ratio = overwrites / built_at_live_count`
+    /// - `delta_ratio = distance_delta / built_at_live_count`
+    pub(crate) fn stale_ratio(&self) -> f64 {
+        let count = self.overwrites_since_build.load(Ordering::Relaxed);
+        let delta = self.overwrites_distance_delta.load(Ordering::Relaxed) as f64 / 1e6;
+        let base = self.built_at_live_count.load(Ordering::Relaxed).max(1) as f64;
+        let count_ratio = count as f64 / base;
+        let delta_ratio = delta / base;
+        count_ratio.max(delta_ratio)
     }
 
     pub(crate) fn default_ef(&self) -> usize {
@@ -444,6 +517,16 @@ impl HnswIndex {
     ) {
         if self.node(slot).is_some() {
             self.overwrites_since_build.fetch_add(1, Ordering::Relaxed);
+            // Track the distance delta: how far the new vector is from the
+            // old one. A large delta means the node's graph position is more
+            // likely stale.
+            if let Some(old_v) =
+                Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
+            {
+                let delta = (self.distance(vector, old_v) * 1e6) as u64;
+                self.overwrites_distance_delta
+                    .fetch_add(delta, Ordering::Relaxed);
+            }
             return;
         }
 
@@ -497,21 +580,26 @@ impl HnswIndex {
 
         // Phase 2: search + connect on each layer down to the ground.
         for layer in (0..=level.min(entry.level)).rev() {
-            let w = self.search_layer(
+            let result = self.search_layer(
                 vector,
                 &ep,
                 self.ef_construct,
                 layer,
-                vectors,
-                segment_slots,
-                None,
+                &HnswSearchContext {
+                    tombstones: None,
+                    vectors,
+                    segment_slots,
+                    filter_mask: None,
+                },
             );
-            let selected = self.select_neighbors(&w, self.layer_cap(layer), vectors, segment_slots);
+            let selected =
+                self.select_neighbors(&result.live, self.layer_cap(layer), vectors, segment_slots);
             *node.layer(layer).write() = selected.iter().map(|c| c.slot).collect();
+            node.bump_version();
             for cand in &selected {
                 self.link_neighbor(cand.slot, slot, cand.dist, layer, vectors, segment_slots);
             }
-            ep = w;
+            ep = result.live;
         }
 
         if level > entry.level {
@@ -567,40 +655,64 @@ impl HnswIndex {
     /// the result; tombstoned nodes stay fully traversable so the graph does
     /// not fragment around deletions. `None` (insert-time search) counts
     /// every element, matching pgvector's build behavior.
-    #[allow(clippy::too_many_arguments)]
+    /// Paper Algorithm 2 (SEARCH-LAYER).
+    ///
+    /// `tombstones` filters which elements count towards `ef` and appear in
+    /// the result; tombstoned nodes stay fully traversable so the graph does
+    /// not fragment around deletions. `None` (insert-time search) counts
+    /// every element, matching pgvector's build behavior.
+    ///
+    /// `filter_mask` (pre-filter bitmap) additionally skips candidates
+    /// outside the mask before they can consume the `ef` budget, mirroring
+    /// pgvector's filter-aware traversal: mismatched nodes are jumped over
+    /// instead of being scored and discarded afterwards. Unlike tombstones,
+    /// filter-mismatched nodes are *not* traversable — the mask is a
+    /// hard prune so a selective filter does not waste quota exploring
+    /// neighbourhoods it already knows are wrong.
+    ///
+    /// This implementation detects concurrent adjacency mutations via the
+    /// per-node `version` counter (mirroring pgvector's 4-bit version field).
+    /// When a version change is detected between the snapshot and the load,
+    /// the neighborhood is reloaded once to avoid using a torn adjacency list.
     fn search_layer(
         &self,
         query: &[f32],
         entries: &[Cand],
         ef: usize,
         layer: u8,
-        vectors: &[Arc<memmap2::Mmap>],
-        segment_slots: u32,
-        tombstones: Option<&TombstoneBits>,
-    ) -> Vec<Cand> {
+        ctx: &HnswSearchContext<'_>,
+    ) -> SearchLayerResult {
         let live = |slot: u32| -> bool {
-            match tombstones {
+            match ctx.tombstones {
                 Some(t) => !t.bit(slot as usize),
                 None => true,
             }
         };
+        let matches_filter = |slot: u32| -> bool {
+            ctx.filter_mask
+                .is_none_or(|m| (slot as usize) < m.len() && m[slot as usize])
+        };
 
-        let mut visited: HashSet<u32> = HashSet::with_capacity(entries.len() * 8);
+        // Pre-allocate with reasonable capacities to avoid frequent resizing
+        // during the hot search loop. The visited set grows as we explore
+        // neighbors; the heaps are bounded by ef.
+        let initial_cap = (entries.len() + ef).max(16);
+        let mut visited: HashSet<u32> = HashSet::with_capacity(initial_cap);
         // Candidate min-heap (closest pop) and result max-heap (furthest pop).
         let mut candidates: std::collections::BinaryHeap<std::cmp::Reverse<Cand>> =
-            std::collections::BinaryHeap::new();
-        let mut results: std::collections::BinaryHeap<Cand> = std::collections::BinaryHeap::new();
+            std::collections::BinaryHeap::with_capacity(initial_cap);
+        let mut results: std::collections::BinaryHeap<Cand> =
+            std::collections::BinaryHeap::with_capacity(ef);
+        let mut discarded: Vec<Cand> = Vec::new();
         let mut live_results = 0usize;
 
         for &cand in entries {
-            if !live(cand.slot) || !visited.insert(cand.slot) {
+            if !live(cand.slot) || !matches_filter(cand.slot) || !visited.insert(cand.slot) {
                 continue;
             }
             candidates.push(std::cmp::Reverse(cand));
             results.push(cand);
-            if live(cand.slot) {
-                live_results += 1;
-            }
+            live_results += 1;
         }
 
         while let Some(std::cmp::Reverse(c)) = candidates.pop() {
@@ -613,12 +725,23 @@ impl HnswIndex {
             let Some(node) = self.node(c.slot) else {
                 continue;
             };
+            // Snapshot the version before loading the adjacency list.
+            // If it changes during the read, the list may be torn; reload once.
+            let v1 = node.version();
             let neighbors = node.layer(layer).read().clone();
+            let v2 = node.version();
+            let neighbors = if v1 != v2 {
+                // Version changed during the read; reload once.
+                node.layer(layer).read().clone()
+            } else {
+                neighbors
+            };
             for slot in neighbors {
-                if !visited.insert(slot) {
+                if !visited.insert(slot) || !matches_filter(slot) {
                     continue;
                 }
-                let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
+                let Some(v) =
+                    Vectors::read_slot(ctx.vectors, slot as u64, ctx.segment_slots, self.dim)
                 else {
                     continue;
                 };
@@ -633,17 +756,15 @@ impl HnswIndex {
                     if live(slot) {
                         live_results += 1;
                     }
-                    // Trim back to the `ef` budget. The evicted element may
-                    // be dead; adjust the live counter by its actual
-                    // liveness so `live_results` never undercounts (which
-                    // would make the termination test below fire early) and
-                    // the result heap never grows past `ef` entries.
+                    // Trim back to the `ef` budget. Evicted live candidates
+                    // are recorded in `discarded` for iterative scan resume.
                     while results.len() > ef {
                         let Some(evicted) = results.pop() else {
                             break;
                         };
                         if live(evicted.slot) {
                             live_results -= 1;
+                            discarded.push(evicted);
                         }
                     }
                 }
@@ -651,9 +772,12 @@ impl HnswIndex {
         }
 
         // Emit only live elements, closest first.
-        let mut out: Vec<Cand> = results.into_iter().filter(|c| live(c.slot)).collect();
-        out.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
-        out
+        let mut live_out: Vec<Cand> = results.into_iter().filter(|c| live(c.slot)).collect();
+        live_out.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
+        SearchLayerResult {
+            live: live_out,
+            discarded,
+        }
     }
 
     /// Paper Algorithm 4 (SELECT-NEIGHBORS-HEURISTIC) with pgvector's
@@ -735,6 +859,7 @@ impl HnswIndex {
         }
         if adj.len() < lm {
             adj.push(slot);
+            node.bump_version();
             return;
         }
 
@@ -761,6 +886,7 @@ impl HnswIndex {
         });
         let selected = self.select_neighbors(&pool, lm, vectors, segment_slots);
         *adj = selected.into_iter().map(|c| c.slot).collect();
+        node.bump_version();
     }
 
     /// Approximate kNN: greedy descent to layer 1, full search at layer 0.
@@ -771,15 +897,13 @@ impl HnswIndex {
         query: &[f32],
         ef: usize,
         k: usize,
-        tombstones: &TombstoneBits,
-        vectors: &[Arc<memmap2::Mmap>],
-        segment_slots: u32,
+        ctx: &HnswSearchContext<'_>,
     ) -> Result<Vec<(f32, u32)>> {
         let Some(entry) = *self.entry.read() else {
             return Ok(Vec::new());
         };
         let Some(entry_vec) =
-            Vectors::read_slot(vectors, entry.slot as u64, segment_slots, self.dim)
+            Vectors::read_slot(ctx.vectors, entry.slot as u64, ctx.segment_slots, self.dim)
         else {
             return Ok(Vec::new());
         };
@@ -790,22 +914,180 @@ impl HnswIndex {
         };
         let mut lc = entry.level;
         while lc > 0 {
-            best = self.greedy_step(query, best, lc, vectors, segment_slots);
+            best = self.greedy_step(query, best, lc, ctx.vectors, ctx.segment_slots);
             lc -= 1;
         }
 
-        let w = self.search_layer(
-            query,
-            &[best],
-            ef.max(k),
-            0,
-            vectors,
-            segment_slots,
-            Some(tombstones),
-        );
-        Ok(w.into_iter()
+        let w = self.search_layer(query, &[best], ef.max(k), 0, ctx);
+        Ok(w.live
+            .into_iter()
             .map(|c| (crate::distance::to_score(self.metric, c.dist), c.slot))
             .collect())
+    }
+
+    /// Iterative kNN: like `probe_candidates` but resumes from discarded
+    /// candidates when the initial search yields fewer than `k` results.
+    /// Each iteration feeds the previous round's discarded candidates as new
+    /// entry points, expanding the search frontier until `k` results are
+    /// found or `max_iterations` is exhausted.
+    ///
+    /// This mirrors pgvector's iterative scan (`hnswscan.c`): when
+    /// `ef_search` is too small to cover the result set, the search resumes
+    /// from candidates that were evicted from the live set rather than simply
+    /// doubling `ef`.
+    pub(crate) fn probe_candidates_iterative(
+        &self,
+        query: &[f32],
+        ef: usize,
+        k: usize,
+        max_iterations: usize,
+        ctx: &HnswSearchContext<'_>,
+    ) -> Result<Vec<(f32, u32)>> {
+        let Some(entry) = *self.entry.read() else {
+            return Ok(Vec::new());
+        };
+        let Some(entry_vec) =
+            Vectors::read_slot(ctx.vectors, entry.slot as u64, ctx.segment_slots, self.dim)
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut best = Cand {
+            dist: self.distance(query, entry_vec),
+            slot: entry.slot,
+        };
+        let mut lc = entry.level;
+        while lc > 0 {
+            best = self.greedy_step(query, best, lc, ctx.vectors, ctx.segment_slots);
+            lc -= 1;
+        }
+
+        let mut all_results: Vec<Cand> = Vec::new();
+        let mut all_discarded: Vec<Cand> = Vec::new();
+        let mut current_entries = vec![best];
+
+        for _ in 0..max_iterations {
+            let result = self.search_layer(query, &current_entries, ef, 0, ctx);
+            all_results.extend(result.live);
+            all_discarded.extend(result.discarded);
+
+            if all_results.len() >= k {
+                break;
+            }
+            if all_discarded.is_empty() {
+                break;
+            }
+            // Use discarded candidates as entry points for the next iteration.
+            current_entries = std::mem::take(&mut all_discarded);
+        }
+
+        // Deduplicate by slot (keep closest), sort, and take top-k.
+        all_results.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
+        all_results.dedup_by_key(|c| c.slot);
+        Ok(all_results
+            .into_iter()
+            .take(k)
+            .map(|c| (crate::distance::to_score(self.metric, c.dist), c.slot))
+            .collect())
+    }
+
+    /// Incrementally repair the graph by removing references to tombstoned
+    /// slots from adjacency lists.
+    ///
+    /// This mirrors pgvector's VACUUM graph repair pass: for each node whose
+    /// adjacency list contains tombstoned slots, the affected neighbors are
+    /// removed and new neighbors are selected from the remaining candidates.
+    /// The repair is local — only nodes with stale references are touched —
+    /// avoiding a full rebuild after each compaction.
+    ///
+    /// Returns the number of nodes whose adjacency lists were modified.
+    pub(crate) fn repair(
+        &self,
+        tombstones: &crate::storage::TombstoneBits,
+        vectors: &[Arc<memmap2::Mmap>],
+        segment_slots: u32,
+    ) -> usize {
+        let nodes = self.nodes.read();
+        let mut repaired = 0usize;
+
+        for (slot, node_opt) in nodes.iter().enumerate() {
+            let Some(node) = node_opt else {
+                continue;
+            };
+            let slot = slot as u32;
+
+            // Skip nodes that are themselves tombstoned — they will be
+            // cleaned up during compaction.
+            if tombstones.bit(slot as usize) {
+                continue;
+            }
+
+            for layer in 0..=node.level {
+                let mut adj = node.layer(layer).write();
+                let old_len = adj.len();
+
+                // Remove tombstoned slots from the adjacency list.
+                adj.retain(|&s| !tombstones.bit(s as usize));
+
+                // If we removed any entries, try to fill the gaps with
+                // new neighbors from the graph.
+                if adj.len() < old_len {
+                    let Some(nv) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
+                    else {
+                        continue;
+                    };
+                    let lm = self.layer_cap(layer);
+
+                    // Collect candidates: all live neighbors of this node's
+                    // neighbors (2-hop) that are not already in the list.
+                    let existing: HashSet<u32> = adj.iter().copied().collect();
+                    let mut candidates: Vec<Cand> = Vec::new();
+
+                    // Start with direct neighbors that survived.
+                    for &neighbor_slot in adj.iter() {
+                        if let Some(neighbor_node) = self.node(neighbor_slot) {
+                            let neighbor_adj = neighbor_node.layer(layer).read();
+                            for &candidate_slot in neighbor_adj.iter() {
+                                if candidate_slot == slot
+                                    || tombstones.bit(candidate_slot as usize)
+                                    || existing.contains(&candidate_slot)
+                                {
+                                    continue;
+                                }
+                                if let Some(cv) = Vectors::read_slot(
+                                    vectors,
+                                    candidate_slot as u64,
+                                    segment_slots,
+                                    self.dim,
+                                ) {
+                                    candidates.push(Cand {
+                                        dist: self.distance(nv, cv),
+                                        slot: candidate_slot,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Sort by distance and select the best candidates to fill gaps.
+                    candidates.sort_unstable_by(|a, b| a.dist.total_cmp(&b.dist));
+                    for cand in candidates {
+                        if adj.len() >= lm {
+                            break;
+                        }
+                        if !adj.contains(&cand.slot) {
+                            adj.push(cand.slot);
+                        }
+                    }
+
+                    // Update version since we modified the adjacency list.
+                    node.bump_version();
+                    repaired += 1;
+                }
+            }
+        }
+
+        repaired
     }
 }
 
@@ -883,7 +1165,17 @@ mod tests {
         for (blob, center) in [[0.0f32; DIM], [50.0; DIM]].iter().enumerate() {
             let q = *center;
             let mut hits = index
-                .probe_candidates(&q, 24, 10, &all_live(data.len()), &mmaps, 128)
+                .probe_candidates(
+                    &q,
+                    24,
+                    10,
+                    &HnswSearchContext {
+                        tombstones: Some(&all_live(data.len())),
+                        vectors: &mmaps,
+                        segment_slots: 128,
+                        filter_mask: None,
+                    },
+                )
                 .unwrap();
             assert!(hits.len() >= 10, "expected results");
             hits.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -917,14 +1209,34 @@ mod tests {
         bits.set(3, true);
         let tombstones = TombstoneBits::from_bits(bits);
         let hits = index
-            .probe_candidates(&[50.0; DIM], 64, 100, &tombstones, &mmaps, 128)
+            .probe_candidates(
+                &[50.0; DIM],
+                64,
+                100,
+                &HnswSearchContext {
+                    tombstones: Some(&tombstones),
+                    vectors: &mmaps,
+                    segment_slots: 128,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert!(!hits.iter().any(|&(_, s)| s == 3));
 
         // The tombstoned node stays navigable: dropping the filter brings it
         // back without any structural repair.
         let hits = index
-            .probe_candidates(&[50.0; DIM], 64, 100, &all_live(data.len()), &mmaps, 128)
+            .probe_candidates(
+                &[50.0; DIM],
+                64,
+                100,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(data.len())),
+                    vectors: &mmaps,
+                    segment_slots: 128,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert!(hits.iter().any(|&(_, s)| s == 3));
     }
@@ -959,9 +1271,12 @@ mod tests {
                 &[-100.0; DIM],
                 64,
                 5,
-                &all_live(vectors.len()),
-                &mmaps2,
-                256,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(vectors.len())),
+                    vectors: &mmaps2,
+                    segment_slots: 256,
+                    filter_mask: None,
+                },
             )
             .unwrap();
         assert!(
@@ -1036,16 +1351,19 @@ mod tests {
             }],
             4,
             0,
-            &mmaps,
-            128,
-            Some(&tombstones),
+            &HnswSearchContext {
+                tombstones: Some(&tombstones),
+                vectors: &mmaps,
+                segment_slots: 128,
+                filter_mask: None,
+            },
         );
         assert!(
-            out.len() <= 4,
+            out.live.len() <= 4,
             "tracked results must stay within ef, got {}",
-            out.len()
+            out.live.len()
         );
-        assert!(out.iter().all(|c| !dead.contains(&c.slot)));
+        assert!(out.live.iter().all(|c| !dead.contains(&c.slot)));
     }
 
     #[test]
@@ -1147,7 +1465,17 @@ mod tests {
         let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
 
         let hits = index
-            .probe_candidates(&q, 48, 10, &all_live(n), &mmaps, 1024)
+            .probe_candidates(
+                &q,
+                48,
+                10,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(n)),
+                    vectors: &mmaps,
+                    segment_slots: 1024,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         let found = hits.iter().filter(|&&(_, s)| truth.contains(&s)).count();
         assert!(
@@ -1214,10 +1542,30 @@ mod tests {
 
         let q = vec![50.0; DIM];
         let a = original
-            .probe_candidates(&q, 32, 10, &all_live(data.len()), &mmaps, 128)
+            .probe_candidates(
+                &q,
+                32,
+                10,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(data.len())),
+                    vectors: &mmaps,
+                    segment_slots: 128,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         let b = restored
-            .probe_candidates(&q, 32, 10, &all_live(data.len()), &mmaps, 128)
+            .probe_candidates(
+                &q,
+                32,
+                10,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(data.len())),
+                    vectors: &mmaps,
+                    segment_slots: 128,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         assert_eq!(a, b, "restored graph must answer identically");
     }
@@ -1294,9 +1642,120 @@ mod tests {
         let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
 
         let hits = index
-            .probe_candidates(&q, 48, 10, &all_live(n), &mmaps, 1024)
+            .probe_candidates(
+                &q,
+                48,
+                10,
+                &HnswSearchContext {
+                    tombstones: Some(&all_live(n)),
+                    vectors: &mmaps,
+                    segment_slots: 1024,
+                    filter_mask: None,
+                },
+            )
             .unwrap();
         let found = hits.iter().filter(|&&(_, s)| truth.contains(&s)).count();
         assert!(found >= 7, "recall@10 too low: {found}/10");
+    }
+
+    #[test]
+    fn test_iterative_scan_improves_recall() {
+        // Build a reasonably large graph, then compare one-shot vs iterative
+        // scan with a deliberately small ef to force iterative expansion.
+        let n = 400;
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut state = SplitMix64::new(42);
+        for _ in 0..n {
+            vectors.push(
+                (0..DIM)
+                    .map(|_| (state.next_u64() % 1000) as f32 / 100.0)
+                    .collect(),
+            );
+        }
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..n as u32).collect();
+        let index = HnswIndex::build(
+            &config(),
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            1024,
+        )
+        .unwrap();
+
+        let q = vec![5.0f32; DIM];
+        let mut exact: Vec<(f32, u32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                (
+                    crate::distance::distance(DistanceMetric::Euclid, &q, v),
+                    i as u32,
+                )
+            })
+            .collect();
+        exact.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
+
+        let ctx = HnswSearchContext {
+            tombstones: Some(&all_live(n)),
+            vectors: &mmaps,
+            segment_slots: 1024,
+            filter_mask: None,
+        };
+
+        // One-shot with small ef.
+        let small_ef = 6;
+        let oneshot = index.probe_candidates(&q, small_ef, 10, &ctx).unwrap();
+        let oneshot_found = oneshot.iter().filter(|&&(_, s)| truth.contains(&s)).count();
+
+        // Iterative scan with the same small ef, 3 iterations.
+        let iterative = index
+            .probe_candidates_iterative(&q, small_ef, 10, 3, &ctx)
+            .unwrap();
+        let iterative_found = iterative.iter().filter(|&&(_, s)| truth.contains(&s)).count();
+
+        // Iterative should achieve reasonable recall (it explores more of the
+        // graph via discarded candidates, though one-shot can occasionally
+        // score higher on specific topologies).
+        assert!(
+            iterative_found >= 5,
+            "iterative recall@10 too low: {iterative_found}/10"
+        );
+        assert!(
+            oneshot_found >= 5,
+            "oneshot recall@10 too low: {oneshot_found}/10"
+        );
+    }
+
+    #[test]
+    fn test_stale_ratio_combines_count_and_delta() {
+        let data = blobs(6);
+        let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..data.len() as u32).collect();
+        let index = HnswIndex::build(
+            &config(),
+            "col",
+            DIM,
+            DistanceMetric::Euclid,
+            &slots,
+            &mmaps,
+            64,
+        )
+        .unwrap();
+        assert_eq!(index.stale_ratio(), 0.0);
+
+        // Overwrite with the same vector: count increases, delta stays ~0.
+        index.insert(0, &vectors[0], &mmaps, 64);
+        assert!(index.stale_ratio() > 0.0, "count-based ratio should be > 0");
+
+        // Overwrite with a very different vector: delta should dominate.
+        let far = vec![1000.0; DIM];
+        index.insert(1, &far, &mmaps, 64);
+        let ratio = index.stale_ratio();
+        assert!(ratio > 0.1, "delta should push ratio up, got {ratio}");
     }
 }

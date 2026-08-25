@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 
+use bitvec::prelude::*;
 use rayon::prelude::*;
 
 use super::directory::DirView;
@@ -21,6 +22,8 @@ use super::payloads::Payloads;
 use super::vectors::Vectors;
 use super::{CollectionStore, TombstoneBits};
 use crate::error::{Result, VectorSearchError};
+use crate::index::hnsw::HnswSearchContext;
+use crate::index::IvfSearchContext;
 use crate::index::{HnswIndex, IvfIndex};
 use crate::types::{PointId, SearchQuery, SearchResult};
 
@@ -32,6 +35,7 @@ struct SearchSnapshot<'a> {
     vsnap: &'a [Arc<memmap2::Mmap>],
     keysnap: &'a DirView,
     paysnap: &'a DirView,
+    filter_mask: Option<&'a BitVec>,
 }
 
 impl CollectionStore {
@@ -46,7 +50,18 @@ impl CollectionStore {
         // every file under the write lock) cannot produce a mixed-generation
         // view. Only the atomic loads happen under the lock; the actual scan
         // runs on immutable snapshots.
-        let (dim, metric, segment_slots, next_slot, tombstones, vsnap, keysnap, paysnap, published) = {
+        let (
+            dim,
+            metric,
+            segment_slots,
+            next_slot,
+            tombstones,
+            vsnap,
+            keysnap,
+            paysnap,
+            published,
+            filter_mask,
+        ) = {
             let inner = self.inner.read();
             if query.vector.len() != inner.meta.vector_size {
                 return Err(VectorSearchError::InvalidVectorDimension {
@@ -54,6 +69,10 @@ impl CollectionStore {
                     actual: query.vector.len(),
                 });
             }
+            let mask = query
+                .filter
+                .as_ref()
+                .and_then(|f| inner.filter_bitmap.build_mask(f));
             (
                 inner.meta.vector_size,
                 inner.meta.distance,
@@ -64,34 +83,35 @@ impl CollectionStore {
                 self.keys.snapshot(),
                 self.payloads.snapshot(),
                 self.index.load(),
+                mask,
             )
         };
         match published.as_ref() {
             Some(PublishedIndex::Ivf(index)) => {
-                let results = self.search_ivf(
-                    index.as_ref(),
-                    query,
+                let snap = SearchSnapshot {
                     dim,
                     segment_slots,
-                    &tombstones,
-                    &vsnap,
-                    &keysnap,
-                    &paysnap,
-                );
+                    tombstones: &tombstones,
+                    vsnap: &vsnap,
+                    keysnap: &keysnap,
+                    paysnap: &paysnap,
+                    filter_mask: filter_mask.as_ref(),
+                };
+                let results = self.search_ivf(index.as_ref(), query, &snap);
                 drop(published);
                 return results;
             }
             Some(PublishedIndex::Hnsw(index)) => {
-                let results = self.search_hnsw(
-                    index.as_ref(),
-                    query,
+                let snap = SearchSnapshot {
                     dim,
                     segment_slots,
-                    &tombstones,
-                    &vsnap,
-                    &keysnap,
-                    &paysnap,
-                );
+                    tombstones: &tombstones,
+                    vsnap: &vsnap,
+                    keysnap: &keysnap,
+                    paysnap: &paysnap,
+                    filter_mask: filter_mask.as_ref(),
+                };
+                let results = self.search_hnsw(index.as_ref(), query, &snap);
                 drop(published);
                 return results;
             }
@@ -99,19 +119,57 @@ impl CollectionStore {
         }
         drop(published);
 
-        // 1. Parallel exact scan, skipping tombstones.
-        let candidates: Vec<(f32, u32)> = (0..next_slot as u32)
+        // 1. Parallel exact scan with streaming top-K. The parallel heap
+        //    avoids materializing the full (score, slot) set when the
+        //    collection is large, cutting peak memory to O(k).
+        let k = query.offset.unwrap_or(0).saturating_add(query.limit);
+        let heap: BinaryHeap<std::cmp::Reverse<ScoredSlot>> = (0..next_slot as u32)
             .into_par_iter()
             .filter(|s| !tombstones.bit(*s as usize))
-            .map(|s| {
-                let v =
-                    Vectors::read_slot(&vsnap, s as u64, segment_slots, dim).ok_or_else(|| {
-                        VectorSearchError::CorruptData(format!("slot {s} out of vectors.bin range"))
-                    })?;
-                let dist = crate::distance::distance(metric, &query.vector, v);
-                Ok((crate::distance::to_score(metric, dist), s))
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .fold(
+                || BinaryHeap::with_capacity(k),
+                |mut acc, s| {
+                    self.exact_scan_step(
+                        &mut acc,
+                        s,
+                        k,
+                        metric,
+                        query,
+                        &SearchSnapshot {
+                            dim,
+                            segment_slots,
+                            tombstones: &tombstones,
+                            vsnap: &vsnap,
+                            keysnap: &keysnap,
+                            paysnap: &paysnap,
+                            filter_mask: None,
+                        },
+                    );
+                    acc
+                },
+            )
+            .reduce(
+                || BinaryHeap::with_capacity(k),
+                |mut acc, other| {
+                    for item in other.into_iter() {
+                        if acc.len() < k {
+                            acc.push(item);
+                        } else if let Some(std::cmp::Reverse(min)) = acc.peek() {
+                            if item.0 > *min {
+                                acc.pop();
+                                acc.push(item);
+                            }
+                        }
+                    }
+                    acc
+                },
+            );
+
+        let mut candidates: Vec<(f32, u32)> = heap
+            .into_iter()
+            .map(|std::cmp::Reverse(s)| (s.score, s.slot))
+            .collect();
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
 
         self.finish_candidates(
             candidates,
@@ -123,8 +181,60 @@ impl CollectionStore {
                 vsnap: &vsnap,
                 keysnap: &keysnap,
                 paysnap: &paysnap,
+                filter_mask: None,
             },
         )
+    }
+
+    /// Single live-slot evaluation for the streaming exact scan.
+    ///
+    /// The payload filter is evaluated inline so the heap is only ever
+    /// populated with candidates that pass the filter; stale data (missing
+    /// key/payload) is silently skipped, mirroring the IVF index path's
+    /// `filter_map` behaviour.
+    fn exact_scan_step(
+        &self,
+        heap: &mut BinaryHeap<std::cmp::Reverse<ScoredSlot>>,
+        slot: u32,
+        k: usize,
+        metric: crate::types::DistanceMetric,
+        query: &SearchQuery,
+        snap: &SearchSnapshot<'_>,
+    ) {
+        let SearchSnapshot {
+            keysnap, paysnap, ..
+        } = snap;
+        if let Some(filter) = &query.filter {
+            let Some(id) = Keys::read_key(keysnap, slot as usize)
+                .ok()
+                .flatten()
+                .map(PointId::from)
+            else {
+                return;
+            };
+            let payload = Payloads::read_payload(paysnap, slot as usize)
+                .ok()
+                .flatten();
+            let ok = crate::filter::matches(filter, &id, payload.as_ref()).unwrap_or(false);
+            if !ok {
+                return;
+            }
+        }
+        let Some(v) = Vectors::read_slot(snap.vsnap, slot as u64, snap.segment_slots, snap.dim)
+        else {
+            return;
+        };
+        let dist = crate::distance::distance(metric, &query.vector, v);
+        let score = crate::distance::to_score(metric, dist);
+        let item = ScoredSlot { score, slot };
+        if heap.len() < k {
+            heap.push(std::cmp::Reverse(item));
+        } else if let Some(std::cmp::Reverse(min)) = heap.peek() {
+            if item > *min {
+                heap.pop();
+                heap.push(std::cmp::Reverse(item));
+            }
+        }
     }
 
     /// IVF path: probe the `nprobe` closest lists (+ pending slots), then
@@ -132,42 +242,24 @@ impl CollectionStore {
     /// `limit` results while unprobed lists remain, nprobe is doubled once as
     /// a bounded accuracy fallback; beyond that the approximate semantics of
     /// IVFFlat apply (`nprobe = lists` degenerates to exact).
-    #[allow(clippy::too_many_arguments)]
     fn search_ivf(
         &self,
         index: &IvfIndex,
         query: &SearchQuery,
-        dim: usize,
-        segment_slots: u32,
-        tombstones: &TombstoneBits,
-        vsnap: &[Arc<memmap2::Mmap>],
-        keysnap: &DirView,
-        paysnap: &DirView,
+        snap: &SearchSnapshot<'_>,
     ) -> Result<Vec<SearchResult>> {
         let lists = index.list_count();
         let mut nprobe = index.clamp_nprobe(query.nprobe);
-        let pending = self.pending.read().clone();
+        let pending = self.pending.load_full();
 
-        let candidates = index.probe_candidates(
-            &query.vector,
-            nprobe,
-            &pending,
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
-        let results = self.finish_candidates(
-            candidates,
-            query,
-            &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones,
-                vsnap,
-                keysnap,
-                paysnap,
-            },
-        )?;
+        let ivf_ctx = IvfSearchContext {
+            tombstones: snap.tombstones,
+            vectors: snap.vsnap,
+            segment_slots: snap.segment_slots,
+            filter_mask: snap.filter_mask,
+        };
+        let candidates = index.probe_candidates(&query.vector, nprobe, &pending, &ivf_ctx)?;
+        let results = self.finish_candidates(candidates, query, snap)?;
 
         let short = query.filter.is_some() && results.len() < query.limit;
         if !short || nprobe >= lists {
@@ -175,77 +267,49 @@ impl CollectionStore {
         }
         // Single controlled retry with a doubled probe width.
         nprobe = (nprobe * 2).min(lists);
-        let candidates = index.probe_candidates(
-            &query.vector,
-            nprobe,
-            &pending,
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
-        self.finish_candidates(
-            candidates,
-            query,
-            &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones,
-                vsnap,
-                keysnap,
-                paysnap,
-            },
-        )
+        let candidates = index.probe_candidates(&query.vector, nprobe, &pending, &ivf_ctx)?;
+        self.finish_candidates(candidates, query, snap)
     }
 
     /// HNSW path: layered-graph search with `ef` from the query's
     /// `SearchMode::KNN.ef_search`, falling back to the index default. With a
-    /// payload filter that leaves fewer than `limit` results, `ef` is doubled
-    /// once as a bounded accuracy fallback (mirroring the IVF nprobe retry).
+    /// payload filter that leaves fewer than `limit` results, iterative scan
+    /// expansion is attempted before falling back to doubling `ef`.
     ///
     /// Pending slots (not yet incorporated into the graph) are scored by
     /// brute force and merged with graph candidates, ensuring visibility
     /// matches the IVF path's `extra_slots` semantics.
-    #[allow(clippy::too_many_arguments)]
     fn search_hnsw(
         &self,
         index: &HnswIndex,
         query: &SearchQuery,
-        dim: usize,
-        segment_slots: u32,
-        tombstones: &TombstoneBits,
-        vsnap: &[Arc<memmap2::Mmap>],
-        keysnap: &DirView,
-        paysnap: &DirView,
+        snap: &SearchSnapshot<'_>,
     ) -> Result<Vec<SearchResult>> {
-        let snap = SearchSnapshot {
-            dim,
-            segment_slots,
-            tombstones,
-            vsnap,
-            keysnap,
-            paysnap,
-        };
         let mut ef = query.hnsw_ef().unwrap_or_else(|| index.default_ef());
-        let mut candidates = index.probe_candidates(
-            &query.vector,
-            ef,
-            query.effective_limit(),
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
+        let hnsw_ctx = HnswSearchContext {
+            tombstones: Some(snap.tombstones),
+            vectors: snap.vsnap,
+            segment_slots: snap.segment_slots,
+            filter_mask: snap.filter_mask,
+        };
+        let mut candidates =
+            index.probe_candidates(&query.vector, ef, query.effective_limit(), &hnsw_ctx)?;
 
         // Merge pending slots (exact brute-force scoring) so points
         // inserted after the index was published remain visible.
-        let pending = self.pending.read().clone();
+        let pending = self.pending.load_full();
         if !pending.is_empty() {
             let metric = self.inner.read().meta.distance;
             let pending_scored: Vec<(f32, u32)> = pending
                 .par_iter()
                 .copied()
-                .filter(|&s| !tombstones.bit(s as usize))
+                .filter(|&s| !snap.tombstones.bit(s as usize))
+                .filter(|&s| {
+                    snap.filter_mask
+                        .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
+                })
                 .filter_map(|s| {
-                    let v = Vectors::read_slot(vsnap, s as u64, segment_slots, dim)?;
+                    let v = Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
                     let dist = crate::distance::distance(metric, &query.vector, v);
                     Some((crate::distance::to_score(metric, dist), s))
                 })
@@ -261,37 +325,75 @@ impl CollectionStore {
             }
         }
 
-        let results = self.finish_candidates(candidates, query, &snap)?;
+        let results = self.finish_candidates(candidates, query, snap)?;
 
         let short = query.filter.is_some() && results.len() < query.limit;
         if !short {
             return Ok(results);
         }
-        // Single controlled retry with a doubled candidate list; the graph
-        // has at most `node_count` live results so growing past it is moot.
+        // Iterative expansion: try resuming from discarded candidates before
+        // doubling ef. This mirrors pgvector's iterative scan which recovers
+        // evicted candidates rather than widening the search window.
         let cap = index.node_count().max(1);
         if ef >= cap {
             return Ok(results);
         }
-        ef = (ef * 2).min(cap);
-        let mut candidates = index.probe_candidates(
+        let iterative_results = index.probe_candidates_iterative(
             &query.vector,
             ef,
             query.effective_limit(),
-            tombstones,
-            vsnap,
-            segment_slots,
-        )?;
+            3,
+            &hnsw_ctx,
+        );
+        if let Ok(iterative_candidates) = iterative_results {
+            let mut candidates = iterative_candidates;
+            // Re-merge pending on retry.
+            let pending = self.pending.load_full();
+            if !pending.is_empty() {
+                let metric = self.inner.read().meta.distance;
+                let pending_scored: Vec<(f32, u32)> = pending
+                    .par_iter()
+                    .copied()
+                    .filter(|&s| !snap.tombstones.bit(s as usize))
+                    .filter(|&s| {
+                        snap.filter_mask
+                            .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
+                    })
+                    .filter_map(|s| {
+                        let v =
+                            Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
+                        let dist = crate::distance::distance(metric, &query.vector, v);
+                        Some((crate::distance::to_score(metric, dist), s))
+                    })
+                    .collect();
+                let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
+                for scored @ (_, slot) in pending_scored {
+                    if seen.insert(slot) {
+                        candidates.push(scored);
+                    }
+                }
+            }
+            return self.finish_candidates(candidates, query, snap);
+        }
+
+        // Fallback: double ef for a single controlled retry.
+        ef = (ef * 2).min(cap);
+        let mut candidates =
+            index.probe_candidates(&query.vector, ef, query.effective_limit(), &hnsw_ctx)?;
         // Re-merge pending on retry.
-        let pending = self.pending.read().clone();
+        let pending = self.pending.load_full();
         if !pending.is_empty() {
             let metric = self.inner.read().meta.distance;
             let pending_scored: Vec<(f32, u32)> = pending
                 .par_iter()
                 .copied()
-                .filter(|&s| !tombstones.bit(s as usize))
+                .filter(|&s| !snap.tombstones.bit(s as usize))
+                .filter(|&s| {
+                    snap.filter_mask
+                        .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
+                })
                 .filter_map(|s| {
-                    let v = Vectors::read_slot(vsnap, s as u64, segment_slots, dim)?;
+                    let v = Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
                     let dist = crate::distance::distance(metric, &query.vector, v);
                     Some((crate::distance::to_score(metric, dist), s))
                 })
@@ -303,7 +405,7 @@ impl CollectionStore {
                 }
             }
         }
-        self.finish_candidates(candidates, query, &snap)
+        self.finish_candidates(candidates, query, snap)
     }
 
     /// Shared post-processing for both search paths: payload post-filter,
@@ -321,8 +423,10 @@ impl CollectionStore {
             vsnap,
             keysnap,
             paysnap,
+            filter_mask,
         } = snap;
         let _ = tombstones;
+        let _ = filter_mask;
         // 2. Post-filter on payload, against the snapshots taken by the
         // caller (one compaction generation).
         if let Some(filter) = &query.filter {
@@ -348,7 +452,7 @@ impl CollectionStore {
         // 4. Top-K by score (K = offset + limit), then sort descending.
         let k = query.offset.unwrap_or(0).saturating_add(query.limit);
         let top: Vec<(f32, u32)> = if candidates.len() <= k {
-            candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+            candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             candidates
         } else {
             let mut heap: BinaryHeap<std::cmp::Reverse<ScoredSlot>> = BinaryHeap::new();
@@ -365,7 +469,7 @@ impl CollectionStore {
                 .into_iter()
                 .map(|std::cmp::Reverse(s)| (s.score, s.slot))
                 .collect();
-            v.sort_by(|a, b| b.0.total_cmp(&a.0));
+            v.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
             v
         };
 

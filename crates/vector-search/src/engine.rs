@@ -459,11 +459,22 @@ impl LocalVectorEngine {
     }
 
     /// Post-mutation hook, run after the store locks are released: drain an
-    /// extreme pending backlog synchronously (guardrail) and schedule a
-    /// background compaction when warranted.
+    /// extreme pending backlog synchronously (guardrail), schedule a
+    /// background compaction when warranted, and incrementally repair the
+    /// HNSW graph if it has stale references to tombstoned slots.
     fn after_mutation(&self, collection: &str, store: &Arc<CollectionStore>) {
         if store.pending_len() >= PENDING_DRAIN_GUARDRAIL {
             store.drain_pending_hnsw();
+        }
+        // Incrementally repair HNSW graph references to tombstoned slots.
+        // This avoids a full rebuild when tombstones accumulate; the repair
+        // is local and idempotent.
+        if let Err(e) = store.repair_hnsw() {
+            tracing::warn!(
+                collection = %collection,
+                error = %e,
+                "HNSW graph repair failed; will rebuild on next compaction"
+            );
         }
         self.maybe_schedule_compaction(collection, store);
     }
@@ -658,10 +669,13 @@ fn sweep_hnsw(
             return;
         }
         // Staleness upkeep: overwrite upserts since the build, relative to
-        // the live count at build time.
+        // the live count at build time. Prefer the combined `stale_ratio`
+        // (count + distance delta) when available.
         if let (Some(threshold), Some(info)) = (config.stale_rebuild_ratio, store.index_info()) {
             if info.built_at_live_count > 0 {
-                let ratio = info.stale_overwrite_count as f64 / info.built_at_live_count as f64;
+                let ratio = info
+                    .stale_ratio
+                    .unwrap_or(info.stale_overwrite_count as f64 / info.built_at_live_count as f64);
                 if ratio > threshold {
                     tracing::info!(
                         collection = %name,

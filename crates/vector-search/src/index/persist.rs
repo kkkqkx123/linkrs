@@ -107,6 +107,10 @@ pub(crate) fn discard(path: &Path) {
 pub(crate) struct PersistedNodeRecord {
     pub slot: u32,
     pub level: u8,
+    /// Version counter for consistency detection. Cycles 1–15 like pgvector's
+    /// 4-bit version field. Readers can compare before/after snapshots to
+    /// detect concurrent adjacency mutations during iterative scans.
+    pub version: u8,
     /// Adjacency for layers `0..=level`; outer index = layer.
     pub neighbors: Vec<Vec<u32>>,
 }

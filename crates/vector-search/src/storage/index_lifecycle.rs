@@ -2,7 +2,7 @@
 //! drop, drift measurement and introspection.
 //!
 //! Publication protocol (shared by both tiers):
-//! - Heavy build work runs off the store lock under the `maintenance` mutex,
+//! - Heavy build work runs off the store lock under the `build_mutex`,
 //!   so compaction cannot interleave and slot numbers stay stable.
 //! - While a build is in flight (`building` flag) and no index is published,
 //!   freshly written slots are recorded in `pending`.
@@ -89,12 +89,13 @@ impl CollectionStore {
         let index = Arc::new(IvfIndex::from_persisted(data, config));
         {
             let tombstones = self.tombstones.load();
-            let mut pending = self.pending.write();
+            let mut p = (**self.pending.load()).clone();
             for slot in covered..next_slot as usize {
                 if slot < capacity && !tombstones.bit(slot) {
-                    pending.push(slot as u32);
+                    p.push(slot as u32);
                 }
             }
+            self.pending.store(Arc::new(p));
         }
         self.index.store(Arc::new(Some(PublishedIndex::Ivf(index))));
         Ok(())
@@ -137,15 +138,16 @@ impl CollectionStore {
         };
         {
             let tombstones = self.tombstones.load();
-            let mut pending = self.pending.write();
+            let mut p = (**self.pending.load()).clone();
             for slot in covered..next_slot as usize {
                 if slot < capacity && !tombstones.bit(slot) {
-                    pending.push(slot as u32);
+                    p.push(slot as u32);
                 }
             }
-            if !pending.is_empty() {
+            if !p.is_empty() {
                 self.needs_rebuild.store(true, AtomicOrdering::Relaxed);
             }
+            self.pending.store(Arc::new(p));
         }
         self.index
             .store(Arc::new(Some(PublishedIndex::Hnsw(index))));
@@ -175,14 +177,18 @@ impl CollectionStore {
                 // Defer graph insertion to the maintenance worker; the
                 // brute-force pending path in search_hnsw guarantees
                 // correct visibility in the interim.
-                self.pending.write().push(slot);
+                let mut p = (**self.pending.load()).clone();
+                p.push(slot);
+                self.pending.store(Arc::new(p));
                 return;
             }
             None => {}
         }
         drop(published);
         if self.building.load(AtomicOrdering::Relaxed) {
-            self.pending.write().push(slot);
+            let mut p = (**self.pending.load()).clone();
+            p.push(slot);
+            self.pending.store(Arc::new(p));
         }
     }
 
@@ -216,13 +222,13 @@ impl CollectionStore {
 
     /// Build and publish an HNSW index from the current live set.
     ///
-    /// Heavy work runs off the store lock under the `maintenance` mutex, so
+    /// Heavy work runs off the store lock under the `build_mutex`, so
     /// compaction cannot interleave and slot numbers stay stable. Slots
     /// appended while building are adopted through incremental inserts under
     /// the store write lock before publication, so approximate search never
     /// misses a point.
     fn build_hnsw_index(&self, config: HnswConfig) -> Result<bool> {
-        let _guard = self.maintenance.lock();
+        let _guard = self.build_mutex.lock();
 
         let (dim, metric, segment_slots, snapshot_next_slot, name) = {
             let inner = self.inner.read();
@@ -278,7 +284,7 @@ impl CollectionStore {
         // miscounted as an overwrite-staleness event).
         {
             let inner = self.inner.write();
-            let mut pending = self.pending.write();
+            let mut p = (**self.pending.load()).clone();
             let tombstones = self.tombstones.load();
             let vsnap = self.vectors.snapshot();
             let mut adopted: HashSet<u32> = HashSet::new();
@@ -292,7 +298,7 @@ impl CollectionStore {
                     adopted.insert(slot);
                 }
             }
-            for slot in pending.drain(..) {
+            for slot in p.drain(..) {
                 if adopted.contains(&slot) || tombstones.bit(slot as usize) {
                     continue;
                 }
@@ -300,6 +306,7 @@ impl CollectionStore {
                     index.insert(slot, v, &vsnap, segment_slots);
                 }
             }
+            self.pending.store(Arc::new(p));
         }
         let persisted = index.to_persisted();
         // Publish before clearing the building flag: an upsert that loaded
@@ -326,13 +333,13 @@ impl CollectionStore {
     /// Build and publish an IVF index from the current live set.
     ///
     /// Heavy work (sampling + k-means) runs off the store lock under the
-    /// `maintenance` mutex, so compaction cannot interleave and slot numbers
+    /// `build_mutex`, so compaction cannot interleave and slot numbers
     /// stay stable. Publication happens atomically under the store write
     /// lock: slots appended during the build are adopted, pending slots are
     /// drained, and only afterwards does the index become visible, so probe
     /// search never misses a point.
     fn build_ivf_index(&self, config: IvfConfig) -> Result<bool> {
-        let _guard = self.maintenance.lock();
+        let _guard = self.build_mutex.lock();
 
         let (dim, metric, segment_slots, snapshot_next_slot, name) = {
             let inner = self.inner.read();
@@ -382,7 +389,7 @@ impl CollectionStore {
         // the published index directly).
         let persisted = {
             let inner = self.inner.write();
-            let mut pending = self.pending.write();
+            let mut p = (**self.pending.load()).clone();
             let tombstones = self.tombstones.load();
             let vsnap = self.vectors.snapshot();
             index.adopt_range(
@@ -392,13 +399,14 @@ impl CollectionStore {
                 &vsnap,
                 segment_slots,
             );
-            for slot in pending.drain(..) {
+            for slot in p.drain(..) {
                 if !tombstones.bit(slot as usize) {
                     if let Some(v) = Vectors::read_slot(&vsnap, slot as u64, segment_slots, dim) {
                         index.assign_slot(slot, v);
                     }
                 }
             }
+            self.pending.store(Arc::new(p));
             index.to_persisted()
         };
         // Publish before clearing the building flag: an upsert that loaded
@@ -423,9 +431,9 @@ impl CollectionStore {
 
     /// Drop the published index and return to exact scan.
     pub fn drop_index(&self) -> Result<()> {
-        let _guard = self.maintenance.lock();
+        let _guard = self.compact_mutex.lock();
         self.index.store(Arc::new(None));
-        self.pending.write().clear();
+        self.pending.store(Arc::new(Vec::new()));
         self.building.store(false, AtomicOrdering::Relaxed);
         self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
         self.discard_index_files();
@@ -435,9 +443,9 @@ impl CollectionStore {
     /// Drain pending slots into the published HNSW index in batch.
     ///
     /// Called by the maintenance worker on each idle tick.  Acquires only the
-    /// `maintenance` mutex (not the store write lock) so concurrent upserts
-    /// and searches are unblocked; new slots that arrive during the drain
-    /// are left for the next tick.  If no HNSW index is published or pending
+    /// `build_mutex` (not the store write lock) so concurrent upserts and
+    /// searches are unblocked; new slots that arrive during the drain are
+    /// left for the next tick.  If no HNSW index is published or pending
     /// is empty this is a no-op.
     pub(crate) fn drain_pending_hnsw(&self) {
         let published = self.index.load();
@@ -445,18 +453,20 @@ impl CollectionStore {
             return;
         };
         let pending: Vec<u32> = {
-            let mut p = self.pending.write();
+            let p = self.pending.load();
             if p.is_empty() {
                 return;
             }
             // Take a snapshot and clear; new arrivals during drain go to
             // the next tick.
-            std::mem::take(&mut *p)
+            let taken = (**p).clone();
+            self.pending.store(Arc::new(Vec::new()));
+            taken
         };
-        // Hold maintenance only — excludes compaction and build, so the
+        // Hold build_mutex only — excludes compaction and build, so the
         // graph structure is stable.  The store write lock is NOT held,
         // so upserts and searches continue concurrently.
-        let _guard = self.maintenance.lock();
+        let _guard = self.build_mutex.lock();
         let (dim, segment_slots) = {
             let inner = self.inner.read();
             (inner.meta.vector_size, inner.meta.segment_slots)
@@ -491,7 +501,7 @@ impl CollectionStore {
     /// into the published index). Used by the sweep to schedule rebuilds
     /// when the index is published but has pending gaps.
     pub(crate) fn pending_len(&self) -> usize {
-        self.pending.read().len()
+        self.pending.load().len()
     }
 
     /// Swap-and-reset the post-compaction rebuild flag.
@@ -557,6 +567,7 @@ impl CollectionStore {
                 ef_search_default: 0,
                 built_at_live_count: index.built_at_live_count(),
                 stale_overwrite_count: 0,
+                stale_ratio: None,
                 last_drift_ratio: self.inner.read().last_drift_ratio,
             }),
             Some(PublishedIndex::Hnsw(index)) => Some(IndexInfo {
@@ -568,6 +579,7 @@ impl CollectionStore {
                 ef_search_default: index.default_ef(),
                 built_at_live_count: index.built_at_live_count(),
                 stale_overwrite_count: index.overwrites_since_build(),
+                stale_ratio: Some(index.stale_ratio()),
                 last_drift_ratio: None,
             }),
             None => {
@@ -586,6 +598,7 @@ impl CollectionStore {
                         ef_search_default: 0,
                         built_at_live_count: 0,
                         stale_overwrite_count: 0,
+                        stale_ratio: None,
                         last_drift_ratio: None,
                     })
                 }

@@ -113,10 +113,13 @@ impl Meta {
 
     pub fn save(&self, dir: &Path) -> Result<()> {
         let bytes = postcard::to_stdvec(self)?;
-        let path = dir.join("meta.bin");
-        let mut file = File::create(&path)?;
+        let target = dir.join("meta.bin");
+        let tmp = dir.join("meta.bin.tmp");
+        let mut file = File::create(&tmp)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
+        std::fs::rename(&tmp, &target)?;
+        sync_parent(dir)?;
         Ok(())
     }
 
@@ -127,4 +130,11 @@ impl Meta {
         meta.validate()?;
         Ok(meta)
     }
+}
+
+fn sync_parent(dir: &Path) -> Result<()> {
+    let parent = dir.parent().unwrap_or(dir);
+    let file = File::open(parent)?;
+    file.sync_all()?;
+    Ok(())
 }

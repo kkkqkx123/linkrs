@@ -13,6 +13,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
+use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VectorSearchError};
@@ -20,6 +21,24 @@ use crate::types::{PointId, VectorPoint};
 
 /// Maximum accepted single-record size (guards against corrupt length fields).
 const MAX_RECORD_LEN: u32 = 512 * 1024 * 1024;
+
+/// State shared between concurrent appenders for group commit.
+struct CommitBatch {
+    /// Buffered record bytes waiting to be flushed.
+    buffer: Vec<u8>,
+    /// Number of appenders currently waiting in this batch.
+    pending: usize,
+    /// True if the leader is currently writing + fsyncing.
+    flushing: bool,
+    /// Set to Ok(()) after a successful flush, Err on failure.
+    result: std::result::Result<(), std::io::Error>,
+}
+
+/// Group commit state: multiple appenders share a single write+fsync.
+struct GroupCommit {
+    state: Mutex<CommitBatch>,
+    condvar: Condvar,
+}
 
 /// One transaction: a batch of operations applied atomically to a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,10 +103,11 @@ pub enum WalRecord {
     DropCollection,
 }
 
-/// Append-only WAL file.
+/// Append-only WAL file with group commit.
 pub struct Wal {
     path: PathBuf,
     file: parking_lot::Mutex<File>,
+    group: GroupCommit,
 }
 
 impl Wal {
@@ -101,10 +121,20 @@ impl Wal {
         Ok(Self {
             path: path.to_path_buf(),
             file: parking_lot::Mutex::new(file),
+            group: GroupCommit {
+                state: Mutex::new(CommitBatch {
+                    buffer: Vec::new(),
+                    pending: 0,
+                    flushing: false,
+                    result: Ok(()),
+                }),
+                condvar: Condvar::new(),
+            },
         })
     }
 
-    /// Append a transaction: `[u32 len][u32 crc32][payload]`, then fsync.
+    /// Append a transaction using group commit: multiple concurrent appends
+    /// share a single write_all + fsync to reduce per-transaction disk latency.
     pub fn append(&self, txn: &WalTxn) -> Result<()> {
         let bytes = postcard::to_stdvec(txn)?;
         if bytes.len() > MAX_RECORD_LEN as usize {
@@ -118,10 +148,51 @@ impl Wal {
         record.extend_from_slice(&crc32fast::hash(&bytes).to_le_bytes());
         record.extend_from_slice(&bytes);
 
-        let mut file = self.file.lock();
-        file.write_all(&record)?;
-        file.sync_all()?;
-        Ok(())
+        let mut state = self.group.state.lock();
+        state.buffer.extend_from_slice(&record);
+        state.pending += 1;
+
+        // If someone is already flushing, wait for it.
+        while state.flushing {
+            self.group.condvar.wait(&mut state);
+        }
+
+        // If we are the leader (first to arrive or previous flush finished),
+        // perform the write + fsync for the entire batch.
+        if state.pending > 0 && !state.flushing {
+            state.flushing = true;
+            let batch_len = state.buffer.len();
+            let batch = std::mem::replace(&mut state.buffer, Vec::with_capacity(batch_len));
+            drop(state);
+
+            let write_result = {
+                let mut file = self.file.lock();
+                file.write_all(&batch).and_then(|_| file.sync_all())
+            };
+
+            let mut state = self.group.state.lock();
+            state.flushing = false;
+            state.pending = 0;
+            state.result = write_result;
+            self.group.condvar.notify_all();
+
+            return match &state.result {
+                Ok(()) => Ok(()),
+                Err(e) => Err(std::io::Error::new(e.kind(), e.to_string()).into()),
+            };
+        }
+
+        // We are a follower: wait for the leader to finish.
+        loop {
+            self.group.condvar.wait(&mut state);
+            if !state.flushing {
+                break;
+            }
+        }
+        match &state.result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(std::io::Error::new(e.kind(), e.to_string()).into()),
+        }
     }
 
     /// Replay all records in order, invoking `f` for each decoded transaction.
@@ -180,6 +251,51 @@ impl Wal {
         file.rewind()?;
         file.sync_all()?;
         Ok(())
+    }
+
+    /// Read all valid WAL records into a `Vec<WalTxn>`, returning the highest
+    /// `txn_id` seen. Caller must hold no other WAL locks; this acquires and
+    /// releases the file lock internally so callers can batch-apply without
+    /// per-record lock contention.
+    pub fn read_all(&self) -> Result<(Vec<WalTxn>, u64)> {
+        let mut file = self.file.lock();
+        file.rewind()?;
+        let mut txns = Vec::new();
+        let mut last_txn = 0u64;
+        let mut header_buf = [0u8; 8];
+        loop {
+            match file.read_exact(&mut header_buf) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(e.into()),
+            }
+            let len = u32::from_le_bytes(header_buf[0..4].try_into().expect("len slice"));
+            if len == 0 {
+                return Err(VectorSearchError::CorruptData(
+                    "wal record with zero length".to_string(),
+                ));
+            }
+            if len > MAX_RECORD_LEN {
+                return Err(VectorSearchError::CorruptData(format!(
+                    "wal record length {len} exceeds limit"
+                )));
+            }
+            let expected_crc = u32::from_le_bytes(header_buf[4..8].try_into().expect("crc slice"));
+            let mut bytes = vec![0u8; len as usize];
+            if let Err(e) = file.read_exact(&mut bytes) {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    break;
+                }
+                return Err(e.into());
+            }
+            if crc32fast::hash(&bytes) != expected_crc {
+                break;
+            }
+            let txn: WalTxn = postcard::from_bytes(&bytes)?;
+            last_txn = txn.txn_id.max(last_txn);
+            txns.push(txn);
+        }
+        Ok((txns, last_txn))
     }
 
     pub fn path(&self) -> &Path {
