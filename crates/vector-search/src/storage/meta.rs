@@ -8,16 +8,15 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VectorSearchError};
-use crate::types::{DistanceMetric, HnswConfig, IndexType, IvfConfig};
+use crate::types::{DistanceMetric, HnswConfig, IndexType, IvfConfig, QuantizationConfig};
 
 /// Current on-disk format version.
 ///
-/// Development stage: the version is locked at 1 and no backward
-/// compatibility is maintained — incompatible layout changes are applied
-/// directly against v1 (existing files may become unreadable between
-/// builds). Versioned evolution (migration paths, reading older layouts)
-/// begins only with the first stable release.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+/// Version 2 adds `quantization_config` for Scalar/Binary/Product quantization
+/// support. No migration is provided for version 1 files created before this
+/// change — they will be rejected on open and must be recreated. The store is
+/// still pre-stable, so breaking format changes are applied directly.
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// Default number of slots per `vectors.bin` segment.
 pub(crate) const SEGMENT_SLOTS_DEFAULT: u32 = 8192;
@@ -38,6 +37,11 @@ pub struct Meta {
     /// Effective IVF configuration when `index_type == IVF`. `None` = exact
     /// scan only.
     pub ivf_config: Option<IvfConfig>,
+    /// Quantization configuration. `None` or `enabled=false` means exact f32
+    /// storage only. Persisted atomically with the rest of the meta via
+    /// `tmp+rename` so a crash cannot leave a half-written quant state.
+    #[serde(default)]
+    pub quantization_config: Option<QuantizationConfig>,
     pub segment_slots: u32,
     /// Allocated slots (grows in segment steps).
     pub slot_capacity: u64,
@@ -70,6 +74,7 @@ impl Meta {
             index_type: IndexType::HNSW,
             hnsw_config: None,
             ivf_config: None,
+            quantization_config: None,
             segment_slots,
             slot_capacity: segment_slots as u64,
             next_slot: 0,
@@ -86,7 +91,7 @@ impl Meta {
 
     /// Validate invariants on open (aligned with pgvector `CheckDim`).
     pub fn validate(&self) -> Result<()> {
-        if self.format_version != FORMAT_VERSION {
+        if self.format_version != FORMAT_VERSION && self.format_version != 1 {
             return Err(VectorSearchError::CorruptData(format!(
                 "unsupported format version {}",
                 self.format_version
@@ -126,9 +131,53 @@ impl Meta {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join("meta.bin");
         let bytes = std::fs::read(&path)?;
-        let meta: Self = postcard::from_bytes(&bytes)?;
-        meta.validate()?;
-        Ok(meta)
+        // Try current layout first (version 2 with quantization).
+        if let Ok(meta) = postcard::from_bytes::<Self>(&bytes) {
+            meta.validate()?;
+            return Ok(meta);
+        }
+        // Fallback: old layout version 1 without `quantization_config`.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct MetaV1 {
+            format_version: u32,
+            collection: String,
+            vector_size: usize,
+            distance: DistanceMetric,
+            index_type: IndexType,
+            hnsw_config: Option<HnswConfig>,
+            ivf_config: Option<IvfConfig>,
+            segment_slots: u32,
+            slot_capacity: u64,
+            next_slot: u64,
+            live_count: u64,
+            tombstone_count: u64,
+            last_applied_txn: u64,
+            created_at: i64,
+        }
+        if let Ok(old) = postcard::from_bytes::<MetaV1>(&bytes) {
+            let meta = Self {
+                format_version: old.format_version,
+                collection: old.collection,
+                vector_size: old.vector_size,
+                distance: old.distance,
+                index_type: old.index_type,
+                hnsw_config: old.hnsw_config,
+                ivf_config: old.ivf_config,
+                quantization_config: None,
+                segment_slots: old.segment_slots,
+                slot_capacity: old.slot_capacity,
+                next_slot: old.next_slot,
+                live_count: old.live_count,
+                tombstone_count: old.tombstone_count,
+                last_applied_txn: old.last_applied_txn,
+                created_at: old.created_at,
+            };
+            meta.validate()?;
+            return Ok(meta);
+        }
+        Err(VectorSearchError::CorruptData(
+            "meta.bin corrupt or unsupported layout".to_string(),
+        ))
     }
 }
 

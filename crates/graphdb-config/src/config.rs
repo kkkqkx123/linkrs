@@ -259,6 +259,31 @@ fn default_hnsw_ef_construct() -> usize {
     100
 }
 
+/// Quantization settings for the local vector engine (raw TOML surface).
+///
+/// Mirrors `vector_search::QuantizationConfig` / Qdrant quantization builders;
+/// the conversion lives in `graphdb-api` so that `graphdb-config` stays free
+/// of `vector-search` types.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+pub struct QuantizationSettings {
+    /// Quantization type: `scalar` | `product` | `binary` | `none` (default disabled)
+    #[serde(default)]
+    pub quantization_type: Option<String>,
+    /// Scalar only: quantile in (0,1], default 0.99
+    #[serde(default)]
+    pub quantile: Option<f32>,
+    /// Product only: compression `x4`/`x8`/`x16`/`x32`/`x64`, default `x4`
+    #[serde(default)]
+    pub compression: Option<String>,
+    /// Whether quantized vectors stay in RAM
+    #[serde(default)]
+    pub always_ram: Option<bool>,
+    /// Master switch: when false (default) quantization is disabled even if
+    /// a type is set. Set to true to enable.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 /// Local vector engine configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct LocalVectorConfig {
@@ -272,6 +297,10 @@ pub struct LocalVectorConfig {
     /// IVF settings (local engine only, opt-in alternative tier).
     #[serde(default)]
     pub ivf: Option<IvfSettings>,
+    /// Quantization settings (local engine only, optional per-collection
+    /// default when a collection is created without explicit quantization).
+    #[serde(default)]
+    pub quantization: Option<QuantizationSettings>,
 }
 
 /// Vector search configuration

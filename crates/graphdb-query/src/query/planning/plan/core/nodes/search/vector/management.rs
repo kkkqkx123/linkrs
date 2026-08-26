@@ -2,7 +2,9 @@
 //!
 //! This module defines plan nodes for vector index management operations.
 
-use crate::query::parser::ast::vector::VectorDistance;
+use crate::query::parser::ast::vector::{
+    CompressionRatioKind, QuantizationKind, VectorDistance,
+};
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
@@ -20,6 +22,10 @@ pub struct CreateVectorIndexParams {
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
+    pub quantization: Option<QuantizationKind>,
+    pub quantile: Option<f32>,
+    pub compression: Option<CompressionRatioKind>,
+    pub always_ram: Option<bool>,
     pub if_not_exists: bool,
     pub space_id: u64,
 }
@@ -43,6 +49,10 @@ impl CreateVectorIndexParams {
             distance,
             hnsw_m: None,
             hnsw_ef_construct: None,
+            quantization: None,
+            quantile: None,
+            compression: None,
+            always_ram: None,
             if_not_exists: false,
             space_id,
         }
@@ -55,6 +65,20 @@ impl CreateVectorIndexParams {
 
     pub fn with_hnsw_ef_construct(mut self, ef_construct: Option<usize>) -> Self {
         self.hnsw_ef_construct = ef_construct;
+        self
+    }
+
+    pub fn with_quantization(
+        mut self,
+        quantization: Option<QuantizationKind>,
+        quantile: Option<f32>,
+        compression: Option<CompressionRatioKind>,
+        always_ram: Option<bool>,
+    ) -> Self {
+        self.quantization = quantization;
+        self.quantile = quantile;
+        self.compression = compression;
+        self.always_ram = always_ram;
         self
     }
 
@@ -76,6 +100,10 @@ pub struct CreateVectorIndexNode {
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
+    pub quantization: Option<QuantizationKind>,
+    pub quantile: Option<f32>,
+    pub compression: Option<CompressionRatioKind>,
+    pub always_ram: Option<bool>,
     pub if_not_exists: bool,
     pub space_id: u64,
 }
@@ -92,6 +120,10 @@ impl CreateVectorIndexNode {
             distance: params.distance,
             hnsw_m: params.hnsw_m,
             hnsw_ef_construct: params.hnsw_ef_construct,
+            quantization: params.quantization,
+            quantile: params.quantile,
+            compression: params.compression,
+            always_ram: params.always_ram,
             if_not_exists: params.if_not_exists,
             space_id: params.space_id,
         }

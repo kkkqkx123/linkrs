@@ -228,6 +228,11 @@ impl<
                     {
                         engine.set_default_ivf_config(ivf);
                     }
+                    if let Some(quant) = graphdb_api::vector_config::local_quantization_config(
+                        &config.vector_config().local,
+                    ) {
+                        engine.set_default_quantization_config(quant);
+                    }
                     crate::sync::backend::VectorBackend::Local(Arc::new(engine))
                 }
             };

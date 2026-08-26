@@ -257,7 +257,45 @@ pub enum CompressionRatio {
     X64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl CompressionRatio {
+    pub fn as_u32(self) -> u32 {
+        match self {
+            CompressionRatio::X4 => 4,
+            CompressionRatio::X8 => 8,
+            CompressionRatio::X16 => 16,
+            CompressionRatio::X32 => 32,
+            CompressionRatio::X64 => 64,
+        }
+    }
+
+    /// Number of PQ subquantizers `M` for `dim`.
+    ///
+    /// PQ encodes each vector into `M` bytes (256 centroids per subspace).
+    /// Compression ratio is `dim*4 / M`, so `M = dim*4 / ratio`.
+    /// The result is clamped to at least 1 and at most `dim`, then adjusted
+    /// down to the nearest divisor of `dim` to keep `dim % M == 0` where
+    /// possible. For indivisible dims fallback to `M=1` ensures scalar tail
+    /// handling elsewhere still works.
+    pub fn pq_m(self, dim: usize) -> usize {
+        let ratio = self.as_u32() as usize;
+        if dim == 0 || ratio == 0 {
+            return 1;
+        }
+        let mut m = (dim * 4).div_ceil(ratio);
+        m = m.clamp(1, dim);
+        while m > 1 && dim % m != 0 {
+            m -= 1;
+        }
+        if dim % m != 0 { 1 } else { m }
+    }
+
+    pub fn sub_dim(self, dim: usize) -> usize {
+        let m = self.pq_m(dim);
+        dim / m.max(1)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QuantizationType {
     Scalar {
         quantile: Option<f32>,
@@ -272,7 +310,7 @@ pub enum QuantizationType {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct QuantizationConfig {
     pub enabled: bool,
     pub quant_type: Option<QuantizationType>,
@@ -324,6 +362,73 @@ impl QuantizationConfig {
             }
         }
         self
+    }
+
+    pub fn always_ram(&self) -> bool {
+        match &self.quant_type {
+            Some(QuantizationType::Scalar { always_ram, .. })
+            | Some(QuantizationType::Product { always_ram, .. })
+            | Some(QuantizationType::Binary { always_ram }) => always_ram.unwrap_or(true),
+            None => true,
+        }
+    }
+
+    pub fn quantile_or_default(&self) -> f32 {
+        match &self.quant_type {
+            Some(QuantizationType::Scalar { quantile, .. }) => quantile.unwrap_or(0.99),
+            _ => 0.99,
+        }
+    }
+
+    pub fn validate(&self, dim: usize) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(qt) = &self.quant_type else {
+            return Err(VectorSearchError::InvalidConfig(
+                "quantization enabled but quant_type is None".to_string(),
+            ));
+        };
+        match qt {
+            QuantizationType::Scalar { quantile, .. } => {
+                if let Some(q) = quantile {
+                    if !q.is_finite() || *q <= 0.0 || *q > 1.0 {
+                        return Err(VectorSearchError::InvalidConfig(format!(
+                            "scalar quantization quantile {q} must be in (0,1]"
+                        )));
+                    }
+                }
+            }
+            QuantizationType::Product { compression, .. } => {
+                let m = compression.pq_m(dim);
+                if m == 0 || dim % m != 0 {
+                    return Err(VectorSearchError::InvalidConfig(format!(
+                        "product quantization dim {dim} not divisible by M={m} for compression {compression:?}"
+                    )));
+                }
+            }
+            QuantizationType::Binary { .. } => {}
+        }
+        Ok(())
+    }
+
+    pub fn quant_bytes_per_vector(&self, dim: usize) -> usize {
+        if !self.enabled {
+            return 0;
+        }
+        match &self.quant_type {
+            Some(QuantizationType::Scalar { .. }) => dim,
+            Some(QuantizationType::Binary { .. }) => (dim + 7) / 8,
+            Some(QuantizationType::Product { compression, .. }) => compression.pq_m(dim),
+            None => 0,
+        }
+    }
+
+    pub fn is_product(&self) -> bool {
+        matches!(
+            self.quant_type,
+            Some(QuantizationType::Product { .. })
+        )
     }
 }
 

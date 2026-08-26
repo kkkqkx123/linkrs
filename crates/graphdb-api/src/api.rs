@@ -72,11 +72,59 @@ pub mod vector_config {
             ..defaults
         })
     }
+
+    /// Map raw TOML quantization settings to the local engine's quantization config.
+    ///
+    /// Mirrors Qdrant's scalar/product/binary builders (`qdrant_features.md:4`);
+    /// `enabled=false` or missing/unknown type yields `None` (exact f32).
+    pub fn local_quantization_config(
+        local: &LocalVectorConfig,
+    ) -> Option<vector_search::QuantizationConfig> {
+        let s = local.quantization.as_ref()?;
+        if !s.enabled {
+            return None;
+        }
+        let type_str = s.quantization_type.as_deref()?.to_lowercase();
+        let always_ram = s.always_ram;
+        match type_str.as_str() {
+            "scalar" => {
+                let quantile = s.quantile.unwrap_or(0.99);
+                let mut cfg = vector_search::QuantizationConfig::scalar(quantile);
+                if let Some(ar) = always_ram {
+                    cfg = cfg.with_always_ram(ar);
+                }
+                Some(cfg)
+            }
+            "binary" => {
+                let mut cfg = vector_search::QuantizationConfig::binary();
+                if let Some(ar) = always_ram {
+                    cfg = cfg.with_always_ram(ar);
+                }
+                Some(cfg)
+            }
+            "product" | "pq" => {
+                let ratio = match s.compression.as_deref().unwrap_or("x4").to_lowercase().as_str() {
+                    "x4" | "4" => vector_search::CompressionRatio::X4,
+                    "x8" | "8" => vector_search::CompressionRatio::X8,
+                    "x16" | "16" => vector_search::CompressionRatio::X16,
+                    "x32" | "32" => vector_search::CompressionRatio::X32,
+                    "x64" | "64" => vector_search::CompressionRatio::X64,
+                    _ => vector_search::CompressionRatio::X4,
+                };
+                let mut cfg = vector_search::QuantizationConfig::product(ratio);
+                if let Some(ar) = always_ram {
+                    cfg = cfg.with_always_ram(ar);
+                }
+                Some(cfg)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(all(test, feature = "vector"))]
 mod vector_config_tests {
-    use super::vector_config::{local_hnsw_config, local_ivf_config};
+    use super::vector_config::{local_hnsw_config, local_ivf_config, local_quantization_config};
     use graphdb_config::config::{HnswSettings, IvfSettings, LocalVectorConfig};
 
     #[test]
@@ -123,6 +171,49 @@ mod vector_config_tests {
             8,
             "probe cap clamped to list count"
         );
+    }
+
+    #[test]
+    fn quantization_toml_maps_to_engine_config() {
+        let local = LocalVectorConfig {
+            quantization: Some(graphdb_config::config::QuantizationSettings {
+                enabled: true,
+                quantization_type: Some("scalar".to_string()),
+                quantile: Some(0.95),
+                compression: None,
+                always_ram: Some(false),
+            }),
+            ..LocalVectorConfig::default()
+        };
+        let qc = local_quantization_config(&local).unwrap();
+        assert!(qc.enabled);
+        assert_eq!(qc.quantile_or_default(), 0.95);
+        assert!(!qc.always_ram());
+
+        let local = LocalVectorConfig {
+            quantization: Some(graphdb_config::config::QuantizationSettings {
+                enabled: true,
+                quantization_type: Some("product".to_string()),
+                quantile: None,
+                compression: Some("x8".to_string()),
+                always_ram: None,
+            }),
+            ..LocalVectorConfig::default()
+        };
+        let qc = local_quantization_config(&local).unwrap();
+        assert!(qc.is_product());
+        assert_eq!(qc.quant_bytes_per_vector(128), 64); // X8: 128*4/8=64
+        assert!(qc.validate(128).is_ok());
+
+        let disabled = LocalVectorConfig {
+            quantization: Some(graphdb_config::config::QuantizationSettings {
+                enabled: false,
+                quantization_type: Some("scalar".to_string()),
+                ..Default::default()
+            }),
+            ..LocalVectorConfig::default()
+        };
+        assert!(local_quantization_config(&disabled).is_none());
     }
 }
 

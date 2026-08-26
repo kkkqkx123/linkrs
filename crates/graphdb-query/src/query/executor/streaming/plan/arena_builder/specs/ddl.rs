@@ -667,6 +667,12 @@ fn vector_manage_to_command(
             vector_size: n.vector_size,
             distance: n.distance,
             space_id: n.space_id,
+            hnsw_m: n.hnsw_m,
+            hnsw_ef_construct: n.hnsw_ef_construct,
+            quantization: n.quantization,
+            quantile: n.quantile,
+            compression: n.compression,
+            always_ram: n.always_ram,
         },
         Drop(n) => VectorManageCommand::Drop {
             index_name: n.index_name.clone(),

@@ -20,6 +20,17 @@ pub struct CreateVectorIndexRequest {
     pub vector_size: usize,
     #[serde(default = "default_distance")]
     pub distance: DistanceMetric,
+    /// HNSW overrides
+    pub hnsw_m: Option<usize>,
+    pub hnsw_ef_construct: Option<usize>,
+    /// Quantization: scalar/binary/product/none (case-insensitive). None = disabled.
+    pub quantization: Option<String>,
+    /// Scalar only: quantile in (0,1]
+    pub quantile: Option<f32>,
+    /// Product only: x4/x8/x16/x32/x64 or integer 4/8/16/32/64
+    pub compression: Option<String>,
+    /// Keep quantized vectors in RAM
+    pub always_ram: Option<bool>,
 }
 
 fn default_distance() -> DistanceMetric {
@@ -108,16 +119,94 @@ pub async fn create_index<
     let vector_api = graph_service.vector_api();
 
     if let Some(vector_api) = vector_api {
-        let collection_name = vector_api
-            .create_index(
-                request.space_id,
-                &request.tag_name,
-                &request.field_name,
-                request.vector_size,
-                request.distance,
-            )
-            .await
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let collection_name = if request.quantization.is_some()
+            || request.hnsw_m.is_some()
+            || request.hnsw_ef_construct.is_some()
+            || request.quantile.is_some()
+            || request.compression.is_some()
+            || request.always_ram.is_some()
+        {
+            let mut config = vector_search::CollectionConfig::new(request.vector_size, request.distance);
+            if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
+                let mut hnsw = vector_search::HnswConfig::default();
+                if let Some(m) = request.hnsw_m {
+                    hnsw.m = m;
+                }
+                if let Some(ef) = request.hnsw_ef_construct {
+                    hnsw.ef_construct = ef;
+                }
+                config = config.with_hnsw(hnsw);
+            }
+            if let Some(ref q) = request.quantization {
+                let q_lower = q.to_lowercase();
+                let quant_cfg = match q_lower.as_str() {
+                    "none" | "disabled" | "off" => None,
+                    "scalar" => {
+                        let mut cfg = vector_search::QuantizationConfig::scalar(
+                            request.quantile.unwrap_or(0.99),
+                        );
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    "binary" => {
+                        let mut cfg = vector_search::QuantizationConfig::binary();
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    "product" | "pq" => {
+                        let ratio = match request.compression.as_deref().unwrap_or("x4").to_lowercase().as_str() {
+                            "x4" | "4" => vector_search::CompressionRatio::X4,
+                            "x8" | "8" => vector_search::CompressionRatio::X8,
+                            "x16" | "16" => vector_search::CompressionRatio::X16,
+                            "x32" | "32" => vector_search::CompressionRatio::X32,
+                            "x64" | "64" => vector_search::CompressionRatio::X64,
+                            other => {
+                                return Err(HttpError::InternalError(format!(
+                                    "unknown compression '{}', expected x4/x8/x16/x32/x64", other
+                                )))
+                            }
+                        };
+                        let mut cfg = vector_search::QuantizationConfig::product(ratio);
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    other => {
+                        return Err(HttpError::InternalError(format!(
+                            "unknown quantization '{}', expected scalar/binary/product/none", other
+                        )))
+                    }
+                };
+                if let Some(qc) = quant_cfg {
+                    config = config.with_quantization(qc);
+                }
+            }
+            vector_api
+                .create_index_with_config(
+                    request.space_id,
+                    &request.tag_name,
+                    &request.field_name,
+                    config,
+                )
+                .await
+                .map_err(|e| HttpError::InternalError(e.to_string()))?
+        } else {
+            vector_api
+                .create_index(
+                    request.space_id,
+                    &request.tag_name,
+                    &request.field_name,
+                    request.vector_size,
+                    request.distance,
+                )
+                .await
+                .map_err(|e| HttpError::InternalError(e.to_string()))?
+        };
 
         Ok(JsonResponse(serde_json::json!({
             "success": true,

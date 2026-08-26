@@ -210,12 +210,19 @@ impl CollectionStore {
     ///
     /// Returns the number of live points after compaction.
     pub fn compact(&self) -> Result<u64> {
-        let _guard = self.compact_mutex.lock();
+        let _compact_guard = self.compact_mutex.lock();
+        // Hold build_mutex jointly with compact_mutex (order: compact -> build)
+        // so quantization rebuilds and index builds cannot interleave slot
+        // renumbering. Dropped between attempts to avoid stalling builds longer
+        // than one rewrite phase when a race is detected.
         let started = std::time::Instant::now();
 
-        // Lock-free attempts: plan on an immutable snapshot, write temps,
-        // then commit only if the mutation counter proves nothing raced.
+        // Lock-free attempts: hold build_mutex together with compact_mutex
+        // (order: compact -> build) so index/quant builds cannot interleave
+        // slot renumbering. The build guard is scoped per attempt so a race
+        // retry does not stall builds for the whole compaction.
         for _ in 0..COMMIT_ATTEMPTS {
+            let _build_guard = self.build_mutex.lock();
             let plan = {
                 let inner = self.inner.read();
                 if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
@@ -244,9 +251,10 @@ impl CollectionStore {
             );
         }
 
-        // Contended fallback: the whole rewrite inside the store write lock.
-        // Queries pause for the duration, but progress is guaranteed.
+        // Contended fallback: the whole rewrite inside the store write lock,
+        // still holding both compact+build guards so no build races it.
         self.metrics.record_compaction_contended();
+        let _build_guard = self.build_mutex.lock();
         let mut inner = self.inner.write();
         if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
             return Ok(inner.meta.live_count);
@@ -278,6 +286,13 @@ impl CollectionStore {
                 &vsnap,
                 &plan.map,
             )?;
+        }
+
+        // 1b. quant.bin (derived, remapped exactly like vectors)
+        if let Some(q) = self.quant.read().as_ref() {
+            let tmp_quant = self.dir.join("quant_tmp.bin");
+            let vsnap = self.vectors.snapshot();
+            q.write_compacted_file(&tmp_quant, plan.new_capacity, &vsnap, &plan.map)?;
         }
 
         // 2. keys.bin
@@ -350,6 +365,15 @@ impl CollectionStore {
         // snapshots until each ArcSwap store below.
         self.vectors
             .replace_from(&self.dir.join("vectors_tmp.bin"))?;
+        if let Some(q) = self.quant.read().as_ref() {
+            // quant_tmp.bin only exists when quantization is active; its
+            // remapping mirrors the vectors slot map so the quant slot numbers
+            // stay consistent with the live vectors after compaction.
+            let tmp_quant = self.dir.join("quant_tmp.bin");
+            if tmp_quant.exists() {
+                q.replace_from(&tmp_quant, plan.new_capacity, &plan.map)?;
+            }
+        }
         self.keys.replace_from(&self.dir.join("keys_tmp.bin"))?;
         self.payloads
             .replace_from(&self.dir.join("payloads_tmp.bin"))?;

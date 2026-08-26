@@ -99,6 +99,10 @@ pub enum WalRecord {
     /// Checkpoint marker written after compaction; replay ignores the payload
     /// but keeps advancing the water mark.
     Compact,
+    /// Quantization state change (codebook / scale update). Replay is idempotent
+    /// — the derived `quant.bin` files are rebuildable, so this record only
+    /// advances the water mark and triggers no in-memory mutation on replay.
+    Quantize,
     /// Reserved for drop (the whole directory is removed, nothing is logged).
     DropCollection,
 }

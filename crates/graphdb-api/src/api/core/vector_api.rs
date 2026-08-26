@@ -85,48 +85,72 @@ impl VectorApi {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> CoreResult<String> {
-        validate_metric(distance)?;
-        if distance == DistanceMetric::Manhattan && !self.backend.is_local() {
+        self.create_index_with_config(
+            space_id,
+            tag_name,
+            field_name,
+            CollectionConfig::new(vector_size, distance),
+        )
+        .await
+    }
+
+    /// Create a vector index with full collection config (quantization/hnsw)
+    pub async fn create_index_with_config(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        mut config: CollectionConfig,
+    ) -> CoreResult<String> {
+        validate_metric(config.distance)?;
+        if config.distance == DistanceMetric::Manhattan && !self.backend.is_local() {
             return Err(CoreError::VectorError(
                 "distance metric Manhattan is only supported by the local engine; \
-                 the remote Qdrant backend supports Cosine, Euclid and Dot only"
+                  the remote Qdrant backend supports Cosine, Euclid and Dot only"
                     .to_string(),
             ));
         }
+        if let Some(qc) = &config.quantization_config {
+            qc.validate(config.vector_size)
+                .map_err(|e| CoreError::VectorError(e.to_string()))?;
+        }
 
         if let Some(coordinator) = &self.coordinator {
-            coordinator
-                .create_vector_index(space_id, tag_name, field_name, vector_size, distance)
+            // Prefer the coordinator's full-config path when quantization/hnsw is set
+            if config.quantization_config.is_some() || config.hnsw_config.is_some() {
+                return coordinator
+                    .create_index_with_config(space_id, tag_name, field_name, config)
+                    .await
+                    .map_err(|e| CoreError::VectorError(e.to_string()));
+            }
+            return coordinator
+                .create_vector_index(
+                    space_id,
+                    tag_name,
+                    field_name,
+                    config.vector_size,
+                    config.distance,
+                )
                 .await
-                .map_err(|e| CoreError::VectorError(e.to_string()))
+                .map_err(|e| CoreError::VectorError(e.to_string()));
         } else {
             let collection_name =
                 VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-            // Index-tier fields are only meaningful for the remote qdrant
-            // backend; the local engine controls its tiers itself.
-            let config = if self.backend.is_local() {
-                CollectionConfig {
-                    vector_size,
-                    distance,
+            // When using the bare backend (no coordinator), ensure a sensible
+            // default for remote Qdrant while letting the local engine keep
+            // exact defaults unless explicitly overridden.
+            if !self.backend.is_local() && config.hnsw_config.is_none() {
+                config.hnsw_config = Some(vector_search::types::HnswConfig {
+                    m: 16,
+                    ef_construct: 100,
+                    full_scan_threshold: None,
+                    max_indexing_threads: None,
+                    on_disk: None,
+                    payload_m: Some(16),
                     ..Default::default()
-                }
-            } else {
-                CollectionConfig {
-                    vector_size,
-                    distance,
-                    index_type: Some(vector_search::types::IndexType::HNSW),
-                    hnsw_config: Some(vector_search::types::HnswConfig {
-                        m: 16,
-                        ef_construct: 100,
-                        full_scan_threshold: None,
-                        max_indexing_threads: None,
-                        on_disk: None,
-                        payload_m: Some(16),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            };
+                });
+                config.index_type = Some(vector_search::types::IndexType::HNSW);
+            }
             self.backend
                 .create_index(&collection_name, &config)
                 .await

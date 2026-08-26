@@ -222,8 +222,43 @@ impl CollectionStore {
 
     /// Build and publish the configured ANN tier from the current live set.
     /// Dispatches on the collection's `index_type`; returns whether a usable
-    /// index is now published.
+    /// index is now published. When quantization is configured this also
+    /// ensures `quant.bin` is trained before the index is built, under the
+    /// same `build_mutex` so slot numbers stay stable.
     pub fn build_index(&self) -> Result<bool> {
+        // Train quantization first if needed (especially Product which needs a
+        // codebook before HNSW/IVF can be usefully built). Scalar/Binary are
+        // idempotent after incremental writes; rebuilding still refreshes the
+        // global scale range.
+        {
+            let needs = {
+                let inner = self.inner.read();
+                inner
+                    .meta
+                    .quantization_config
+                    .as_ref()
+                    .is_some_and(|qc| qc.enabled && qc.quant_type.is_some())
+            };
+            let ready = self.has_quantization();
+            if needs && !ready {
+                // Product quantization not yet trained, or scalar missing.
+                let _ = self.build_quantization();
+            } else if needs {
+                // For scalar, periodically refresh the scale even when ready
+                // if live set has grown significantly. For now trigger on
+                // every build to keep the range accurate without extra cost
+                // for small collections; larger collections grow via background
+                // sweeps. Keep product rebuild lazy (already ready) to avoid
+                // repeated k-means.
+                let qc = self.inner.read().meta.quantization_config.clone().unwrap();
+                if matches!(
+                    qc.quant_type,
+                    Some(crate::types::QuantizationType::Scalar { .. })
+                ) {
+                    let _ = self.build_quantization();
+                }
+            }
+        }
         let inner = self.inner.read();
         let kind = inner.meta.index_type;
         let ivf_config = inner.ivf_config.clone();
@@ -250,6 +285,7 @@ impl CollectionStore {
     /// the store write lock before publication, so approximate search never
     /// misses a point.
     fn build_hnsw_index(&self, config: HnswConfig) -> Result<bool> {
+        let _compact_guard = self.compact_mutex.lock();
         let _guard = self.build_mutex.lock();
 
         let (dim, metric, segment_slots, snapshot_next_slot, name) = {
@@ -377,6 +413,7 @@ impl CollectionStore {
     /// drained, and only afterwards does the index become visible, so probe
     /// search never misses a point.
     fn build_ivf_index(&self, config: IvfConfig) -> Result<bool> {
+        let _compact_guard = self.compact_mutex.lock();
         let _guard = self.build_mutex.lock();
 
         let (dim, metric, segment_slots, snapshot_next_slot, name) = {

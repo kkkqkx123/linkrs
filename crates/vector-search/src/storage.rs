@@ -27,6 +27,7 @@ mod index_lifecycle;
 mod keys;
 mod meta;
 mod payloads;
+pub(crate) mod quant;
 mod search;
 mod tombstones;
 pub(crate) mod vectors;
@@ -49,11 +50,14 @@ use self::filter_bitmap::FilterBitmap;
 use self::index_lifecycle::PublishedIndex;
 use self::keys::Keys;
 use self::payloads::Payloads;
+use self::quant::QuantStore;
 use self::vectors::Vectors;
 
 use crate::error::{Result, VectorSearchError};
 use crate::metrics::Metrics;
-use crate::types::{CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, VectorPoint};
+use crate::types::{
+    CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, QuantizationConfig, VectorPoint,
+};
 
 /// Tombstone ratio above which deletes trigger compaction.
 const COMPACTION_THRESHOLD: f64 = 0.20;
@@ -86,6 +90,9 @@ pub struct CollectionStore {
     vectors: Vectors,
     keys: Keys,
     payloads: Payloads,
+    /// Optional quantized storage (Scalar/Binary/Product). `None` when
+    /// quantization is disabled or not yet built.
+    quant: parking_lot::RwLock<Option<QuantStore>>,
     wal: Wal,
     /// Published ANN index; `None` = exact scan. Swapped atomically.
     index: ArcSwap<Option<PublishedIndex>>,
@@ -165,6 +172,9 @@ impl CollectionStore {
                 ivf.validate()?;
             }
         }
+        if let Some(qc) = &config.quantization_config {
+            qc.validate(config.vector_size)?;
+        }
 
         let dir = dir.as_ref();
         if dir.exists() {
@@ -196,6 +206,12 @@ impl CollectionStore {
                 meta.hnsw_config = None;
             }
         }
+        // Persist quantization config alongside other tier settings.
+        if let Some(qc) = &config.quantization_config {
+            if qc.enabled {
+                meta.quantization_config = Some(qc.clone());
+            }
+        }
         meta.save(dir)?;
 
         let vectors = Vectors::create(
@@ -205,6 +221,24 @@ impl CollectionStore {
         )?;
         let keys = Keys::create(&dir.join("keys.bin"), meta.slot_capacity)?;
         let payloads = Payloads::create(&dir.join("payloads.bin"), meta.slot_capacity)?;
+        // Create quantized storage if requested. Scalar/Binary are ready immediately;
+        // Product needs a codebook build before it becomes usable.
+        let quant = if let Some(qc) = &config.quantization_config {
+            if qc.enabled && qc.quant_type.is_some() {
+                Some(QuantStore::create(
+                    dir,
+                    config.vector_size,
+                    config.distance,
+                    qc,
+                    meta.segment_slots,
+                    meta.slot_capacity,
+                )?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let tombstones = ArcSwap::from(Arc::new(TombstoneBits::new(meta.slot_capacity as usize)));
         let slot_capacity = meta.slot_capacity;
@@ -222,6 +256,7 @@ impl CollectionStore {
             vectors,
             keys,
             payloads,
+            quant: parking_lot::RwLock::new(quant),
             wal,
             index: ArcSwap::from(Arc::new(None)),
             pending: ArcSwap::from(Arc::new(Vec::new())),
@@ -282,6 +317,25 @@ impl CollectionStore {
             }
         }
 
+        // Load quantized storage if configured. Missing or corrupt quant files are
+        // treated as absent (derived structure) so open still succeeds; the
+        // collection will run exact until `build_quantization` recreates them.
+        let quant = if let Some(qc) = &meta.quantization_config {
+            if qc.enabled && qc.quant_type.is_some() {
+                QuantStore::open(
+                    dir,
+                    meta.vector_size,
+                    meta.distance,
+                    meta.segment_slots,
+                    meta.slot_capacity,
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let store = Self {
             dir: dir.to_path_buf(),
             inner: RwLock::new(StoreInner {
@@ -295,6 +349,7 @@ impl CollectionStore {
             vectors,
             keys,
             payloads,
+            quant: parking_lot::RwLock::new(quant),
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
             index: ArcSwap::from(Arc::new(None)),
             pending: ArcSwap::from(Arc::new(Vec::new())),
@@ -504,8 +559,10 @@ impl CollectionStore {
                         self.apply_delete_locked(inner, id)?;
                     }
                 }
-                // Checkpoint markers carry no data.
-                WalRecord::Compact | WalRecord::DropCollection => {}
+                // Checkpoint / quantization markers carry no separate mutation.
+                WalRecord::Compact
+                | WalRecord::Quantize
+                | WalRecord::DropCollection => {}
             }
         }
         Ok(())
@@ -527,6 +584,20 @@ impl CollectionStore {
         };
 
         self.vectors.write_slot(slot, &point.vector)?;
+        // Mirror the vector into quantized storage when ready.
+        if let Some(q) = self.quant.read().as_ref() {
+            if q.is_ready() {
+                let _ = q.write_slot(slot, &point.vector);
+            } else if matches!(
+                q.config().quant_type,
+                Some(crate::types::QuantizationType::Scalar { .. })
+                    | Some(crate::types::QuantizationType::Binary { .. })
+            ) {
+                // Scalar/Binary are always ready after create/rebuild; attempt to
+                // quantize even when `ready` flag races the build.
+                let _ = q.write_slot(slot, &point.vector);
+            }
+        }
         self.payloads
             .append_payload(slot as usize, point.payload.as_ref())?;
         self.register_slot(slot as u32, &point.vector, inner.meta.segment_slots);
@@ -628,12 +699,158 @@ impl CollectionStore {
         let new_capacity = self.vectors.slot_capacity();
         self.keys.grow_to(new_capacity)?;
         self.payloads.grow_to(new_capacity)?;
+        if let Some(q) = self.quant.read().as_ref() {
+            // Quant file growth mirrors vectors capacity; zero-fill new range.
+            let _ = q.grow_to(new_capacity);
+        }
 
         let next = self.tombstones.load().resized(new_capacity as usize);
         self.tombstones.store(Arc::new(next));
 
         meta.slot_capacity = new_capacity;
         inner.filter_bitmap.resize(new_capacity as usize);
+        Ok(())
+    }
+
+    /// Build or rebuild quantization from the current live set.
+    ///
+    /// Heavy work (collecting vectors and training codebooks) runs without
+    /// holding the store write lock, under the same `build_mutex` that
+    /// serializes index builds and compaction. The product codebook requires
+    /// k-means; scalar/binary need only a range scan.
+    pub fn build_quantization(&self) -> Result<bool> {
+        let qc = {
+            let inner = self.inner.read();
+            match &inner.meta.quantization_config {
+                Some(qc) if qc.enabled && qc.quant_type.is_some() => qc.clone(),
+                _ => return Ok(false),
+            }
+        };
+        // Exclusive with compaction and index builds (order: compact -> build)
+        // so slot numbers stay stable and quant files are not rewritten
+        // concurrently by compaction.
+        let _compact_guard = self.compact_mutex.lock();
+        let _guard = self.build_mutex.lock();
+        let (dim, distance, segment_slots, next_slot) = {
+            let inner = self.inner.read();
+            (
+                inner.meta.vector_size,
+                inner.meta.distance,
+                inner.meta.segment_slots,
+                inner.meta.next_slot,
+            )
+        };
+        // If store has no quant yet, create one now.
+        {
+            let mut qguard = self.quant.write();
+            if qguard.is_none() {
+                let capacity = self.inner.read().meta.slot_capacity;
+                *qguard = Some(QuantStore::create(
+                    &self.dir,
+                    dim,
+                    distance,
+                    &qc,
+                    segment_slots,
+                    capacity,
+                )?);
+            }
+        }
+        let live: Vec<u32> = {
+            let tomb = self.tombstones.load();
+            (0..next_slot as u32)
+                .filter(|&s| !tomb.bit(s as usize))
+                .collect()
+        };
+        if live.is_empty() {
+            return Ok(false);
+        }
+        let vsnap = self.vectors.snapshot();
+        let quant = self.quant.read().as_ref().expect("quant present").meta_snapshot();
+        let _ = quant;
+        // Delegate training to QuantStore.
+        let quant_store = self.quant.read();
+        let qs = quant_store.as_ref().expect("quant store exists");
+        qs.rebuild(&vsnap, segment_slots, &live, dim)?;
+        Ok(true)
+    }
+
+    /// Whether quantization is active and ready for search.
+    pub fn has_quantization(&self) -> bool {
+        self.quant
+            .read()
+            .as_ref()
+            .is_some_and(|q| q.is_ready())
+    }
+
+    /// Quantization config in effect, if any.
+    pub fn quantization_config(&self) -> Option<crate::types::QuantizationConfig> {
+        self.inner.read().meta.quantization_config.clone()
+    }
+
+    /// Replace quantization config at runtime (engine setting). Persists to
+    /// `meta.bin` and creates or drops the quant files accordingly.
+    ///
+    /// Crash-safe order: quant files are created/synced first, then `meta.bin`
+    /// is swapped. If the process crashes before `meta.bin` is durable the
+    /// collection reopens without quantization (fallback to exact); orphan
+    /// quant files are discarded on the next open.
+    pub fn set_quantization_config(&self, config: QuantizationConfig) -> Result<()> {
+        config.validate(self.inner.read().meta.vector_size)?;
+        // Create or drop quant files before persisting meta, so a crash
+        // cannot leave meta claiming quantization while files are missing.
+        let new_quant = if config.enabled && config.quant_type.is_some() {
+            // Pre-create the store while not holding the inner write lock.
+            let (dim, distance, segment_slots, slot_capacity) = {
+                let inner = self.inner.read();
+                (
+                    inner.meta.vector_size,
+                    inner.meta.distance,
+                    inner.meta.segment_slots,
+                    inner.meta.slot_capacity,
+                )
+            };
+            let mut qguard = self.quant.write();
+            if qguard.is_none() {
+                *qguard = Some(QuantStore::create(
+                    &self.dir, dim, distance, &config, segment_slots, slot_capacity,
+                )?);
+            } else if qguard.as_ref().is_some_and(|q| q.config() != &config) {
+                // Config type changed: recreate files.
+                *qguard = None;
+                let _ = std::fs::remove_file(self.dir.join("quant.bin"));
+                let _ = std::fs::remove_file(self.dir.join("quant_meta.bin"));
+                *qguard = Some(QuantStore::create(
+                    &self.dir, dim, distance, &config, segment_slots, slot_capacity,
+                )?);
+            }
+            // Hold the quant guard briefly to ensure files are durable before
+            // meta claims them; QuantStore::create already fsyncs.
+            drop(qguard);
+            Some(config.clone())
+        } else {
+            // Disable: drop in-memory store and remove files first.
+            {
+                let mut qguard = self.quant.write();
+                *qguard = None;
+            }
+            let _ = std::fs::remove_file(self.dir.join("quant.bin"));
+            let _ = std::fs::remove_file(self.dir.join("quant_meta.bin"));
+            // Still persist the disabled config so callers can distinguish
+            // "never configured" vs "explicitly disabled".
+            Some(config.clone())
+        };
+        let mut inner = self.inner.write();
+        inner.meta.quantization_config = new_quant;
+        inner.meta.save(&self.dir)?;
+        // Append a WAL checkpoint so replay knows to re-validate quant files.
+        // No in-memory mutation is needed; replay for `Quantize` is a no-op
+        // because quant files are derived and rebuildable.
+        // Best-effort: WAL append failure after meta save is still recoverable
+        // (open discards corrupt quant files and falls back to exact).
+        let _ = self.wal.append(&WalTxn {
+            txn_id: inner.meta.last_applied_txn,
+            ops: vec![WalRecord::Quantize],
+        });
         Ok(())
     }
 
@@ -671,7 +888,7 @@ fn count_ops(ops: &[WalRecord]) -> (u64, u64) {
             WalRecord::Upsert { .. } => upserts += 1,
             WalRecord::Delete { .. } => deletes += 1,
             WalRecord::DeleteBatch { point_ids } => deletes += point_ids.len() as u64,
-            WalRecord::Compact | WalRecord::DropCollection => {}
+            WalRecord::Compact | WalRecord::Quantize | WalRecord::DropCollection => {}
         }
     }
     (upserts, deletes)

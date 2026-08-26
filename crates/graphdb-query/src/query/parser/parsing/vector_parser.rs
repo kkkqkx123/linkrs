@@ -93,6 +93,10 @@ fn parse_vector_index_config(
     let mut distance = VectorDistance::Cosine;
     let mut hnsw_m = None;
     let mut hnsw_ef_construct = None;
+    let mut quantization: Option<crate::query::parser::ast::vector::QuantizationKind> = None;
+    let mut quantile: Option<f32> = None;
+    let mut compression: Option<crate::query::parser::ast::vector::CompressionRatioKind> = None;
+    let mut always_ram: Option<bool> = None;
 
     loop {
         let key = ctx.consume_identifier()?;
@@ -129,6 +133,136 @@ fn parse_vector_index_config(
             "hnsw_ef_construct" => {
                 hnsw_ef_construct = Some(ctx.consume_int()? as usize);
             }
+            "quantization" | "quantization_type" | "quant_type" => {
+                // Accept scalar/binary/product/none (none = disabled)
+                let q_str = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
+                    ctx.consume_string()?
+                } else {
+                    ctx.consume_identifier()?
+                };
+                match q_str.to_lowercase().as_str() {
+                    "none" | "disabled" | "off" => quantization = None,
+                    "scalar" => {
+                        quantization = Some(
+                            crate::query::parser::ast::vector::QuantizationKind::Scalar,
+                        )
+                    }
+                    "binary" => {
+                        quantization = Some(
+                            crate::query::parser::ast::vector::QuantizationKind::Binary,
+                        )
+                    }
+                    "product" | "pq" => {
+                        quantization = Some(
+                            crate::query::parser::ast::vector::QuantizationKind::Product,
+                        )
+                    }
+                    _ => {
+                        return Err(crate::query::parser::ParseError::new(
+                            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                            format!(
+                                "Unknown quantization '{}', expected scalar/binary/product/none",
+                                q_str
+                            ),
+                            ctx.current_position(),
+                        ))
+                    }
+                }
+            }
+            "quantile" => {
+                let v = ctx.consume_float()? as f32;
+                if !v.is_finite() || v <= 0.0 || v > 1.0 {
+                    return Err(crate::query::parser::ParseError::new(
+                        crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                        format!("quantile {} must be in (0,1]", v),
+                        ctx.current_position(),
+                    ));
+                }
+                quantile = Some(v);
+            }
+            "compression" | "pq_compression" => {
+                // Accept x4/x8/x16/x32/x64 or integer 4/8/16/32/64
+                let c_str = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
+                    ctx.consume_string()?
+                } else if matches!(
+                    ctx.current_token().kind,
+                    TokenKind::FloatLiteral(_) | TokenKind::IntegerLiteral(_)
+                ) {
+                    // Numeric literal fallback: consume as int
+                    let n = ctx.consume_int()?;
+                    format!("x{}", n)
+                } else {
+                    ctx.consume_identifier()?
+                };
+                compression = Some(match c_str.to_lowercase().as_str() {
+                    "x4" | "4" => crate::query::parser::ast::vector::CompressionRatioKind::X4,
+                    "x8" | "8" => crate::query::parser::ast::vector::CompressionRatioKind::X8,
+                    "x16" | "16" => crate::query::parser::ast::vector::CompressionRatioKind::X16,
+                    "x32" | "32" => crate::query::parser::ast::vector::CompressionRatioKind::X32,
+                    "x64" | "64" => crate::query::parser::ast::vector::CompressionRatioKind::X64,
+                    _ => {
+                        return Err(crate::query::parser::ParseError::new(
+                            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                            format!(
+                                "Unknown compression '{}', expected x4/x8/x16/x32/x64",
+                                c_str
+                            ),
+                            ctx.current_position(),
+                        ))
+                    }
+                });
+            }
+            "always_ram" => {
+                let b = match ctx.current_token().kind.clone() {
+                    TokenKind::BooleanLiteral(v) => {
+                        ctx.next_token();
+                        v
+                    }
+                    TokenKind::StringLiteral(s) => {
+                        ctx.next_token();
+                        match s.to_lowercase().as_str() {
+                            "true" | "1" | "yes" | "on" => true,
+                            "false" | "0" | "no" | "off" => false,
+                            _ => {
+                                return Err(crate::query::parser::ParseError::new(
+                                    crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                                    format!(
+                                        "Unknown always_ram '{}', expected true/false",
+                                        s
+                                    ),
+                                    ctx.current_position(),
+                                ))
+                            }
+                        }
+                    }
+                    TokenKind::Identifier(s) => {
+                        let lower = s.to_lowercase();
+                        ctx.next_token();
+                        match lower.as_str() {
+                            "true" | "1" | "yes" | "on" => true,
+                            "false" | "0" | "no" | "off" => false,
+                            _ => {
+                                return Err(crate::query::parser::ParseError::new(
+                                    crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                                    format!(
+                                        "Unknown always_ram '{}', expected true/false",
+                                        s
+                                    ),
+                                    ctx.current_position(),
+                                ))
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(crate::query::parser::ParseError::new(
+                            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                            "always_ram expects true/false".to_string(),
+                            ctx.current_position(),
+                        ))
+                    }
+                };
+                always_ram = Some(b);
+            }
             _ => {
                 return Err(crate::query::parser::ParseError::new(
                     crate::query::parser::core::error::ParseErrorKind::SyntaxError,
@@ -159,6 +293,19 @@ fn parse_vector_index_config(
     }
     if let Some(ef) = hnsw_ef_construct {
         config.hnsw_ef_construct = Some(ef);
+    }
+    // Quantization: only populate when kind is set; `none` keeps disabled
+    if let Some(q) = quantization {
+        config.quantization = Some(q);
+        config.quantile = quantile;
+        config.compression = compression;
+        config.always_ram = always_ram;
+    } else if quantile.is_some() || compression.is_some() || always_ram.is_some() {
+        return Err(crate::query::parser::ParseError::new(
+            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+            "quantile/compression/always_ram require quantization='scalar'/'binary'/'product'".to_string(),
+            ctx.current_position(),
+        ));
     }
 
     Ok(config)

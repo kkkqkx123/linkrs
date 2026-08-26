@@ -805,6 +805,12 @@ pub enum VectorManageCommand {
         vector_size: usize,
         distance: VectorDistance,
         space_id: u64,
+        hnsw_m: Option<usize>,
+        hnsw_ef_construct: Option<usize>,
+        quantization: Option<crate::query::parser::ast::vector::QuantizationKind>,
+        quantile: Option<f32>,
+        compression: Option<crate::query::parser::ast::vector::CompressionRatioKind>,
+        always_ram: Option<bool>,
     },
     Drop {
         index_name: String,

@@ -144,7 +144,13 @@ impl VectorSearchPlanner {
             space_id,
         )
         .with_hnsw_m(create.config.hnsw_m)
-        .with_hnsw_ef_construct(create.config.hnsw_ef_construct);
+        .with_hnsw_ef_construct(create.config.hnsw_ef_construct)
+        .with_quantization(
+            create.config.quantization,
+            create.config.quantile,
+            create.config.compression,
+            create.config.always_ram,
+        );
         if create.if_not_exists {
             params = params.with_if_not_exists();
         }

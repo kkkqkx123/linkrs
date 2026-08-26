@@ -123,6 +123,7 @@ pub enum SearchPath {
     Exact,
     Ivf,
     Hnsw,
+    Quantized,
 }
 
 /// Accuracy fallback triggered because a filter left too few results.
@@ -184,6 +185,7 @@ pub struct Metrics {
     search_exact: AtomicU64,
     search_ivf: AtomicU64,
     search_hnsw: AtomicU64,
+    search_quantized: AtomicU64,
     search_filtered: AtomicU64,
     /// Searches that failed at the engine boundary (validation, corruption).
     ///
@@ -237,6 +239,7 @@ impl Metrics {
             SearchPath::Exact => &self.search_exact,
             SearchPath::Ivf => &self.search_ivf,
             SearchPath::Hnsw => &self.search_hnsw,
+            SearchPath::Quantized => &self.search_quantized,
         }
         .fetch_add(1, Ordering::Relaxed);
         if filtered {
@@ -346,6 +349,7 @@ impl Metrics {
             search_exact: self.search_exact.load(Ordering::Relaxed),
             search_ivf: self.search_ivf.load(Ordering::Relaxed),
             search_hnsw: self.search_hnsw.load(Ordering::Relaxed),
+            search_quantized: self.search_quantized.load(Ordering::Relaxed),
             search_filtered: self.search_filtered.load(Ordering::Relaxed),
             search_errors: self.search_errors.load(Ordering::Relaxed),
             search_nprobe_retries: self.search_nprobe_retries.load(Ordering::Relaxed),
@@ -389,6 +393,7 @@ pub struct MetricsSnapshot {
     pub search_exact: u64,
     pub search_ivf: u64,
     pub search_hnsw: u64,
+    pub search_quantized: u64,
     pub search_filtered: u64,
     /// Searches that failed at the engine boundary.
     pub search_errors: u64,

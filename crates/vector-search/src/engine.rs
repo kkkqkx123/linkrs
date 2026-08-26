@@ -82,6 +82,8 @@ pub struct LocalVectorEngine {
     default_ivf: RwLock<Option<IvfConfig>>,
     /// Applied to HNSW collections created without an explicit HNSW config.
     default_hnsw: RwLock<Option<HnswConfig>>,
+    /// Applied to collections created without an explicit quantization config.
+    default_quantization: RwLock<Option<crate::types::QuantizationConfig>>,
     jobs: Option<Sender<MaintenanceJob>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     /// Collections with a build already queued or running.
@@ -159,6 +161,7 @@ impl LocalVectorEngine {
             collections,
             default_ivf: RwLock::new(None),
             default_hnsw: RwLock::new(None),
+            default_quantization: RwLock::new(None),
             jobs: Some(tx),
             worker: Mutex::new(Some(handle)),
             in_flight,
@@ -205,6 +208,13 @@ impl LocalVectorEngine {
             }
             IndexType::FLAT => {}
         }
+        // Apply default quantization when caller did not specify one (per-collection
+        // TOML defaults or global quantization settings).
+        if effective.quantization_config.is_none() {
+            if let Some(default) = &*self.default_quantization.read() {
+                effective.quantization_config = Some(default.clone());
+            }
+        }
         let dir = self.root_dir.join(name);
         let store = Arc::new(CollectionStore::create(&dir, name, &effective)?);
         self.collections.write().insert(name.to_string(), store);
@@ -227,12 +237,37 @@ impl LocalVectorEngine {
         }
     }
 
+    /// Default quantization configuration for collections created without one.
+    pub fn set_default_quantization_config(&self, config: crate::types::QuantizationConfig) {
+        *self.default_quantization.write() = Some(config.clone());
+        for store in self.collections.read().values() {
+            let _ = store.set_quantization_config(config.clone());
+        }
+    }
+
     /// Build and publish the IVF index of a collection synchronously.
     /// Returns whether a usable index is now published. This is also the
     /// entry point used by the maintenance worker.
     pub fn build_index(&self, collection: &str) -> Result<bool> {
         let store = self.store(collection)?;
         store.build_index()
+    }
+
+    /// Build or rebuild quantized storage for a collection.
+    ///
+    /// Scalar quantization refreshes the global min/max/scale; Binary is a
+    /// no-op (bits are already per-vector); Product retrains `M` codebooks
+    /// (256 centroids per subspace via k-means) and recodes every live vector.
+    /// Returns whether quantization is now ready for search.
+    pub fn build_quantization(&self, collection: &str) -> Result<bool> {
+        let store = self.store(collection)?;
+        store.build_quantization()
+    }
+
+    /// Whether quantization is active and ready for the collection.
+    pub fn has_quantization(&self, collection: &str) -> bool {
+        self.store(collection)
+            .is_ok_and(|s| s.has_quantization())
     }
 
     /// Drop the published IVF index; the collection falls back to
@@ -279,9 +314,9 @@ impl LocalVectorEngine {
 
     /// Collection configuration, or `None` if the collection does not exist.
     ///
-    /// Dimension, distance, effective index type and the effective ANN
-    /// configuration are read back from the persisted metadata; remote-only
-    /// fields (quantization, replication) are not stored locally.
+    /// Dimension, distance, effective index type, quantization and the effective
+    /// ANN configurations are read back from the persisted metadata; remote-only
+    /// replication fields are still excluded.
     pub fn collection_config(&self, name: &str) -> Result<Option<CollectionConfig>> {
         let collections = self.collections.read();
         Ok(collections.get(name).map(|store| {
@@ -290,6 +325,7 @@ impl LocalVectorEngine {
             config.index_type = Some(meta.index_type);
             config.hnsw_config = meta.hnsw_config.clone();
             config.ivf_config = meta.ivf_config.clone();
+            config.quantization_config = meta.quantization_config.clone();
             config
         }))
     }
@@ -307,6 +343,7 @@ impl LocalVectorEngine {
         config.index_type = Some(meta.index_type);
         config.hnsw_config = meta.hnsw_config.clone();
         config.ivf_config = meta.ivf_config.clone();
+        config.quantization_config = meta.quantization_config.clone();
         Ok(CollectionInfo {
             name: meta.collection.clone(),
             vector_count: live,

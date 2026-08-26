@@ -1,7 +1,7 @@
 pub mod api;
 
 #[cfg(feature = "vector")]
-pub use api::vector_config::{local_hnsw_config, local_ivf_config};
+pub use api::vector_config::{local_hnsw_config, local_ivf_config, local_quantization_config};
 pub use graphdb_config::config;
 pub use graphdb_core::core;
 pub use graphdb_core::utils;

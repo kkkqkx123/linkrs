@@ -248,6 +248,12 @@ impl VectorOperator {
                         vector_size,
                         distance,
                         space_id,
+                        hnsw_m,
+                        hnsw_ef_construct,
+                        quantization,
+                        quantile,
+                        compression,
+                        always_ram,
                     } => {
                         #[cfg(feature = "vector")]
                         {
@@ -266,16 +272,93 @@ impl VectorOperator {
                                         vector_search::DistanceMetric::Manhattan
                                     }
                                 };
-                                let res = crate::query::executor::streaming::helpers::runtime_bridge::wait(
-                                    "Vector create",
-                                    coordinator.create_vector_index(
-                                        *space_id,
-                                        tag_name,
-                                        field_name,
-                                        *vector_size,
-                                        distance,
-                                    ),
-                                );
+                                // Build CollectionConfig with optional HNSW and quantization
+                                // (mirrors Qdrant scalar/product/binary builders).
+                                let mut config =
+                                    vector_search::CollectionConfig::new(*vector_size, distance);
+                                if hnsw_m.is_some() || hnsw_ef_construct.is_some() {
+                                    let mut hnsw = vector_search::HnswConfig::default();
+                                    if let Some(m) = hnsw_m {
+                                        hnsw.m = *m;
+                                    }
+                                    if let Some(ef) = hnsw_ef_construct {
+                                        hnsw.ef_construct = *ef;
+                                    }
+                                    let _ = hnsw.validate();
+                                    config = config.with_hnsw(hnsw);
+                                }
+                                if let Some(qkind) = quantization {
+                                    let quant_cfg = match qkind {
+                                        crate::query::parser::ast::vector::QuantizationKind::Scalar => {
+                                            let mut cfg = vector_search::QuantizationConfig::scalar(
+                                                quantile.unwrap_or(0.99),
+                                            );
+                                            if let Some(ar) = always_ram {
+                                                cfg = cfg.with_always_ram(*ar);
+                                            }
+                                            cfg
+                                        }
+                                        crate::query::parser::ast::vector::QuantizationKind::Binary => {
+                                            let mut cfg = vector_search::QuantizationConfig::binary();
+                                            if let Some(ar) = always_ram {
+                                                cfg = cfg.with_always_ram(*ar);
+                                            }
+                                            cfg
+                                        }
+                                        crate::query::parser::ast::vector::QuantizationKind::Product => {
+                                            let ratio = match compression {
+                                                Some(crate::query::parser::ast::vector::CompressionRatioKind::X4) => {
+                                                    vector_search::CompressionRatio::X4
+                                                }
+                                                Some(crate::query::parser::ast::vector::CompressionRatioKind::X8) => {
+                                                    vector_search::CompressionRatio::X8
+                                                }
+                                                Some(crate::query::parser::ast::vector::CompressionRatioKind::X16) => {
+                                                    vector_search::CompressionRatio::X16
+                                                }
+                                                Some(crate::query::parser::ast::vector::CompressionRatioKind::X32) => {
+                                                    vector_search::CompressionRatio::X32
+                                                }
+                                                Some(crate::query::parser::ast::vector::CompressionRatioKind::X64) => {
+                                                    vector_search::CompressionRatio::X64
+                                                }
+                                                None => vector_search::CompressionRatio::X4,
+                                            };
+                                            let mut cfg =
+                                                vector_search::QuantizationConfig::product(ratio);
+                                            if let Some(ar) = always_ram {
+                                                cfg = cfg.with_always_ram(*ar);
+                                            }
+                                            cfg
+                                        }
+                                    };
+                                    let _ = quant_cfg.validate(*vector_size);
+                                    config = config.with_quantization(quant_cfg);
+                                }
+                                let res = if config.quantization_config.is_some()
+                                    || config.hnsw_config.is_some()
+                                {
+                                    crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                        "Vector create",
+                                        coordinator.create_index_with_config(
+                                            *space_id,
+                                            tag_name,
+                                            field_name,
+                                            config,
+                                        ),
+                                    )
+                                } else {
+                                    crate::query::executor::streaming::helpers::runtime_bridge::wait(
+                                        "Vector create",
+                                        coordinator.create_vector_index(
+                                            *space_id,
+                                            tag_name,
+                                            field_name,
+                                            *vector_size,
+                                            distance,
+                                        ),
+                                    )
+                                };
                                 match res {
                                     Ok(_) => {
                                         // Record the statement-level name so
@@ -310,6 +393,12 @@ impl VectorOperator {
                                 vector_size,
                                 distance,
                                 space_id,
+                                hnsw_m,
+                                hnsw_ef_construct,
+                                quantization,
+                                quantile,
+                                compression,
+                                always_ram,
                             );
                             Err(QueryError::feature_disabled(
                                 "vector",

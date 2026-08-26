@@ -25,6 +25,26 @@ pub struct CreateVectorIndex {
     pub if_not_exists: bool,
 }
 
+/// Quantization kind for vector index (mirrors `vector_search::QuantizationType` / Qdrant builders)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuantizationKind {
+    Scalar,
+    Binary,
+    Product,
+}
+
+/// Compression ratio for product quantization (mirrors `vector_search::CompressionRatio` / Qdrant)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompressionRatioKind {
+    X4,
+    X8,
+    X16,
+    X32,
+    X64,
+}
+
 /// Vector index configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorIndexConfig {
@@ -32,6 +52,14 @@ pub struct VectorIndexConfig {
     pub distance: VectorDistance,
     pub hnsw_m: Option<usize>,
     pub hnsw_ef_construct: Option<usize>,
+    /// Quantization kind: None = disabled (exact f32), Some = scalar/binary/product
+    pub quantization: Option<QuantizationKind>,
+    /// Scalar only: quantile in (0,1], default 0.99
+    pub quantile: Option<f32>,
+    /// Product only: compression ratio, default X4
+    pub compression: Option<CompressionRatioKind>,
+    /// Always keep quantized vectors in RAM (scalar/binary/product)
+    pub always_ram: Option<bool>,
 }
 
 /// DROP VECTOR INDEX statement
@@ -210,6 +238,10 @@ impl VectorIndexConfig {
             distance,
             hnsw_m: None,
             hnsw_ef_construct: None,
+            quantization: None,
+            quantile: None,
+            compression: None,
+            always_ram: None,
         }
     }
 
@@ -217,5 +249,31 @@ impl VectorIndexConfig {
         self.hnsw_m = Some(m);
         self.hnsw_ef_construct = Some(ef_construct);
         self
+    }
+
+    pub fn with_quantization(
+        mut self,
+        quantization: QuantizationKind,
+        quantile: Option<f32>,
+        compression: Option<CompressionRatioKind>,
+        always_ram: Option<bool>,
+    ) -> Self {
+        self.quantization = Some(quantization);
+        self.quantile = quantile;
+        self.compression = compression;
+        self.always_ram = always_ram;
+        self
+    }
+}
+
+impl CompressionRatioKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CompressionRatioKind::X4 => "x4",
+            CompressionRatioKind::X8 => "x8",
+            CompressionRatioKind::X16 => "x16",
+            CompressionRatioKind::X32 => "x32",
+            CompressionRatioKind::X64 => "x64",
+        }
     }
 }
