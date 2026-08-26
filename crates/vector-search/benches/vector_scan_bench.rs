@@ -110,31 +110,112 @@ fn scan_latency(c: &mut Criterion) {
     group.finish();
 }
 
-/// SIMD vs naive ratio on the same input (x86-64 only).
+/// SIMD vs naive ratio on the same input (multi-kernel).
+///
+/// All kernels must agree within 1e-4 (tested in unit tests) and the bench
+/// here establishes the latency win (>15% for AVX-512 to be promoted).
 fn simd_vs_naive(c: &mut Criterion) {
+    // Build the list of available kernels for this host.
+    let mut kernels = vec![Kernel::Naive];
     #[cfg(target_arch = "x86_64")]
     {
-        if !Kernel::Avx2.is_available() {
-            eprintln!("avx2 not available; skipping simd_vs_naive");
-            return;
+        if Kernel::Avx2.is_available() {
+            kernels.push(Kernel::Avx2);
         }
-        let query = unit_vector(SEED);
-        let data = unit_vectors(100_000);
-        let mut group = c.benchmark_group("simd_vs_naive");
-        for kernel in [Kernel::Naive, Kernel::Avx2] {
-            group.bench_with_input(
-                BenchmarkId::new("100k_cosine", kernel.to_string()),
-                &(),
-                |b, _| {
-                    b.iter(|| black_box(scan_best(kernel, DistanceMetric::Cosine, &query, &data)))
-                },
-            );
+        if Kernel::Avx512.is_available() {
+            kernels.push(Kernel::Avx512);
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if Kernel::Neon.is_available() {
+            kernels.push(Kernel::Neon);
+        }
+    }
+    #[cfg(feature = "simd_portable")]
+    {
+        if Kernel::Portable.is_available() {
+            kernels.push(Kernel::Portable);
+        }
+    }
+    if kernels.len() <= 1 {
+        eprintln!("no SIMD kernels available; skipping simd_vs_naive");
+        return;
+    }
+    let query = unit_vector(SEED);
+    let data = unit_vectors(100_000);
+    let mut group = c.benchmark_group("simd_vs_naive");
+    for kernel in kernels {
+        group.bench_with_input(
+            BenchmarkId::new("100k_cosine", kernel.to_string()),
+            &(),
+            |b, _| b.iter(|| black_box(scan_best(kernel, DistanceMetric::Cosine, &query, &data))),
+        );
+    }
+    group.finish();
+}
+
+/// Dim-scaling bench for the promotion gate (dim=384/768/1536).
+///
+/// AVX-512 is only promoted to the default `best_available` ranking when it
+/// sustains >15% win across these dims without p99 regression.
+fn simd_dim_scaling(c: &mut Criterion) {
+    // Collect available kernels again for dim scaling.
+    let mut kernels = vec![Kernel::Naive];
+    #[cfg(target_arch = "x86_64")]
+    {
+        if Kernel::Avx2.is_available() {
+            kernels.push(Kernel::Avx2);
+        }
+        if Kernel::Avx512.is_available() {
+            kernels.push(Kernel::Avx512);
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if Kernel::Neon.is_available() {
+            kernels.push(Kernel::Neon);
+        }
+    }
+    #[cfg(feature = "simd_portable")]
+    {
+        if Kernel::Portable.is_available() {
+            kernels.push(Kernel::Portable);
+        }
+    }
+    if kernels.len() <= 1 {
+        return;
+    }
+    for dim in [384usize, 768, 1536] {
+        // Generate dim-specific data (still unit vectors for cosine).
+        let mut rng = StdRng::seed_from_u64(SEED + dim as u64);
+        let data: Vec<Vec<f32>> = (0..10_000)
+            .map(|_| {
+                let mut v: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                for x in &mut v {
+                    *x /= norm.max(1e-6);
+                }
+                v
+            })
+            .collect();
+        let mut q: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let norm: f32 = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for x in &mut q {
+            *x /= norm.max(1e-6);
+        }
+        let mut group = c.benchmark_group(format!("simd_dim_{dim}"));
+        group.throughput(Throughput::Elements(10_000));
+        for kernel in &kernels {
+            for metric in [DistanceMetric::Cosine, DistanceMetric::Dot] {
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{metric:?}"), kernel.to_string()),
+                    &(),
+                    |b, _| b.iter(|| black_box(scan_best(*kernel, metric, &q, &data))),
+                );
+            }
         }
         group.finish();
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let _ = c;
     }
 }
 
@@ -278,6 +359,7 @@ criterion_group!(
     benches,
     scan_latency,
     simd_vs_naive,
+    simd_dim_scaling,
     filter_selectivity,
     upsert_wal
 );

@@ -103,7 +103,13 @@ pub mod vector_config {
                 Some(cfg)
             }
             "product" | "pq" => {
-                let ratio = match s.compression.as_deref().unwrap_or("x4").to_lowercase().as_str() {
+                let ratio = match s
+                    .compression
+                    .as_deref()
+                    .unwrap_or("x4")
+                    .to_lowercase()
+                    .as_str()
+                {
                     "x4" | "4" => vector_search::CompressionRatio::X4,
                     "x8" | "8" => vector_search::CompressionRatio::X8,
                     "x16" | "16" => vector_search::CompressionRatio::X16,

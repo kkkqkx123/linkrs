@@ -341,10 +341,7 @@ impl VectorOperator {
                                     crate::query::executor::streaming::helpers::runtime_bridge::wait(
                                         "Vector create",
                                         coordinator.create_index_with_config(
-                                            *space_id,
-                                            tag_name,
-                                            field_name,
-                                            config,
+                                            *space_id, tag_name, field_name, config,
                                         ),
                                     )
                                 } else {

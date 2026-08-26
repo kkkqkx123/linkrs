@@ -143,19 +143,16 @@ fn parse_vector_index_config(
                 match q_str.to_lowercase().as_str() {
                     "none" | "disabled" | "off" => quantization = None,
                     "scalar" => {
-                        quantization = Some(
-                            crate::query::parser::ast::vector::QuantizationKind::Scalar,
-                        )
+                        quantization =
+                            Some(crate::query::parser::ast::vector::QuantizationKind::Scalar)
                     }
                     "binary" => {
-                        quantization = Some(
-                            crate::query::parser::ast::vector::QuantizationKind::Binary,
-                        )
+                        quantization =
+                            Some(crate::query::parser::ast::vector::QuantizationKind::Binary)
                     }
                     "product" | "pq" => {
-                        quantization = Some(
-                            crate::query::parser::ast::vector::QuantizationKind::Product,
-                        )
+                        quantization =
+                            Some(crate::query::parser::ast::vector::QuantizationKind::Product)
                     }
                     _ => {
                         return Err(crate::query::parser::ParseError::new(
@@ -213,54 +210,45 @@ fn parse_vector_index_config(
                 });
             }
             "always_ram" => {
-                let b = match ctx.current_token().kind.clone() {
-                    TokenKind::BooleanLiteral(v) => {
-                        ctx.next_token();
-                        v
-                    }
-                    TokenKind::StringLiteral(s) => {
-                        ctx.next_token();
-                        match s.to_lowercase().as_str() {
-                            "true" | "1" | "yes" | "on" => true,
-                            "false" | "0" | "no" | "off" => false,
-                            _ => {
-                                return Err(crate::query::parser::ParseError::new(
+                let b =
+                    match ctx.current_token().kind.clone() {
+                        TokenKind::BooleanLiteral(v) => {
+                            ctx.next_token();
+                            v
+                        }
+                        TokenKind::StringLiteral(s) => {
+                            ctx.next_token();
+                            match s.to_lowercase().as_str() {
+                                "true" | "1" | "yes" | "on" => true,
+                                "false" | "0" | "no" | "off" => false,
+                                _ => return Err(crate::query::parser::ParseError::new(
                                     crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-                                    format!(
-                                        "Unknown always_ram '{}', expected true/false",
-                                        s
-                                    ),
+                                    format!("Unknown always_ram '{}', expected true/false", s),
                                     ctx.current_position(),
-                                ))
+                                )),
                             }
                         }
-                    }
-                    TokenKind::Identifier(s) => {
-                        let lower = s.to_lowercase();
-                        ctx.next_token();
-                        match lower.as_str() {
-                            "true" | "1" | "yes" | "on" => true,
-                            "false" | "0" | "no" | "off" => false,
-                            _ => {
-                                return Err(crate::query::parser::ParseError::new(
+                        TokenKind::Identifier(s) => {
+                            let lower = s.to_lowercase();
+                            ctx.next_token();
+                            match lower.as_str() {
+                                "true" | "1" | "yes" | "on" => true,
+                                "false" | "0" | "no" | "off" => false,
+                                _ => return Err(crate::query::parser::ParseError::new(
                                     crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-                                    format!(
-                                        "Unknown always_ram '{}', expected true/false",
-                                        s
-                                    ),
+                                    format!("Unknown always_ram '{}', expected true/false", s),
                                     ctx.current_position(),
-                                ))
+                                )),
                             }
                         }
-                    }
-                    _ => {
-                        return Err(crate::query::parser::ParseError::new(
-                            crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-                            "always_ram expects true/false".to_string(),
-                            ctx.current_position(),
-                        ))
-                    }
-                };
+                        _ => {
+                            return Err(crate::query::parser::ParseError::new(
+                                crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                                "always_ram expects true/false".to_string(),
+                                ctx.current_position(),
+                            ))
+                        }
+                    };
                 always_ram = Some(b);
             }
             _ => {
@@ -303,7 +291,8 @@ fn parse_vector_index_config(
     } else if quantile.is_some() || compression.is_some() || always_ram.is_some() {
         return Err(crate::query::parser::ParseError::new(
             crate::query::parser::core::error::ParseErrorKind::SyntaxError,
-            "quantile/compression/always_ram require quantization='scalar'/'binary'/'product'".to_string(),
+            "quantile/compression/always_ram require quantization='scalar'/'binary'/'product'"
+                .to_string(),
             ctx.current_position(),
         ));
     }

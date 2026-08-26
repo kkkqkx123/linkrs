@@ -13,6 +13,14 @@ path = "src/lib.rs"
 # default so the hot mutation paths carry no timing overhead; enable for
 # lock-contention investigations (metrics flow through MetricsSnapshot).
 lock-metrics = []
+# Portable SIMD via `std::simd` (`portable_simd`, still unstable on stable
+# Rust as of 1.97; `#86656`). When enabled, `distance::portable` delegates
+# to `naive` as a stable placeholder until `std::simd` stabilizes or the
+# `wide` crate is adopted. The kernel `Portable` variant remains in the
+# dispatch ranking for differential bench wiring. Evaluation branch:
+# compare against hand-written AVX2/AVX512 kernels within 1e-4; gate merged
+# until bench shows >10% gain.
+simd_portable = []
 
 [dependencies]
 serde.workspace = true

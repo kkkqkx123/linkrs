@@ -144,8 +144,18 @@ impl CollectionStore {
             // Try the quantized path; if it fails (corrupt quant file) fall
             // back to exact scan transparently.
             let quant_result = self.search_quantized(
-                query, dim, metric, segment_slots, next_slot, &tombstones, &vsnap, &keysnap,
-                &paysnap, filter_mask.as_ref(), filtered, started,
+                query,
+                dim,
+                metric,
+                segment_slots,
+                next_slot,
+                &tombstones,
+                &vsnap,
+                &keysnap,
+                &paysnap,
+                filter_mask.as_ref(),
+                filtered,
+                started,
             );
             if let Ok(results) = quant_result {
                 return Ok(results);
@@ -265,13 +275,12 @@ impl CollectionStore {
         };
         let quant_k = (k * oversample).min(next_slot as usize).max(k);
         // Precompute binary query bits once to avoid per-slot allocation.
-        let query_bits: Option<Vec<u8>> =
-            match quant.config().quant_type.as_ref() {
-                Some(crate::types::QuantizationType::Binary { .. }) => {
-                    Some(super::quant::encode_binary_for_query(&query.vector))
-                }
-                _ => None,
-            };
+        let query_bits: Option<Vec<u8>> = match quant.config().quant_type.as_ref() {
+            Some(crate::types::QuantizationType::Binary { .. }) => {
+                Some(super::quant::encode_binary_for_query(&query.vector))
+            }
+            _ => None,
+        };
 
         let heap: BinaryHeap<std::cmp::Reverse<ScoredSlot>> = (0..next_slot as u32)
             .into_par_iter()
@@ -412,7 +421,9 @@ impl CollectionStore {
                 return;
             }
         }
-        let Some(code) = QuantStore::read_slot(q_snap, slot as u64, segment_slots, bytes_per_vector) else {
+        let Some(code) =
+            QuantStore::read_slot(q_snap, slot as u64, segment_slots, bytes_per_vector)
+        else {
             return;
         };
         // Binary hamming can be computed from pre-encoded query bits without
@@ -424,7 +435,7 @@ impl CollectionStore {
                 for (a, b) in qbits.iter().zip(code.iter()) {
                     ham += (a ^ b).count_ones();
                 }
-                - (ham as f32)
+                -(ham as f32)
             }
             _ => {
                 let qdist = quant.distance_quantized(&query.vector, code, metric);

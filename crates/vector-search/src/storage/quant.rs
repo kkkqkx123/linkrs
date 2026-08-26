@@ -122,15 +122,9 @@ impl QuantStore {
         meta.slot_capacity = slot_capacity;
         // Scalar/binary ready immediately (global scale or trivial bits).
         // Product needs training; mark not ready until build_quantization runs.
-        meta.ready = !matches!(
-            config.quant_type,
-            Some(QuantizationType::Product { .. })
-        );
+        meta.ready = !matches!(config.quant_type, Some(QuantizationType::Product { .. }));
         // For scalar, init dummy scale (will be recomputed on build).
-        if matches!(
-            config.quant_type,
-            Some(QuantizationType::Scalar { .. })
-        ) {
+        if matches!(config.quant_type, Some(QuantizationType::Scalar { .. })) {
             meta.scalar_min = Some(0.0);
             meta.scalar_max = Some(1.0);
             meta.scalar_scale = Some(1.0 / 255.0);
@@ -374,12 +368,7 @@ impl QuantStore {
 
     /// Quantized distance between query f32 and stored code.
     /// Returns internal distance (smaller = nearer) consistent with `distance`.
-    pub fn distance_quantized(
-        &self,
-        query: &[f32],
-        code: &[u8],
-        metric: DistanceMetric,
-    ) -> f32 {
+    pub fn distance_quantized(&self, query: &[f32], code: &[u8], metric: DistanceMetric) -> f32 {
         let meta = self.meta.read();
         match &self.config.quant_type {
             Some(QuantizationType::Scalar { .. }) => {
@@ -444,9 +433,11 @@ impl QuantStore {
                 ham as f32
             }
             Some(QuantizationType::Product { .. }) => {
-                if let (Some(cb), Some(&m), Some(&subdim)) =
-                    (meta.codebook.as_ref(), meta.pq_m.as_ref(), meta.pq_subdim.as_ref())
-                {
+                if let (Some(cb), Some(&m), Some(&subdim)) = (
+                    meta.codebook.as_ref(),
+                    meta.pq_m.as_ref(),
+                    meta.pq_subdim.as_ref(),
+                ) {
                     match metric {
                         DistanceMetric::Euclid => {
                             // ADC: precompute distance tables per subspace.
@@ -541,7 +532,10 @@ impl QuantStore {
                 values.reserve(live_slots.len() * dim);
                 for &slot in live_slots {
                     if let Some(v) = crate::storage::vectors::Vectors::read_slot(
-                        vectors, slot as u64, segment_slots, dim,
+                        vectors,
+                        slot as u64,
+                        segment_slots,
+                        dim,
                     ) {
                         values.extend_from_slice(v);
                     }
@@ -563,7 +557,11 @@ impl QuantStore {
                     }
                 };
                 let range = max - min;
-                let scale = if range.abs() < 1e-9 { 1.0 } else { range / 255.0 };
+                let scale = if range.abs() < 1e-9 {
+                    1.0
+                } else {
+                    range / 255.0
+                };
                 {
                     let mut meta = self.meta.write();
                     meta.scalar_min = Some(min);
@@ -575,7 +573,10 @@ impl QuantStore {
                 // Encode all live slots into quant.bin
                 for &slot in live_slots {
                     if let Some(v) = crate::storage::vectors::Vectors::read_slot(
-                        vectors, slot as u64, segment_slots, dim,
+                        vectors,
+                        slot as u64,
+                        segment_slots,
+                        dim,
                     ) {
                         self.write_slot(slot as u64, v)?;
                     }
@@ -593,7 +594,10 @@ impl QuantStore {
                 }
                 for &slot in live_slots {
                     if let Some(v) = crate::storage::vectors::Vectors::read_slot(
-                        vectors, slot as u64, segment_slots, dim,
+                        vectors,
+                        slot as u64,
+                        segment_slots,
+                        dim,
                     ) {
                         self.write_slot(slot as u64, v)?;
                     }
@@ -614,7 +618,10 @@ impl QuantStore {
                         .iter()
                         .filter_map(|&slot| {
                             crate::storage::vectors::Vectors::read_slot(
-                                vectors, slot as u64, segment_slots, dim,
+                                vectors,
+                                slot as u64,
+                                segment_slots,
+                                dim,
                             )
                             .map(|v| &v[start..end])
                         })
@@ -633,7 +640,8 @@ impl QuantStore {
                         max_iter: 20,
                         seed: 0x9E37_79B9_7F4A_7C15u64.wrapping_add(s as u64 * 0x9E3779B9),
                     };
-                    let result = crate::index::kmeans::train(DistanceMetric::Euclid, &sample, &opts)?;
+                    let result =
+                        crate::index::kmeans::train(DistanceMetric::Euclid, &sample, &opts)?;
                     // result.centroids len may be <256 if sample small; pad.
                     for c in result.centroids {
                         codebook.extend_from_slice(&c);
@@ -658,7 +666,10 @@ impl QuantStore {
                 // Encode live vectors
                 for &slot in live_slots {
                     if let Some(v) = crate::storage::vectors::Vectors::read_slot(
-                        vectors, slot as u64, segment_slots, dim,
+                        vectors,
+                        slot as u64,
+                        segment_slots,
+                        dim,
                     ) {
                         self.write_slot(slot as u64, v)?;
                     }
@@ -729,7 +740,12 @@ impl QuantStore {
             // If quant not ready (product before build), encode from vectors instead of copying
             // old quant bytes. But copying old bytes is fine if ready.
             if self.is_ready() {
-                if let Some(code) = Self::read_slot(&old_snap, old_slot as u64, self.segment_slots, self.bytes_per_vector) {
+                if let Some(code) = Self::read_slot(
+                    &old_snap,
+                    old_slot as u64,
+                    self.segment_slots,
+                    self.bytes_per_vector,
+                ) {
                     let dst = new_slot as usize * self.bytes_per_vector;
                     write_at(&mut file, code, dst as u64)?;
                     continue;
@@ -738,7 +754,10 @@ impl QuantStore {
             // Fallback: encode from vector if available and ready after potential rebuild of meta?
             // For product not ready, skip (remains zero).
             if let Some(v) = crate::storage::vectors::Vectors::read_slot(
-                old_vectors, old_slot as u64, self.segment_slots, self.dim,
+                old_vectors,
+                old_slot as u64,
+                self.segment_slots,
+                self.dim,
             ) {
                 // Only encode if ready or scalar/binary (always ready)
                 if self.is_ready() {
@@ -840,7 +859,9 @@ fn read_tagged<T: serde::de::DeserializeOwned>(
     version: u16,
 ) -> Result<T> {
     if bytes.len() < 10 || &bytes[..4] != magic {
-        return Err(VectorSearchError::CorruptData("bad quant magic".to_string()));
+        return Err(VectorSearchError::CorruptData(
+            "bad quant magic".to_string(),
+        ));
     }
     let stored = u16::from_le_bytes([bytes[4], bytes[5]]);
     if stored != version {
@@ -851,7 +872,9 @@ fn read_tagged<T: serde::de::DeserializeOwned>(
     let expected_crc = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
     let payload = &bytes[10..];
     if crc32fast::hash(payload) != expected_crc {
-        return Err(VectorSearchError::CorruptData("quant crc mismatch".to_string()));
+        return Err(VectorSearchError::CorruptData(
+            "quant crc mismatch".to_string(),
+        ));
     }
     Ok(postcard::from_bytes(payload)?)
 }

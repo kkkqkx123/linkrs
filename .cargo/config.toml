@@ -1,34 +1,44 @@
 # Build configuration (SIMD compile options)
 #
-# x86-64-v3 enables AVX2/SSE4.2 codegen (Haswell+, 2013). This is a pure
-# compile-level win (verified 3.46x on the autovectorization benchmark) with
-# zero code changes. See AGENTS.md "Building and Running" for the fallback.
-#
-# IMPORTANT: a binary built with `-C target-cpu=x86-64-v3` REQUIRES AVX2
-# hardware at runtime — the whole binary (including third-party crates) may
-# emit AVX2 instructions, and the runtime kernel checks in
-# `crates/vector-search/src/distance/` are NOT a safety net here. To run on
-# older CPUs, rebuild with the baseline target:
-#   RUSTFLAGS="-C target-cpu=x86_64" cargo build --release
-# (or delete the `[target.*]` rustflags lines entirely).
+# Baseline is `x86-64` (widest compatibility). Performance comes from runtime
+# dispatch in `crates/vector-search/src/distance/kernel.rs` which selects
+# the best available kernel at startup:
+#   Avx512 (avx512f) > Avx2+FMA > Neon (aarch64) > Naive, with an optional
+#   `simd_portable` (std::simd) fallback when the feature is enabled.
+# Previous `.cargo/config.toml` revisions used `x86-64-v3` (AVX2) for a
+# compile-level autovectorization win (3.46x on microbenchmarks) but that
+# tied the binary to AVX2 hardware and made `kernel::is_available` checks
+# moot. The current setup compiles portable and dispatches at runtime;
+# specialized deployments may still opt into compile-time tuning:
+#   RUSTFLAGS="-C target-cpu=native" cargo build --release
+#   RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release
+# Those builds still benefit from the same runtime dispatch, plus extra
+# autovectorization in third-party crates.
 
 [env]
 RUST_TEST_THREADS = "1"
 
-# x86-64 targets: x86-64-v3 (AVX2, Haswell+ 2013).
-# aarch64 targets: NEON is mandatory in the ARMv8 baseline, so auto-
-# vectorization works without explicit flags; entries are declared for the
-# intended deployment surface but NOT yet verified (2026-08-18).
+# x86-64 targets: baseline `x86-64` with runtime dispatch.
+# The distance kernels in `crates/vector-search/src/distance/` select the
+# best available implementation at startup (`kernel::best_available`):
+#   Avx512 (if `avx512f` detected) > Avx2+FMA > Naive.
+# This gives a single portable binary that auto-optimizes on AVX2/AVX512
+# hardware. For deployment-specific high-throughput builds, override at
+# build time:
+#   RUSTFLAGS="-C target-cpu=native" cargo build --release
+#   RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release
+# aarch64 targets: NEON is mandatory in the ARMv8 baseline, so
+# auto-vectorization works without explicit flags; `distance/neon.rs`
+# adds explicit NEON intrinsics selected at runtime via
+# `kernel::best_available` ([Neon, Naive]).
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
+# Baseline for widest compatibility; runtime dispatch picks AVX2/AVX512.
+rustflags = ["-C", "target-cpu=x86-64"]
 
 [target.x86_64-apple-darwin]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
+rustflags = ["-C", "target-cpu=x86-64"]
 
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
+rustflags = ["-C", "target-cpu=x86-64"]
 
-[target.aarch64-unknown-linux-gnu]
-
-[target.aarch64-apple-darwin]

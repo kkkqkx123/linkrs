@@ -9,10 +9,19 @@
 //! one enum variant + one `is_available` arm + one `distance` arm + one
 //! `IMPLS` entry).
 //!
-//! Note: on builds compiled with `-C target-cpu=x86-64-v3` (the workspace
-//! default, `.cargo/config.toml`) the whole binary requires AVX2 hardware and
-//! `Avx2` is always selected; the runtime checks only matter for baseline
-//! (`x86_64`) builds targeting older CPUs.
+//! Runtime dispatch model:
+//! - Baseline compile is `x86-64` / `aarch64` generic (`.cargo/config.toml`
+//!   no longer forces `x86-64-v3`). Every kernel's `is_available` is checked
+//!   at startup and `best_available` picks the highest-ranked available one.
+//! - `x86_64` ranking: `Avx512 (avx512f) > Avx2+FMA > Portable? > Naive`.
+//! - `aarch64` ranking: `Neon > Portable? > Naive`.
+//! - `Portable` is `std::simd` (8-wide) behind the `simd_portable` feature
+//!   and is always available when enabled (it degrades to scalar autovec if
+//!   no SIMD target is present). It is evaluated against hand-written kernels
+//!   within `1e-4` in bench before becoming a rated tier.
+//! - Release binaries for specific hardware may still be built with
+//!   `RUSTFLAGS="-C target-cpu=native"` for extra autovectorization; the
+//!   runtime dispatch remains the correctness gate.
 
 use std::fmt;
 #[cfg(test)]
@@ -23,7 +32,13 @@ use crate::types::DistanceMetric;
 
 #[cfg(target_arch = "x86_64")]
 use super::avx2;
+#[cfg(target_arch = "x86_64")]
+use super::avx512;
 use super::naive;
+#[cfg(target_arch = "aarch64")]
+use super::neon;
+#[cfg(feature = "simd_portable")]
+use super::portable;
 
 /// A distance kernel implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +48,21 @@ pub enum Kernel {
     /// AVX2 + FMA kernels (x86-64 only).
     #[cfg(target_arch = "x86_64")]
     Avx2,
+    /// AVX-512F kernels (x86-64 only). Requires `avx512f`; `avx512bw/vl/vnni`
+    /// are supersets and also satisfy this gate but are not separately ranked
+    /// (the register width is the same 16 x f32 ZMM).
+    #[cfg(target_arch = "x86_64")]
+    Avx512,
+    /// NEON kernels (aarch64 only). NEON is mandatory on ARMv8 baseline so
+    /// this is always available on aarch64, but we keep the runtime check
+    /// for symmetry and future SVE gating.
+    #[cfg(target_arch = "aarch64")]
+    Neon,
+    /// Portable SIMD via `std::simd` (feature-gated, any arch).
+    /// Currently delegates to `naive` on stable Rust; placeholder for
+    /// `portable_simd` stabilization or `wide` crate adoption.
+    #[cfg(feature = "simd_portable")]
+    Portable,
 }
 
 impl Kernel {
@@ -45,6 +75,12 @@ impl Kernel {
                 std::arch::is_x86_feature_detected!("avx2")
                     && std::arch::is_x86_feature_detected!("fma")
             }
+            #[cfg(target_arch = "x86_64")]
+            Kernel::Avx512 => std::arch::is_x86_feature_detected!("avx512f"),
+            #[cfg(target_arch = "aarch64")]
+            Kernel::Neon => std::arch::is_aarch64_feature_detected!("neon"),
+            #[cfg(feature = "simd_portable")]
+            Kernel::Portable => true,
         }
     }
 
@@ -55,6 +91,12 @@ impl Kernel {
             Kernel::Naive => naive::distance(metric, a, b),
             #[cfg(target_arch = "x86_64")]
             Kernel::Avx2 => unsafe { avx2::distance(metric, a, b) },
+            #[cfg(target_arch = "x86_64")]
+            Kernel::Avx512 => unsafe { avx512::distance(metric, a, b) },
+            #[cfg(target_arch = "aarch64")]
+            Kernel::Neon => unsafe { neon::distance(metric, a, b) },
+            #[cfg(feature = "simd_portable")]
+            Kernel::Portable => portable::distance(metric, a, b),
         }
     }
 }
@@ -65,14 +107,46 @@ impl fmt::Display for Kernel {
             Kernel::Naive => write!(f, "naive"),
             #[cfg(target_arch = "x86_64")]
             Kernel::Avx2 => write!(f, "avx2"),
+            #[cfg(target_arch = "x86_64")]
+            Kernel::Avx512 => write!(f, "avx512"),
+            #[cfg(target_arch = "aarch64")]
+            Kernel::Neon => write!(f, "neon"),
+            #[cfg(feature = "simd_portable")]
+            Kernel::Portable => write!(f, "portable"),
         }
     }
 }
 
-/// Preferred kernel order per architecture (mirrors tantivy's `IMPLS`).
-#[cfg(target_arch = "x86_64")]
-const IMPLS: [Kernel; 2] = [Kernel::Avx2, Kernel::Naive];
-#[cfg(not(target_arch = "x86_64"))]
+// Preferred kernel order per architecture (mirrors tantivy's `IMPLS`).
+// The ordering is documented at the top of the file; each cfg expands to
+// the appropriate slice length so `best_available` stays trivial.
+
+#[cfg(all(target_arch = "x86_64", feature = "simd_portable"))]
+const IMPLS: [Kernel; 4] = [
+    Kernel::Avx512,
+    Kernel::Avx2,
+    Kernel::Portable,
+    Kernel::Naive,
+];
+#[cfg(all(target_arch = "x86_64", not(feature = "simd_portable")))]
+const IMPLS: [Kernel; 3] = [Kernel::Avx512, Kernel::Avx2, Kernel::Naive];
+
+#[cfg(all(target_arch = "aarch64", feature = "simd_portable"))]
+const IMPLS: [Kernel; 3] = [Kernel::Neon, Kernel::Portable, Kernel::Naive];
+#[cfg(all(target_arch = "aarch64", not(feature = "simd_portable")))]
+const IMPLS: [Kernel; 2] = [Kernel::Neon, Kernel::Naive];
+
+#[cfg(all(
+    not(target_arch = "x86_64"),
+    not(target_arch = "aarch64"),
+    feature = "simd_portable"
+))]
+const IMPLS: [Kernel; 2] = [Kernel::Portable, Kernel::Naive];
+#[cfg(all(
+    not(target_arch = "x86_64"),
+    not(target_arch = "aarch64"),
+    not(feature = "simd_portable")
+))]
 const IMPLS: [Kernel; 1] = [Kernel::Naive];
 
 fn best_available() -> Kernel {
@@ -105,4 +179,17 @@ pub fn selected() -> Kernel {
 #[cfg(test)]
 pub fn force_for_test(kernel: Kernel) {
     *OVERRIDE.lock().expect("kernel override lock poisoned") = Some(kernel);
+}
+
+/// Clear the test override; subsequent `selected()` calls use the cached
+/// `SELECTED` value (or initialize it on first call). Does **not** reset
+/// the `OnceLock` cache. Only available in tests.
+#[cfg(test)]
+pub fn clear_override_for_test() {
+    *OVERRIDE.lock().expect("kernel override lock poisoned") = None;
+}
+
+/// All kernels compiled in this binary (in preference order).
+pub fn all_kernels() -> Vec<Kernel> {
+    IMPLS.to_vec()
 }

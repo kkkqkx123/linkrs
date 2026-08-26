@@ -126,7 +126,8 @@ pub async fn create_index<
             || request.compression.is_some()
             || request.always_ram.is_some()
         {
-            let mut config = vector_search::CollectionConfig::new(request.vector_size, request.distance);
+            let mut config =
+                vector_search::CollectionConfig::new(request.vector_size, request.distance);
             if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
                 let mut hnsw = vector_search::HnswConfig::default();
                 if let Some(m) = request.hnsw_m {
@@ -158,7 +159,13 @@ pub async fn create_index<
                         Some(cfg)
                     }
                     "product" | "pq" => {
-                        let ratio = match request.compression.as_deref().unwrap_or("x4").to_lowercase().as_str() {
+                        let ratio = match request
+                            .compression
+                            .as_deref()
+                            .unwrap_or("x4")
+                            .to_lowercase()
+                            .as_str()
+                        {
                             "x4" | "4" => vector_search::CompressionRatio::X4,
                             "x8" | "8" => vector_search::CompressionRatio::X8,
                             "x16" | "16" => vector_search::CompressionRatio::X16,
@@ -166,7 +173,8 @@ pub async fn create_index<
                             "x64" | "64" => vector_search::CompressionRatio::X64,
                             other => {
                                 return Err(HttpError::InternalError(format!(
-                                    "unknown compression '{}', expected x4/x8/x16/x32/x64", other
+                                    "unknown compression '{}', expected x4/x8/x16/x32/x64",
+                                    other
                                 )))
                             }
                         };
@@ -178,7 +186,8 @@ pub async fn create_index<
                     }
                     other => {
                         return Err(HttpError::InternalError(format!(
-                            "unknown quantization '{}', expected scalar/binary/product/none", other
+                            "unknown quantization '{}', expected scalar/binary/product/none",
+                            other
                         )))
                     }
                 };

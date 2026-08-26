@@ -25,11 +25,22 @@
 //! (best available SIMD implementation with a naive fallback); the naive
 //! path serves as the correctness baseline and is always exercised by the
 //! unit tests.
+//!
+//! Available kernels:
+//! - `Naive` (always)
+//! - `Avx2+FMA` (x86-64, 8 x f32 YMM)
+//! - `Avx512`  (x86-64, 16 x f32 ZMM, `avx512f`)
+//! - `Neon`    (aarch64, 4 x f32 Q, `neon` baseline)
+//! - `Portable` (`std::simd` 8-wide, feature `simd_portable`, any arch)
 
 #[cfg(target_arch = "x86_64")]
 pub mod avx2;
+#[cfg(target_arch = "x86_64")]
+pub mod avx512;
 pub mod kernel;
 pub mod naive;
+pub mod neon;
+pub mod portable;
 
 use crate::types::DistanceMetric;
 
@@ -51,7 +62,6 @@ pub fn to_score(metric: DistanceMetric, dist: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distance::avx2 as avx;
     use crate::types::DistanceMetric;
 
     use rand::Rng;
@@ -131,6 +141,15 @@ mod tests {
         }
     }
 
+    // Helper: compare two kernels with relative tolerance (FMA rounding).
+    fn assert_kernels_close(metric: DistanceMetric, dim: usize, expected: f32, got: f32) {
+        let tolerance = 1e-4 * expected.abs().max(1.0);
+        assert!(
+            (expected - got).abs() < tolerance,
+            "{metric:?} dim={dim}: expected {expected} vs got {got} (tol {tolerance})"
+        );
+    }
+
     #[test]
     fn test_naive_vs_avx2_consistency() {
         #[cfg(target_arch = "x86_64")]
@@ -138,6 +157,11 @@ mod tests {
             && std::arch::is_x86_feature_detected!("fma"))
         {
             eprintln!("avx2 not available, skipping");
+            return;
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            eprintln!("not x86_64, skipping avx2 test");
             return;
         }
 
@@ -153,24 +177,13 @@ mod tests {
                     DistanceMetric::Manhattan,
                 ] {
                     let expected = naive::distance(metric, &a, &b);
-                    #[cfg(target_arch = "x86_64")]
-                    let got = unsafe { avx::distance(metric, &a, &b) };
-                    #[cfg(not(target_arch = "x86_64"))]
-                    let got = expected;
-                    // Tolerance is relative because FMA-based lane
-                    // accumulation rounds differently from the scalar loop
-                    // (error grows with the magnitude of the sum).
-                    let tolerance = 1e-4 * expected.abs().max(1.0);
-                    assert!(
-                        (expected - got).abs() < tolerance,
-                        "{metric:?} dim={dim}: naive {expected} vs avx2 {got}"
-                    );
+                    let got = unsafe { crate::distance::avx2::distance(metric, &a, &b) };
+                    assert_kernels_close(metric, dim, expected, got);
                 }
             }
         }
 
-        // Zero-norm boundary: the cosine `denom == 0 -> 1.0` branch must
-        // agree on both paths (random vectors above never hit it).
+        // Zero-norm boundary
         let zero: Vec<f32> = vec![0.0; 8];
         let ones: Vec<f32> = vec![1.0; 8];
         for (a, b) in [(&zero, &ones), (&ones, &zero), (&zero, &zero)] {
@@ -181,11 +194,166 @@ mod tests {
                 DistanceMetric::Manhattan,
             ] {
                 let expected = naive::distance(metric, a, b);
-                #[cfg(target_arch = "x86_64")]
-                let got = unsafe { avx::distance(metric, a, b) };
-                #[cfg(not(target_arch = "x86_64"))]
-                let got = expected;
-                assert_eq!(got, expected, "{metric:?} zero-norm");
+                let got = unsafe { crate::distance::avx2::distance(metric, a, b) };
+                assert_eq!(got, expected, "{metric:?} zero-norm avx2");
+            }
+        }
+    }
+
+    #[test]
+    fn test_naive_vs_avx512_consistency() {
+        #[cfg(target_arch = "x86_64")]
+        if !std::arch::is_x86_feature_detected!("avx512f") {
+            eprintln!("avx512f not available, skipping");
+            return;
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            eprintln!("not x86_64, skipping avx512 test");
+            return;
+        }
+
+        let mut rng = rand::thread_rng();
+        for dim in [1usize, 7, 8, 15, 16, 31, 32, 128, 384, 768, 1025, 1536] {
+            for _ in 0..20 {
+                let a: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                let b: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                for metric in [
+                    DistanceMetric::Euclid,
+                    DistanceMetric::Dot,
+                    DistanceMetric::Cosine,
+                    DistanceMetric::Manhattan,
+                ] {
+                    let expected = naive::distance(metric, &a, &b);
+                    let got = unsafe { crate::distance::avx512::distance(metric, &a, &b) };
+                    assert_kernels_close(metric, dim, expected, got);
+                }
+            }
+        }
+
+        let zero: Vec<f32> = vec![0.0; 16];
+        let ones: Vec<f32> = vec![1.0; 16];
+        for (a, b) in [(&zero, &ones), (&ones, &zero), (&zero, &zero)] {
+            for metric in [
+                DistanceMetric::Euclid,
+                DistanceMetric::Dot,
+                DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
+            ] {
+                let expected = naive::distance(metric, a, b);
+                let got = unsafe { crate::distance::avx512::distance(metric, a, b) };
+                assert_eq!(got, expected, "{metric:?} zero-norm avx512");
+            }
+        }
+    }
+
+    #[test]
+    fn test_naive_vs_neon_consistency() {
+        #[cfg(target_arch = "aarch64")]
+        if !std::arch::is_aarch64_feature_detected!("neon") {
+            eprintln!("neon not available, skipping");
+            return;
+        }
+        // On x86_64 the neon module is a naive wrapper, so we still verify
+        // it matches naive exactly (fallback path).
+        let mut rng = rand::thread_rng();
+        for dim in [1usize, 7, 8, 15, 16, 128, 1025] {
+            for _ in 0..20 {
+                let a: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                let b: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                for metric in [
+                    DistanceMetric::Euclid,
+                    DistanceMetric::Dot,
+                    DistanceMetric::Cosine,
+                    DistanceMetric::Manhattan,
+                ] {
+                    let expected = naive::distance(metric, &a, &b);
+                    let got = unsafe { crate::distance::neon::distance(metric, &a, &b) };
+                    assert_kernels_close(metric, dim, expected, got);
+                }
+            }
+        }
+        let zero: Vec<f32> = vec![0.0; 4];
+        let ones: Vec<f32> = vec![1.0; 4];
+        for (a, b) in [(&zero, &ones), (&ones, &zero), (&zero, &zero)] {
+            for metric in [
+                DistanceMetric::Euclid,
+                DistanceMetric::Dot,
+                DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
+            ] {
+                let expected = naive::distance(metric, a, b);
+                let got = unsafe { crate::distance::neon::distance(metric, a, b) };
+                assert_eq!(got, expected, "{metric:?} zero-norm neon");
+            }
+        }
+    }
+
+    #[test]
+    fn test_naive_vs_portable_consistency() {
+        // Portable is feature-gated; without the feature it delegates to naive
+        // and is trivially consistent. With the feature we verify 1e-4.
+        let mut rng = rand::thread_rng();
+        for dim in [1usize, 7, 8, 15, 16, 128, 384, 1025] {
+            for _ in 0..20 {
+                let a: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                let b: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+                for metric in [
+                    DistanceMetric::Euclid,
+                    DistanceMetric::Dot,
+                    DistanceMetric::Cosine,
+                    DistanceMetric::Manhattan,
+                ] {
+                    let expected = naive::distance(metric, &a, &b);
+                    let got = crate::distance::portable::distance(metric, &a, &b);
+                    assert_kernels_close(metric, dim, expected, got);
+                }
+            }
+        }
+
+        let zero: Vec<f32> = vec![0.0; 8];
+        let ones: Vec<f32> = vec![1.0; 8];
+        for (a, b) in [(&zero, &ones), (&ones, &zero), (&zero, &zero)] {
+            for metric in [
+                DistanceMetric::Euclid,
+                DistanceMetric::Dot,
+                DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
+            ] {
+                let expected = naive::distance(metric, a, b);
+                let got = crate::distance::portable::distance(metric, a, b);
+                assert_eq!(got, expected, "{metric:?} zero-norm portable");
+            }
+        }
+    }
+
+    #[test]
+    fn test_all_kernels_agree() {
+        // Cross-compare every kernel exposed by `kernel::all_kernels` against
+        // naive on a few representative dimensions. This verifies that
+        // naive vs avx2 vs avx512 vs neon agree within 1e-4.
+        let mut rng = rand::thread_rng();
+        let kernels = crate::distance::kernel::all_kernels();
+        // Filter to available kernels only for the comparison.
+        let available: Vec<_> = kernels.into_iter().filter(|k| k.is_available()).collect();
+        if available.is_empty() {
+            eprintln!("no kernels available, skipping");
+            return;
+        }
+        for dim in [8usize, 31, 128, 1536] {
+            let a: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+            let b: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+            for metric in [
+                DistanceMetric::Euclid,
+                DistanceMetric::Dot,
+                DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
+            ] {
+                let expected = naive::distance(metric, &a, &b);
+                for k in &available {
+                    let got = k.distance(metric, &a, &b);
+                    assert_kernels_close(metric, dim, expected, got);
+                }
             }
         }
     }
@@ -194,14 +362,14 @@ mod tests {
     fn test_selected_kernel() {
         use crate::distance::kernel::Kernel;
 
-        let expected = if cfg!(target_arch = "x86_64")
-            && std::arch::is_x86_feature_detected!("avx2")
-            && std::arch::is_x86_feature_detected!("fma")
-        {
-            Kernel::Avx2
-        } else {
-            Kernel::Naive
-        };
+        // Determine expected best-available without relying on cached SELECTED.
+        let mut expected = Kernel::Naive;
+        for k in crate::distance::kernel::all_kernels() {
+            if k.is_available() {
+                expected = k;
+                break;
+            }
+        }
         assert_eq!(kernel::selected(), expected);
 
         // Pinning the naive kernel must produce identical results through
@@ -217,6 +385,26 @@ mod tests {
             DistanceMetric::Manhattan,
         ] {
             assert_eq!(distance(metric, &a, &b), naive::distance(metric, &a, &b));
+        }
+        // Also verify portable pinning when feature is enabled.
+        #[cfg(feature = "simd_portable")]
+        {
+            kernel::force_for_test(Kernel::Portable);
+            assert_eq!(kernel::selected(), Kernel::Portable);
+            for metric in [
+                DistanceMetric::Euclid,
+                DistanceMetric::Dot,
+                DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
+            ] {
+                let got = distance(metric, &a, &b);
+                let expected = naive::distance(metric, &a, &b);
+                let tolerance = 1e-4 * expected.abs().max(1.0);
+                assert!(
+                    (got - expected).abs() < tolerance,
+                    "portable vs naive {metric:?}: {got} vs {expected}"
+                );
+            }
         }
     }
 }

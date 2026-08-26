@@ -56,7 +56,8 @@ use self::vectors::Vectors;
 use crate::error::{Result, VectorSearchError};
 use crate::metrics::Metrics;
 use crate::types::{
-    CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, QuantizationConfig, VectorPoint,
+    CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, QuantizationConfig,
+    VectorPoint,
 };
 
 /// Tombstone ratio above which deletes trigger compaction.
@@ -560,9 +561,7 @@ impl CollectionStore {
                     }
                 }
                 // Checkpoint / quantization markers carry no separate mutation.
-                WalRecord::Compact
-                | WalRecord::Quantize
-                | WalRecord::DropCollection => {}
+                WalRecord::Compact | WalRecord::Quantize | WalRecord::DropCollection => {}
             }
         }
         Ok(())
@@ -765,7 +764,12 @@ impl CollectionStore {
             return Ok(false);
         }
         let vsnap = self.vectors.snapshot();
-        let quant = self.quant.read().as_ref().expect("quant present").meta_snapshot();
+        let quant = self
+            .quant
+            .read()
+            .as_ref()
+            .expect("quant present")
+            .meta_snapshot();
         let _ = quant;
         // Delegate training to QuantStore.
         let quant_store = self.quant.read();
@@ -776,10 +780,7 @@ impl CollectionStore {
 
     /// Whether quantization is active and ready for search.
     pub fn has_quantization(&self) -> bool {
-        self.quant
-            .read()
-            .as_ref()
-            .is_some_and(|q| q.is_ready())
+        self.quant.read().as_ref().is_some_and(|q| q.is_ready())
     }
 
     /// Quantization config in effect, if any.
@@ -812,7 +813,12 @@ impl CollectionStore {
             let mut qguard = self.quant.write();
             if qguard.is_none() {
                 *qguard = Some(QuantStore::create(
-                    &self.dir, dim, distance, &config, segment_slots, slot_capacity,
+                    &self.dir,
+                    dim,
+                    distance,
+                    &config,
+                    segment_slots,
+                    slot_capacity,
                 )?);
             } else if qguard.as_ref().is_some_and(|q| q.config() != &config) {
                 // Config type changed: recreate files.
@@ -820,7 +826,12 @@ impl CollectionStore {
                 let _ = std::fs::remove_file(self.dir.join("quant.bin"));
                 let _ = std::fs::remove_file(self.dir.join("quant_meta.bin"));
                 *qguard = Some(QuantStore::create(
-                    &self.dir, dim, distance, &config, segment_slots, slot_capacity,
+                    &self.dir,
+                    dim,
+                    distance,
+                    &config,
+                    segment_slots,
+                    slot_capacity,
                 )?);
             }
             // Hold the quant guard briefly to ensure files are durable before

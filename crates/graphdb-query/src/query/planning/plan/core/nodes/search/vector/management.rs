@@ -2,9 +2,7 @@
 //!
 //! This module defines plan nodes for vector index management operations.
 
-use crate::query::parser::ast::vector::{
-    CompressionRatioKind, QuantizationKind, VectorDistance,
-};
+use crate::query::parser::ast::vector::{CompressionRatioKind, QuantizationKind, VectorDistance};
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;

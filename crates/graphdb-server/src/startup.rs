@@ -99,11 +99,9 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                         {
                             engine.set_default_ivf_config(ivf);
                         }
-                        if let Some(quant) =
-                            graphdb_api::vector_config::local_quantization_config(
-                                &config.vector_config().local,
-                            )
-                        {
+                        if let Some(quant) = graphdb_api::vector_config::local_quantization_config(
+                            &config.vector_config().local,
+                        ) {
                             engine.set_default_quantization_config(quant);
                         }
                         info!("Local vector engine initialized at {}", data_dir.display());

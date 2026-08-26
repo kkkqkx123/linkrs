@@ -266,8 +266,7 @@ impl LocalVectorEngine {
 
     /// Whether quantization is active and ready for the collection.
     pub fn has_quantization(&self, collection: &str) -> bool {
-        self.store(collection)
-            .is_ok_and(|s| s.has_quantization())
+        self.store(collection).is_ok_and(|s| s.has_quantization())
     }
 
     /// Drop the published IVF index; the collection falls back to

@@ -286,7 +286,11 @@ impl CompressionRatio {
         while m > 1 && dim % m != 0 {
             m -= 1;
         }
-        if dim % m != 0 { 1 } else { m }
+        if dim % m != 0 {
+            1
+        } else {
+            m
+        }
     }
 
     pub fn sub_dim(self, dim: usize) -> usize {
@@ -425,10 +429,7 @@ impl QuantizationConfig {
     }
 
     pub fn is_product(&self) -> bool {
-        matches!(
-            self.quant_type,
-            Some(QuantizationType::Product { .. })
-        )
+        matches!(self.quant_type, Some(QuantizationType::Product { .. }))
     }
 }
 
