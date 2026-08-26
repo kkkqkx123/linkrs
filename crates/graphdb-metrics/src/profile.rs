@@ -19,7 +19,7 @@ pub struct StageMetrics {
 }
 
 impl StageMetrics {
-    pub fn from_query_metrics(metrics: &crate::core::stats::QueryMetrics) -> Self {
+    pub fn from_query_metrics(metrics: &crate::QueryMetrics) -> Self {
         Self {
             parse_us: metrics.parse_time_us,
             validate_us: metrics.validate_time_us,
@@ -164,7 +164,7 @@ impl QueryProfile {
         self.executor_stats.push(stat);
     }
 
-    pub fn set_stage_metrics(&mut self, metrics: crate::core::stats::QueryMetrics) {
+    pub fn set_stage_metrics(&mut self, metrics: crate::QueryMetrics) {
         self.stages = StageMetrics::from_query_metrics(&metrics);
     }
 
@@ -183,7 +183,7 @@ impl QueryProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::stats::executor_stats::ExecutorStats;
+    use crate::executor_stats::ExecutorStats;
 
     #[test]
     fn test_query_profile_creation() {
@@ -244,10 +244,10 @@ mod tests {
 
     #[test]
     fn test_stage_metrics_from_query_metrics() {
-        let metrics = crate::core::stats::QueryMetrics {
+        let metrics = crate::QueryMetrics {
             parse_time_us: 100,
             execute_time_us: 500,
-            ..crate::core::stats::QueryMetrics::default()
+            ..crate::QueryMetrics::default()
         };
 
         let stages = StageMetrics::from_query_metrics(&metrics);

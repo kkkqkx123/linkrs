@@ -140,6 +140,16 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     #[cfg(not(feature = "vector"))]
     let _vector_backend = None::<()>;
 
+    // Forward local vector engine metrics into the shared StatsManager.
+    #[cfg(feature = "vector")]
+    if let Some(crate::sync::backend::VectorBackend::Local(engine)) = vector_backend.as_ref() {
+        crate::vector_metrics::spawn_vector_metrics_sampler(
+            Arc::clone(engine),
+            stats_manager.clone(),
+        );
+        info!("vector metrics sampling enabled");
+    }
+
     let mut sync_manager = if config.fulltext.enabled || config.is_vector_enabled() {
         use crate::sync::SyncManager;
 

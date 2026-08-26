@@ -95,9 +95,7 @@ impl ElkanState {
         let half_center_dist: Vec<Vec<f32>> = (0..k)
             .map(|j| {
                 (0..k)
-                    .map(|l| {
-                        0.5 * crate::distance::distance(metric, &centroids[j], &centroids[l])
-                    })
+                    .map(|l| 0.5 * crate::distance::distance(metric, &centroids[j], &centroids[l]))
                     .collect()
             })
             .collect();
@@ -171,8 +169,7 @@ impl ElkanState {
                 if l == li {
                     self.lower_bound[i][l] = dist_to_label;
                 } else {
-                    let delta =
-                        (dist_to_label - self.half_center_dist[li][l] * 2.0).abs();
+                    let delta = (dist_to_label - self.half_center_dist[li][l] * 2.0).abs();
                     self.lower_bound[i][l] = delta;
                 }
             }
@@ -429,11 +426,7 @@ fn update_centroids(
 }
 
 /// Nearest centroid index for one vector.
-pub(crate) fn nearest_centroid(
-    metric: DistanceMetric,
-    v: &[f32],
-    centroids: &[Vec<f32>],
-) -> usize {
+pub(crate) fn nearest_centroid(metric: DistanceMetric, v: &[f32], centroids: &[Vec<f32>]) -> usize {
     let mut best = 0usize;
     let mut best_dist = f32::INFINITY;
     for (i, c) in centroids.iter().enumerate() {
@@ -491,11 +484,7 @@ fn kmeans_pp_init(
     centroids
 }
 
-fn farthest_point(
-    metric: DistanceMetric,
-    sample: &[&[f32]],
-    centroids: &[Vec<f32>],
-) -> usize {
+fn farthest_point(metric: DistanceMetric, sample: &[&[f32]], centroids: &[Vec<f32>]) -> usize {
     let mut best = 0usize;
     let mut best_dist = f32::NEG_INFINITY;
     for (i, v) in sample.iter().enumerate() {
@@ -571,8 +560,8 @@ mod tests {
 
         assert_eq!(result.centroids.len(), 3);
         for v in &refs {
-            let c = &result.centroids
-                [nearest_centroid(DistanceMetric::Euclid, v, &result.centroids)];
+            let c =
+                &result.centroids[nearest_centroid(DistanceMetric::Euclid, v, &result.centroids)];
             let dist = crate::distance::distance(DistanceMetric::Euclid, v, c).sqrt();
             assert!(dist < 2.0, "point {v:?} landed {dist} away from {c:?}");
         }
@@ -657,8 +646,8 @@ mod tests {
 
         // Verify all points are close to some centroid.
         for v in &refs {
-            let c = &result.centroids
-                [nearest_centroid(DistanceMetric::Euclid, v, &result.centroids)];
+            let c =
+                &result.centroids[nearest_centroid(DistanceMetric::Euclid, v, &result.centroids)];
             let dist = crate::distance::distance(DistanceMetric::Euclid, v, c).sqrt();
             assert!(dist < 2.0, "Elkan result: point landed {dist} away");
         }
@@ -677,9 +666,14 @@ mod tests {
         let centroids = vec![vec![0.0, 0.0], vec![10.0, 0.0]];
         let mut labels = vec![0u32, 0, 1, 1];
 
-        let mut state =
-            ElkanState::new(DistanceMetric::Euclid, &refs, &centroids, &labels);
-        elkan_assign(&mut state, &refs, DistanceMetric::Euclid, &centroids, &mut labels);
+        let mut state = ElkanState::new(DistanceMetric::Euclid, &refs, &centroids, &labels);
+        elkan_assign(
+            &mut state,
+            &refs,
+            DistanceMetric::Euclid,
+            &centroids,
+            &mut labels,
+        );
 
         assert_eq!(labels, [0, 0, 1, 1]);
     }
@@ -691,9 +685,9 @@ mod tests {
         // Create unit vectors in distinct directions.
         let data: Vec<Vec<f32>> = vec![
             vec![1.0, 0.0],
-            vec![0.99, 0.14],  // near (1,0)
+            vec![0.99, 0.14], // near (1,0)
             vec![0.0, 1.0],
-            vec![0.14, 0.99],  // near (0,1)
+            vec![0.14, 0.99], // near (0,1)
         ];
         let refs: Vec<&[f32]> = data.iter().map(|v| v.as_slice()).collect();
         let result = train(

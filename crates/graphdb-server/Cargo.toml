@@ -14,6 +14,7 @@ prost-build = { workspace = true, optional = true }
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
 graphdb-config = { path = "../graphdb-config", features = ["server"] }
+graphdb-metrics = { path = "../graphdb-metrics" }
 graphdb-storage = { path = "../graphdb-storage" }
 graphdb-query = { path = "../graphdb-query" }
 graphdb-wire = { path = "../graphdb-wire" }

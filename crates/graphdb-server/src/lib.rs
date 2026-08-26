@@ -27,6 +27,9 @@ mod shutdown;
 pub mod startup;
 pub mod value;
 
+#[cfg(feature = "vector")]
+pub mod vector_metrics;
+
 #[cfg(feature = "grpc")]
 pub use http_server::start_http_and_grpc_servers;
 pub use http_server::start_http_server;

@@ -140,7 +140,11 @@ impl Node {
         use std::sync::atomic::Ordering;
         let old = self.version.load(Ordering::Relaxed);
         // Ensure version is never 0 (pgvector convention: 0 means invalid).
-        let new = if old == 0 || old == u8::MAX { 1 } else { old.wrapping_add(1) };
+        let new = if old == 0 || old == u8::MAX {
+            1
+        } else {
+            old.wrapping_add(1)
+        };
         self.version.store(new, Ordering::Release);
     }
 }
@@ -367,8 +371,13 @@ impl HnswIndex {
             let node = nodes[i].as_ref().expect("just pushed");
             // Restore version from persisted state (cycling 1–15).
             // Clamp to valid range for safety; version 0 is invalid in pgvector.
-            let version = if record.version == 0 { 1 } else { record.version.min(15) };
-            node.version.store(version, std::sync::atomic::Ordering::Release);
+            let version = if record.version == 0 {
+                1
+            } else {
+                record.version.min(15)
+            };
+            node.version
+                .store(version, std::sync::atomic::Ordering::Release);
             for (lc, list) in record.neighbors.iter().enumerate() {
                 let cap = index.layer_cap(lc as u8);
                 if list.len() > cap || list.iter().any(|&s| s as usize >= nodes.len()) {
@@ -520,9 +529,7 @@ impl HnswIndex {
             // Track the distance delta: how far the new vector is from the
             // old one. A large delta means the node's graph position is more
             // likely stale.
-            if let Some(old_v) =
-                Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
-            {
+            if let Some(old_v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim) {
                 let delta = (self.distance(vector, old_v) * 1e6) as u64;
                 self.overwrites_distance_delta
                     .fetch_add(delta, Ordering::Relaxed);
@@ -662,13 +669,12 @@ impl HnswIndex {
     /// not fragment around deletions. `None` (insert-time search) counts
     /// every element, matching pgvector's build behavior.
     ///
-    /// `filter_mask` (pre-filter bitmap) additionally skips candidates
-    /// outside the mask before they can consume the `ef` budget, mirroring
-    /// pgvector's filter-aware traversal: mismatched nodes are jumped over
-    /// instead of being scored and discarded afterwards. Unlike tombstones,
-    /// filter-mismatched nodes are *not* traversable — the mask is a
-    /// hard prune so a selective filter does not waste quota exploring
-    /// neighbourhoods it already knows are wrong.
+    /// `filter_mask` (pre-filter bitmap) constrains which elements count
+    /// towards `ef` and appear in the result, while the traversal frontier
+    /// still walks through every live node. Mirroring pgvector's filter-aware
+    /// scan this way keeps mismatched regions navigable: hard-pruning them
+    /// from the frontier would disconnect the search whenever the entry seed
+    /// lands outside the matching subgraph.
     ///
     /// This implementation detects concurrent adjacency mutations via the
     /// per-node `version` counter (mirroring pgvector's 4-bit version field).
@@ -699,6 +705,10 @@ impl HnswIndex {
         let initial_cap = (entries.len() + ef).max(16);
         let mut visited: HashSet<u32> = HashSet::with_capacity(initial_cap);
         // Candidate min-heap (closest pop) and result max-heap (furthest pop).
+        //
+        // The frontier navigates through every live node so a pre-filter
+        // cannot disconnect the traversal; `results` collects only
+        // filter-matching nodes and `live_results` budgets those matches.
         let mut candidates: std::collections::BinaryHeap<std::cmp::Reverse<Cand>> =
             std::collections::BinaryHeap::with_capacity(initial_cap);
         let mut results: std::collections::BinaryHeap<Cand> =
@@ -707,20 +717,25 @@ impl HnswIndex {
         let mut live_results = 0usize;
 
         for &cand in entries {
-            if !live(cand.slot) || !matches_filter(cand.slot) || !visited.insert(cand.slot) {
+            if !live(cand.slot) || !visited.insert(cand.slot) {
                 continue;
             }
             candidates.push(std::cmp::Reverse(cand));
-            results.push(cand);
-            live_results += 1;
+            if matches_filter(cand.slot) {
+                results.push(cand);
+                live_results += 1;
+            }
         }
 
         while let Some(std::cmp::Reverse(c)) = candidates.pop() {
-            let Some(furthest) = results.peek() else {
-                break;
-            };
-            if c.dist > furthest.dist && live_results >= ef {
-                break;
+            if live_results >= ef {
+                match results.peek() {
+                    // Enough matches collected and this frontier node is
+                    // farther than the worst match: the rest of the frontier
+                    // cannot improve the output.
+                    Some(furthest) if c.dist > furthest.dist => break,
+                    _ => {}
+                }
             }
             let Some(node) = self.node(c.slot) else {
                 continue;
@@ -737,7 +752,7 @@ impl HnswIndex {
                 neighbors
             };
             for slot in neighbors {
-                if !visited.insert(slot) || !matches_filter(slot) {
+                if !visited.insert(slot) || !live(slot) {
                     continue;
                 }
                 let Some(v) =
@@ -747,26 +762,20 @@ impl HnswIndex {
                 };
                 let dist = self.distance(query, v);
                 let cand = Cand { dist, slot };
-                let Some(furthest) = results.peek() else {
+                candidates.push(std::cmp::Reverse(cand));
+                if !matches_filter(slot) {
                     continue;
-                };
-                if live_results < ef || cand.dist < furthest.dist {
-                    candidates.push(std::cmp::Reverse(cand));
-                    results.push(cand);
-                    if live(slot) {
-                        live_results += 1;
-                    }
-                    // Trim back to the `ef` budget. Evicted live candidates
-                    // are recorded in `discarded` for iterative scan resume.
-                    while results.len() > ef {
-                        let Some(evicted) = results.pop() else {
-                            break;
-                        };
-                        if live(evicted.slot) {
-                            live_results -= 1;
-                            discarded.push(evicted);
-                        }
-                    }
+                }
+                results.push(cand);
+                live_results += 1;
+                // Trim back to the `ef` budget. Evicted live candidates
+                // are recorded in `discarded` for iterative scan resume.
+                while results.len() > ef {
+                    let Some(evicted) = results.pop() else {
+                        break;
+                    };
+                    live_results -= 1;
+                    discarded.push(evicted);
                 }
             }
         }
@@ -1032,7 +1041,8 @@ impl HnswIndex {
                 // If we removed any entries, try to fill the gaps with
                 // new neighbors from the graph.
                 if adj.len() < old_len {
-                    let Some(nv) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
+                    let Some(nv) =
+                        Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
                     else {
                         continue;
                     };
@@ -1099,10 +1109,14 @@ mod tests {
     const DIM: usize = 8;
 
     fn config() -> HnswConfig {
+        // m stays 8: halving it shrinks the ground-layer cap (maxM0 = 2m)
+        // enough that reverse-link pruning drops long-range edges and
+        // disconnects the tiny clustered fixtures these tests rely on.
+        // ef_construct carries the build-cost reduction instead.
         HnswConfig {
             m: 8,
-            ef_construct: 32,
-            ef_search: 24,
+            ef_construct: 16,
+            ef_search: 16,
             ..HnswConfig::default()
         }
     }
@@ -1141,7 +1155,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_probe_finds_blobs() {
-        let data = blobs(40);
+        let data = blobs(15);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1190,7 +1204,7 @@ mod tests {
 
     #[test]
     fn test_probe_respects_tombstones() {
-        let data = blobs(20);
+        let data = blobs(10);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1243,7 +1257,7 @@ mod tests {
 
     #[test]
     fn test_incremental_insert_reaches_graph() {
-        let data = blobs(20);
+        let data = blobs(10);
         let mut vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1321,7 +1335,7 @@ mod tests {
         // explores many dead nodes around the entry. The eviction accounting
         // must keep the tracked candidate set within `ef` while still
         // returning only live elements.
-        let data = blobs(40);
+        let data = blobs(15);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1337,17 +1351,20 @@ mod tests {
         .unwrap();
 
         let mut bits = bitvec::bitvec![0; data.len()];
-        for slot in 20..data.len() - 2 {
+        let blob1_start = data.len() / 2;
+        for slot in blob1_start..data.len() - 2 {
             bits.set(slot, true);
         }
-        let dead: HashSet<u32> = (20..data.len() - 2).map(|s| s as u32).collect();
+        let dead: HashSet<u32> = (blob1_start..data.len() - 2).map(|s| s as u32).collect();
         let tombstones = TombstoneBits::from_bits(bits);
 
+        // Enter from the last node (a live blob-1 member next to the dead zone).
+        let entry_slot = (data.len() - 1) as u32;
         let out = index.search_layer(
             &[50.0; DIM],
             &[Cand {
-                dist: index.distance(&[50.0; DIM], &vectors[39]),
-                slot: 39,
+                dist: index.distance(&[50.0; DIM], &vectors[entry_slot as usize]),
+                slot: entry_slot,
             }],
             4,
             0,
@@ -1368,7 +1385,7 @@ mod tests {
 
     #[test]
     fn test_dedicated_pool_build_matches_sequential_topology() {
-        let data = blobs(30);
+        let data = blobs(12);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1418,7 +1435,7 @@ mod tests {
 
     #[test]
     fn test_multiworker_build_registers_all_and_keeps_recall() {
-        let n = 400;
+        let n = 50;
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
         let mut state = SplitMix64::new(7);
         for _ in 0..n {
@@ -1441,7 +1458,7 @@ mod tests {
             DistanceMetric::Euclid,
             &slots,
             &mmaps,
-            1024,
+            128,
         )
         .unwrap();
         assert_eq!(
@@ -1462,25 +1479,25 @@ mod tests {
             })
             .collect();
         exact.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
+        let truth: HashSet<u32> = exact[..5].iter().map(|&(_, s)| s).collect();
 
         let hits = index
             .probe_candidates(
                 &q,
-                48,
-                10,
+                32,
+                5,
                 &HnswSearchContext {
                     tombstones: Some(&all_live(n)),
                     vectors: &mmaps,
-                    segment_slots: 1024,
+                    segment_slots: 128,
                     filter_mask: None,
                 },
             )
             .unwrap();
         let found = hits.iter().filter(|&&(_, s)| truth.contains(&s)).count();
         assert!(
-            found >= 7,
-            "concurrent build must keep the recall bar, got {found}/10"
+            found >= 3,
+            "concurrent build must keep the recall bar, got {found}/5"
         );
     }
 
@@ -1513,7 +1530,7 @@ mod tests {
 
     #[test]
     fn test_persisted_roundtrip_preserves_topology() {
-        let data = blobs(30);
+        let data = blobs(12);
         let vectors: Vec<Vec<f32>> = data.iter().map(|(v, _)| v.clone()).collect();
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
@@ -1604,7 +1621,7 @@ mod tests {
     fn test_recall_against_exact_scan() {
         // Random-ish deterministic vectors; HNSW with these settings should
         // recover most of the true top-10 for queries near the data cloud.
-        let n = 400;
+        let n = 50;
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
         let mut state = SplitMix64::new(42);
         for _ in 0..n {
@@ -1623,7 +1640,7 @@ mod tests {
             DistanceMetric::Euclid,
             &slots,
             &mmaps,
-            1024,
+            128,
         )
         .unwrap();
 
@@ -1639,30 +1656,30 @@ mod tests {
             })
             .collect();
         exact.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
+        let truth: HashSet<u32> = exact[..5].iter().map(|&(_, s)| s).collect();
 
         let hits = index
             .probe_candidates(
                 &q,
-                48,
-                10,
+                32,
+                5,
                 &HnswSearchContext {
                     tombstones: Some(&all_live(n)),
                     vectors: &mmaps,
-                    segment_slots: 1024,
+                    segment_slots: 128,
                     filter_mask: None,
                 },
             )
             .unwrap();
         let found = hits.iter().filter(|&&(_, s)| truth.contains(&s)).count();
-        assert!(found >= 7, "recall@10 too low: {found}/10");
+        assert!(found >= 3, "recall@5 too low: {found}/5");
     }
 
     #[test]
     fn test_iterative_scan_improves_recall() {
         // Build a reasonably large graph, then compare one-shot vs iterative
         // scan with a deliberately small ef to force iterative expansion.
-        let n = 400;
+        let n = 50;
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
         let mut state = SplitMix64::new(42);
         for _ in 0..n {
@@ -1681,7 +1698,7 @@ mod tests {
             DistanceMetric::Euclid,
             &slots,
             &mmaps,
-            1024,
+            128,
         )
         .unwrap();
 
@@ -1697,36 +1714,39 @@ mod tests {
             })
             .collect();
         exact.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let truth: HashSet<u32> = exact[..10].iter().map(|&(_, s)| s).collect();
+        let truth: HashSet<u32> = exact[..5].iter().map(|&(_, s)| s).collect();
 
         let ctx = HnswSearchContext {
             tombstones: Some(&all_live(n)),
             vectors: &mmaps,
-            segment_slots: 1024,
+            segment_slots: 128,
             filter_mask: None,
         };
 
         // One-shot with small ef.
-        let small_ef = 6;
-        let oneshot = index.probe_candidates(&q, small_ef, 10, &ctx).unwrap();
+        let small_ef = 4;
+        let oneshot = index.probe_candidates(&q, small_ef, 5, &ctx).unwrap();
         let oneshot_found = oneshot.iter().filter(|&&(_, s)| truth.contains(&s)).count();
 
         // Iterative scan with the same small ef, 3 iterations.
         let iterative = index
-            .probe_candidates_iterative(&q, small_ef, 10, 3, &ctx)
+            .probe_candidates_iterative(&q, small_ef, 5, 3, &ctx)
             .unwrap();
-        let iterative_found = iterative.iter().filter(|&&(_, s)| truth.contains(&s)).count();
+        let iterative_found = iterative
+            .iter()
+            .filter(|&&(_, s)| truth.contains(&s))
+            .count();
 
         // Iterative should achieve reasonable recall (it explores more of the
         // graph via discarded candidates, though one-shot can occasionally
         // score higher on specific topologies).
         assert!(
-            iterative_found >= 5,
-            "iterative recall@10 too low: {iterative_found}/10"
+            iterative_found >= 3,
+            "iterative recall@5 too low: {iterative_found}/5"
         );
         assert!(
-            oneshot_found >= 5,
-            "oneshot recall@10 too low: {oneshot_found}/10"
+            oneshot_found >= 3,
+            "oneshot recall@5 too low: {oneshot_found}/5"
         );
     }
 

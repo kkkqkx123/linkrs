@@ -8,9 +8,11 @@ pub mod engine;
 pub mod error;
 pub mod filter;
 mod index;
+pub mod metrics;
 pub mod storage;
 pub mod types;
 
 pub use engine::{LocalVectorEngine, TxnOp};
 pub use error::{Result, VectorSearchError};
+pub use metrics::{IndexTier, Metrics, MetricsSnapshot, SearchPath, SearchRetry};
 pub use types::*;

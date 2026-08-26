@@ -52,6 +52,7 @@ use self::payloads::Payloads;
 use self::vectors::Vectors;
 
 use crate::error::{Result, VectorSearchError};
+use crate::metrics::Metrics;
 use crate::types::{CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, VectorPoint};
 
 /// Tombstone ratio above which deletes trigger compaction.
@@ -108,6 +109,8 @@ pub struct CollectionStore {
     /// Transactions since the last meta.bin save. Used to amortize fsync
     /// cost; the WAL guarantees crash safety independently.
     txns_since_last_save: AtomicU64,
+    /// Operational metrics (counters and latency histograms), wait-free.
+    metrics: Metrics,
 }
 
 impl CollectionStore {
@@ -215,6 +218,7 @@ impl CollectionStore {
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
             txns_since_last_save: AtomicU64::new(0),
+            metrics: Metrics::default(),
         })
     }
 
@@ -285,6 +289,7 @@ impl CollectionStore {
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
             txns_since_last_save: AtomicU64::new(0),
+            metrics: Metrics::default(),
         };
         store.replay_wal()?;
         store.load_index()?;
@@ -298,6 +303,11 @@ impl CollectionStore {
     /// Snapshot of the metadata (dimension, metric, counts).
     pub fn meta(&self) -> Meta {
         self.inner.read().meta.clone()
+    }
+
+    /// Operational metrics recorder for this collection.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 
     /// Upsert a point. Existing ids reuse their slot (overwrite); new ids get
@@ -337,6 +347,7 @@ impl CollectionStore {
     /// On success the caller's buffer may be drained; on failure nothing was
     /// applied in memory and the call may be retried (replay is idempotent).
     pub fn apply_txn(&self, txn: &WalTxn) -> Result<()> {
+        let started = std::time::Instant::now();
         {
             let mut inner = self.inner.write();
             for op in &txn.ops {
@@ -363,6 +374,9 @@ impl CollectionStore {
                 self.txns_since_last_save.store(0, AtomicOrdering::Relaxed);
             }
         }
+        let (upserts, deletes) = count_ops(&txn.ops);
+        self.metrics
+            .record_apply_txn(upserts, deletes, started.elapsed());
         Ok(())
     }
 
@@ -614,6 +628,21 @@ fn validate_point(meta: &Meta, point: &VectorPoint) -> Result<()> {
 
 fn threshold_met(meta: &Meta) -> bool {
     meta.next_slot > 0 && meta.tombstone_count as f64 / meta.next_slot as f64 > COMPACTION_THRESHOLD
+}
+
+/// Number of upserted and deleted points in a WAL operation batch.
+fn count_ops(ops: &[WalRecord]) -> (u64, u64) {
+    let mut upserts = 0u64;
+    let mut deletes = 0u64;
+    for op in ops {
+        match op {
+            WalRecord::Upsert { .. } => upserts += 1,
+            WalRecord::Delete { .. } => deletes += 1,
+            WalRecord::DeleteBatch { point_ids } => deletes += point_ids.len() as u64,
+            WalRecord::Compact | WalRecord::DropCollection => {}
+        }
+    }
+    (upserts, deletes)
 }
 
 pub(crate) fn validate_collection_name(name: &str) -> Result<()> {

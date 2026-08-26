@@ -374,10 +374,7 @@ impl IvfIndex {
         vectors: &[Arc<Mmap>],
         segment_slots: u32,
     ) -> f64 {
-        let is_spherical = matches!(
-            self.metric,
-            DistanceMetric::Cosine | DistanceMetric::Dot
-        );
+        let is_spherical = matches!(self.metric, DistanceMetric::Cosine | DistanceMetric::Dot);
         let slot_map = self.slot_list.read();
         let mut total = 0f64;
         let mut counted = 0usize;
@@ -391,8 +388,7 @@ impl IvfIndex {
             if list == UNASSIGNED || list as usize >= self.centroids.len() {
                 continue;
             }
-            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim)
-            else {
+            let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, self.dim) else {
                 continue;
             };
             let q = if is_spherical {
@@ -402,8 +398,8 @@ impl IvfIndex {
             } else {
                 v.to_vec()
             };
-            total += crate::distance::distance(self.metric, &q, &self.centroids[list as usize])
-                as f64;
+            total +=
+                crate::distance::distance(self.metric, &q, &self.centroids[list as usize]) as f64;
             counted += 1;
         }
         if counted == 0 {

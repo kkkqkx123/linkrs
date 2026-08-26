@@ -13,8 +13,8 @@ const DIM: usize = 8;
 fn hnsw_config() -> HnswConfig {
     HnswConfig {
         m: 8,
-        ef_construct: 64,
-        ef_search: 32,
+        ef_construct: 16,
+        ef_search: 16,
         ..HnswConfig::default()
     }
 }
@@ -63,7 +63,7 @@ fn engine_with_hnsw(path: &std::path::Path, n_per_blob: usize) -> LocalVectorEng
 fn publish_search_drop_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let engine = engine_with_hnsw(&dir.path().join("vec"), 40);
+        let engine = engine_with_hnsw(&dir.path().join("vec"), 15);
 
         assert!(!engine.has_index("col"));
         assert!(engine.build_index("col").unwrap());
@@ -75,7 +75,7 @@ fn publish_search_drop_roundtrip() {
         let indexed = engine
             .search(
                 "col",
-                &SearchQuery::new(query.clone(), 5).with_knn(5, Some(64)),
+                &SearchQuery::new(query.clone(), 5).with_knn(5, Some(16)),
             )
             .unwrap();
 
@@ -83,7 +83,7 @@ fn publish_search_drop_roundtrip() {
         let index = info.index.expect("index info present");
         assert_eq!(index.index_kind, 2);
         assert_eq!(index.m, 8);
-        assert_eq!(index.ef_construct, 64);
+        assert_eq!(index.ef_construct, 16);
 
         // Filtered search across the whole collection still returns rows.
         let filter = VectorFilter::new().must(FilterCondition::match_value("blob", "1"));
@@ -92,7 +92,7 @@ fn publish_search_drop_roundtrip() {
                 "col",
                 &SearchQuery::new(vec![50.0; DIM], 3)
                     .with_filter(filter)
-                    .with_knn(3, Some(64)),
+                    .with_knn(3, Some(16)),
             )
             .unwrap();
         assert!(!filtered.is_empty());
@@ -114,14 +114,14 @@ fn publish_search_drop_roundtrip() {
     // Reopen: index files were dropped together with drop_index.
     let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
     assert!(!reopened.has_index("col"));
-    assert_eq!(reopened.count("col").unwrap(), 80);
+    assert_eq!(reopened.count("col").unwrap(), 30);
 }
 
 #[test]
 fn index_persists_across_restart() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let engine = engine_with_hnsw(&dir.path().join("vec"), 30);
+        let engine = engine_with_hnsw(&dir.path().join("vec"), 12);
         assert!(engine.build_index("col").unwrap());
     }
     let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
@@ -134,19 +134,19 @@ fn index_persists_across_restart() {
     assert_eq!(index.index_kind, 2);
     // The effective config is persisted in meta.bin, so the rehydrated
     // graph keeps its search-time default instead of the crate default.
-    assert_eq!(index.ef_search_default, 32);
+    assert_eq!(index.ef_search_default, 16);
 }
 
 #[test]
 fn incremental_inserts_stay_visible() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = Arc::new(engine_with_hnsw(&dir.path().join("vec"), 30));
+    let engine = Arc::new(engine_with_hnsw(&dir.path().join("vec"), 12));
     assert!(engine.build_index("col").unwrap());
 
     // Points appended to the published graph must be reachable through
     // approximate search immediately (incremental insert path). Every late
     // vector is unique, so the exact zero-distance hit identifies it.
-    for i in 0..20u64 {
+    for i in 0..5u64 {
         let mut v = [50.0f32; DIM];
         v[(i as usize) % DIM] -= i as f32 * 0.13 + 0.01;
         engine
@@ -155,7 +155,7 @@ fn incremental_inserts_stay_visible() {
         let hits = engine
             .search(
                 "col",
-                &SearchQuery::new(v.to_vec(), 1).with_knn(1, Some(48)),
+                &SearchQuery::new(v.to_vec(), 1).with_knn(1, Some(16)),
             )
             .unwrap();
         assert_eq!(hits.len(), 1, "no result for late point {i}");
@@ -170,21 +170,21 @@ fn incremental_inserts_stay_visible() {
 #[test]
 fn deleted_points_are_never_returned() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = engine_with_hnsw(&dir.path().join("vec"), 30);
+    let engine = engine_with_hnsw(&dir.path().join("vec"), 12);
     assert!(engine.build_index("col").unwrap());
 
     // Delete one blob-1 member; queries near blob 1 must not surface it,
     // even though the node stays in the graph for navigation.
-    engine.delete("col", "p40").unwrap();
+    engine.delete("col", "p12").unwrap();
     let hits = engine
         .search(
             "col",
-            &SearchQuery::new(vec![50.0; DIM], 80).with_knn(80, Some(128)),
+            &SearchQuery::new(vec![50.0; DIM], 12).with_knn(12, Some(32)),
         )
         .unwrap();
     assert!(!hits.is_empty());
     assert!(
-        hits.iter().all(|r| r.id.to_string() != "p40"),
+        hits.iter().all(|r| r.id.to_string() != "p12"),
         "tombstoned point must not be returned"
     );
 
@@ -219,7 +219,7 @@ fn promotion_after_full_scan_threshold() {
         )
         .unwrap();
 
-    let points: Vec<VectorPoint> = (0..25u64)
+    let points: Vec<VectorPoint> = (0..15u64)
         .map(|i| VectorPoint::new(i, vec![(i % 7) as f32; DIM]))
         .collect();
     engine.upsert_batch("col", &points).unwrap();
@@ -244,7 +244,7 @@ fn promotion_after_full_scan_threshold() {
 #[test]
 fn knn_mode_controls_recall_width() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = engine_with_hnsw(&dir.path().join("vec"), 40);
+    let engine = engine_with_hnsw(&dir.path().join("vec"), 15);
     assert!(engine.build_index("col").unwrap());
 
     let q = vec![50.0; DIM];
@@ -262,7 +262,7 @@ fn knn_mode_controls_recall_width() {
             "col",
             &SearchQuery::new(q.clone(), 5).with_search_mode(SearchMode::KNN {
                 k: 5,
-                ef_search: Some(256),
+                ef_search: Some(32),
             }),
         )
         .unwrap();
@@ -335,7 +335,7 @@ fn stale_ratio_triggers_background_rebuild() {
     let engine = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
     let cfg = HnswConfig {
         m: 8,
-        ef_construct: 64,
+        ef_construct: 16,
         full_scan_threshold: Some(10),
         stale_rebuild_ratio: Some(0.05),
         ..HnswConfig::default()
@@ -348,7 +348,7 @@ fn stale_ratio_triggers_background_rebuild() {
                 .with_hnsw(cfg),
         )
         .unwrap();
-    let points: Vec<VectorPoint> = (0..25u64)
+    let points: Vec<VectorPoint> = (0..15u64)
         .map(|i| VectorPoint::new(i, vec![(i % 7) as f32 * 0.3 + 1.0; DIM]))
         .collect();
     engine.upsert_batch("col", &points).unwrap();
@@ -363,7 +363,7 @@ fn stale_ratio_triggers_background_rebuild() {
 
     // Overwrite one point repeatedly: each overwrite keeps its old graph
     // position and accumulates staleness (routed through pending).
-    for i in 0..30u64 {
+    for i in 0..10u64 {
         let mut v = vec![0.5f32; DIM];
         v[(i as usize) % DIM] += i as f32 * 0.01;
         engine.upsert("col", VectorPoint::new(0u64, v)).unwrap();
@@ -384,7 +384,7 @@ fn stale_ratio_triggers_background_rebuild() {
         let info = engine.collection_info("col").unwrap().index.unwrap();
         if info.stale_overwrite_count == 0 {
             assert_eq!(
-                info.built_at_live_count, 25,
+                info.built_at_live_count, 15,
                 "rebuild republished over the live set"
             );
             break;

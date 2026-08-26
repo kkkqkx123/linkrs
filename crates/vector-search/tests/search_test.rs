@@ -30,14 +30,23 @@ fn color_point(i: u64, dim: usize, color: &str) -> VectorPoint {
 }
 
 fn seed(store: &CollectionStore, n: u64, dim: usize, with_color: bool) {
-    for i in 0..n {
-        let p = if with_color {
-            color_point(i, dim, if i % 2 == 0 { "red" } else { "blue" })
-        } else {
-            unit(i, dim)
-        };
-        store.upsert(&p).unwrap();
-    }
+    // One WAL-backed batch: a single WAL append + meta save for the seed set.
+    let points: Vec<VectorPoint> = (0..n)
+        .map(|i| {
+            if with_color {
+                color_point(i, dim, if i % 2 == 0 { "red" } else { "blue" })
+            } else {
+                unit(i, dim)
+            }
+        })
+        .collect();
+    let ops: Vec<vector_search::storage::WalRecord> = points
+        .iter()
+        .map(|p| vector_search::storage::WalRecord::Upsert {
+            point: vector_search::storage::WalPoint::from_point(p).unwrap(),
+        })
+        .collect();
+    store.apply_ops(&ops).unwrap();
 }
 
 /// Expected cosine ordering for ids in `points`, excluding `exclude`, computed

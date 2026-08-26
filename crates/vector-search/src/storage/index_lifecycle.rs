@@ -17,11 +17,13 @@
 use std::collections::HashSet;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::vectors::Vectors;
 use super::CollectionStore;
 use crate::error::Result;
 use crate::index::{persist, HnswIndex, IvfIndex};
+use crate::metrics::IndexTier;
 use crate::types::{HnswConfig, IndexInfo, IndexType, IvfConfig};
 
 /// A published ANN index; `None` = exact scan. Both tiers are derived
@@ -82,6 +84,7 @@ impl CollectionStore {
         };
         if !data.valid_for(dim, distance, next_slot) {
             tracing::info!("vector index.bin inconsistent with meta; falling back to exact scan");
+            self.metrics.record_index_load_fallback();
             return Ok(());
         }
         let config = self.inner.read().ivf_config.clone().unwrap_or_default();
@@ -116,6 +119,7 @@ impl CollectionStore {
         };
         if !data.valid_for(dim, distance, next_slot) {
             tracing::info!("vector hnsw.bin inconsistent with meta; falling back to exact scan");
+            self.metrics.record_index_load_fallback();
             return Ok(());
         }
         let config = self
@@ -133,6 +137,7 @@ impl CollectionStore {
                     error = %e,
                     "vector hnsw.bin failed structural validation; falling back to exact scan"
                 );
+                self.metrics.record_index_load_fallback();
                 return Ok(());
             }
         };
@@ -256,6 +261,7 @@ impl CollectionStore {
             points = live.len(),
             "building HNSW index"
         );
+        let build_started = Instant::now();
         let built = {
             let vsnap = self.vectors.snapshot();
             HnswIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots)
@@ -322,6 +328,8 @@ impl CollectionStore {
         if let Err(e) = persist::save_hnsw(&self.dir, &persisted) {
             tracing::warn!(collection = %name, error = %e, "hnsw.bin save failed");
         }
+        self.metrics
+            .record_index_build(IndexTier::Hnsw, build_started.elapsed());
         tracing::info!(
             collection = %name,
             nodes = persisted.nodes.len(),
@@ -368,6 +376,7 @@ impl CollectionStore {
             "building IVF index"
         );
 
+        let build_started = Instant::now();
         let built = {
             let vsnap = self.vectors.snapshot();
             IvfIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots).map(Arc::new)
@@ -421,6 +430,8 @@ impl CollectionStore {
         if let Err(e) = persist::save(&self.dir, &persisted) {
             tracing::warn!(collection = %name, error = %e, "index.bin save failed");
         }
+        self.metrics
+            .record_index_build(IndexTier::Ivf, build_started.elapsed());
         tracing::info!(
             collection = %name,
             lists = persisted.lists,

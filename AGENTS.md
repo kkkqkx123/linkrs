@@ -18,8 +18,9 @@ A lightweight single-node graph database reimplemented in Rust, focusing on loca
 
 ## Architecture
 
-Workspace with 11 sub-crates under `crates/`:
+Workspace with 12 sub-crates under `crates/`:
 
+- `graphdb-metrics` - observability primitives: StatsManager, MetricType registry, latency histograms, error/slow-query stats (base of the DAG)
 - `graphdb-core` - core data structures, types, errors
 - `graphdb-config` - configuration management
 - `graphdb-search` - fulltext search (BM25)
@@ -34,7 +35,7 @@ Workspace with 11 sub-crates under `crates/`:
 
 Root `src/` has `lib.rs`, `main.rs`, `c_api.rs` with `pub use dep_crate::api as api` re-exports.
 
-Dependency DAG: core → config → search → sync → transaction → storage → query → api → server
+Dependency DAG: metrics → core → config → search → sync → transaction → storage → query → api → server. `graphdb-core` re-exports `graphdb-metrics` under `core::stats` for compatibility; new code should depend on `graphdb-metrics` directly.
 
 Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`, `crates/tantivy`
 

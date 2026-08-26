@@ -1,0 +1,15 @@
+[package]
+name = "graphdb-metrics"
+version.workspace = true
+edition.workspace = true
+description = "Central observability primitives: StatsManager, latency histograms, error and slow-query statistics"
+
+[dependencies]
+serde = { workspace = true, features = ["rc"] }
+serde_json.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true

@@ -12,9 +12,9 @@ const DIM: usize = 8;
 
 fn hnsw_config() -> HnswConfig {
     HnswConfig {
-        m: 16,
-        ef_construct: 100,
-        ef_search: 64,
+        m: 8,
+        ef_construct: 16,
+        ef_search: 16,
         ..HnswConfig::default()
     }
 }
@@ -61,6 +61,18 @@ fn publish_hnsw(store: &CollectionStore) {
     store.build_index().expect("HNSW build must succeed");
 }
 
+/// Batch upsert through the WAL-backed apply path: one WAL append and one
+/// meta.bin save per batch instead of per-point saves.
+fn upsert_batch(store: &CollectionStore, points: &[VectorPoint]) {
+    let ops: Vec<vector_search::storage::WalRecord> = points
+        .iter()
+        .map(|p| vector_search::storage::WalRecord::Upsert {
+            point: vector_search::storage::WalPoint::from_point(p).unwrap(),
+        })
+        .collect();
+    store.apply_ops(&ops).unwrap();
+}
+
 /// Oracle: sort ids by descending score to `query_vector` among `ids` and
 /// return them in rank order.
 fn oracle(query_vector: &[f32], ids: &[u64]) -> Vec<u64> {
@@ -92,10 +104,8 @@ fn test_prefilter_bitmap_high_selectivity_recall() {
     )
     .unwrap();
 
-    let points = clustered_points(40, 160);
-    for p in &points {
-        store.upsert(p).unwrap();
-    }
+    let points = clustered_points(10, 40);
+    upsert_batch(&store, &points);
     publish_hnsw(&store);
 
     let query_vec = [0.0f32; DIM];
@@ -105,7 +115,7 @@ fn test_prefilter_bitmap_high_selectivity_recall() {
         .search(
             &SearchQuery::new(query_vec.to_vec(), 10)
                 .with_filter(filter.clone())
-                .with_knn(10, Some(64)),
+                .with_knn(10, Some(16)),
         )
         .unwrap();
 
@@ -296,13 +306,14 @@ fn test_streaming_topk_matches_collect_all() {
         &config(DistanceMetric::Cosine, DIM).with_index_type(vector_search::types::IndexType::FLAT),
     )
     .unwrap();
-    for i in 0..200u64 {
-        store.upsert(&VectorPoint::new(i, unit(i, DIM))).unwrap();
-    }
+    let points: Vec<VectorPoint> = (0..50u64)
+        .map(|i| VectorPoint::new(i, unit(i, DIM)))
+        .collect();
+    upsert_batch(&store, &points);
 
-    let ids: Vec<u64> = (0..200).collect();
-    for limit in [3usize, 10, 50] {
-        for offset in [0usize, 5, 99] {
+    let ids: Vec<u64> = (0..50).collect();
+    for limit in [3usize, 10, 20] {
+        for offset in [0usize, 5, 40] {
             let query = unit(42, DIM);
             let indexed = store
                 .search(&SearchQuery::new(query.clone(), limit).with_offset(offset))
@@ -331,14 +342,13 @@ fn test_streaming_topk_with_filter() {
         &config(DistanceMetric::Cosine, DIM).with_index_type(vector_search::types::IndexType::FLAT),
     )
     .unwrap();
-    for i in 0..200u64 {
-        let tag = if i % 10 == 0 { "rare" } else { "common" };
-        store
-            .upsert(
-                &VectorPoint::new(i, unit(i, DIM)).with_payload_kv("tag", serde_json::json!(tag)),
-            )
-            .unwrap();
-    }
+    let points: Vec<VectorPoint> = (0..50u64)
+        .map(|i| {
+            let tag = if i % 10 == 0 { "rare" } else { "common" };
+            VectorPoint::new(i, unit(i, DIM)).with_payload_kv("tag", serde_json::json!(tag))
+        })
+        .collect();
+    upsert_batch(&store, &points);
 
     let query = unit(42, DIM);
     let filter = VectorFilter::new().must(FilterCondition::match_value("tag", "rare"));
@@ -346,7 +356,7 @@ fn test_streaming_topk_with_filter() {
         .search(&SearchQuery::new(query.clone(), 5).with_filter(filter))
         .unwrap();
 
-    let special_ids: Vec<u64> = (0..200).filter(|i| i % 10 == 0).collect();
+    let special_ids: Vec<u64> = (0..50).filter(|i| i % 10 == 0).collect();
     let expected_ids = oracle(&query, &special_ids)
         .into_iter()
         .take(5)

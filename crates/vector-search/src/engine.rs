@@ -19,6 +19,7 @@ use std::time::Duration;
 use parking_lot::{Mutex, RwLock};
 
 use crate::error::{Result, VectorSearchError};
+use crate::metrics::MetricsSnapshot;
 use crate::storage::{CollectionStore, WalPoint, WalRecord, WalTxn};
 use crate::types::{
     CollectionConfig, CollectionInfo, CollectionStatus, HnswConfig, IndexType, IvfConfig, PointId,
@@ -176,6 +177,11 @@ impl LocalVectorEngine {
         names
     }
 
+    /// Operational metrics snapshot for a collection.
+    pub fn collection_metrics(&self, collection: &str) -> Result<MetricsSnapshot> {
+        Ok(self.store(collection)?.metrics().snapshot())
+    }
+
     /// Create a collection. Fails with
     /// [`VectorSearchError::CollectionAlreadyExists`] if it already exists.
     pub fn create_collection(&self, name: &str, config: &CollectionConfig) -> Result<()> {
@@ -316,9 +322,13 @@ impl LocalVectorEngine {
     /// Upsert a point (WAL-backed).
     pub fn upsert(&self, collection: &str, point: VectorPoint) -> Result<()> {
         let store = self.store(collection)?;
-        store.apply_ops(&[WalRecord::Upsert {
+        let result = store.apply_ops(&[WalRecord::Upsert {
             point: WalPoint::from_point(&point)?,
-        }])?;
+        }]);
+        if result.is_err() {
+            store.metrics().record_upsert_error();
+        }
+        result?;
         self.after_mutation(collection, &store);
         Ok(())
     }
@@ -334,7 +344,18 @@ impl LocalVectorEngine {
                 })
             })
             .collect();
-        store.apply_ops(&ops?)?;
+        let ops = match ops {
+            Ok(ops) => ops,
+            Err(e) => {
+                store.metrics().record_upsert_error();
+                return Err(e);
+            }
+        };
+        let result = store.apply_ops(&ops);
+        if result.is_err() {
+            store.metrics().record_upsert_error();
+        }
+        result?;
         self.after_mutation(collection, &store);
         Ok(())
     }
@@ -342,9 +363,13 @@ impl LocalVectorEngine {
     /// Delete a point by id (WAL-backed). Deleting a missing id is a no-op.
     pub fn delete(&self, collection: &str, point_id: &str) -> Result<()> {
         let store = self.store(collection)?;
-        store.apply_ops(&[WalRecord::Delete {
+        let result = store.apply_ops(&[WalRecord::Delete {
             point_id: point_id.to_string(),
-        }])?;
+        }]);
+        if result.is_err() {
+            store.metrics().record_delete_error();
+        }
+        result?;
         self.after_mutation(collection, &store);
         Ok(())
     }
@@ -352,9 +377,13 @@ impl LocalVectorEngine {
     /// Delete a batch of points (WAL-backed, single transaction).
     pub fn delete_batch(&self, collection: &str, point_ids: &[String]) -> Result<()> {
         let store = self.store(collection)?;
-        store.apply_ops(&[WalRecord::DeleteBatch {
+        let result = store.apply_ops(&[WalRecord::DeleteBatch {
             point_ids: point_ids.to_vec(),
-        }])?;
+        }]);
+        if result.is_err() {
+            store.metrics().record_delete_error();
+        }
+        result?;
         self.after_mutation(collection, &store);
         Ok(())
     }
@@ -362,7 +391,13 @@ impl LocalVectorEngine {
     /// Delete every point matching `filter`. Returns the number deleted.
     pub fn delete_by_filter(&self, collection: &str, filter: &VectorFilter) -> Result<u64> {
         let store = self.store(collection)?;
-        let deleted = store.delete_by_filter(filter)?;
+        let deleted = match store.delete_by_filter(filter) {
+            Ok(deleted) => deleted,
+            Err(e) => {
+                store.metrics().record_delete_error();
+                return Err(e);
+            }
+        };
         self.after_mutation(collection, &store);
         Ok(deleted)
     }
@@ -374,7 +409,12 @@ impl LocalVectorEngine {
     /// Remote Qdrant engines normalize their raw Euclid distances to the
     /// same contract at the client boundary.
     pub fn search(&self, collection: &str, query: &SearchQuery) -> Result<Vec<SearchResult>> {
-        self.store(collection)?.search(query)
+        let store = self.store(collection)?;
+        let results = store.search(query);
+        if results.is_err() {
+            store.metrics().record_search_error();
+        }
+        results
     }
 
     /// Fetch a point by id.

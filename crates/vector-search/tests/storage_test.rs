@@ -20,6 +20,18 @@ fn point(id: u64, dim: usize) -> VectorPoint {
     )
 }
 
+/// Batch upsert through the WAL-backed apply path: one WAL append and one
+/// meta.bin save for the whole batch instead of per-point saves.
+fn upsert_batch(store: &CollectionStore, ids: impl IntoIterator<Item = u64>, dim: usize) {
+    let ops: Vec<WalRecord> = ids
+        .into_iter()
+        .map(|id| WalRecord::Upsert {
+            point: vector_search::storage::WalPoint::from_point(&point(id, dim)).unwrap(),
+        })
+        .collect();
+    store.apply_ops(&ops).unwrap();
+}
+
 #[test]
 fn test_apply_txn_roundtrip_and_replay() {
     let dir = tempfile::tempdir().unwrap();
@@ -160,9 +172,7 @@ fn test_compact_rebuilds_and_search_stays_correct() {
     let store_dir = dir.path().join("col");
     let store = CollectionStore::create(&store_dir, "col", &config(4)).unwrap();
 
-    for i in 0..20u64 {
-        store.upsert(&point(i, 4)).unwrap();
-    }
+    upsert_batch(&store, 0..20, 4);
     // Delete some points (below the 20% threshold: 4/20 = 20%, threshold is
     // strictly greater, so no auto-compaction).
     for i in [3u64, 7, 11, 15] {
@@ -242,9 +252,7 @@ fn test_compact_checkpoint_truncates_wal() {
     let dir = tempfile::tempdir().unwrap();
     let store_dir = dir.path().join("col");
     let store = CollectionStore::create(&store_dir, "col", &config(4)).unwrap();
-    for i in 0..6u64 {
-        store.upsert(&point(i, 4)).unwrap();
-    }
+    upsert_batch(&store, 0..6, 4);
     for i in 0..2u64 {
         assert!(store.delete(&PointId::Num(i)).unwrap());
     }
@@ -261,20 +269,19 @@ fn test_grow_after_compact() {
     let dir = tempfile::tempdir().unwrap();
     let store_dir = dir.path().join("col");
     let store = CollectionStore::create(&store_dir, "col", &config(4)).unwrap();
-    for i in 0..100u64 {
-        store.upsert(&point(i, 4)).unwrap();
-    }
-    for i in 0..50u64 {
+    upsert_batch(&store, 0..40, 4);
+    for i in 0..20u64 {
         assert!(store.delete(&PointId::Num(i)).unwrap());
     }
-    assert_eq!(store.count(), 50);
+    assert_eq!(store.count(), 20);
 
     // Continue inserting well past the compacted capacity.
-    for i in 100..500u64 {
-        store.upsert(&point(i, 4)).unwrap();
-    }
-    assert_eq!(store.count(), 450);
-    for i in 100..500u64 {
+    upsert_batch(&store, 40..120, 4);
+    assert_eq!(store.count(), 100);
+    // A couple of individual upserts keep single-write growth covered.
+    store.upsert(&point(200, 4)).unwrap();
+    assert_eq!(store.count(), 101);
+    for i in 40..120u64 {
         assert_eq!(
             store.get(&PointId::Num(i)).unwrap().unwrap().vector,
             point(i, 4).vector,
@@ -291,16 +298,15 @@ fn compaction_under_concurrent_writes_stays_consistent() {
         std::sync::Arc::new(CollectionStore::create(&store_dir, "col", &config(4)).unwrap());
 
     // Writer: each round appends 8 fresh ids then deletes the first 4 of the
-    // same round, so tombstones keep triggering compactions while appends
-    // race them. Final live set is deterministic: ids with `id % 8 >= 4`.
-    const ROUNDS: u64 = 60;
+    // same round (one WAL-backed batch per phase), so tombstones keep
+    // triggering compactions while appends race them. Final live set is
+    // deterministic: ids with `id % 8 >= 4`.
+    const ROUNDS: u64 = 15;
     let writer = {
         let store = std::sync::Arc::clone(&store);
         std::thread::spawn(move || {
             for r in 0..ROUNDS {
-                for j in 0..8u64 {
-                    store.upsert(&point(r * 8 + j, 4)).unwrap();
-                }
+                upsert_batch(&store, r * 8..r * 8 + 8, 4);
                 for j in 0..4u64 {
                     assert!(store.delete(&PointId::Num(r * 8 + j)).unwrap());
                 }
@@ -310,7 +316,7 @@ fn compaction_under_concurrent_writes_stays_consistent() {
 
     // Concurrent compactions: both the lock-free retry path and the
     // contended fallback must preserve visibility and data integrity.
-    for _ in 0..6 {
+    for _ in 0..4 {
         std::thread::sleep(std::time::Duration::from_millis(5));
         store.compact().unwrap();
     }

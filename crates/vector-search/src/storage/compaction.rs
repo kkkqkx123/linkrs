@@ -211,6 +211,7 @@ impl CollectionStore {
     /// Returns the number of live points after compaction.
     pub fn compact(&self) -> Result<u64> {
         let _guard = self.compact_mutex.lock();
+        let started = std::time::Instant::now();
 
         // Lock-free attempts: plan on an immutable snapshot, write temps,
         // then commit only if the mutation counter proves nothing raced.
@@ -231,9 +232,12 @@ impl CollectionStore {
                     || inner.meta.next_slot != plan.next_slot
                     || inner.meta.tombstone_count != plan.tombstone_count;
                 if !raced {
-                    return self.commit_compaction(&mut inner, &plan);
+                    let live = self.commit_compaction(&mut inner, &plan)?;
+                    self.metrics.record_compaction(started.elapsed());
+                    return Ok(live);
                 }
             }
+            self.metrics.record_compaction_race_retry();
             tracing::debug!(
                 collection = %self.inner.read().meta.collection,
                 "compaction raced concurrent writes; retrying"
@@ -242,6 +246,7 @@ impl CollectionStore {
 
         // Contended fallback: the whole rewrite inside the store write lock.
         // Queries pause for the duration, but progress is guaranteed.
+        self.metrics.record_compaction_contended();
         let mut inner = self.inner.write();
         if inner.meta.tombstone_count == 0 || inner.meta.next_slot == 0 {
             return Ok(inner.meta.live_count);
@@ -250,7 +255,9 @@ impl CollectionStore {
         let plan = build_plan(&inner.meta, &tombstones);
         drop(tombstones);
         self.write_temp_files(&plan)?;
-        self.commit_compaction(&mut inner, &plan)
+        let live = self.commit_compaction(&mut inner, &plan);
+        self.metrics.record_compaction(started.elapsed());
+        live
     }
 
     /// Write the three compacted temp files from immutable snapshots.

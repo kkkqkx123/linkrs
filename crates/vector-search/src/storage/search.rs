@@ -11,6 +11,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use bitvec::prelude::*;
 use rayon::prelude::*;
@@ -25,6 +26,7 @@ use crate::error::{Result, VectorSearchError};
 use crate::index::hnsw::HnswSearchContext;
 use crate::index::IvfSearchContext;
 use crate::index::{HnswIndex, IvfIndex};
+use crate::metrics::{SearchPath, SearchRetry};
 use crate::types::{PointId, SearchQuery, SearchResult};
 
 /// Snapshot of the immutable views used by a single search pass.
@@ -45,6 +47,7 @@ impl CollectionStore {
     /// [`Self::finish_candidates`], so scores and semantics are
     /// path-independent.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<SearchResult>> {
+        let started = Instant::now();
         // Take the metadata and all per-file views inside one read-lock
         // acquisition so a concurrent background compaction (which swaps
         // every file under the write lock) cannot produce a mixed-generation
@@ -86,6 +89,7 @@ impl CollectionStore {
                 mask,
             )
         };
+        let filtered = query.filter.is_some();
         match published.as_ref() {
             Some(PublishedIndex::Ivf(index)) => {
                 let snap = SearchSnapshot {
@@ -98,6 +102,8 @@ impl CollectionStore {
                     filter_mask: filter_mask.as_ref(),
                 };
                 let results = self.search_ivf(index.as_ref(), query, &snap);
+                self.metrics
+                    .record_search(SearchPath::Ivf, filtered, started.elapsed());
                 drop(published);
                 return results;
             }
@@ -112,6 +118,8 @@ impl CollectionStore {
                     filter_mask: filter_mask.as_ref(),
                 };
                 let results = self.search_hnsw(index.as_ref(), query, &snap);
+                self.metrics
+                    .record_search(SearchPath::Hnsw, filtered, started.elapsed());
                 drop(published);
                 return results;
             }
@@ -171,6 +179,8 @@ impl CollectionStore {
             .collect();
         candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
 
+        self.metrics
+            .record_search(SearchPath::Exact, filtered, started.elapsed());
         self.finish_candidates(
             candidates,
             query,
@@ -266,6 +276,8 @@ impl CollectionStore {
             return Ok(results);
         }
         // Single controlled retry with a doubled probe width.
+        self.metrics
+            .record_search_retry(SearchRetry::NprobeDoubling);
         nprobe = (nprobe * 2).min(lists);
         let candidates = index.probe_candidates(&query.vector, nprobe, &pending, &ivf_ctx)?;
         self.finish_candidates(candidates, query, snap)
@@ -338,6 +350,8 @@ impl CollectionStore {
         if ef >= cap {
             return Ok(results);
         }
+        self.metrics
+            .record_search_retry(SearchRetry::IterativeExpansion);
         let iterative_results = index.probe_candidates_iterative(
             &query.vector,
             ef,
@@ -377,6 +391,7 @@ impl CollectionStore {
         }
 
         // Fallback: double ef for a single controlled retry.
+        self.metrics.record_search_retry(SearchRetry::EfDoubling);
         ef = (ef * 2).min(cap);
         let mut candidates =
             index.probe_candidates(&query.vector, ef, query.effective_limit(), &hnsw_ctx)?;

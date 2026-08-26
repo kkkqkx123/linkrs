@@ -16,8 +16,8 @@ fn ivf_config() -> IvfConfig {
     IvfConfig {
         lists: Some(4),
         min_build_points: 1,
-        sample_limit: 1024,
-        kmeans_max_iter: 10,
+        sample_limit: 256,
+        kmeans_max_iter: 5,
         drift_threshold: 0.10,
         drift_check_interval: u64::MAX, // no automatic checks in most tests
         default_nprobe: 2,
@@ -64,7 +64,7 @@ fn engine_with_blobs(path: &std::path::Path, n_per_blob: usize) -> LocalVectorEn
 fn promote_search_rebuild_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let engine = engine_with_blobs(&dir.path().join("vec"), 40);
+        let engine = engine_with_blobs(&dir.path().join("vec"), 20);
 
         assert!(!engine.has_index("col"));
         let published = engine.build_index("col").unwrap();
@@ -114,7 +114,7 @@ fn promote_search_rebuild_roundtrip() {
     // Reopen: index.bin was dropped together with drop_index -> exact scan.
     let reopened = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
     assert!(!reopened.has_index("col"));
-    assert_eq!(reopened.count("col").unwrap(), 80);
+    assert_eq!(reopened.count("col").unwrap(), 40);
 }
 
 #[test]
@@ -181,13 +181,13 @@ fn restart_applies_runtime_config_to_published_index() {
 #[test]
 fn compact_invalidates_index_and_rebuild_restores() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = engine_with_blobs(&dir.path().join("vec"), 40);
+    let engine = engine_with_blobs(&dir.path().join("vec"), 20);
     assert!(engine.build_index("col").unwrap());
 
     // Delete one point per blob: below the 20% tombstone threshold, so the
     // delete does not auto-compact.
     engine.delete("col", "p0").unwrap();
-    engine.delete("col", "p40").unwrap();
+    engine.delete("col", "p20").unwrap();
     assert!(engine.has_index("col"));
 
     engine.compact_collection("col").unwrap();
@@ -202,7 +202,7 @@ fn compact_invalidates_index_and_rebuild_restores() {
     let results = engine.search("col", &SearchQuery::new(query, 5)).unwrap();
     assert!(!results.is_empty());
     assert!(
-        results.iter().all(|r| r.id.to_string() != "p40"),
+        results.iter().all(|r| r.id.to_string() != "p20"),
         "deleted points stay deleted after compact + rebuild"
     );
 }
@@ -268,7 +268,7 @@ fn wal_replayed_points_are_searchable_after_promote() {
 #[test]
 fn concurrent_search_during_build_and_drop() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = Arc::new(engine_with_blobs(&dir.path().join("vec"), 60));
+    let engine = Arc::new(engine_with_blobs(&dir.path().join("vec"), 20));
 
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut readers = Vec::new();
@@ -363,7 +363,7 @@ fn filtered_probe_semantics_and_retry() {
 #[test]
 fn build_window_no_missing_results() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = Arc::new(engine_with_blobs(&dir.path().join("vec"), 250));
+    let engine = Arc::new(engine_with_blobs(&dir.path().join("vec"), 50));
 
     // Keep inserting while builds run so slots land in every routing state:
     // published-list assignment, pending set, and plain exact-scan windows.

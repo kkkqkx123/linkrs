@@ -4,6 +4,7 @@ members = [
     ".",
     "crates/graphdb-core",
     "crates/graphdb-config",
+    "crates/graphdb-metrics",
     "crates/graphdb-search",
     "crates/graphdb-sync",
     "crates/graphdb-transaction",
