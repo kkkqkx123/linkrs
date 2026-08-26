@@ -28,15 +28,36 @@ use vector_search::{
 /// fast with one consistent error instead of deep inside a specific engine
 /// or on the remote server.
 fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
-    match distance {
-        DistanceMetric::Cosine | DistanceMetric::Euclid | DistanceMetric::Dot => Ok(()),
-        other => Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+    if matches!(
+        distance,
+        DistanceMetric::Cosine
+            | DistanceMetric::Euclid
+            | DistanceMetric::Dot
+            | DistanceMetric::Manhattan
+    ) {
+        Ok(())
+    } else {
+        Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
             format!(
-                "distance metric {:?} is not supported; supported metrics: Cosine, Euclid, Dot",
-                other
+                "distance metric {distance:?} is not supported; supported metrics: Cosine, Euclid, Dot, Manhattan",
             ),
-        ))),
+        )))
     }
+}
+
+fn validate_metric_for_backend(
+    backend: &VectorBackend,
+    distance: DistanceMetric,
+) -> VectorCoordinatorResult<()> {
+    validate_metric(distance)?;
+    if distance == DistanceMetric::Manhattan && !backend.is_local() {
+        return Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+            "distance metric Manhattan is only supported by the local engine; \
+             the remote Qdrant backend supports Cosine, Euclid and Dot only"
+                .to_string(),
+        )));
+    }
+    Ok(())
 }
 
 /// Runtime state of the vector engine.
@@ -305,7 +326,7 @@ impl VectorSyncCoordinator {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> VectorCoordinatorResult<String> {
-        validate_metric(distance)?;
+        validate_metric_for_backend(&self.backend, distance)?;
 
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -744,7 +765,7 @@ impl VectorSyncCoordinator {
         field_name: &str,
         config: CollectionConfig,
     ) -> VectorCoordinatorResult<String> {
-        validate_metric(config.distance)?;
+        validate_metric_for_backend(&self.backend, config.distance)?;
 
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();

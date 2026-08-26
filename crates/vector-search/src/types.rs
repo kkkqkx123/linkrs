@@ -64,9 +64,10 @@ pub enum DistanceMetric {
     Cosine,
     Euclid,
     Dot,
-    /// Supported for ad-hoc query evaluation (`manhattan_distance` function)
-    /// but not for ANN index construction. Kept as a variant so stored
-    /// configs deserialize; every index creation entry point rejects it.
+    /// Manhattan distance (`Σ|a-b|`). Fully supported for both exact scan and
+    /// ANN tiers (HNSW/IVF) on the local engine. Qdrant does not natively
+    /// support it — queries against the remote backend will be rejected with
+    /// a clear error at the coordinator layer.
     Manhattan,
 }
 
@@ -124,6 +125,16 @@ pub struct HnswConfig {
     /// staleness-triggered rebuilds.
     #[serde(default)]
     pub stale_rebuild_ratio: Option<f64>,
+    /// Cap on iterative-scan expansion rounds when a filtered search comes
+    /// up short. `None` = engine default. Baked into the published graph at
+    /// build/reload time like the other search parameters.
+    #[serde(default)]
+    pub iterative_max_rounds: Option<usize>,
+    /// Cumulative cap on distinct nodes visited across iterative-scan
+    /// rounds; the scan stops once the budget is exhausted. `None` =
+    /// unbounded.
+    #[serde(default)]
+    pub max_scan_tuples: Option<u64>,
 }
 
 fn default_hnsw_ef_search() -> usize {
@@ -141,6 +152,8 @@ impl Default for HnswConfig {
             payload_m: None,
             ef_search: 40,
             stale_rebuild_ratio: None,
+            iterative_max_rounds: None,
+            max_scan_tuples: None,
         }
     }
 }
@@ -165,6 +178,16 @@ impl HnswConfig {
                 "hnsw ef_construct {} must be >= max(2*m, 4) = {min_ef} (m = {})",
                 self.ef_construct, self.m
             )));
+        }
+        if self.iterative_max_rounds.is_some_and(|r| r == 0) {
+            return Err(VectorSearchError::InvalidConfig(
+                "hnsw iterative_max_rounds must be >= 1 when set".to_string(),
+            ));
+        }
+        if self.max_scan_tuples.is_some_and(|t| t == 0) {
+            return Err(VectorSearchError::InvalidConfig(
+                "hnsw max_scan_tuples must be >= 1 when set".to_string(),
+            ));
         }
         Ok(())
     }
@@ -196,6 +219,16 @@ impl HnswConfig {
 
     pub fn with_stale_rebuild_ratio(mut self, ratio: f64) -> Self {
         self.stale_rebuild_ratio = Some(ratio);
+        self
+    }
+
+    pub fn with_iterative_max_rounds(mut self, rounds: usize) -> Self {
+        self.iterative_max_rounds = Some(rounds);
+        self
+    }
+
+    pub fn with_max_scan_tuples(mut self, tuples: u64) -> Self {
+        self.max_scan_tuples = Some(tuples);
         self
     }
 }
@@ -318,6 +351,11 @@ pub struct IvfConfig {
     pub default_nprobe: usize,
     /// Whether automatic index promotion is allowed.
     pub auto_promotion: bool,
+    /// Upper bound for multi-round probe widening during filtered searches.
+    /// The probe width still never exceeds the list count. `None` = capped
+    /// by the list count only (historical single-doubling bound).
+    #[serde(default)]
+    pub max_probes: Option<usize>,
 }
 
 impl Default for IvfConfig {
@@ -332,11 +370,23 @@ impl Default for IvfConfig {
             default_nprobe: 8,
             // Off until benchmarks justify turning it on.
             auto_promotion: false,
+            max_probes: None,
         }
     }
 }
 
 impl IvfConfig {
+    /// Validate the probe-widening bound. Kept separate from the HNSW
+    /// validator so each tier's creation path checks only its own knobs.
+    pub fn validate(&self) -> Result<()> {
+        if self.max_probes.is_some_and(|p| p == 0) {
+            return Err(VectorSearchError::InvalidConfig(
+                "ivf max_probes must be >= 1 when set".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Number of lists to train for `live` live points.
     pub fn effective_lists(&self, live: u64) -> u32 {
         match self.lists {
@@ -349,6 +399,18 @@ impl IvfConfig {
     pub fn clamp_nprobe(&self, nprobe: Option<usize>, lists: usize) -> usize {
         let requested = nprobe.unwrap_or(self.default_nprobe);
         requested.clamp(1, lists.max(1))
+    }
+
+    /// Ceiling for multi-round probe widening: `max_probes` clamped to the
+    /// list count (and at least one probe).
+    pub fn effective_max_probes(&self, lists: usize) -> usize {
+        let cap = self.max_probes.unwrap_or(lists);
+        cap.clamp(1, lists.max(1))
+    }
+
+    pub fn with_max_probes(mut self, max_probes: usize) -> Self {
+        self.max_probes = Some(max_probes);
+        self
     }
 }
 
@@ -449,6 +511,15 @@ pub struct IndexInfo {
     pub stale_ratio: Option<f64>,
     /// IVF only: last measured cluster drift ratio.
     pub last_drift_ratio: Option<f64>,
+    /// Whether an ANN index build is currently in flight.
+    #[serde(default)]
+    pub building: bool,
+    /// In-flight build progress: slots incorporated so far.
+    #[serde(default)]
+    pub build_inserted: u64,
+    /// In-flight build progress: total slots the running build targets.
+    #[serde(default)]
+    pub build_points_total: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1925,5 +1996,74 @@ mod tests {
     fn test_search_query_score_threshold_default() {
         let q = SearchQuery::new(vec![1.0], 10);
         assert!(q.score_threshold().is_none());
+    }
+
+    #[test]
+    fn test_scan_limit_config_defaults() {
+        let hnsw = HnswConfig::default();
+        assert_eq!(hnsw.iterative_max_rounds, None);
+        assert_eq!(hnsw.max_scan_tuples, None);
+        let ivf = IvfConfig::default();
+        assert_eq!(ivf.max_probes, None);
+        // Missing fields fall back to engine defaults on deserialization.
+        let hnsw: HnswConfig = serde_json::from_str(r#"{"m": 16, "ef_construct": 100}"#).unwrap();
+        assert_eq!(hnsw.iterative_max_rounds, None);
+        assert_eq!(hnsw.max_scan_tuples, None);
+        assert_eq!(hnsw.ef_search, 40);
+        let ivf: IvfConfig = serde_json::from_str(
+            r#"{
+                "min_build_points": 1,
+                "sample_limit": 10,
+                "kmeans_max_iter": 1,
+                "drift_threshold": 0.1,
+                "drift_check_interval": 1,
+                "default_nprobe": 4,
+                "auto_promotion": false
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(ivf.max_probes, None);
+        assert_eq!(ivf.default_nprobe, 4);
+    }
+
+    #[test]
+    fn test_hnsw_config_validate_scan_limits() {
+        let cfg = HnswConfig::new(16, 100)
+            .with_iterative_max_rounds(1)
+            .with_max_scan_tuples(1);
+        assert!(cfg.validate().is_ok());
+
+        let err = HnswConfig::new(16, 100)
+            .with_iterative_max_rounds(0)
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+
+        let err = HnswConfig::new(16, 100)
+            .with_max_scan_tuples(0)
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn test_ivf_config_validate_and_effective_max_probes() {
+        assert!(IvfConfig::default().validate().is_ok());
+        assert!(IvfConfig::default().with_max_probes(1).validate().is_ok());
+        let err = IvfConfig::default()
+            .with_max_probes(0)
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+
+        // The cap never exceeds the list count and never drops below one.
+        let with_cap = |max_probes| IvfConfig {
+            max_probes,
+            ..IvfConfig::default()
+        };
+        assert_eq!(with_cap(Some(2)).effective_max_probes(8), 2);
+        assert_eq!(with_cap(Some(16)).effective_max_probes(8), 8);
+        assert_eq!(with_cap(None).effective_max_probes(8), 8);
+        assert_eq!(with_cap(None).effective_max_probes(0), 1);
     }
 }

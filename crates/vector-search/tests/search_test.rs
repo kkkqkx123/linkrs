@@ -131,6 +131,76 @@ fn test_topk_l2_and_dot() {
 }
 
 #[test]
+fn test_manhattan_topk_and_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CollectionStore::create(
+        dir.path().join("col_man"),
+        "col_man",
+        &config(DistanceMetric::Manhattan, 8),
+    )
+    .unwrap();
+    seed(&store, 10, 8, false);
+
+    // Query is an exact copy of id 4; Manhattan distance to itself is 0 -> score 1.0.
+    let query = unit(4, 8).vector;
+    let results = store.search(&SearchQuery::new(query.clone(), 3)).unwrap();
+    assert_eq!(results.len(), 3, "manhattan top-3");
+    assert_eq!(results[0].id.to_string(), "4");
+    assert!(
+        (results[0].score - 1.0).abs() < 1e-4,
+        "exact match score must be 1.0"
+    );
+
+    // Oracle: brute-force Manhattan distance via naive kernel, score = 1/(1+sqrt(l1)).
+    let oracle: Vec<(f32, u64)> = (0..10)
+        .map(|i| {
+            let p = unit(i, 8);
+            let l1 = naive::distance(DistanceMetric::Manhattan, &query, &p.vector);
+            let score = 1.0 / (1.0 + l1.sqrt());
+            (score, i)
+        })
+        .collect();
+    let mut oracle_sorted = oracle.clone();
+    oracle_sorted.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let expected_ids: Vec<String> = oracle_sorted
+        .iter()
+        .take(3)
+        .map(|(_, id)| id.to_string())
+        .collect();
+    let got_ids: Vec<String> = results.iter().map(|r| r.id.to_string()).collect();
+    assert_eq!(
+        got_ids, expected_ids,
+        "manhattan ranking must match naive oracle"
+    );
+
+    // Scores must be 1/(1+sqrt(l1)) and descending.
+    for r in &results {
+        let pid: u64 = r.id.to_string().parse().unwrap();
+        let l1 = naive::distance(DistanceMetric::Manhattan, &query, &unit(pid, 8).vector);
+        let expected_score = 1.0 / (1.0 + l1.sqrt());
+        assert!(
+            (r.score - expected_score).abs() < 1e-4,
+            "manhattan score id={pid} got {} expected {}",
+            r.score,
+            expected_score
+        );
+    }
+    for pair in results.windows(2) {
+        assert!(pair[0].score >= pair[1].score, "scores must descend");
+    }
+
+    // Threshold filtering between best and second best keeps exactly the top hit.
+    let all = store.search(&SearchQuery::new(query.clone(), 10)).unwrap();
+    assert!(all.len() >= 2);
+    let threshold = (all[0].score + all[1].score) / 2.0;
+    let filtered = store
+        .search(&SearchQuery::new(query, 10).with_score_threshold(threshold))
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id.to_string(), "4");
+}
+
+#[test]
 fn test_score_threshold_filters_below() {
     let dir = tempfile::tempdir().unwrap();
     let store = CollectionStore::create(

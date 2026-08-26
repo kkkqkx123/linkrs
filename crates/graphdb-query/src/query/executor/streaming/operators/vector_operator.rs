@@ -262,6 +262,9 @@ impl VectorOperator {
                                     crate::query::parser::ast::vector::VectorDistance::Dot => {
                                         vector_search::DistanceMetric::Dot
                                     }
+                                    crate::query::parser::ast::vector::VectorDistance::Manhattan => {
+                                        vector_search::DistanceMetric::Manhattan
+                                    }
                                 };
                                 let res = crate::query::executor::streaming::helpers::runtime_bridge::wait(
                                     "Vector create",

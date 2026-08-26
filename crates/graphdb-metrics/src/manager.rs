@@ -129,6 +129,15 @@ pub enum MetricType {
     VectorDeleteOps,
     VectorDeleteErrors,
     VectorDeleteLatencyMs,
+    /// Local vector engine: adjacency/list write-lock acquisitions (only
+    /// populated when the `lock-metrics` feature is enabled).
+    VectorLockOps,
+    /// Local vector engine: cumulative wait time of those acquisitions, in
+    /// microseconds (requires the `lock-metrics` feature).
+    VectorLockLatencyUs,
+    /// Local vector engine: HNSW adjacency reads where the version
+    /// double-read detected a concurrent mutation and reloaded.
+    VectorVersionReloads,
     VectorBufferFlushOps,
     VectorBufferFlushLatencyMs,
     VectorEmbeddingOps,

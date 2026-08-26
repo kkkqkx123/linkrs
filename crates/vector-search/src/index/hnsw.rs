@@ -26,15 +26,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
-use rayon::prelude::*;
 
 use crate::error::{Result, VectorSearchError};
 use crate::index::persist::{PersistedHnsw, PersistedNodeRecord};
+use crate::index::IndexBuildParams;
+use crate::metrics::{timed_write_lock, Metrics};
 use crate::storage::vectors::Vectors;
 use crate::storage::TombstoneBits;
 use crate::types::{DistanceMetric, HnswConfig};
 
 use bitvec::prelude::*;
+
+/// Default cap on iterative-scan expansion rounds when a filtered search
+/// comes up short and `HnswConfig::iterative_max_rounds` is unset.
+pub(crate) const DEFAULT_ITERATIVE_MAX_ROUNDS: usize = 3;
 
 pub(crate) struct HnswSearchContext<'a> {
     pub tombstones: Option<&'a TombstoneBits>,
@@ -165,6 +170,9 @@ struct SearchLayerResult {
     /// Discarded candidates that were evicted from the live set during the
     /// search. May contain duplicates across iterative calls.
     discarded: Vec<Cand>,
+    /// Distinct nodes touched by this pass (including tombstoned and
+    /// non-matching ones); feeds the iterative-scan tuple budget.
+    visited: usize,
 }
 
 impl Eq for Cand {}
@@ -226,6 +234,17 @@ pub(crate) struct HnswIndex {
     /// in fixed-point (× 1e6). Combined with `overwrites_since_build` this
     /// gives a more precise staleness signal than raw counts alone.
     overwrites_distance_delta: AtomicU64,
+    /// Iterative-scan expansion round cap, resolved from
+    /// `HnswConfig::iterative_max_rounds` at construction (baked in like the
+    /// other graph parameters; changes take effect on the next rebuild).
+    iterative_max_rounds: usize,
+    /// Cumulative visited-node cap for iterative scans, from
+    /// `HnswConfig::max_scan_tuples`. `None` = unbounded.
+    max_scan_tuples: Option<u64>,
+    /// Per-collection metrics sink for lock-contention and version-reload
+    /// diagnostics. Attached by the store after construction; `None` in
+    /// standalone builds (benches, tests), which then record nothing.
+    lock_metrics: Option<Arc<Metrics>>,
 }
 
 impl HnswIndex {
@@ -246,11 +265,33 @@ impl HnswIndex {
             built_at_live_count: AtomicU64::new(0),
             overwrites_since_build: AtomicU64::new(0),
             overwrites_distance_delta: AtomicU64::new(0),
+            iterative_max_rounds: config
+                .iterative_max_rounds
+                .unwrap_or(DEFAULT_ITERATIVE_MAX_ROUNDS)
+                .max(1),
+            max_scan_tuples: config.max_scan_tuples,
+            lock_metrics: None,
         }
     }
 
+    /// Attach the owning collection's metrics sink. Called by the store
+    /// right after construction, before the index is published.
+    pub(crate) fn set_metrics(&mut self, metrics: Arc<Metrics>) {
+        self.lock_metrics = Some(metrics);
+    }
+
+    /// Cap on iterative-scan expansion rounds for filtered searches.
+    pub(crate) fn iterative_rounds(&self) -> usize {
+        self.iterative_max_rounds
+    }
+
+    /// Cumulative visited-node cap for iterative scans.
+    pub(crate) fn scan_tuple_budget(&self) -> Option<u64> {
+        self.max_scan_tuples
+    }
+
     /// Build a fresh index by inserting the given live slots (off the store
-    /// lock; `slots` must be sorted ascending).
+    /// lock; `params.slots` must be sorted ascending).
     ///
     /// `HnswConfig::max_indexing_threads` selects the build shape:
     /// - unset/0: sequential insertion on the global rayon pool;
@@ -259,32 +300,47 @@ impl HnswIndex {
     ///   shared graph concurrently (entry-point publication serialized by
     ///   [`Self::promote_lock`]). Topology then depends on interleaving, so
     ///   only recall invariants hold — asserted by the multi-worker tests.
-    pub(crate) fn build(
-        config: &HnswConfig,
-        collection: &str,
-        dim: usize,
-        metric: DistanceMetric,
-        slots: &[u32],
-        vectors: &[Arc<memmap2::Mmap>],
-        segment_slots: u32,
-    ) -> Result<Self> {
+    ///
+    /// `IndexBuildParams::progress`, when attached, is incremented once per
+    /// processed slot and emits milestone debug logs.
+    pub(crate) fn build(params: &IndexBuildParams<'_>, config: &HnswConfig) -> Result<Self> {
         config.validate()?;
-        let mut seed = collection.len() as u64;
-        for b in collection.as_bytes() {
+        let mut seed = params.collection.len() as u64;
+        for b in params.collection.as_bytes() {
             seed = seed.wrapping_mul(0x100_0000_01b3) ^ (*b as u64);
         }
-        seed ^= slots.len() as u64;
+        seed ^= params.slots.len() as u64;
         seed = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
 
-        let index = Self::new(dim, metric, config, seed);
+        let index = Self::new(params.dim, params.metric, config, seed);
+        let total = params.slots.len() as u64;
+        // Milestone for periodic progress logging: every ~10% of a large
+        // build, at most every 10k slots on huge corpora.
+        let milestone = (total / 10).max(10_000);
         let insert_one = |index: &Self, slot: u32| {
-            if let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, dim) {
-                index.insert(slot, v, vectors, segment_slots);
+            if let Some(v) = Vectors::read_slot(
+                params.vectors,
+                slot as u64,
+                params.segment_slots,
+                params.dim,
+            ) {
+                index.insert(slot, v, params.vectors, params.segment_slots);
+            }
+            if let Some(progress) = params.progress {
+                let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % milestone == 0 || done == total {
+                    tracing::debug!(
+                        collection = %params.collection,
+                        done,
+                        total,
+                        "hnsw build progress"
+                    );
+                }
             }
         };
 
         let workers = match config.max_indexing_threads {
-            Some(threads) if threads >= 2 => threads.min(slots.len().max(1)),
+            Some(threads) if threads >= 2 => threads.min(params.slots.len().max(1)),
             _ => 1,
         };
         if workers > 1 {
@@ -302,7 +358,7 @@ impl HnswIndex {
                 for w in 0..workers {
                     scope.spawn(move || {
                         pool_ref.install(|| {
-                            for (i, &slot) in slots.iter().enumerate() {
+                            for (i, &slot) in params.slots.iter().enumerate() {
                                 if i % workers == w {
                                     insert_one(index_ref, slot);
                                 }
@@ -317,18 +373,18 @@ impl HnswIndex {
                 .build()
                 .map_err(|e| VectorSearchError::Internal(format!("hnsw build thread pool: {e}")))?;
             pool.install(|| {
-                for &slot in slots {
+                for &slot in params.slots {
                     insert_one(&index, slot);
                 }
             });
         } else {
-            for &slot in slots {
+            for &slot in params.slots {
                 insert_one(&index, slot);
             }
         }
         index
             .built_at_live_count
-            .store(slots.len() as u64, Ordering::Relaxed);
+            .store(params.slots.len() as u64, Ordering::Relaxed);
         Ok(index)
     }
 
@@ -601,7 +657,8 @@ impl HnswIndex {
             );
             let selected =
                 self.select_neighbors(&result.live, self.layer_cap(layer), vectors, segment_slots);
-            *node.layer(layer).write() = selected.iter().map(|c| c.slot).collect();
+            *timed_write_lock(self.lock_metrics.as_deref(), node.layer(layer)) =
+                selected.iter().map(|c| c.slot).collect();
             node.bump_version();
             for cand in &selected {
                 self.link_neighbor(cand.slot, slot, cand.dist, layer, vectors, segment_slots);
@@ -746,7 +803,12 @@ impl HnswIndex {
             let neighbors = node.layer(layer).read().clone();
             let v2 = node.version();
             let neighbors = if v1 != v2 {
-                // Version changed during the read; reload once.
+                // Version changed during the read; reload once. Counted so
+                // concurrency regression tests can assert this recovery path
+                // is actually exercised under write/read contention.
+                if let Some(metrics) = &self.lock_metrics {
+                    metrics.record_version_reload();
+                }
                 node.layer(layer).read().clone()
             } else {
                 neighbors
@@ -786,6 +848,7 @@ impl HnswIndex {
         SearchLayerResult {
             live: live_out,
             discarded,
+            visited: visited.len(),
         }
     }
 
@@ -818,19 +881,26 @@ impl HnswIndex {
             else {
                 continue;
             };
-            // The pairwise checks are independent per already-selected
-            // neighbor, so the distance fan-out runs on rayon. Each check
-            // performs the same float ops as the sequential version, so the
-            // selection (and therefore the built topology) is identical.
-            let closer = selected.par_iter().all(|s| {
+            // Pairwise checks stay sequential: the fan-out is at most `lm`
+            // distances (~microseconds), far below rayon task-routing cost.
+            // Routing each check through the global pool made builds orders
+            // of magnitude slower (every join wakes the worker threads) with
+            // no compute to amortize it. Slot-level parallelism belongs to
+            // the multi-worker build path, not this inner loop.
+            let mut closer = true;
+            for s in &selected {
                 let Some(rv) = Vectors::read_slot(vectors, s.slot as u64, segment_slots, self.dim)
                 else {
-                    return false;
+                    closer = false;
+                    break;
                 };
                 // Strictly-farther-from-every-selected means diverse enough
                 // to keep (pgvector CheckElementCloser).
-                self.distance(cv, rv) > cand.dist
-            });
+                if self.distance(cv, rv) <= cand.dist {
+                    closer = false;
+                    break;
+                }
+            }
             if closer {
                 selected.push(cand);
             } else {
@@ -862,7 +932,7 @@ impl HnswIndex {
             return;
         };
         let lm = self.layer_cap(layer);
-        let mut adj = node.layer(layer).write();
+        let mut adj = timed_write_lock(self.lock_metrics.as_deref(), node.layer(layer));
         if adj.contains(&slot) {
             return;
         }
@@ -872,15 +942,14 @@ impl HnswIndex {
             return;
         }
 
-        // Overflow: reselect around the neighbor's own vector. The pool
-        // distances are independent per adjacency entry; the parallel
-        // collect preserves order, so the reselection matches the
-        // sequential result exactly.
+        // Overflow: reselect around the neighbor's own vector. The pool is
+        // bounded by the layer cap (a few dozen entries), so the distance
+        // fan-out stays sequential — rayon routing would dominate the work.
         let Some(nv) = Vectors::read_slot(vectors, neighbor as u64, segment_slots, self.dim) else {
             return;
         };
         let mut pool: Vec<Cand> = adj
-            .par_iter()
+            .iter()
             .filter_map(|&s| {
                 let v = Vectors::read_slot(vectors, s as u64, segment_slots, self.dim)?;
                 Some(Cand {
@@ -938,7 +1007,8 @@ impl HnswIndex {
     /// candidates when the initial search yields fewer than `k` results.
     /// Each iteration feeds the previous round's discarded candidates as new
     /// entry points, expanding the search frontier until `k` results are
-    /// found or `max_iterations` is exhausted.
+    /// found, `max_iterations` is exhausted, or the cumulative visited-node
+    /// budget (`max_scan_tuples`) runs out.
     ///
     /// This mirrors pgvector's iterative scan (`hnswscan.c`): when
     /// `ef_search` is too small to cover the result set, the search resumes
@@ -950,6 +1020,7 @@ impl HnswIndex {
         ef: usize,
         k: usize,
         max_iterations: usize,
+        max_scan_tuples: Option<u64>,
         ctx: &HnswSearchContext<'_>,
     ) -> Result<Vec<(f32, u32)>> {
         let Some(entry) = *self.entry.read() else {
@@ -974,16 +1045,24 @@ impl HnswIndex {
         let mut all_results: Vec<Cand> = Vec::new();
         let mut all_discarded: Vec<Cand> = Vec::new();
         let mut current_entries = vec![best];
+        let mut visited_total: u64 = 0;
 
         for _ in 0..max_iterations {
             let result = self.search_layer(query, &current_entries, ef, 0, ctx);
             all_results.extend(result.live);
             all_discarded.extend(result.discarded);
+            visited_total += result.visited as u64;
 
             if all_results.len() >= k {
                 break;
             }
             if all_discarded.is_empty() {
+                break;
+            }
+            // Budget check after the pass so a single round is never skipped,
+            // mirroring pgvector's "finish the current batch, then re-check"
+            // scan-memory behavior.
+            if max_scan_tuples.is_some_and(|cap| visited_total >= cap) {
                 break;
             }
             // Use discarded candidates as entry points for the next iteration.
@@ -1032,7 +1111,7 @@ impl HnswIndex {
             }
 
             for layer in 0..=node.level {
-                let mut adj = node.layer(layer).write();
+                let mut adj = timed_write_lock(self.lock_metrics.as_deref(), node.layer(layer));
                 let old_len = adj.len();
 
                 // Remove tombstoned slots from the adjacency list.
@@ -1161,13 +1240,8 @@ mod tests {
         let slots: Vec<u32> = (0..data.len() as u32).collect();
 
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1209,13 +1283,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1262,13 +1331,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 256),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            256,
         )
         .unwrap();
 
@@ -1306,13 +1370,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 64),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            64,
         )
         .unwrap();
         assert_eq!(index.overwrites_since_build(), 0);
@@ -1340,13 +1399,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1391,13 +1445,8 @@ mod tests {
         let slots: Vec<u32> = (0..data.len() as u32).collect();
 
         let sequential = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
         let threaded_cfg = HnswConfig {
@@ -1405,13 +1454,8 @@ mod tests {
             ..config()
         };
         let threaded = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &threaded_cfg,
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1452,13 +1496,8 @@ mod tests {
             ..config()
         };
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &workers_cfg,
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
         assert_eq!(
@@ -1512,13 +1551,8 @@ mod tests {
             ..config()
         };
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &workers_cfg,
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
         assert_eq!(index.node_count(), data.len());
@@ -1535,13 +1569,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let original = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1594,13 +1623,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 64),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            64,
         )
         .unwrap();
 
@@ -1634,13 +1658,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..n as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1692,13 +1711,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..n as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            128,
         )
         .unwrap();
 
@@ -1730,7 +1744,7 @@ mod tests {
 
         // Iterative scan with the same small ef, 3 iterations.
         let iterative = index
-            .probe_candidates_iterative(&q, small_ef, 5, 3, &ctx)
+            .probe_candidates_iterative(&q, small_ef, 5, 3, None, &ctx)
             .unwrap();
         let iterative_found = iterative
             .iter()
@@ -1757,13 +1771,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 64),
             &config(),
-            "col",
-            DIM,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            64,
         )
         .unwrap();
         assert_eq!(index.stale_ratio(), 0.0);
@@ -1777,5 +1786,121 @@ mod tests {
         index.insert(1, &far, &mmaps, 64);
         let ratio = index.stale_ratio();
         assert!(ratio > 0.1, "delta should push ratio up, got {ratio}");
+    }
+
+    #[test]
+    fn test_iterative_scan_tuple_budget_truncates() {
+        let n = 50;
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut state = SplitMix64::new(42);
+        for _ in 0..n {
+            vectors.push(
+                (0..DIM)
+                    .map(|_| (state.next_u64() % 1000) as f32 / 100.0)
+                    .collect(),
+            );
+        }
+        let (_dir, mmaps) = mmap_from(&vectors);
+        let slots: Vec<u32> = (0..n as u32).collect();
+        let index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &slots, &mmaps, 128),
+            &config(),
+        )
+        .unwrap();
+
+        let ctx = HnswSearchContext {
+            tombstones: Some(&all_live(n)),
+            vectors: &mmaps,
+            segment_slots: 128,
+            filter_mask: None,
+        };
+        let q = vec![5.0f32; DIM];
+
+        // A one-node budget stops the expansion after the first pass; an
+        // unbounded budget may keep resuming from discarded candidates.
+        let bounded = index
+            .probe_candidates_iterative(&q, 4, 50, 8, Some(1), &ctx)
+            .unwrap();
+        let unbounded = index
+            .probe_candidates_iterative(&q, 4, 50, 8, None, &ctx)
+            .unwrap();
+        assert!(!bounded.is_empty(), "first pass must still return results");
+        assert!(
+            bounded.len() <= unbounded.len(),
+            "budgeted scan must not explore more than unbounded ({}/{})",
+            bounded.len(),
+            unbounded.len()
+        );
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_probe_exercises_version_reload() {
+        // Writers keep mutating adjacency lists while a reader hammers the
+        // probe path; the reader's version double-read protocol must detect
+        // at least one concurrent mutation and reload the neighborhood.
+        let base = blobs(30);
+        let mut vectors: Vec<Vec<f32>> = base.iter().map(|(v, _)| v.clone()).collect();
+        // Extra slots inserted by the writer thread, clustered on blob 1 so
+        // reverse-links keep mutating the same hub neighborhoods.
+        let extra: Vec<Vec<f32>> = (0..300)
+            .map(|i| {
+                let mut v = vec![50.0f32; DIM];
+                v[i % DIM] += (i % 11) as f32 * 0.1;
+                v
+            })
+            .collect();
+        vectors.extend(extra.iter().cloned());
+        let (_dir, mmaps) = mmap_from(&vectors);
+
+        let initial: Vec<u32> = (0..base.len() as u32).collect();
+        let metrics = Arc::new(Metrics::default());
+        let mut index = HnswIndex::build(
+            &IndexBuildParams::new("col", DIM, DistanceMetric::Euclid, &initial, &mmaps, 256),
+            &config(),
+        )
+        .unwrap();
+        index.set_metrics(Arc::clone(&metrics));
+        let index = Arc::new(index);
+
+        let first_extra = base.len() as u32;
+        let total_slots = vectors.len();
+        let writer_mmaps = mmaps.clone();
+        let writer_index = Arc::clone(&index);
+        let writer = std::thread::spawn(move || {
+            for i in 0..extra.len() as u32 {
+                writer_index.insert(first_extra + i, &extra[i as usize], &writer_mmaps, 256);
+            }
+        });
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader_index = Arc::clone(&index);
+        let reader_stop = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            while !reader_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                for _ in 0..50 {
+                    let _ = reader_index.probe_candidates(
+                        &[50.0; DIM],
+                        8,
+                        5,
+                        &HnswSearchContext {
+                            tombstones: Some(&all_live(total_slots)),
+                            vectors: &mmaps,
+                            segment_slots: 256,
+                            filter_mask: None,
+                        },
+                    );
+                }
+            }
+        });
+
+        writer.join().unwrap();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        reader.join().unwrap();
+
+        assert_eq!(index.node_count(), vectors.len());
+        assert!(
+            metrics.snapshot().search_version_reloads > 0,
+            "write/read contention must exercise the version double-read reload path"
+        );
     }
 }

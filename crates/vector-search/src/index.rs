@@ -22,6 +22,7 @@ use rayon::prelude::*;
 
 use crate::error::Result;
 use crate::index::persist::PersistedIvf;
+use crate::metrics::{timed_write_lock, Metrics};
 use crate::storage::vectors::Vectors;
 use crate::types::{DistanceMetric, IvfConfig};
 
@@ -29,6 +30,56 @@ use bitvec::prelude::*;
 
 /// Sentinel list id for "not assigned".
 pub(crate) const UNASSIGNED: u32 = u32::MAX;
+
+/// Inputs shared by both ANN-tier build entry points.
+///
+/// Groups the corpus description and the observability sink so the build
+/// signatures stay stable as knobs are added. `progress` is only wired by
+/// the store's lifecycle paths; standalone builders (tests, tooling) leave
+/// it unset via [`IndexBuildParams::new`].
+pub(crate) struct IndexBuildParams<'a> {
+    /// Target collection name; seeds the deterministic build RNG.
+    pub collection: &'a str,
+    /// Vector dimensionality; must match the stored rows.
+    pub dim: usize,
+    pub metric: DistanceMetric,
+    /// Live slots to index (sorted ascending).
+    pub slots: &'a [u32],
+    /// Immutable mmap snapshot the slot rows are read from.
+    pub vectors: &'a [Arc<Mmap>],
+    /// Slots per `vectors.bin` segment.
+    pub segment_slots: u32,
+    /// Optional per-slot progress sink, incremented once per processed slot.
+    pub progress: Option<&'a AtomicU64>,
+}
+
+impl<'a> IndexBuildParams<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        collection: &'a str,
+        dim: usize,
+        metric: DistanceMetric,
+        slots: &'a [u32],
+        vectors: &'a [Arc<Mmap>],
+        segment_slots: u32,
+    ) -> Self {
+        Self {
+            collection,
+            dim,
+            metric,
+            slots,
+            vectors,
+            segment_slots,
+            progress: None,
+        }
+    }
+
+    /// Attach a per-slot progress sink for long builds.
+    pub(crate) fn with_progress(mut self, progress: &'a AtomicU64) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+}
 
 /// Upper bound for reported drift ratios so stored/serialized values stay
 /// finite even for degenerate baselines.
@@ -85,25 +136,23 @@ pub(crate) struct IvfIndex {
     baseline_mean_dist: f32,
     built_at_live_count: u64,
     upserts_since_check: AtomicU64,
+    /// Per-collection metrics sink for lock-contention diagnostics,
+    /// attached by the store after construction (see [`HnswIndex`]).
+    lock_metrics: Option<Arc<Metrics>>,
 }
 
 impl IvfIndex {
     /// Build a fresh index from the given live slots (called off the store
-    /// lock; `slots` must be sorted ascending).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build(
-        config: &IvfConfig,
-        collection: &str,
-        dim: usize,
-        metric: DistanceMetric,
-        slots: &[u32],
-        vectors: &[Arc<Mmap>],
-        segment_slots: u32,
-    ) -> Result<Self> {
+    /// lock; `params.slots` must be sorted ascending). k-means training runs
+    /// on rayon; `IndexBuildParams::progress`, when attached, is incremented
+    /// once per assigned slot and emits milestone debug logs.
+    pub(crate) fn build(params: &IndexBuildParams<'_>, config: &IvfConfig) -> Result<Self> {
         // Reservoir sampling: uniform random sample of up to `sample_limit`
         // slots, matching pgvector's sampling strategy. This is unbiased
         // regardless of slot distribution and uses O(sample_limit) memory.
         let sample_limit = config.sample_limit.max(1);
+        let slots = params.slots;
+        let collection = params.collection;
         let sample_slots: Vec<u32> = if slots.len() <= sample_limit {
             slots.to_vec()
         } else {
@@ -128,7 +177,9 @@ impl IvfIndex {
         };
         let sample: Vec<&[f32]> = sample_slots
             .iter()
-            .filter_map(|&s| Vectors::read_slot(vectors, s as u64, segment_slots, dim))
+            .filter_map(|&s| {
+                Vectors::read_slot(params.vectors, s as u64, params.segment_slots, params.dim)
+            })
             .collect();
 
         let mut seed = collection.len() as u64;
@@ -143,20 +194,33 @@ impl IvfIndex {
             max_iter: config.kmeans_max_iter.max(1),
             seed,
         };
-        let trained = kmeans::train(metric, &sample, &opts)?;
-        let baseline = baseline_distance(metric, &sample, &trained.centroids);
+        let trained = kmeans::train(params.metric, &sample, &opts)?;
+        let baseline = baseline_distance(params.metric, &sample, &trained.centroids);
 
         let index = Self::from_centroids(
             config.clone(),
-            dim,
-            metric,
+            params.dim,
+            params.metric,
             trained.centroids,
             baseline,
             slots.len() as u64,
         );
-        for &slot in slots {
-            if let Some(v) = Vectors::read_slot(vectors, slot as u64, segment_slots, dim) {
+        let total = slots.len() as u64;
+        let milestone = (total / 10).max(10_000);
+        for &slot in slots.iter() {
+            if let Some(v) = Vectors::read_slot(
+                params.vectors,
+                slot as u64,
+                params.segment_slots,
+                params.dim,
+            ) {
                 index.assign_slot(slot, v);
+            }
+            if let Some(progress) = params.progress {
+                let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % milestone == 0 || done == total {
+                    tracing::debug!(collection = %collection, done, total, "ivf build progress");
+                }
             }
         }
         Ok(index)
@@ -177,6 +241,7 @@ impl IvfIndex {
             upserts_since_check: AtomicU64::new(0),
             centroids: data.centroids,
             config: ArcSwap::from_pointee(config),
+            lock_metrics: None,
         };
         {
             let slot_map = index.slot_list.read();
@@ -208,11 +273,26 @@ impl IvfIndex {
             baseline_mean_dist,
             built_at_live_count,
             upserts_since_check: AtomicU64::new(0),
+            lock_metrics: None,
         }
+    }
+
+    /// Attach the owning collection's metrics sink. Called by the store
+    /// right after construction, before the index is published.
+    pub(crate) fn set_metrics(&mut self, metrics: Arc<Metrics>) {
+        self.lock_metrics = Some(metrics);
     }
 
     pub(crate) fn list_count(&self) -> usize {
         self.centroids.len()
+    }
+
+    /// Ceiling for multi-round probe widening during filtered searches:
+    /// `IvfConfig::max_probes` clamped to the list count.
+    pub(crate) fn max_probe_cap(&self) -> usize {
+        self.config
+            .load()
+            .effective_max_probes(self.centroids.len())
     }
 
     /// Current configuration snapshot (all-scalar struct; cloning is cheap).
@@ -283,12 +363,13 @@ impl IvfIndex {
             return;
         }
         if old_list != UNASSIGNED {
-            let mut members = self.lists[old_list as usize].write();
+            let mut members =
+                timed_write_lock(self.lock_metrics.as_deref(), &self.lists[old_list as usize]);
             if let Some(pos) = members.iter().position(|&s| s == slot) {
                 members.swap_remove(pos);
             }
         }
-        self.lists[new_list as usize].write().push(slot);
+        timed_write_lock(self.lock_metrics.as_deref(), &self.lists[new_list as usize]).push(slot);
     }
 
     /// Assign every non-tombstoned slot in `start..end` (publish path: slots
@@ -459,6 +540,7 @@ mod tests {
             drift_check_interval: 3,
             default_nprobe: 2,
             auto_promotion: true,
+            max_probes: None,
         }
     }
 
@@ -498,13 +580,8 @@ mod tests {
         let slots: Vec<u32> = (0..data.len() as u32).collect();
 
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -524,13 +601,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -556,13 +628,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -612,13 +679,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let known: Vec<u32> = (0..4).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &known, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &known,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -672,13 +734,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let first_half: Vec<u32> = (0..4).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &first_half, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &first_half,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -695,13 +752,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..vectors.len() as u32).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -739,13 +791,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..vectors.len() as u32).collect();
         let index = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 
@@ -765,13 +812,8 @@ mod tests {
         let (_dir, mmaps) = mmap_from(&vectors);
         let slots: Vec<u32> = (0..data.len() as u32).collect();
         let original = IvfIndex::build(
+            &IndexBuildParams::new("col", 8, DistanceMetric::Euclid, &slots, &mmaps, 16),
             &config(),
-            "col",
-            8,
-            DistanceMetric::Euclid,
-            &slots,
-            &mmaps,
-            16,
         )
         .unwrap();
 

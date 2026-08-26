@@ -109,8 +109,13 @@ pub struct CollectionStore {
     /// Transactions since the last meta.bin save. Used to amortize fsync
     /// cost; the WAL guarantees crash safety independently.
     txns_since_last_save: AtomicU64,
+    /// In-flight index build progress: slots incorporated so far / total
+    /// slots targeted. Reset at build start, finalized at completion;
+    /// surfaced through [`crate::types::IndexInfo`].
+    build_inserted: AtomicU64,
+    build_points_total: AtomicU64,
     /// Operational metrics (counters and latency histograms), wait-free.
-    metrics: Metrics,
+    metrics: Arc<Metrics>,
 }
 
 impl CollectionStore {
@@ -140,7 +145,10 @@ impl CollectionStore {
         }
         if !matches!(
             config.distance,
-            DistanceMetric::Cosine | DistanceMetric::Euclid | DistanceMetric::Dot
+            DistanceMetric::Cosine
+                | DistanceMetric::Euclid
+                | DistanceMetric::Dot
+                | DistanceMetric::Manhattan
         ) {
             return Err(VectorSearchError::UnsupportedMetric(config.distance));
         }
@@ -150,6 +158,11 @@ impl CollectionStore {
         ) {
             if let Some(hnsw) = &config.hnsw_config {
                 hnsw.validate()?;
+            }
+        }
+        if config.index_type == Some(IndexType::IVF) {
+            if let Some(ivf) = &config.ivf_config {
+                ivf.validate()?;
             }
         }
 
@@ -218,7 +231,9 @@ impl CollectionStore {
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
             txns_since_last_save: AtomicU64::new(0),
-            metrics: Metrics::default(),
+            build_inserted: AtomicU64::new(0),
+            build_points_total: AtomicU64::new(0),
+            metrics: Arc::new(Metrics::default()),
         })
     }
 
@@ -289,7 +304,9 @@ impl CollectionStore {
             needs_rebuild: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
             txns_since_last_save: AtomicU64::new(0),
-            metrics: Metrics::default(),
+            build_inserted: AtomicU64::new(0),
+            build_points_total: AtomicU64::new(0),
+            metrics: Arc::new(Metrics::default()),
         };
         store.replay_wal()?;
         store.load_index()?;
@@ -308,6 +325,21 @@ impl CollectionStore {
     /// Operational metrics recorder for this collection.
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
+    }
+
+    /// Metrics sink shared with the published ANN indexes for lock
+    /// contention and version-reload diagnostics.
+    pub(crate) fn metrics_arc(&self) -> Arc<Metrics> {
+        Arc::clone(&self.metrics)
+    }
+
+    /// In-flight index build progress: (building, inserted, total).
+    pub(crate) fn build_progress(&self) -> (bool, u64, u64) {
+        (
+            self.building.load(AtomicOrdering::Relaxed),
+            self.build_inserted.load(AtomicOrdering::Relaxed),
+            self.build_points_total.load(AtomicOrdering::Relaxed),
+        )
     }
 
     /// Upsert a point. Existing ids reuse their slot (overwrite); new ids get
@@ -903,11 +935,9 @@ mod tests {
 
         let mut cfg = config(4);
         cfg.distance = DistanceMetric::Manhattan;
-        let err = CollectionStore::create(dir.path().join("bad"), "col", &cfg).unwrap_err();
-        assert!(matches!(
-            err,
-            VectorSearchError::UnsupportedMetric(DistanceMetric::Manhattan)
-        ));
+        let manhattan_dir = dir.path().join("manhattan_ok");
+        let store = CollectionStore::create(&manhattan_dir, "col", &cfg).unwrap();
+        assert_eq!(store.meta().distance, DistanceMetric::Manhattan);
     }
 
     #[test]

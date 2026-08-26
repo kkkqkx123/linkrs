@@ -8,6 +8,12 @@ description = "Local vector search engine: exact scan, mmap storage, WAL"
 name = "vector_search"
 path = "src/lib.rs"
 
+[features]
+# Compile in adjacency/list write-lock wait instrumentation. Off by
+# default so the hot mutation paths carry no timing overhead; enable for
+# lock-contention investigations (metrics flow through MetricsSnapshot).
+lock-metrics = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -26,6 +32,7 @@ crc32fast.workspace = true
 tempfile.workspace = true
 rand.workspace = true
 criterion.workspace = true
+rayon.workspace = true
 
 [[bench]]
 name = "vector_scan_bench"
@@ -41,4 +48,16 @@ harness = false
 
 [[bench]]
 name = "hnsw_ingest_bench"
+harness = false
+
+[[bench]]
+name = "concurrent_search_bench"
+harness = false
+
+[[bench]]
+name = "alloc_stats_bench"
+harness = false
+
+[[bench]]
+name = "persist_crc_bench"
 harness = false

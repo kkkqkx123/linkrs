@@ -113,6 +113,7 @@ fn parse_vector_index_config(
                     "cosine" => VectorDistance::Cosine,
                     "euclidean" => VectorDistance::Euclidean,
                     "dot" => VectorDistance::Dot,
+                    "manhattan" => VectorDistance::Manhattan,
                     _ => {
                         return Err(crate::query::parser::ParseError::new(
                             crate::query::parser::core::error::ParseErrorKind::SyntaxError,

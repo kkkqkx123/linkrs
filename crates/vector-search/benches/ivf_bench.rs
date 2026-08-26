@@ -44,6 +44,7 @@ fn ivf_config(lists: u32) -> IvfConfig {
         drift_check_interval: u64::MAX,
         default_nprobe: 8,
         auto_promotion: false,
+        max_probes: None,
     }
 }
 
@@ -98,13 +99,15 @@ fn latency_and_recall(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
     let n = 100_000;
     let engine = engine_with(dir.path(), n, 256);
-    engine.build_index("col").unwrap();
 
+    // Ground truth must come from the exact-scan path, so compute it before
+    // the index is published; afterwards searches route through IVF.
     let queries = unit_vectors(20);
     let truth: Vec<Vec<String>> = queries
         .iter()
         .map(|q| ground_truth(&engine, q, 10))
         .collect();
+    engine.build_index("col").unwrap();
 
     let mut group = c.benchmark_group("ivf_latency_vs_nprobe");
     let mut report =

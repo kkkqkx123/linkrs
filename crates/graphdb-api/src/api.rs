@@ -40,27 +40,89 @@ pub mod vector_config {
             drift_check_interval: s.drift_check_interval,
             default_nprobe: s.default_nprobe,
             auto_promotion: s.auto_promotion,
+            max_probes: if s.max_probes == 0 {
+                None
+            } else {
+                Some(s.max_probes)
+            },
         })
     }
 
     /// Map raw TOML HNSW settings to the local engine's HNSW configuration.
-    /// `0` leaves a field at the engine default.
+    /// A TOML value of `0` leaves the field at the engine default; nonzero
+    /// values override it.
     pub fn local_hnsw_config(local: &LocalVectorConfig) -> Option<vector_search::HnswConfig> {
         let s = local.hnsw.as_ref()?;
-        let mut config = vector_search::HnswConfig::default();
-        if s.m > 0 {
-            config.m = s.m;
-        }
-        if s.ef_construct > 0 {
-            config.ef_construct = s.ef_construct;
-        }
-        if s.full_scan_threshold > 0 {
-            config.full_scan_threshold = Some(s.full_scan_threshold);
-        }
-        if s.ef_search > 0 {
-            config.ef_search = s.ef_search;
-        }
-        Some(config)
+        let defaults = vector_search::HnswConfig::default();
+        Some(vector_search::HnswConfig {
+            m: if s.m > 0 { s.m } else { defaults.m },
+            ef_construct: if s.ef_construct > 0 {
+                s.ef_construct
+            } else {
+                defaults.ef_construct
+            },
+            full_scan_threshold: (s.full_scan_threshold > 0).then_some(s.full_scan_threshold),
+            ef_search: if s.ef_search > 0 {
+                s.ef_search
+            } else {
+                defaults.ef_search
+            },
+            iterative_max_rounds: (s.iterative_max_rounds > 0).then_some(s.iterative_max_rounds),
+            max_scan_tuples: (s.max_scan_tuples > 0).then_some(s.max_scan_tuples),
+            ..defaults
+        })
+    }
+}
+
+#[cfg(all(test, feature = "vector"))]
+mod vector_config_tests {
+    use super::vector_config::{local_hnsw_config, local_ivf_config};
+    use graphdb_config::config::{HnswSettings, IvfSettings, LocalVectorConfig};
+
+    #[test]
+    fn zero_toml_fields_map_to_engine_defaults() {
+        let local = LocalVectorConfig {
+            hnsw: Some(HnswSettings::default()),
+            ivf: Some(IvfSettings::default()),
+            ..LocalVectorConfig::default()
+        };
+
+        let hnsw = local_hnsw_config(&local).unwrap();
+        assert_eq!(hnsw.iterative_max_rounds, None);
+        assert_eq!(hnsw.max_scan_tuples, None);
+
+        let ivf = local_ivf_config(&local).unwrap();
+        assert_eq!(ivf.max_probes, None);
+    }
+
+    #[test]
+    fn scan_limit_toml_fields_flow_through() {
+        let local = LocalVectorConfig {
+            hnsw: Some(HnswSettings {
+                iterative_max_rounds: 5,
+                max_scan_tuples: 20_000,
+                ..HnswSettings::default()
+            }),
+            ivf: Some(IvfSettings {
+                max_probes: 16,
+                ..IvfSettings::default()
+            }),
+            ..LocalVectorConfig::default()
+        };
+
+        let hnsw = local_hnsw_config(&local).unwrap();
+        assert_eq!(hnsw.iterative_max_rounds, Some(5));
+        assert_eq!(hnsw.max_scan_tuples, Some(20_000));
+        assert!(hnsw.validate().is_ok());
+
+        let ivf = local_ivf_config(&local).unwrap();
+        assert_eq!(ivf.max_probes, Some(16));
+        assert!(ivf.validate().is_ok());
+        assert_eq!(
+            ivf.effective_max_probes(8),
+            8,
+            "probe cap clamped to list count"
+        );
     }
 }
 

@@ -118,6 +118,32 @@ pub unsafe fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
     1.0 - (dot / denom).clamp(-1.0, 1.0)
 }
 
+/// Manhattan distance.
+///
+/// # Safety
+///
+/// The caller must ensure `a` and `b` have the same length, and that the
+/// current CPU supports AVX2 (checked by `is_x86_feature_detected!` before dispatch).
+#[target_feature(enable = "avx2")]
+pub unsafe fn distance_l1(a: &[f32], b: &[f32]) -> f32 {
+    let sign = _mm256_set1_ps(-0.0f32);
+    let mut acc = _mm256_setzero_ps();
+    let mut i = 0;
+    while i + 8 <= a.len() {
+        let av = _mm256_loadu_ps(a.as_ptr().add(i));
+        let bv = _mm256_loadu_ps(b.as_ptr().add(i));
+        let d = _mm256_sub_ps(av, bv);
+        let abs = _mm256_andnot_ps(sign, d);
+        acc = _mm256_add_ps(acc, abs);
+        i += 8;
+    }
+    let mut sum = horizontal_sum(acc);
+    for j in i..a.len() {
+        sum += (a[j] - b[j]).abs();
+    }
+    sum
+}
+
 /// Dispatch for a metric.
 ///
 /// # Safety
@@ -128,14 +154,6 @@ pub unsafe fn distance(metric: DistanceMetric, a: &[f32], b: &[f32]) -> f32 {
         DistanceMetric::Euclid => distance_l2(a, b),
         DistanceMetric::Dot => -inner_product(a, b),
         DistanceMetric::Cosine => distance_cosine(a, b),
-        DistanceMetric::Manhattan => {
-            // Intentionally scalar: Manhattan is rejected at collection
-            // creation, kept here only for completeness.
-            let mut sum = 0.0f32;
-            for j in 0..a.len() {
-                sum += (a[j] - b[j]).abs();
-            }
-            sum
-        }
+        DistanceMetric::Manhattan => distance_l1(a, b),
     }
 }

@@ -161,6 +161,10 @@ pub struct IvfSettings {
     /// Default nprobe when a query does not set one.
     #[serde(default = "default_ivf_nprobe")]
     pub default_nprobe: usize,
+    /// Upper bound for multi-round probe widening on filtered searches;
+    /// `0` = engine default (capped by the list count only).
+    #[serde(default)]
+    pub max_probes: usize,
 }
 
 impl Default for IvfSettings {
@@ -174,6 +178,7 @@ impl Default for IvfSettings {
             drift_threshold: 0.10,
             drift_check_interval: 25_000,
             default_nprobe: 8,
+            max_probes: 0,
         }
     }
 }
@@ -223,6 +228,14 @@ pub struct HnswSettings {
     /// default. Per-query `SearchMode::KNN.ef_search` overrides it.
     #[serde(default)]
     pub ef_search: usize,
+    /// Cap on iterative-scan expansion rounds for filtered searches; `0` =
+    /// engine default.
+    #[serde(default)]
+    pub iterative_max_rounds: usize,
+    /// Cumulative cap on nodes visited across iterative-scan rounds; `0` =
+    /// unbounded.
+    #[serde(default)]
+    pub max_scan_tuples: u64,
 }
 
 impl Default for HnswSettings {
@@ -232,6 +245,8 @@ impl Default for HnswSettings {
             ef_construct: 100,
             full_scan_threshold: 0,
             ef_search: 0,
+            iterative_max_rounds: 0,
+            max_scan_tuples: 0,
         }
     }
 }

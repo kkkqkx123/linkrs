@@ -86,6 +86,7 @@ pub enum VectorDistance {
     Cosine,
     Euclidean,
     Dot,
+    Manhattan,
 }
 
 /// YIELD clause for vector search

@@ -22,6 +22,7 @@ fn ivf_config() -> IvfConfig {
         drift_check_interval: u64::MAX, // no automatic checks in most tests
         default_nprobe: 2,
         auto_promotion: false,
+        max_probes: None,
     }
 }
 
@@ -337,16 +338,20 @@ fn filtered_probe_semantics_and_retry() {
         .unwrap();
     assert_eq!(near.len(), 10);
 
-    // Approximate semantics: querying near blob 0 with a filter that only
-    // blob 7 satisfies may legitimately return nothing (the single controlled
-    // nprobe-doubling retry is best effort, not a guarantee).
+    // Multi-round probe widening keeps doubling the probe width until every
+    // list has been probed, so a filtered query reaches full recall even
+    // when the matching points live far from the query.
     let far = engine
         .search(
             "col",
             &SearchQuery::new(vec![0.0; DIM], 10).with_filter(filter.clone()),
         )
         .unwrap();
-    let _ = far; // must not error; content unspecified by IVF semantics
+    assert_eq!(
+        far.len(),
+        10,
+        "unbounded probe widening must recover all markers"
+    );
 
     // nprobe=all degenerates to exact: every marker is found from anywhere.
     let exact = engine
@@ -358,6 +363,122 @@ fn filtered_probe_semantics_and_retry() {
         )
         .unwrap();
     assert_eq!(exact.len(), 10);
+}
+
+/// Eight tight blobs far apart; only blob 7 carries the marker payload.
+fn engine_with_marker_blobs(
+    path: &std::path::Path,
+    max_probes: Option<usize>,
+) -> LocalVectorEngine {
+    let engine = LocalVectorEngine::open(path).unwrap();
+    engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid).with_ivf(IvfConfig {
+                lists: Some(8),
+                min_build_points: 1,
+                default_nprobe: 1,
+                max_probes,
+                ..ivf_config()
+            }),
+        )
+        .unwrap();
+
+    let mut points = Vec::new();
+    for blob in 0..8i32 {
+        for i in 0..10 {
+            let mut v = [0.0f32; DIM];
+            v[0] = blob as f32 * 100.0 + i as f32 * 0.01;
+            let tag = if blob == 7 { "marker" } else { "other" };
+            points.push(blob_point(points.len(), v, tag));
+        }
+    }
+    engine.upsert_batch("col", &points).unwrap();
+    assert!(engine.build_index("col").unwrap());
+    engine
+}
+
+/// `IvfConfig::max_probes` must truncate the multi-round widening loop:
+/// each configured ceiling bounds how many doublings a short filtered
+/// search may attempt (observable through the retry counter).
+#[test]
+fn max_probes_caps_probe_widening() {
+    let filter = || VectorFilter::new().must(FilterCondition::match_value("blob", "marker"));
+
+    // cap == initial nprobe (1): widening disabled entirely, zero retries.
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_with_marker_blobs(&dir.path().join("vec"), Some(1));
+    let before = engine
+        .collection_metrics("col")
+        .unwrap()
+        .search_nprobe_retries;
+    let results = engine
+        .search(
+            "col",
+            &SearchQuery::new(vec![0.0; DIM], 10).with_filter(filter()),
+        )
+        .unwrap();
+    assert!(
+        results.len() < 10,
+        "cap=1 must stop before reaching the marker lists"
+    );
+    assert_eq!(
+        engine
+            .collection_metrics("col")
+            .unwrap()
+            .search_nprobe_retries,
+        before,
+        "no widening attempt may be recorded once the cap is already reached"
+    );
+
+    // cap == 2 from nprobe 1: exactly one widening is allowed.
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_with_marker_blobs(&dir.path().join("vec"), Some(2));
+    let before = engine
+        .collection_metrics("col")
+        .unwrap()
+        .search_nprobe_retries;
+    let results = engine
+        .search(
+            "col",
+            &SearchQuery::new(vec![0.0; DIM], 10).with_filter(filter()),
+        )
+        .unwrap();
+    assert!(results.len() < 10, "two lists cannot cover eight blobs");
+    assert_eq!(
+        engine
+            .collection_metrics("col")
+            .unwrap()
+            .search_nprobe_retries
+            - before,
+        1,
+        "exactly one doubling between nprobe 1 and the cap of 2"
+    );
+
+    // No cap: widening proceeds until all lists are probed (full recall),
+    // with one retry per doubling (1 -> 2 -> 4 -> 8).
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine_with_marker_blobs(&dir.path().join("vec"), None);
+    let before = engine
+        .collection_metrics("col")
+        .unwrap()
+        .search_nprobe_retries;
+    let results = engine
+        .search(
+            "col",
+            &SearchQuery::new(vec![0.0; DIM], 10).with_filter(filter()),
+        )
+        .unwrap();
+    assert_eq!(results.len(), 10);
+    assert_eq!(
+        engine
+            .collection_metrics("col")
+            .unwrap()
+            .search_nprobe_retries
+            - before,
+        3,
+        "one retry per doubling until the list count is reached"
+    );
 }
 
 #[test]

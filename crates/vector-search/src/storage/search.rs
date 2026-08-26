@@ -52,7 +52,12 @@ impl CollectionStore {
         // acquisition so a concurrent background compaction (which swaps
         // every file under the write lock) cannot produce a mixed-generation
         // view. Only the atomic loads happen under the lock; the actual scan
-        // runs on immutable snapshots.
+        // runs on immutable snapshots. `pending` must be captured here too:
+        // a slot enters pending only after its key/payload/vector are
+        // visible in the current file generations (both happen under the
+        // store write lock), so a pending slot is always covered by these
+        // snapshots. Loading it later could surface a slot whose key is
+        // missing from the older key generation.
         let (
             dim,
             metric,
@@ -64,6 +69,7 @@ impl CollectionStore {
             paysnap,
             published,
             filter_mask,
+            pending,
         ) = {
             let inner = self.inner.read();
             if query.vector.len() != inner.meta.vector_size {
@@ -87,6 +93,7 @@ impl CollectionStore {
                 self.payloads.snapshot(),
                 self.index.load(),
                 mask,
+                self.pending.load_full(),
             )
         };
         let filtered = query.filter.is_some();
@@ -101,7 +108,7 @@ impl CollectionStore {
                     paysnap: &paysnap,
                     filter_mask: filter_mask.as_ref(),
                 };
-                let results = self.search_ivf(index.as_ref(), query, &snap);
+                let results = self.search_ivf(index.as_ref(), query, &snap, &pending);
                 self.metrics
                     .record_search(SearchPath::Ivf, filtered, started.elapsed());
                 drop(published);
@@ -117,7 +124,7 @@ impl CollectionStore {
                     paysnap: &paysnap,
                     filter_mask: filter_mask.as_ref(),
                 };
-                let results = self.search_hnsw(index.as_ref(), query, &snap);
+                let results = self.search_hnsw(index.as_ref(), query, &snap, &pending);
                 self.metrics
                     .record_search(SearchPath::Hnsw, filtered, started.elapsed());
                 drop(published);
@@ -249,18 +256,19 @@ impl CollectionStore {
 
     /// IVF path: probe the `nprobe` closest lists (+ pending slots), then
     /// shared post-processing. With a payload filter that leaves fewer than
-    /// `limit` results while unprobed lists remain, nprobe is doubled once as
-    /// a bounded accuracy fallback; beyond that the approximate semantics of
-    /// IVFFlat apply (`nprobe = lists` degenerates to exact).
+    /// `limit` results, the probe width keeps doubling (each widening
+    /// recorded as a [`SearchRetry::NprobeDoubling`]) until the result count
+    /// is met, every list has been probed, or `IvfConfig::max_probes` caps
+    /// the widening — pgvector's multi-round iterative scan semantics.
     fn search_ivf(
         &self,
         index: &IvfIndex,
         query: &SearchQuery,
         snap: &SearchSnapshot<'_>,
+        pending: &[u32],
     ) -> Result<Vec<SearchResult>> {
-        let lists = index.list_count();
         let mut nprobe = index.clamp_nprobe(query.nprobe);
-        let pending = self.pending.load_full();
+        let cap = index.max_probe_cap();
 
         let ivf_ctx = IvfSearchContext {
             tombstones: snap.tombstones,
@@ -268,19 +276,18 @@ impl CollectionStore {
             segment_slots: snap.segment_slots,
             filter_mask: snap.filter_mask,
         };
-        let candidates = index.probe_candidates(&query.vector, nprobe, &pending, &ivf_ctx)?;
-        let results = self.finish_candidates(candidates, query, snap)?;
+        loop {
+            let candidates = index.probe_candidates(&query.vector, nprobe, pending, &ivf_ctx)?;
+            let results = self.finish_candidates(candidates, query, snap)?;
 
-        let short = query.filter.is_some() && results.len() < query.limit;
-        if !short || nprobe >= lists {
-            return Ok(results);
+            let short = query.filter.is_some() && results.len() < query.limit;
+            if !short || nprobe >= cap {
+                return Ok(results);
+            }
+            self.metrics
+                .record_search_retry(SearchRetry::NprobeDoubling);
+            nprobe = (nprobe * 2).min(cap);
         }
-        // Single controlled retry with a doubled probe width.
-        self.metrics
-            .record_search_retry(SearchRetry::NprobeDoubling);
-        nprobe = (nprobe * 2).min(lists);
-        let candidates = index.probe_candidates(&query.vector, nprobe, &pending, &ivf_ctx)?;
-        self.finish_candidates(candidates, query, snap)
     }
 
     /// HNSW path: layered-graph search with `ef` from the query's
@@ -296,6 +303,7 @@ impl CollectionStore {
         index: &HnswIndex,
         query: &SearchQuery,
         snap: &SearchSnapshot<'_>,
+        pending: &[u32],
     ) -> Result<Vec<SearchResult>> {
         let mut ef = query.hnsw_ef().unwrap_or_else(|| index.default_ef());
         let hnsw_ctx = HnswSearchContext {
@@ -304,38 +312,9 @@ impl CollectionStore {
             segment_slots: snap.segment_slots,
             filter_mask: snap.filter_mask,
         };
-        let mut candidates =
+        let candidates =
             index.probe_candidates(&query.vector, ef, query.effective_limit(), &hnsw_ctx)?;
-
-        // Merge pending slots (exact brute-force scoring) so points
-        // inserted after the index was published remain visible.
-        let pending = self.pending.load_full();
-        if !pending.is_empty() {
-            let metric = self.inner.read().meta.distance;
-            let pending_scored: Vec<(f32, u32)> = pending
-                .par_iter()
-                .copied()
-                .filter(|&s| !snap.tombstones.bit(s as usize))
-                .filter(|&s| {
-                    snap.filter_mask
-                        .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
-                })
-                .filter_map(|s| {
-                    let v = Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
-                    let dist = crate::distance::distance(metric, &query.vector, v);
-                    Some((crate::distance::to_score(metric, dist), s))
-                })
-                .collect();
-            // Deduplicate: if a slot appears in both graph results and
-            // pending, keep the better score (pending uses the live vector
-            // so scores are equivalent; just avoid duplicates).
-            let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
-            for scored @ (_, slot) in pending_scored {
-                if seen.insert(slot) {
-                    candidates.push(scored);
-                }
-            }
-        }
+        let candidates = self.merge_pending(candidates, pending, query, snap);
 
         let results = self.finish_candidates(candidates, query, snap)?;
 
@@ -356,71 +335,59 @@ impl CollectionStore {
             &query.vector,
             ef,
             query.effective_limit(),
-            3,
+            index.iterative_rounds(),
+            index.scan_tuple_budget(),
             &hnsw_ctx,
         );
         if let Ok(iterative_candidates) = iterative_results {
-            let mut candidates = iterative_candidates;
-            // Re-merge pending on retry.
-            let pending = self.pending.load_full();
-            if !pending.is_empty() {
-                let metric = self.inner.read().meta.distance;
-                let pending_scored: Vec<(f32, u32)> = pending
-                    .par_iter()
-                    .copied()
-                    .filter(|&s| !snap.tombstones.bit(s as usize))
-                    .filter(|&s| {
-                        snap.filter_mask
-                            .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
-                    })
-                    .filter_map(|s| {
-                        let v =
-                            Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
-                        let dist = crate::distance::distance(metric, &query.vector, v);
-                        Some((crate::distance::to_score(metric, dist), s))
-                    })
-                    .collect();
-                let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
-                for scored @ (_, slot) in pending_scored {
-                    if seen.insert(slot) {
-                        candidates.push(scored);
-                    }
-                }
-            }
+            let candidates = self.merge_pending(iterative_candidates, pending, query, snap);
             return self.finish_candidates(candidates, query, snap);
         }
 
         // Fallback: double ef for a single controlled retry.
         self.metrics.record_search_retry(SearchRetry::EfDoubling);
         ef = (ef * 2).min(cap);
-        let mut candidates =
+        let candidates =
             index.probe_candidates(&query.vector, ef, query.effective_limit(), &hnsw_ctx)?;
-        // Re-merge pending on retry.
-        let pending = self.pending.load_full();
-        if !pending.is_empty() {
-            let metric = self.inner.read().meta.distance;
-            let pending_scored: Vec<(f32, u32)> = pending
-                .par_iter()
-                .copied()
-                .filter(|&s| !snap.tombstones.bit(s as usize))
-                .filter(|&s| {
-                    snap.filter_mask
-                        .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
-                })
-                .filter_map(|s| {
-                    let v = Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
-                    let dist = crate::distance::distance(metric, &query.vector, v);
-                    Some((crate::distance::to_score(metric, dist), s))
-                })
-                .collect();
-            let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
-            for scored @ (_, slot) in pending_scored {
-                if seen.insert(slot) {
-                    candidates.push(scored);
-                }
+        let candidates = self.merge_pending(candidates, pending, query, snap);
+        self.finish_candidates(candidates, query, snap)
+    }
+
+    /// Score pending slots by brute force against the live vectors and merge
+    /// them into ANN candidates (deduplicating in favor of the first
+    /// occurrence), so points inserted after a build stay visible.
+    fn merge_pending(
+        &self,
+        mut candidates: Vec<(f32, u32)>,
+        pending: &[u32],
+        query: &SearchQuery,
+        snap: &SearchSnapshot<'_>,
+    ) -> Vec<(f32, u32)> {
+        if pending.is_empty() {
+            return candidates;
+        }
+        let metric = self.inner.read().meta.distance;
+        let scored: Vec<(f32, u32)> = pending
+            .par_iter()
+            .copied()
+            .filter(|&s| !snap.tombstones.bit(s as usize))
+            .filter(|&s| {
+                snap.filter_mask
+                    .is_none_or(|m| (s as usize) < m.len() && m[s as usize])
+            })
+            .filter_map(|s| {
+                let v = Vectors::read_slot(snap.vsnap, s as u64, snap.segment_slots, snap.dim)?;
+                let dist = crate::distance::distance(metric, &query.vector, v);
+                Some((crate::distance::to_score(metric, dist), s))
+            })
+            .collect();
+        let mut seen: HashSet<u32> = candidates.iter().map(|&(_, s)| s).collect();
+        for scored @ (_, slot) in scored {
+            if seen.insert(slot) {
+                candidates.push(scored);
             }
         }
-        self.finish_candidates(candidates, query, snap)
+        candidates
     }
 
     /// Shared post-processing for both search paths: payload post-filter,

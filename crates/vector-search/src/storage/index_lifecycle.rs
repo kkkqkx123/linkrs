@@ -22,7 +22,7 @@ use std::time::Instant;
 use super::vectors::Vectors;
 use super::CollectionStore;
 use crate::error::Result;
-use crate::index::{persist, HnswIndex, IvfIndex};
+use crate::index::{persist, HnswIndex, IndexBuildParams, IvfIndex};
 use crate::metrics::IndexTier;
 use crate::types::{HnswConfig, IndexInfo, IndexType, IvfConfig};
 
@@ -70,7 +70,13 @@ impl CollectionStore {
     }
 
     fn load_ivf(&self) -> Result<()> {
+        let index_path = self.dir.join("index.bin");
+        let existed = index_path.exists();
         let Some(data) = persist::load(&self.dir)? else {
+            if existed {
+                tracing::info!("vector index.bin corrupt; falling back to exact scan");
+                self.metrics.record_index_load_fallback();
+            }
             return Ok(());
         };
         let (dim, distance, next_slot, capacity) = {
@@ -89,7 +95,9 @@ impl CollectionStore {
         }
         let config = self.inner.read().ivf_config.clone().unwrap_or_default();
         let covered = data.slot_list.len();
-        let index = Arc::new(IvfIndex::from_persisted(data, config));
+        let mut index = IvfIndex::from_persisted(data, config);
+        index.set_metrics(self.metrics_arc());
+        let index = Arc::new(index);
         {
             let tombstones = self.tombstones.load();
             let mut p = (**self.pending.load()).clone();
@@ -105,7 +113,13 @@ impl CollectionStore {
     }
 
     fn load_hnsw(&self) -> Result<()> {
+        let hnsw_path = self.dir.join("hnsw.bin");
+        let existed = hnsw_path.exists();
         let Some(data) = persist::load_hnsw(&self.dir)? else {
+            if existed {
+                tracing::info!("vector hnsw.bin corrupt; falling back to exact scan");
+                self.metrics.record_index_load_fallback();
+            }
             return Ok(());
         };
         let (dim, distance, next_slot, capacity) = {
@@ -131,7 +145,10 @@ impl CollectionStore {
             .unwrap_or_default();
         let covered = data.nodes.len();
         let index = match HnswIndex::from_persisted(data, &config) {
-            Ok(index) => Arc::new(index),
+            Ok(mut index) => {
+                index.set_metrics(self.metrics_arc());
+                Arc::new(index)
+            }
             Err(e) => {
                 tracing::info!(
                     error = %e,
@@ -256,6 +273,9 @@ impl CollectionStore {
         }
 
         self.building.store(true, AtomicOrdering::Relaxed);
+        self.build_points_total
+            .store(live.len() as u64, AtomicOrdering::Relaxed);
+        self.build_inserted.store(0, AtomicOrdering::Relaxed);
         tracing::info!(
             collection = %name,
             points = live.len(),
@@ -264,12 +284,18 @@ impl CollectionStore {
         let build_started = Instant::now();
         let built = {
             let vsnap = self.vectors.snapshot();
-            HnswIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots)
-                .map(Arc::new)
+            HnswIndex::build(
+                &IndexBuildParams::new(&name, dim, metric, &live, &vsnap, segment_slots)
+                    .with_progress(&self.build_inserted),
+                &config,
+            )
         };
 
         let index = match built {
-            Ok(index) => index,
+            Ok(mut index) => {
+                index.set_metrics(self.metrics_arc());
+                Arc::new(index)
+            }
             Err(e) => {
                 self.building.store(false, AtomicOrdering::Relaxed);
                 tracing::warn!(collection = %name, error = %e, "HNSW build failed");
@@ -322,6 +348,10 @@ impl CollectionStore {
         // in `pending`, which every published-index adoption path drains.
         self.index
             .store(Arc::new(Some(PublishedIndex::Hnsw(index))));
+        self.build_inserted.store(
+            self.build_points_total.load(AtomicOrdering::Relaxed),
+            AtomicOrdering::Relaxed,
+        );
         self.building.store(false, AtomicOrdering::Relaxed);
         self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
 
@@ -370,6 +400,9 @@ impl CollectionStore {
         }
 
         self.building.store(true, AtomicOrdering::Relaxed);
+        self.build_points_total
+            .store(live.len() as u64, AtomicOrdering::Relaxed);
+        self.build_inserted.store(0, AtomicOrdering::Relaxed);
         tracing::info!(
             collection = %name,
             points = live.len(),
@@ -379,11 +412,18 @@ impl CollectionStore {
         let build_started = Instant::now();
         let built = {
             let vsnap = self.vectors.snapshot();
-            IvfIndex::build(&config, &name, dim, metric, &live, &vsnap, segment_slots).map(Arc::new)
+            IvfIndex::build(
+                &IndexBuildParams::new(&name, dim, metric, &live, &vsnap, segment_slots)
+                    .with_progress(&self.build_inserted),
+                &config,
+            )
         };
 
         let index = match built {
-            Ok(index) => index,
+            Ok(mut index) => {
+                index.set_metrics(self.metrics_arc());
+                Arc::new(index)
+            }
             Err(e) => {
                 self.building.store(false, AtomicOrdering::Relaxed);
                 tracing::warn!(collection = %name, error = %e, "IVF build failed");
@@ -424,6 +464,10 @@ impl CollectionStore {
         // order such an upsert still sees `building == true` and lands in
         // `pending`, which every probe search scans unconditionally.
         self.index.store(Arc::new(Some(PublishedIndex::Ivf(index))));
+        self.build_inserted.store(
+            self.build_points_total.load(AtomicOrdering::Relaxed),
+            AtomicOrdering::Relaxed,
+        );
         self.building.store(false, AtomicOrdering::Relaxed);
         self.needs_rebuild.store(false, AtomicOrdering::Relaxed);
 
@@ -567,6 +611,7 @@ impl CollectionStore {
 
     /// Current index state for [`CollectionInfo`](crate::types::CollectionInfo).
     pub fn index_info(&self) -> Option<IndexInfo> {
+        let (building, build_inserted, build_points_total) = self.build_progress();
         let published = self.index.load();
         match published.as_ref() {
             Some(PublishedIndex::Ivf(index)) => Some(IndexInfo {
@@ -580,6 +625,9 @@ impl CollectionStore {
                 stale_overwrite_count: 0,
                 stale_ratio: None,
                 last_drift_ratio: self.inner.read().last_drift_ratio,
+                building,
+                build_inserted,
+                build_points_total,
             }),
             Some(PublishedIndex::Hnsw(index)) => Some(IndexInfo {
                 index_kind: 2,
@@ -592,6 +640,9 @@ impl CollectionStore {
                 stale_overwrite_count: index.overwrites_since_build(),
                 stale_ratio: Some(index.stale_ratio()),
                 last_drift_ratio: None,
+                building,
+                build_inserted,
+                build_points_total,
             }),
             None => {
                 // Nothing published: report a placeholder when an ANN tier is
@@ -611,6 +662,9 @@ impl CollectionStore {
                         stale_overwrite_count: 0,
                         stale_ratio: None,
                         last_drift_ratio: None,
+                        building,
+                        build_inserted,
+                        build_points_total,
                     })
                 }
             }

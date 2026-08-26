@@ -111,6 +111,8 @@ engine = "local"
 [vector.local]
 # 本地向量引擎数据目录（不填则默认使用 <storage_path>/vector）
 # data_dir = "data/vector"
+# 距离度量说明：Cosine / Euclid / Dot 兼容本地与 Qdrant 双后端；
+# Manhattan 仅本地引擎可用（`crates/vector-search` 已实现 naive/avx2 内核与分数契约 1/(1+√d)），Qdrant 后端会拒绝并报错；无需额外配置，度量随集合创建参数传递。
 
 [vector.qdrant]
 # 是否启用 qdrant 后端（仅当 engine = "qdrant" 时生效）

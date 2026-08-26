@@ -15,10 +15,15 @@
 //!   fallbacks to exact scan
 //! - compaction: commits, race retries, contended write-lock fallbacks,
 //!   latency
+//! - lock contention: adjacency/list write-lock acquisition counts and wait
+//!   times (compiled in only with the `lock-metrics` feature, off by
+//!   default), plus the version-double-read reloads observed on the HNSW
+//!   search path
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use parking_lot::{RwLock, RwLockWriteGuard};
 use serde::Serialize;
 
 /// Number of power-of-two buckets in [`LatencyHistogram`]. Bucket `i`
@@ -138,6 +143,33 @@ pub enum IndexTier {
     Ivf,
 }
 
+/// Acquire a write guard on an adjacency/list lock while measuring the
+/// wait time, when lock metrics are compiled in and a recorder is attached.
+///
+/// Instrumentation points: HNSW adjacency writes (`insert`, `link_neighbor`,
+/// `repair`) and IVF list membership writes (`assign_slot`).
+#[cfg(feature = "lock-metrics")]
+pub(crate) fn timed_write_lock<'a, T>(
+    recorder: Option<&'a Metrics>,
+    lock: &'a RwLock<T>,
+) -> RwLockWriteGuard<'a, T> {
+    let started = std::time::Instant::now();
+    let guard = lock.write();
+    if let Some(metrics) = recorder {
+        metrics.record_lock_wait(started.elapsed());
+    }
+    guard
+}
+
+#[cfg(not(feature = "lock-metrics"))]
+pub(crate) fn timed_write_lock<'a, T>(
+    recorder: Option<&'a Metrics>,
+    lock: &'a RwLock<T>,
+) -> RwLockWriteGuard<'a, T> {
+    let _ = recorder;
+    lock.write()
+}
+
 /// Cumulative per-collection operational metrics.
 ///
 /// All recording methods are wait-free and safe to call concurrently.
@@ -161,7 +193,16 @@ pub struct Metrics {
     search_nprobe_retries: AtomicU64,
     search_iterative_expansions: AtomicU64,
     search_ef_retries: AtomicU64,
+    /// Adjacency reads where the version double-read protocol detected a
+    /// concurrent mutation and reloaded the neighborhood (HNSW only).
+    search_version_reloads: AtomicU64,
     search_latency: LatencyHistogram,
+
+    /// Adjacency/list write-lock acquisitions. Only incremented with the
+    /// `lock-metrics` feature enabled.
+    adjacency_write_locks: AtomicU64,
+    /// Cumulative wait time of those acquisitions, in nanoseconds.
+    adjacency_lock_wait_nanos: AtomicU64,
 
     upsert_errors: AtomicU64,
     delete_errors: AtomicU64,
@@ -212,6 +253,31 @@ impl Metrics {
             SearchRetry::EfDoubling => &self.search_ef_retries,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record one adjacency read where the version double-read protocol
+    /// detected a concurrent mutation and reloaded the neighborhood.
+    pub fn record_version_reload(&self) {
+        self.search_version_reloads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record one sampled adjacency/list write-lock acquisition with the
+    /// time spent waiting for it.
+    ///
+    /// A no-op unless the `lock-metrics` feature is compiled in; the
+    /// feature keeps the hot mutation paths free of timing overhead by
+    /// default.
+    pub fn record_lock_wait(&self, waited: Duration) {
+        #[cfg(feature = "lock-metrics")]
+        {
+            self.adjacency_write_locks.fetch_add(1, Ordering::Relaxed);
+            self.adjacency_lock_wait_nanos
+                .fetch_add(waited.as_nanos() as u64, Ordering::Relaxed);
+        }
+        #[cfg(not(feature = "lock-metrics"))]
+        {
+            let _ = waited;
+        }
     }
 
     /// Record a failed search (engine boundary).
@@ -285,7 +351,11 @@ impl Metrics {
             search_nprobe_retries: self.search_nprobe_retries.load(Ordering::Relaxed),
             search_iterative_expansions: self.search_iterative_expansions.load(Ordering::Relaxed),
             search_ef_retries: self.search_ef_retries.load(Ordering::Relaxed),
+            search_version_reloads: self.search_version_reloads.load(Ordering::Relaxed),
             search: self.search_latency.summary(),
+
+            adjacency_write_locks: self.adjacency_write_locks.load(Ordering::Relaxed),
+            adjacency_lock_wait_nanos: self.adjacency_lock_wait_nanos.load(Ordering::Relaxed),
 
             upsert_errors: self.upsert_errors.load(Ordering::Relaxed),
             delete_errors: self.delete_errors.load(Ordering::Relaxed),
@@ -328,7 +398,16 @@ pub struct MetricsSnapshot {
     pub search_iterative_expansions: u64,
     /// Filtered searches where HNSW doubled `ef`.
     pub search_ef_retries: u64,
+    /// HNSW adjacency reads where the version double-read detected a
+    /// concurrent mutation and reloaded the neighborhood.
+    pub search_version_reloads: u64,
     pub search: LatencySummary,
+
+    /// Adjacency/list write-lock acquisitions; only grows with the
+    /// `lock-metrics` feature enabled (stays 0 otherwise).
+    pub adjacency_write_locks: u64,
+    /// Cumulative wait time of those acquisitions, in nanoseconds.
+    pub adjacency_lock_wait_nanos: u64,
 
     /// Upserts that failed at the engine boundary (validation, WAL, IO).
     pub upsert_errors: u64,
@@ -394,6 +473,7 @@ mod tests {
         m.record_search(SearchPath::Hnsw, true, Duration::from_micros(20));
         m.record_search(SearchPath::Exact, false, Duration::from_micros(5));
         m.record_search_retry(SearchRetry::IterativeExpansion);
+        m.record_version_reload();
         m.record_index_build(IndexTier::Ivf, Duration::from_millis(4));
         m.record_index_load_fallback();
         m.record_compaction(Duration::from_millis(8));
@@ -411,6 +491,11 @@ mod tests {
         assert_eq!(s.search_exact, 1);
         assert_eq!(s.search_filtered, 1);
         assert_eq!(s.search_iterative_expansions, 1);
+        assert_eq!(s.search_version_reloads, 1);
+        // Lock metrics stay zero unless the `lock-metrics` feature records
+        // them; the fields must exist in every build for downstream samplers.
+        assert_eq!(s.adjacency_write_locks, 0);
+        assert_eq!(s.adjacency_lock_wait_nanos, 0);
         assert_eq!(s.ivf_builds, 1);
         assert_eq!(s.index_load_fallbacks, 1);
         assert_eq!(s.compactions, 1);

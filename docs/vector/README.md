@@ -181,8 +181,11 @@ pub enum DistanceMetric {
     Cosine,    // 余弦相似度：cos(θ) = (a·b) / (||a|| * ||b||)
     Euclid,    // 欧几里得距离：√(Σ(aᵢ - bᵢ)²)
     Dot,       // 点积：Σ(aᵢ * bᵢ)
+    Manhattan, // 曼哈顿距离：Σ|aᵢ - bᵢ|，分数 1/(1+√d)，仅本地引擎（local）可用，Qdrant 后端会直接拒绝
 }
 ```
+
+> **注意**：`Manhattan` 仅在 `vector.engine = "local"` 时可用（`crates/vector-search` 的 `distance` 内核已实现 `naive`/`avx2`，见 `docs/plan/vector_search_improvement_plan.md §2.3.1` 的全链路启用清单）。配置/查询走 Qdrant 后端时会被 `is_supported_by_qdrant` 守卫拒绝并返回明确错误（`graphdb-sync/src/sync/vector_sync.rs` 与 `graphdb-api/src/api/core/vector_api.rs` 的 `is_local()` 分支）。无需为 `Manhattan` 新增独立 TOML 配置项，度量随集合创建参数传递。
 
 ### 相似度计算（余弦）
 

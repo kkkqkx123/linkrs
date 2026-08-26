@@ -7,11 +7,12 @@
 //! distances; the qdrant client normalizes them back to this contract at its
 //! boundary (`engine/common/distance_utils.rs`).
 //!
-//! | metric   | internal distance          | output score        |
-//! |----------|----------------------------|---------------------|
-//! | Euclid   | `Σ(a-b)²` (squared, no sqrt) | `1/(1+sqrt(d²))`  |
-//! | Dot      | `-Σ(a·b)`                  | `Σ(a·b)`            |
-//! | Cosine   | `1 - similarity` clamped to `[-1,1]` | `similarity` |
+//! | metric    | internal distance          | output score        |
+//! |-----------|----------------------------|---------------------|
+//! | Euclid    | `Σ(a-b)²` (squared, no sqrt) | `1/(1+sqrt(d²))`  |
+//! | Dot       | `-Σ(a·b)`                  | `Σ(a·b)`            |
+//! | Cosine    | `1 - similarity` clamped to `[-1,1]` | `similarity` |
+//! | Manhattan | `Σ\|a-b\|`                | `1/(1+sqrt(d))`    |
 //!
 //! Cosine deliberately computes norms on the fly instead of normalizing at
 //! insert time. `vectors.bin` is the single copy of the data and
@@ -70,6 +71,15 @@ mod tests {
         assert_close(d, 25.0);
         assert_close(to_score(DistanceMetric::Euclid, d), 1.0 / 6.0);
 
+        // Manhattan: |1-4|+|2-5|+|3-6|=9 -> score 1/(1+3)=0.25
+        let d = naive::distance(
+            DistanceMetric::Manhattan,
+            &[1.0, 2.0, 3.0],
+            &[4.0, 5.0, 6.0],
+        );
+        assert_close(d, 9.0);
+        assert_close(to_score(DistanceMetric::Manhattan, d), 1.0 / 4.0);
+
         // Dot: a=(1,2,3) b=(4,5,6) -> 32
         let d = naive::distance(DistanceMetric::Dot, &[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]);
         assert_close(d, -32.0);
@@ -106,6 +116,7 @@ mod tests {
             DistanceMetric::Euclid,
             DistanceMetric::Dot,
             DistanceMetric::Cosine,
+            DistanceMetric::Manhattan,
         ] {
             let mut prev = f32::INFINITY;
             for i in 0..100 {
@@ -139,6 +150,7 @@ mod tests {
                     DistanceMetric::Euclid,
                     DistanceMetric::Dot,
                     DistanceMetric::Cosine,
+                    DistanceMetric::Manhattan,
                 ] {
                     let expected = naive::distance(metric, &a, &b);
                     #[cfg(target_arch = "x86_64")]
@@ -166,6 +178,7 @@ mod tests {
                 DistanceMetric::Euclid,
                 DistanceMetric::Dot,
                 DistanceMetric::Cosine,
+                DistanceMetric::Manhattan,
             ] {
                 let expected = naive::distance(metric, a, b);
                 #[cfg(target_arch = "x86_64")]
@@ -201,6 +214,7 @@ mod tests {
             DistanceMetric::Euclid,
             DistanceMetric::Dot,
             DistanceMetric::Cosine,
+            DistanceMetric::Manhattan,
         ] {
             assert_eq!(distance(metric, &a, &b), naive::distance(metric, &a, &b));
         }

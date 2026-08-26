@@ -17,6 +17,10 @@
 //! - `delete_errors`         → [`MetricType::VectorDeleteErrors`]
 //! - `apply_txn.total_nanos` → upsert/delete latency accumulators (the WAL
 //!   fsync inside the store write lock is shared by both write kinds)
+//! - `adjacency_write_locks`       → [`MetricType::VectorLockOps`] (nonzero
+//!   only when the engine is built with the `lock-metrics` feature)
+//! - `adjacency_lock_wait_nanos`   → [`MetricType::VectorLockLatencyUs`]
+//! - `search_version_reloads`      → [`MetricType::VectorVersionReloads`]
 //!
 //! `VectorBufferFlush*` / `VectorEmbedding*` stay reserved for remote
 //! engines; index-build and compaction counters remain engine-local
@@ -37,6 +41,10 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 
 fn nanos_to_ms(nanos_delta: u64) -> u64 {
     nanos_delta / 1_000_000
+}
+
+fn nanos_to_us(nanos_delta: u64) -> u64 {
+    nanos_delta / 1_000
 }
 
 /// Forwards engine snapshot deltas into [`StatsManager`].
@@ -91,6 +99,16 @@ impl VectorMetricsSampler {
                 .total_nanos
                 .saturating_sub(prev.apply_txn.total_nanos),
         );
+        let lock_ops = cur
+            .adjacency_write_locks
+            .saturating_sub(prev.adjacency_write_locks);
+        let lock_us = nanos_to_us(
+            cur.adjacency_lock_wait_nanos
+                .saturating_sub(prev.adjacency_lock_wait_nanos),
+        );
+        let version_reloads = cur
+            .search_version_reloads
+            .saturating_sub(prev.search_version_reloads);
 
         let stats = &self.stats;
         stats.add_value_with_amount(MetricType::VectorSearchOps, search_total);
@@ -102,6 +120,9 @@ impl VectorMetricsSampler {
         stats.add_value_with_amount(MetricType::VectorDeleteOps, deletes);
         stats.add_value_with_amount(MetricType::VectorDeleteErrors, delete_errors);
         stats.add_value_with_amount(MetricType::VectorDeleteLatencyMs, apply_ms);
+        stats.add_value_with_amount(MetricType::VectorLockOps, lock_ops);
+        stats.add_value_with_amount(MetricType::VectorLockLatencyUs, lock_us);
+        stats.add_value_with_amount(MetricType::VectorVersionReloads, version_reloads);
 
         stats.add_space_metric_with_amount(name, MetricType::VectorSearchOps, search_total);
         stats.add_space_metric_with_amount(name, MetricType::VectorSearchErrors, search_errors);
@@ -112,6 +133,9 @@ impl VectorMetricsSampler {
         stats.add_space_metric_with_amount(name, MetricType::VectorDeleteOps, deletes);
         stats.add_space_metric_with_amount(name, MetricType::VectorDeleteErrors, delete_errors);
         stats.add_space_metric_with_amount(name, MetricType::VectorDeleteLatencyMs, apply_ms);
+        stats.add_space_metric_with_amount(name, MetricType::VectorLockOps, lock_ops);
+        stats.add_space_metric_with_amount(name, MetricType::VectorLockLatencyUs, lock_us);
+        stats.add_space_metric_with_amount(name, MetricType::VectorVersionReloads, version_reloads);
     }
 }
 

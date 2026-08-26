@@ -276,3 +276,121 @@ fn test_hnsw_pending_slots_visible_after_restart() {
         );
     }
 }
+
+#[test]
+fn test_index_bin_payload_bitflip_triggers_crc_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join("col_ivf");
+    let cfg = CollectionConfig::new(4, DistanceMetric::Cosine)
+        .with_index_type(vector_search::types::IndexType::IVF)
+        .with_ivf(vector_search::types::IvfConfig {
+            lists: Some(2),
+            min_build_points: 1,
+            sample_limit: 64,
+            kmeans_max_iter: 5,
+            drift_threshold: 0.10,
+            drift_check_interval: u64::MAX,
+            default_nprobe: 1,
+            auto_promotion: false,
+            max_probes: None,
+        });
+
+    {
+        let store = CollectionStore::create(&store_dir, "col_ivf", &cfg).unwrap();
+        let points: Vec<VectorPoint> = (0..20u64)
+            .map(|i| VectorPoint::new(i, vec![i as f32 * 0.1, 1.0, 2.0, 3.0]))
+            .collect();
+        let ops: Vec<WalRecord> = points
+            .iter()
+            .map(|p| WalRecord::Upsert {
+                point: WalPoint::from_point(p).unwrap(),
+            })
+            .collect();
+        store.apply_ops(&ops).unwrap();
+        assert!(store.build_index().unwrap(), "IVF index must publish");
+        assert!(store.has_index(), "index published before corruption");
+        // Exact search ground truth before corruption.
+        let hits = store
+            .search(&SearchQuery::new(vec![0.1, 1.0, 2.0, 3.0], 1))
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    // Flip an arbitrary payload byte after the 10-byte header (magic+version+crc).
+    let index_path = store_dir.join("index.bin");
+    let mut bytes = std::fs::read(&index_path).unwrap();
+    assert!(bytes.len() > 12, "index.bin must contain payload");
+    // Payload starts at byte 10; flipping byte 10 must break CRC.
+    bytes[10] ^= 0xFF;
+    std::fs::write(&index_path, &bytes).unwrap();
+
+    let reopened = CollectionStore::open(&store_dir).unwrap();
+    assert!(
+        !reopened.has_index(),
+        "corrupt index.bin payload must fall back to exact scan"
+    );
+    assert_eq!(reopened.count(), 20, "live count must survive fallback");
+    assert!(
+        !index_path.exists(),
+        "corrupt index.bin must be deleted on load, so next save starts clean"
+    );
+    assert!(
+        reopened.metrics().snapshot().index_load_fallbacks >= 1,
+        "CRC mismatch must increment index_load_fallbacks"
+    );
+    // Search must still succeed via exact scan with perfect recall.
+    let hits = reopened
+        .search(&SearchQuery::new(vec![0.1, 1.0, 2.0, 3.0], 1))
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+}
+
+#[test]
+fn test_hnsw_bin_payload_bitflip_triggers_crc_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join("col_hnsw");
+    let cfg = CollectionConfig::new(4, DistanceMetric::Euclid);
+
+    {
+        let store = CollectionStore::create(&store_dir, "col_hnsw", &cfg).unwrap();
+        let points: Vec<VectorPoint> = (0..20u64)
+            .map(|i| VectorPoint::new(i, vec![i as f32, 0.0, 0.0, 0.0]))
+            .collect();
+        let ops: Vec<WalRecord> = points
+            .iter()
+            .map(|p| WalRecord::Upsert {
+                point: WalPoint::from_point(p).unwrap(),
+            })
+            .collect();
+        store.apply_ops(&ops).unwrap();
+        assert!(store.build_index().unwrap(), "HNSW index must publish");
+        assert!(store.has_index());
+    }
+
+    let hnsw_path = store_dir.join("hnsw.bin");
+    let mut bytes = std::fs::read(&hnsw_path).unwrap();
+    assert!(bytes.len() > 12, "hnsw.bin must contain payload");
+    // Flip a payload byte (header is 10 bytes).
+    let flip_off = 11.min(bytes.len() - 1);
+    bytes[flip_off] ^= 0xA5;
+    std::fs::write(&hnsw_path, &bytes).unwrap();
+
+    let reopened = CollectionStore::open(&store_dir).unwrap();
+    assert!(
+        !reopened.has_index(),
+        "corrupt hnsw.bin payload must fall back to exact scan"
+    );
+    assert_eq!(reopened.count(), 20);
+    assert!(
+        !hnsw_path.exists(),
+        "corrupt hnsw.bin must be deleted on load"
+    );
+    assert!(
+        reopened.metrics().snapshot().index_load_fallbacks >= 1,
+        "CRC mismatch must increment index_load_fallbacks for HNSW"
+    );
+    let hits = reopened
+        .search(&SearchQuery::new(vec![0.0, 0.0, 0.0, 0.0], 1))
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+}

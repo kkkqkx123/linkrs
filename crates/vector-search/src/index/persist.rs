@@ -15,14 +15,18 @@ use crate::error::{Result, VectorSearchError};
 use crate::types::DistanceMetric;
 
 pub(crate) const INDEX_MAGIC: [u8; 4] = *b"VIVF";
-/// Development stage: locked at 1, no backward compatibility (see the
-/// `FORMAT_VERSION` note in `storage::meta` for the policy).
+/// Development stage: version locked at 1. No backward compatibility is
+/// maintained (see the `FORMAT_VERSION` note in `storage::meta`): older files
+/// fail version / checksum validation and are discarded in favor of exact
+/// scan, exactly like the pgvector "corrupt index file is deleted and search
+/// falls back" contract. The format is CRC32-protected tag
+/// `[magic 4][version u16 LE][crc32 u32 LE][postcard payload]`.
 pub(crate) const INDEX_VERSION: u16 = 1;
 const INDEX_TMP: &str = "index_tmp.bin";
 
 const HNSW_FILE: &str = "hnsw.bin";
 const HNSW_MAGIC: [u8; 4] = *b"VHSW";
-/// Same dev-stage policy as `INDEX_VERSION`.
+/// Same dev-stage policy as `INDEX_VERSION`; version locked at 1.
 const HNSW_VERSION: u16 = 1;
 const HNSW_TMP: &str = "hnsw_tmp.bin";
 
@@ -200,9 +204,11 @@ fn write_tagged<T: serde::Serialize>(
     data: &T,
 ) -> Result<()> {
     let bytes = postcard::to_stdvec(data)?;
+    let crc = crc32fast::hash(&bytes);
     let mut file = File::create(path)?;
     file.write_all(magic)?;
     file.write_all(&version.to_le_bytes())?;
+    file.write_all(&crc.to_le_bytes())?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
@@ -213,7 +219,7 @@ fn read_tagged<T: serde::de::DeserializeOwned>(
     magic: &[u8; 4],
     version: u16,
 ) -> Result<T> {
-    if bytes.len() < 6 || &bytes[..4] != magic {
+    if bytes.len() < 10 || &bytes[..4] != magic {
         return Err(VectorSearchError::CorruptData("bad magic".to_string()));
     }
     let stored = u16::from_le_bytes([bytes[4], bytes[5]]);
@@ -222,7 +228,12 @@ fn read_tagged<T: serde::de::DeserializeOwned>(
             "unsupported version {stored}"
         )));
     }
-    Ok(postcard::from_bytes(&bytes[6..])?)
+    let expected_crc = u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
+    let payload = &bytes[10..];
+    if crc32fast::hash(payload) != expected_crc {
+        return Err(VectorSearchError::CorruptData("crc32 mismatch".to_string()));
+    }
+    Ok(postcard::from_bytes(payload)?)
 }
 
 #[cfg(test)]
@@ -305,5 +316,62 @@ mod tests {
         let mut data = sample(2, 3);
         data.centroids[0] = vec![1.0; 9];
         assert!(!data.structurally_valid());
+    }
+
+    #[test]
+    fn test_payload_bitflip_detected_by_crc() {
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &sample(2, 3)).unwrap();
+        let mut bytes = std::fs::read(dir.path().join("index.bin")).unwrap();
+        assert!(bytes.len() > 10, "payload must exist");
+        // Flip an arbitrary payload byte (header is 10 bytes: magic 4 + version 2 + crc 4).
+        bytes[10] ^= 0xFF;
+        std::fs::write(dir.path().join("index.bin"), &bytes).unwrap();
+        assert!(
+            load(dir.path()).unwrap().is_none(),
+            "CRC mismatch must be treated as corrupt"
+        );
+        assert!(
+            !dir.path().join("index.bin").exists(),
+            "corrupt payload file must be deleted"
+        );
+    }
+
+    #[test]
+    fn test_crc_mismatch_on_hnsw_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = PersistedHnsw {
+            dim: 4,
+            distance: DistanceMetric::Cosine,
+            m: 4,
+            ef_construct: 16,
+            ef_search: 16,
+            entry: None,
+            built_at_live_count: 0,
+            nodes: vec![],
+        };
+        save_hnsw(dir.path(), &data).unwrap();
+        let mut bytes = std::fs::read(dir.path().join("hnsw.bin")).unwrap();
+        assert!(bytes.len() > 10);
+        bytes[10] ^= 0xA5;
+        std::fs::write(dir.path().join("hnsw.bin"), &bytes).unwrap();
+        assert!(load_hnsw(dir.path()).unwrap().is_none());
+        assert!(!dir.path().join("hnsw.bin").exists());
+    }
+
+    #[test]
+    fn test_old_version_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), &sample(2, 3)).unwrap();
+        let mut bytes = std::fs::read(dir.path().join("index.bin")).unwrap();
+        // Flip version from 1 to 2 (bytes 4..6 LE). Keep CRC/payload otherwise valid.
+        bytes[4] = 2;
+        bytes[5] = 0;
+        std::fs::write(dir.path().join("index.bin"), &bytes).unwrap();
+        assert!(
+            load(dir.path()).unwrap().is_none(),
+            "unsupported version must be treated as corrupt"
+        );
+        assert!(!dir.path().join("index.bin").exists());
     }
 }

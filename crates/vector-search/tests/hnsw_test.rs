@@ -394,3 +394,57 @@ fn stale_ratio_triggers_background_rebuild() {
         engine.run_maintenance_sweep();
     }
 }
+
+/// `HnswConfig::iterative_max_rounds` / `max_scan_tuples` are accepted at
+/// creation, validated (0 rejected), and honored on the filtered-search
+/// retry path: a search whose filter matches nothing still terminates via
+/// the configured caps instead of expanding unboundedly.
+#[test]
+fn scan_limit_config_controls_iterative_expansion() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = LocalVectorEngine::open(dir.path().join("vec")).unwrap();
+
+    // Boundary values are accepted at creation.
+    engine
+        .create_collection(
+            "col",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid)
+                .with_index_type(vector_search::IndexType::HNSW)
+                .with_hnsw(HnswConfig {
+                    iterative_max_rounds: Some(1),
+                    max_scan_tuples: Some(64),
+                    ..hnsw_config()
+                }),
+        )
+        .unwrap();
+    let points = clustered_points(20);
+    engine.upsert_batch("col", &points).unwrap();
+    assert!(engine.build_index("col").unwrap());
+    // Filter matching a single point: the first pass comes up short for
+    // limit=5, so iterative expansion runs and must stop within one round /
+    // 64 visited nodes. The query must terminate with valid results.
+    let marker_id = clustered_points(1).remove(0).id.to_string();
+    let filter = VectorFilter::new().must(FilterCondition::has_id(vec![marker_id.clone()]));
+    let results = engine
+        .search(
+            "col",
+            &SearchQuery::new(vec![0.0; DIM], 5).with_filter(filter),
+        )
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id.to_string(), marker_id);
+
+    // Zero values are rejected by config validation at collection creation.
+    let err = engine
+        .create_collection(
+            "bad",
+            &CollectionConfig::new(DIM, DistanceMetric::Euclid)
+                .with_index_type(vector_search::IndexType::HNSW)
+                .with_hnsw(HnswConfig {
+                    max_scan_tuples: Some(0),
+                    ..hnsw_config()
+                }),
+        )
+        .unwrap_err();
+    assert!(matches!(err, VectorSearchError::InvalidConfig(_)));
+}
