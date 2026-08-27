@@ -118,7 +118,7 @@ fn test_analyze_without_space_errors() {
 
 #[test]
 fn test_analyze_parser_variants() {
-    use graphdb_query::query::parser::Parser;
+    use graphdb_query::parser::Parser;
 
     let mut parser = Parser::new("ANALYZE SPACE basketball");
     let result = parser.parse();

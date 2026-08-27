@@ -12,12 +12,12 @@
 mod common;
 
 use graphdb_storage::core::types::{CompactConfig, VertexId};
-use graphdb_storage::storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
+use graphdb_storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
 
 /// Compact and reopen helper: save+checkpoint, compact, save+checkpoint, reopen.
-fn compact_and_reopen<F>(dir: &std::path::Path, fixup: F) -> graphdb_storage::storage::GraphStorage
+fn compact_and_reopen<F>(dir: &std::path::Path, fixup: F) -> graphdb_storage::GraphStorage
 where
-    F: FnOnce(&mut graphdb_storage::storage::GraphStorage),
+    F: FnOnce(&mut graphdb_storage::GraphStorage),
 {
     let mut storage = common::create_persistent_storage(dir);
     common::setup_basic_schema(&mut storage);

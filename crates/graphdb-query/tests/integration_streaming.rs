@@ -5,26 +5,26 @@
 
 use graphdb_query::core::types::expr::Expression;
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::base::{MemoryBudget, MemoryTracker};
-use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
-use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
-use graphdb_query::query::executor::streaming::operators::blocking::{
+use graphdb_query::executor::base::{MemoryBudget, MemoryTracker};
+use graphdb_query::executor::streaming::executor::StreamingExecutor;
+use graphdb_query::executor::streaming::operators::base::OperatorBase;
+use graphdb_query::executor::streaming::operators::blocking::{
     BlockingOperator, BlockingOperatorKind,
 };
-use graphdb_query::query::executor::streaming::operators::join_operator::{
+use graphdb_query::executor::streaming::operators::join_operator::{
     HashJoinBuildSide, JoinOperator, JoinOperatorKind,
 };
-use graphdb_query::query::executor::streaming::operators::set_operator::{
+use graphdb_query::executor::streaming::operators::set_operator::{
     SetOperator, SetOperatorKind,
 };
-use graphdb_query::query::executor::streaming::operators::source_operator::{
+use graphdb_query::executor::streaming::operators::source_operator::{
     SourceOperator, SourceOperatorKind,
 };
-use graphdb_query::query::executor::streaming::operators::spec::BuildSide;
-use graphdb_query::query::executor::streaming::operators::unary_operator::{
+use graphdb_query::executor::streaming::operators::spec::BuildSide;
+use graphdb_query::executor::streaming::operators::unary_operator::{
     UnaryOperator, UnaryOperatorKind,
 };
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
+use graphdb_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
 
 // ====== Test Helpers ======

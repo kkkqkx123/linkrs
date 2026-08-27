@@ -1,5 +1,5 @@
-use graphdb_core::core::Value;
-use graphdb_search::search::{
+use graphdb_core::Value;
+use graphdb_search::{
     EngineType, FulltextConfig, FulltextIndexManager, IndexMetadata, IndexStats, SearchError,
     SearchResult,
 };
@@ -19,7 +19,7 @@ impl FulltextTestContext {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
-            sync: graphdb_search::search::SyncConfig::default(),
+            sync: graphdb_search::SyncConfig::default(),
             tantivy: Default::default(),
             cache_size: 100,
             max_result_cache: 1000,

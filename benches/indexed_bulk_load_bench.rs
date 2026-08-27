@@ -4,7 +4,7 @@ use graphdb_storage::core::types::{
 };
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, Value, Vertex};
-use graphdb_storage::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(

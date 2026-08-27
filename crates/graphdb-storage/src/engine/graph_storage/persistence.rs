@@ -1,0 +1,931 @@
+use std::path::{Path, PathBuf};
+
+use crate::core::types::{CompactConfig, CompactTarget, Timestamp};
+use crate::core::{StorageError, StorageResult};
+use crate::engine::paths::StoragePaths;
+use crate::engine::persistence_coordinator::{
+    CheckpointData, CheckpointInfo, CheckpointStats,
+};
+use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
+use crate::transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
+use graphdb_sync::checkpoint_manifest::CheckpointManifestManager;
+
+use super::context::GraphStorageContext;
+
+fn load_schema_and_index_metadata(ctx: &GraphStorageContext) -> StorageResult<()> {
+    if let Some(path) = ctx.work_dir().as_ref() {
+        let paths = StoragePaths::new(path.clone());
+
+        let latest_checkpoint = latest_published_checkpoint_dir(path)?;
+        let schema_paths = latest_checkpoint
+            .as_ref()
+            .map(|checkpoint| StoragePaths::new(checkpoint).schema_file())
+            .into_iter()
+            .chain(std::iter::once(paths.schema_file()));
+        for schema_path in schema_paths {
+            if schema_path.exists() {
+                ctx.schema_manager().load_schema(&schema_path)?;
+                break;
+            }
+        }
+
+        let index_paths = latest_checkpoint
+            .as_ref()
+            .map(|checkpoint| StoragePaths::new(checkpoint).index_meta_file())
+            .into_iter()
+            .chain(std::iter::once(paths.index_meta_file()));
+        for index_path in index_paths {
+            if index_path.exists() {
+                ctx.index_metadata_manager().load_indexes(&index_path)?;
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn latest_published_checkpoint_dir(work_dir: &Path) -> StorageResult<Option<PathBuf>> {
+    let checkpoint_root = work_dir.join("checkpoint");
+    if !checkpoint_root.exists() {
+        return Ok(None);
+    }
+    let manifest_manager = CheckpointManifestManager::new(checkpoint_root.join("manifests"));
+    manifest_manager
+        .load_latest()
+        .map_err(StorageError::db_error)
+        .map(|manifest| manifest.map(|manifest| manifest.storage_snapshot.path))
+}
+
+fn restore_full_state_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
+    if let Some(path) = ctx.work_dir().as_ref() {
+        let paths = StoragePaths::new(path.clone());
+        ctx.restore_from_checkpoint(path)?;
+        ctx.user_storage().load_from_dir(paths.data_dir())?;
+
+        let index_path = paths.indexes_dir();
+        if index_path.exists() {
+            ctx.index_data_manager().write().load(&index_path)?;
+        }
+        ctx.register_loaded_native_indexes()?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn bootstrap_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
+    load_schema_and_index_metadata(ctx)?;
+    super::schema_writer::ensure_graph_types_from_schema(ctx)?;
+
+    let checkpoint_info = load_latest_checkpoint(ctx)?;
+    if let Some(ref info) = checkpoint_info {
+        // A fully materialized checkpoint may have reclaimed every WAL record
+        // from the active segment. Re-establish the logical WAL baseline so a
+        // subsequent truncate or append does not treat the empty segment as
+        // durable LSN zero.
+        if let Some(persistence) = ctx.persistence() {
+            let coordinator = persistence.read();
+            if let Some(wal_manager) = coordinator.wal_manager() {
+                wal_manager
+                    .write()
+                    .set_recovery_baseline_lsn(info.lsn)
+                    .map_err(|error| {
+                        StorageError::wal_error(format!(
+                            "Failed to restore WAL checkpoint baseline: {}",
+                            error
+                        ))
+                    })?;
+            }
+        }
+
+        // Initialize the version manager with the checkpoint timestamp so that
+        // persisted data (written at timestamps <= checkpoint timestamp) is visible
+        // after reload. Without this, the fresh version manager's read_ts=1 would
+        // not see data written at higher timestamps.
+        ctx.version_manager().init_ts(info.timestamp);
+    } else {
+        restore_full_state_from_disk(ctx)?;
+        // If data was restored from the main data directory (no checkpoints),
+        // we can't recover the max timestamp. Use a default that ensures
+        // data at ts=1 is visible (the minimum write timestamp).
+        ctx.version_manager().init_ts(1);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn initialize_with_recovery(
+    ctx: &GraphStorageContext,
+) -> StorageResult<Option<RecoveryStats>> {
+    bootstrap_from_disk(ctx)?;
+
+    if !needs_recovery(ctx) {
+        super::serial::seed_serial_allocators(ctx)?;
+        return Ok(None);
+    }
+
+    log::info!("WAL recovery needed, starting recovery...");
+    let stats = recover_from_wal(ctx)?;
+
+    log::info!(
+        "WAL recovery completed: {} entries replayed in {}ms",
+        stats.wal_entries_replayed,
+        stats.recovery_time_ms
+    );
+
+    // Seed SERIAL counters after replay so the column max includes replayed
+    // rows (redo entries carry final property values; the counters themselves
+    // are never replayed).
+    super::serial::seed_serial_allocators(ctx)?;
+
+    Ok(Some(stats))
+}
+
+pub(crate) fn save_data(ctx: &GraphStorageContext) -> StorageResult<()> {
+    let paths = ctx
+        .storage_paths()
+        .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
+
+    save_data_to_dir(ctx, paths.root())
+}
+
+pub(crate) fn save_data_to_dir(ctx: &GraphStorageContext, dir: &Path) -> StorageResult<()> {
+    use std::fs::{self, File};
+    use std::io::Write;
+
+    let paths = StoragePaths::new(dir);
+    let data_dir = paths.data_dir();
+    fs::create_dir_all(&data_dir)?;
+
+    let version_file = paths.version_file();
+    let mut file = File::create(&version_file)?;
+    writeln!(file, "1")?;
+
+    ctx.flush_tables_to_dir(&data_dir)?;
+    ctx.user_storage().save_to_dir(&data_dir)?;
+
+    if let Some(persistence) = ctx.persistence().as_ref() {
+        let wal_lsn = {
+            let coordinator = persistence.read();
+            coordinator
+                .wal_manager()
+                .map(|w| w.read().current_lsn())
+                .unwrap_or(Lsn::ZERO)
+        };
+        persistence.read().mark_flushed(wal_lsn);
+    }
+
+    log::info!("Data saved to {:?}", data_dir);
+    Ok(())
+}
+
+pub(crate) fn flush(ctx: &GraphStorageContext) -> StorageResult<()> {
+    save_data(ctx)
+}
+
+pub(crate) fn create_checkpoint(
+    ctx: &GraphStorageContext,
+) -> StorageResult<Option<CheckpointStats>> {
+    let persistence = match ctx.persistence().as_ref() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let ts = ctx.get_write_timestamp()?;
+    let graph = ctx.clone();
+    let user_storage = ctx.user_storage().clone();
+
+    let result = persistence.read().create_checkpoint(
+        |checkpoint_dir, _timestamp| {
+            let checkpoint_paths = StoragePaths::new(checkpoint_dir);
+            std::fs::create_dir_all(checkpoint_paths.schema_dir())?;
+            graph
+                .schema_manager()
+                .set_serial_next(super::serial::serial_next_snapshot(&graph));
+            graph
+                .schema_manager()
+                .save_schema(&checkpoint_paths.schema_file())?;
+            std::fs::create_dir_all(checkpoint_paths.index_meta_dir())?;
+            graph
+                .index_metadata_manager()
+                .save_indexes(&checkpoint_paths.index_meta_file())?;
+
+            let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
+            std::fs::create_dir_all(&data_dir)?;
+
+            graph.flush_tables_to_dir(&data_dir)?;
+            user_storage.save_to_dir(&data_dir)?;
+
+            let vertex_count = graph.total_vertex_count() as u64;
+            let edge_count = graph.total_edge_count() as u64;
+
+            let data_size = std::fs::metadata(&data_dir).map(|m| m.len()).unwrap_or(0);
+
+            Ok(CheckpointData {
+                vertex_count,
+                edge_count,
+                data_size,
+            })
+        },
+        ts,
+    );
+
+    let stats = match result {
+        Ok(stats) => {
+            ctx.commit_write_timestamp(ts);
+            stats
+        }
+        Err(error) => {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+    };
+
+    Ok(Some(stats))
+}
+
+pub(crate) fn verify_snapshot(ctx: &GraphStorageContext, snapshot_id: u64) -> StorageResult<bool> {
+    let persistence = ctx
+        .persistence()
+        .as_ref()
+        .ok_or_else(|| StorageError::not_supported("Snapshots are not available"))?;
+
+    persistence.read().verify_snapshot(snapshot_id)
+}
+
+pub(crate) fn cleanup_snapshots(ctx: &GraphStorageContext) -> StorageResult<usize> {
+    let persistence = ctx
+        .persistence()
+        .as_ref()
+        .ok_or_else(|| StorageError::not_supported("Snapshots are not available"))?;
+
+    persistence.read().cleanup_old_snapshots()
+}
+
+pub(crate) fn snapshot_stats(ctx: &GraphStorageContext) -> crate::SnapshotStats {
+    ctx.persistence()
+        .as_ref()
+        .map(|persistence| persistence.read().snapshot_stats())
+        .unwrap_or_default()
+}
+
+pub(crate) fn persistence_diagnostics(
+    ctx: &GraphStorageContext,
+) -> Option<crate::PersistenceDiagnostics> {
+    ctx.persistence().as_ref().map(|persistence| {
+        let mut diagnostics = persistence.read().diagnostics();
+        let catalog = ctx.data_store().lock_metrics();
+        diagnostics.catalog_lock_acquisitions = catalog.acquisitions;
+        diagnostics.catalog_lock_wait_nanos = catalog.wait_nanos;
+        diagnostics.catalog_lock_hold_nanos = catalog.hold_nanos;
+        diagnostics.catalog_lock_contentions = catalog.contended;
+        diagnostics.catalog_lock_by_operation =
+            crate::engine::data_store::CatalogLockOperation::all()
+                .into_iter()
+                .enumerate()
+                .map(|(index, operation)| {
+                    let metric = catalog.by_operation[index];
+                    crate::engine::persistence_coordinator::CatalogLockDiagnostic {
+                        operation: operation.name().to_string(),
+                        acquisitions: metric.acquisitions,
+                        wait_nanos: metric.wait_nanos,
+                        hold_nanos: metric.hold_nanos,
+                        contentions: metric.contended,
+                    }
+                })
+                .collect();
+        diagnostics
+    })
+}
+
+pub(crate) fn load_latest_checkpoint(
+    ctx: &GraphStorageContext,
+) -> StorageResult<Option<CheckpointInfo>> {
+    let persistence = match &ctx.persistence() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let graph = ctx.clone();
+    let user_storage = ctx.user_storage().clone();
+
+    persistence
+        .read()
+        .load_latest_checkpoint(|checkpoint_dir| {
+            graph.restore_from_checkpoint(checkpoint_dir)?;
+            user_storage.load_from_dir(StoragePaths::new(checkpoint_dir).data_dir())
+        })
+        .map(|result| {
+            if let Some(ref info) = result {
+                persistence.read().mark_checkpointed(info.lsn);
+            }
+            result
+        })
+}
+
+pub(crate) fn should_flush(ctx: &GraphStorageContext) -> bool {
+    if let Some(persistence) = ctx.persistence().as_ref() {
+        persistence.read().should_flush()
+    } else {
+        false
+    }
+}
+
+pub(crate) fn should_checkpoint(ctx: &GraphStorageContext) -> bool {
+    if let Some(persistence) = ctx.persistence().as_ref() {
+        persistence.read().should_checkpoint()
+    } else {
+        false
+    }
+}
+
+pub(crate) fn auto_flush_if_needed(ctx: &GraphStorageContext) -> StorageResult<bool> {
+    if should_flush(ctx) {
+        flush(ctx)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub(crate) fn auto_checkpoint_if_needed(
+    ctx: &GraphStorageContext,
+) -> StorageResult<Option<CheckpointStats>> {
+    if should_checkpoint(ctx) {
+        let stats = create_checkpoint(ctx)?;
+        return Ok(stats);
+    }
+    Ok(None)
+}
+
+pub(crate) fn compact_transactional(
+    ctx: &GraphStorageContext,
+    config: &CompactConfig,
+) -> StorageResult<()> {
+    let persistence = ctx.persistence().as_ref().ok_or_else(|| {
+        StorageError::db_error("Persistence not available for transactional compaction".to_string())
+    })?;
+
+    let version_manager = ctx.version_manager().as_ref();
+
+    let timestamp = version_manager.acquire_insert_timestamp().map_err(|e| {
+        StorageError::db_error(format!("Failed to acquire compaction timestamp: {}", e))
+    })?;
+
+    let result = {
+        let before_stats = ctx.get_compact_stats();
+        log::info!(
+            "Starting transactional compaction: enable_structure_compaction={}, config={{ segment_merge_enabled: {} }}, size={}/{}",
+            config.enable_structure_compaction,
+            config.segment_merge_enabled,
+            before_stats.used_size,
+            before_stats.total_size
+        );
+
+        {
+            let coordinator = persistence.read();
+            let wal_mgr = coordinator.wal_manager();
+            let wal_guard = wal_mgr
+                .as_ref()
+                .ok_or_else(|| StorageError::db_error("WAL not enabled".to_string()))?
+                .read();
+
+            wal_guard
+                .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
+                .map_err(|e| {
+                    StorageError::wal_error(format!("Failed to append compact WAL: {}", e))
+                })?;
+        }
+
+        ctx.compact(config, timestamp)
+            .map_err(|e| StorageError::db_error(format!("Compaction failed: {}", e)))
+    };
+
+    match result {
+        Ok(()) => {
+            version_manager.commit_write_timestamp(timestamp);
+
+            let after_stats = ctx.get_compact_stats();
+            log::info!(
+                "Compaction completed: size={}/{} (freed {} bytes)",
+                after_stats.used_size,
+                after_stats.total_size,
+                ctx.get_compact_stats()
+                    .total_size
+                    .saturating_sub(after_stats.used_size)
+            );
+
+            Ok(())
+        }
+        Err(e) => {
+            version_manager.abort_write_timestamp(timestamp);
+            Err(e)
+        }
+    }
+}
+
+pub(crate) fn load_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
+    load_schema_and_index_metadata(ctx)?;
+    super::schema_writer::ensure_graph_types_from_schema(ctx)?;
+    restore_full_state_from_disk(ctx)?;
+    super::serial::seed_serial_allocators(ctx)
+}
+
+pub(crate) fn save_to_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
+    if let Some(path) = ctx.work_dir().as_ref() {
+        let paths = StoragePaths::new(path.clone());
+        std::fs::create_dir_all(paths.root()).map_err(|e| StorageError::io_error(e.to_string()))?;
+
+        let schema_dir = paths.schema_dir();
+        std::fs::create_dir_all(&schema_dir).map_err(|e| StorageError::io_error(e.to_string()))?;
+        let schema_path = paths.schema_file();
+        ctx.schema_manager()
+            .set_serial_next(super::serial::serial_next_snapshot(ctx));
+        ctx.schema_manager().save_schema(&schema_path)?;
+
+        let index_meta_dir = paths.index_meta_dir();
+        std::fs::create_dir_all(&index_meta_dir)
+            .map_err(|e| StorageError::io_error(e.to_string()))?;
+        let index_meta_path = paths.index_meta_file();
+        ctx.index_metadata_manager()
+            .save_indexes(&index_meta_path)?;
+
+        save_data_to_dir(ctx, paths.root())?;
+
+        let index_path = paths.indexes_dir();
+        std::fs::create_dir_all(&index_path).map_err(|e| StorageError::io_error(e.to_string()))?;
+        ctx.index_data_manager().read().flush(&index_path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<RecoveryStats> {
+    let (wal_dir, data_dir, checkpoint_dir) = persistence_dirs(ctx)
+        .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
+
+    let start_lsn = latest_checkpoint_info_from_dir(&checkpoint_dir)?.map(|info| info.lsn);
+    let config = RecoveryConfig {
+        wal_dir,
+        data_dir,
+        start_lsn,
+        ..Default::default()
+    };
+
+    let mut manager = RecoveryManager::new(config);
+
+    let stats = manager.recover_with_applier(ctx)?;
+    ctx.restore_auto_transaction_id(stats.max_transaction_id);
+
+    // Replay deferred edge operations (two-phase recovery)
+    ctx.replay_deferred_edges()?;
+
+    // Set the WAL writer's LSN to the last replayed position so that
+    // create_checkpoint records the correct LSN instead of the fresh WAL's 0.
+    if let Some(persistence) = ctx.persistence() {
+        let coordinator = persistence.read();
+        if let Some(wal_mgr) = coordinator.wal_manager() {
+            let _ = wal_mgr.write().set_current_lsn(stats.last_lsn);
+        }
+    }
+
+    // Advance write_ts past the max replayed timestamp so create_checkpoint
+    // allocates a timestamp >= all recovered data, making recovered data
+    // visible after reload.
+    let current_ts = ctx.version_manager().write_timestamp();
+    if stats.max_timestamp >= current_ts {
+        ctx.version_manager().init_ts(stats.max_timestamp);
+    }
+
+    // When the durable outbox exists, storage recovery must leave the
+    // remaining WAL available for the outbox projection recovery that runs
+    // immediately after startup. A storage-only checkpoint here could
+    // reclaim the very intents that SQLite still needs. The synchronized
+    // checkpoint path creates the next combined baseline after projection
+    // recovery completes.
+    if !has_durable_outbox(ctx) {
+        let _ = create_checkpoint(ctx)?;
+    }
+
+    // Update read_ts so recovered data is visible to subsequent reads.
+    ctx.version_manager()
+        .init_ts(ctx.version_manager().read_timestamp());
+
+    // Replaying the WAL changed the physical layout; invalidate cached
+    // plans that assumed the pre-recovery layout.
+    ctx.bump_layout_version();
+
+    Ok(stats)
+}
+
+pub(crate) fn recover_from_wal_with_config(
+    ctx: &GraphStorageContext,
+    mut config: RecoveryConfig,
+) -> StorageResult<RecoveryStats> {
+    if config.start_lsn.is_none() {
+        let (_, _, checkpoint_dir) = persistence_dirs(ctx)
+            .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
+        config.start_lsn = latest_checkpoint_info_from_dir(&checkpoint_dir)?.map(|info| info.lsn);
+    }
+
+    let mut manager = RecoveryManager::new(config);
+
+    let stats = manager.recover_with_applier(ctx)?;
+    ctx.restore_auto_transaction_id(stats.max_transaction_id);
+
+    // Replay deferred edge operations (two-phase recovery)
+    ctx.replay_deferred_edges()?;
+
+    // Set the WAL writer's LSN to the last replayed position so that
+    // create_checkpoint records the correct LSN instead of the fresh WAL's 0.
+    if let Some(persistence) = ctx.persistence() {
+        let coordinator = persistence.read();
+        if let Some(wal_mgr) = coordinator.wal_manager() {
+            let _ = wal_mgr.write().set_current_lsn(stats.last_lsn);
+        }
+    }
+
+    // Advance write_ts past the max replayed timestamp so create_checkpoint
+    // allocates a timestamp >= all recovered data.
+    let current_ts = ctx.version_manager().write_timestamp();
+    if stats.max_timestamp >= current_ts {
+        ctx.version_manager().init_ts(stats.max_timestamp);
+    }
+
+    if !has_durable_outbox(ctx) {
+        let _ = create_checkpoint(ctx)?;
+    }
+
+    // Update read_ts so recovered data is visible to subsequent reads.
+    ctx.version_manager()
+        .init_ts(ctx.version_manager().read_timestamp());
+
+    // Replaying the WAL changed the physical layout; invalidate cached
+    // plans that assumed the pre-recovery layout.
+    ctx.bump_layout_version();
+
+    Ok(stats)
+}
+
+pub(crate) fn needs_recovery(ctx: &GraphStorageContext) -> bool {
+    if let Some((wal_dir, _, checkpoint_dir)) = persistence_dirs(ctx) {
+        if wal_dir.exists() {
+            let latest_checkpoint_lsn = latest_checkpoint_info_from_dir(&checkpoint_dir)
+                .ok()
+                .flatten()
+                .map(|info| info.lsn)
+                .unwrap_or(Lsn::ZERO);
+
+            match ParallelWalParser::new()
+                .with_recovery_mode(WalRecoveryMode::default())
+                .parse_parallel(&wal_dir)
+            {
+                Ok(result) => {
+                    return result.last_lsn > latest_checkpoint_lsn;
+                }
+                Err(_) => {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn latest_checkpoint_info_from_dir(
+    checkpoints_dir: &Path,
+) -> StorageResult<Option<CheckpointInfo>> {
+    if !checkpoints_dir.exists() {
+        return Ok(None);
+    }
+    let manifest_manager = CheckpointManifestManager::new(checkpoints_dir.join("manifests"));
+    let Some(manifest) = manifest_manager
+        .load_latest()
+        .map_err(StorageError::db_error)?
+    else {
+        return Ok(None);
+    };
+    let checkpoint_path = manifest.storage_snapshot.path;
+    let info = read_checkpoint_metadata(&checkpoint_path)?;
+    if info.checkpoint_id != manifest.checkpoint_id {
+        return Err(StorageError::deserialize_error(format!(
+            "Checkpoint metadata id {} does not match manifest {}",
+            info.checkpoint_id, manifest.checkpoint_id
+        )));
+    }
+    Ok(Some(info))
+}
+
+fn persistence_dirs(ctx: &GraphStorageContext) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    if let Some(persistence) = ctx.persistence().as_ref() {
+        let coordinator = persistence.read();
+        Some((
+            coordinator.wal_dir(),
+            coordinator.data_dir(),
+            coordinator.checkpoint_dir(),
+        ))
+    } else {
+        ctx.storage_paths().map(|paths| {
+            let root = paths.root().to_path_buf();
+            (paths.wal_dir(), paths.data_dir(), root.join("checkpoint"))
+        })
+    }
+}
+
+fn has_durable_outbox(ctx: &GraphStorageContext) -> bool {
+    let Some((_, data_dir, _)) = persistence_dirs(ctx) else {
+        return false;
+    };
+    let work_dir = data_dir.parent().unwrap_or(&data_dir);
+    work_dir.join("outbox/outbox.sqlite").exists() || work_dir.join("outbox_snapshots").is_dir()
+}
+
+fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let metadata_path = dir.join("checkpoint.meta");
+    let file = File::open(metadata_path)?;
+    let reader = BufReader::new(file);
+
+    let mut checkpoint_id: Option<u64> = None;
+    let mut lsn: Option<u64> = None;
+    let mut timestamp: Option<Timestamp> = None;
+    let mut format_version: Option<u32> = None;
+
+    for line in reader.lines() {
+        let line = line?;
+        let parts: Vec<&str> = line.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            return Err(StorageError::deserialize_error(format!(
+                "Invalid checkpoint metadata line: {}",
+                line
+            )));
+        }
+
+        match parts[0] {
+            "format_version" => {
+                format_version = Some(parts[1].parse().map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid checkpoint format version: {}",
+                        e
+                    ))
+                })?);
+            }
+            "checkpoint_id" => {
+                checkpoint_id = Some(parts[1].parse().map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid checkpoint_id in checkpoint metadata: {}",
+                        e
+                    ))
+                })?);
+            }
+            "wal_lsn" => {
+                lsn = Some(parts[1].parse().map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid wal_lsn in checkpoint metadata: {}",
+                        e
+                    ))
+                })?);
+            }
+            "timestamp" => {
+                timestamp = Some(parts[1].parse().map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid timestamp in checkpoint metadata: {}",
+                        e
+                    ))
+                })?);
+            }
+            _ => {}
+        }
+    }
+
+    let checkpoint_id = checkpoint_id.ok_or_else(|| {
+        StorageError::deserialize_error("Missing checkpoint_id in checkpoint metadata".to_string())
+    })?;
+    let lsn = lsn.ok_or_else(|| {
+        StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
+    })?;
+    if format_version != Some(2) {
+        return Err(StorageError::deserialize_error(format!(
+            "Unsupported checkpoint format version: {:?}",
+            format_version
+        )));
+    }
+
+    Ok(CheckpointInfo {
+        checkpoint_id,
+        lsn: Lsn::new(lsn),
+        timestamp: timestamp.unwrap_or(0),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::types::VertexId;
+    use crate::core::{DataType, Value};
+    use crate::engine::PersistenceConfig;
+    use crate::types::StoragePropertyDef;
+    use crate::transaction::wal::writer::WalWriter;
+    use crate::transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
+    use graphdb_core::types::CommitLsn;
+    use graphdb_sync::checkpoint_manifest::CheckpointManifest;
+    use postcard::to_allocvec;
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn write_insert_vertex_wal(
+        wal_dir: &Path,
+        timestamp: u64,
+        label: u32,
+        vid: i64,
+        name: &str,
+    ) -> StorageResult<Lsn> {
+        let wal_uri = wal_dir.to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&wal_uri, 0);
+        writer
+            .open()
+            .map_err(|e| StorageError::wal_error(format!("Failed to open WAL: {:?}", e)))?;
+
+        let redo = InsertVertexRedo {
+            label,
+            vid: VertexId::from_int64(vid),
+            properties: vec![("name".to_string(), Value::string(name))],
+        };
+        let payload =
+            to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
+
+        writer
+            .append_entry(WalOpType::InsertVertex, timestamp, &payload)
+            .map_err(|e| StorageError::wal_error(format!("Failed to append WAL: {:?}", e)))?;
+
+        let lsn = writer.current_lsn();
+        writer
+            .sync()
+            .map_err(|e| StorageError::wal_error(format!("Failed to sync WAL: {:?}", e)))?;
+        writer.close();
+
+        Ok(lsn)
+    }
+
+    fn write_checkpoint_metadata(
+        checkpoint_dir: &Path,
+        checkpoint_id: u64,
+        wal_lsn: Lsn,
+    ) -> StorageResult<()> {
+        let checkpoint_path = checkpoint_dir.join(format!("checkpoint_{}", checkpoint_id));
+        fs::create_dir_all(&checkpoint_path)?;
+
+        let metadata_path = checkpoint_path.join("checkpoint.meta");
+        let mut file = fs::File::create(metadata_path)?;
+        writeln!(file, "format_version=2")?;
+        writeln!(file, "checkpoint_id={}", checkpoint_id)?;
+        writeln!(file, "wal_lsn={}", wal_lsn.as_u64())?;
+
+        let storage_ref = CheckpointManifest::storage_snapshot_from_directory(
+            &checkpoint_path,
+            checkpoint_id,
+            0,
+            0,
+        )
+        .map_err(StorageError::db_error)?;
+        let manifest = CheckpointManifest::new(
+            checkpoint_id,
+            CommitLsn::new(wal_lsn.as_u64()),
+            storage_ref,
+            None,
+            Vec::new(),
+        )
+        .map_err(StorageError::db_error)?;
+        let manager = CheckpointManifestManager::new(checkpoint_dir.join("manifests"));
+        manager.init().map_err(StorageError::db_error)?;
+        manager.publish(&manifest).map_err(StorageError::db_error)?;
+
+        Ok(())
+    }
+
+    fn create_context(temp_dir: &TempDir) -> StorageResult<GraphStorageContext> {
+        let config = PersistenceConfig::for_work_dir(temp_dir.path());
+        GraphStorageContext::new_with_persistence(temp_dir.path().to_path_buf(), config)
+    }
+
+    #[test]
+    fn test_needs_recovery_false_after_checkpoint() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let ctx = create_context(&temp_dir).expect("Failed to create storage context");
+
+        let (wal_dir, checkpoint_dir) = {
+            let persistence = ctx
+                .persistence()
+                .as_ref()
+                .expect("Persistence should exist");
+            let coordinator = persistence.read();
+            (coordinator.wal_dir(), coordinator.checkpoint_dir())
+        };
+
+        let wal_lsn =
+            write_insert_vertex_wal(&wal_dir, 1, 1, 1001, "Alice").expect("Failed to write WAL");
+        write_checkpoint_metadata(&checkpoint_dir, 1, wal_lsn)
+            .expect("Failed to write checkpoint metadata");
+
+        assert!(!needs_recovery(&ctx));
+    }
+
+    #[test]
+    fn test_needs_recovery_true_when_wal_is_ahead_of_checkpoint() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let ctx = create_context(&temp_dir).expect("Failed to create storage context");
+
+        let (wal_dir, checkpoint_dir) = {
+            let persistence = ctx
+                .persistence()
+                .as_ref()
+                .expect("Persistence should exist");
+            let coordinator = persistence.read();
+            (coordinator.wal_dir(), coordinator.checkpoint_dir())
+        };
+
+        let wal_uri = wal_dir.to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&wal_uri, 0);
+        writer.open().expect("Failed to open WAL");
+
+        let first_redo = InsertVertexRedo {
+            label: 1,
+            vid: VertexId::from_int64(1001),
+            properties: vec![("name".to_string(), Value::string("Alice"))],
+        };
+        let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, &first_payload)
+            .expect("Failed to append first WAL entry");
+        let checkpoint_lsn = writer.current_lsn();
+
+        let second_redo = InsertVertexRedo {
+            label: 1,
+            vid: VertexId::from_int64(1002),
+            properties: vec![("name".to_string(), Value::string("Bob"))],
+        };
+        let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
+        writer
+            .append_entry(WalOpType::InsertVertex, 2, &second_payload)
+            .expect("Failed to append second WAL entry");
+        writer.close();
+
+        write_checkpoint_metadata(&checkpoint_dir, 1, checkpoint_lsn)
+            .expect("Failed to write checkpoint metadata");
+
+        assert!(needs_recovery(&ctx));
+    }
+
+    #[test]
+    fn test_recover_from_wal_persists_checkpoint_baseline() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let ctx = create_context(&temp_dir).expect("Failed to create storage context");
+
+        let (wal_dir, checkpoint_dir) = {
+            let persistence = ctx
+                .persistence()
+                .as_ref()
+                .expect("Persistence should exist");
+            let coordinator = persistence.read();
+            (coordinator.wal_dir(), coordinator.checkpoint_dir())
+        };
+
+        ctx.create_vertex_type_with_id(
+            "space_1:tag:person",
+            "person",
+            1,
+            vec![StoragePropertyDef::new(
+                "name".to_string(),
+                DataType::String,
+            )],
+            "name",
+        )
+        .expect("Failed to create vertex type");
+
+        let _wal_lsn =
+            write_insert_vertex_wal(&wal_dir, 1, 1, 1001, "Alice").expect("Failed to write WAL");
+        write_checkpoint_metadata(&checkpoint_dir, 1, Lsn::ZERO)
+            .expect("Failed to write checkpoint metadata");
+
+        let stats = recover_from_wal(&ctx).expect("Recovery should succeed");
+        assert_eq!(stats.wal_entries_replayed, 1);
+        assert!(!needs_recovery(&ctx));
+    }
+
+    #[test]
+    fn test_read_checkpoint_metadata_rejects_malformed_fields() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let checkpoint_dir = temp_dir.path().join("checkpoint");
+        let checkpoint_path = checkpoint_dir.join("checkpoint_1");
+        fs::create_dir_all(&checkpoint_path).expect("Failed to create checkpoint dir");
+
+        let metadata_path = checkpoint_path.join("checkpoint.meta");
+        let mut file = fs::File::create(&metadata_path).expect("Failed to create metadata file");
+        writeln!(file, "checkpoint_id=1").expect("Failed to write checkpoint id");
+        writeln!(file, "wal_lsn=not-a-number").expect("Failed to write wal lsn");
+
+        let result = read_checkpoint_metadata(&checkpoint_path);
+        assert!(result.is_err());
+    }
+}

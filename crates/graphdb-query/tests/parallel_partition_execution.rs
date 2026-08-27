@@ -15,9 +15,9 @@ use common::TestStorage;
 use graphdb_query::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_query::core::vertex_edge_path::Tag;
 use graphdb_query::core::{DataType, Edge, StatsManager, Value, Vertex};
-use graphdb_query::query::executor::base::ExecutionResult;
-use graphdb_query::query::optimizer::{OptimizerEngine, PartitioningConfig};
-use graphdb_query::query::pipeline::QueryPipelineManager;
+use graphdb_query::executor::base::ExecutionResult;
+use graphdb_query::optimizer::{OptimizerEngine, PartitioningConfig};
+use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -654,8 +654,8 @@ fn plan_cache_replans_on_partition_config_change() {
 
 #[test]
 fn plan_cache_partition_fingerprint_changes_with_ranges() {
-    use graphdb_query::query::cache::plan_cache::PlanCacheKey;
-    use graphdb_query::query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
+    use graphdb_query::cache::plan_cache::PlanCacheKey;
+    use graphdb_query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
     use std::ops::Range;
 
     // Same source and layout_version but different ranges → different key.

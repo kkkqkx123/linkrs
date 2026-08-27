@@ -2,7 +2,7 @@
 //!
 //! Re-exports common test utilities from the parent directory.
 
-use graphdb_core::core::value::geography::{
+use graphdb_core::value::geography::{
     Geography, GeographyValue, LineStringValue, MultiLineStringValue, MultiPointValue,
     MultiPolygonValue, PolygonValue,
 };

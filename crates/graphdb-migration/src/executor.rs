@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use graphdb_core::core::{Edge, Tag, Value, Vertex};
+use graphdb_core::{Edge, Tag, Value, Vertex};
 use graphdb_storage::core::error::storage::StorageErrorKind;
 use graphdb_storage::core::StorageError;
-use graphdb_storage::storage::{StorageClient, StorageWriter};
+use graphdb_storage::{StorageClient, StorageWriter};
 
 use crate::converter::convert_value;
 use crate::generator::MigrationError;
@@ -311,7 +311,7 @@ fn apply_step_to_vertex(
                 name.clone(),
                 default_value
                     .clone()
-                    .unwrap_or(Value::Null(graphdb_core::core::value::null::NullType::Null)),
+                    .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
             );
         }
         MigrationStep::ChangeNullability { .. } => return Ok(None),
@@ -365,7 +365,7 @@ fn apply_step_to_edge(edge: &Edge, step: &MigrationStep) -> Result<HashMap<Strin
                 name.clone(),
                 default_value
                     .clone()
-                    .unwrap_or(Value::Null(graphdb_core::core::value::null::NullType::Null)),
+                    .unwrap_or(Value::Null(graphdb_core::value::null::NullType::Null)),
             );
             Ok(props)
         }

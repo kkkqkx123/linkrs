@@ -8,15 +8,15 @@
 //! mid-stream empty chunk, cancel, early stop.
 
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
-use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
-use graphdb_query::query::executor::streaming::operators::source_operator::{
+use graphdb_query::executor::streaming::executor::StreamingExecutor;
+use graphdb_query::executor::streaming::operators::base::OperatorBase;
+use graphdb_query::executor::streaming::operators::source_operator::{
     SourceOperator, SourceOperatorKind,
 };
-use graphdb_query::query::executor::streaming::operators::unary_operator::{
+use graphdb_query::executor::streaming::operators::unary_operator::{
     UnaryOperator, UnaryOperatorKind,
 };
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
+use graphdb_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
 
 // ── Helpers ──

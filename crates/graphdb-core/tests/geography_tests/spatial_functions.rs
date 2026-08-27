@@ -11,7 +11,7 @@
 use super::common::{
     assert_distance_within, create_test_linestring, create_test_point, create_test_polygon,
 };
-use graphdb_core::core::value::geography::{Geography, GeographyValue};
+use graphdb_core::value::geography::{Geography, GeographyValue};
 
 /// TC-GEO-FUNC-001: Point Creation and Validation
 #[test]
@@ -105,7 +105,7 @@ fn test_geojson_point() {
     let geojson = point.to_geojson();
 
     match geojson {
-        graphdb_core::core::value::geography::GeoJsonGeometry::Point { coordinates } => {
+        graphdb_core::value::geography::GeoJsonGeometry::Point { coordinates } => {
             assert_eq!(coordinates.len(), 2);
             assert_distance_within(coordinates[0], 116.4074, 1e-9);
             assert_distance_within(coordinates[1], 39.9042, 1e-9);
@@ -121,7 +121,7 @@ fn test_geojson_linestring() {
     let geojson = linestring.to_geojson();
 
     match geojson {
-        graphdb_core::core::value::geography::GeoJsonGeometry::LineString { coordinates } => {
+        graphdb_core::value::geography::GeoJsonGeometry::LineString { coordinates } => {
             assert_eq!(coordinates.len(), 2);
         }
         _ => panic!("Expected LineString GeoJSON"),

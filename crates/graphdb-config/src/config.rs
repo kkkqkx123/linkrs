@@ -15,7 +15,7 @@
 //! ## Server Mode
 //!
 //! ```rust,no_run
-//! use graphdb_config::config::Config;
+//! use graphdb_config::Config;
 //!
 //! // Load from file
 //! let config = Config::load("config.toml").expect("Failed to load config");
@@ -27,7 +27,7 @@
 //! ## Embedded Mode
 //!
 //! ```rust,ignore
-//! use graphdb_config::config::{Config, EmbeddedConfig};
+//! use graphdb_config::{Config, EmbeddedConfig};
 //!
 //! let mut config = Config::default();
 //! config.embedded.runtime.cache_size_mb = 128;
@@ -82,7 +82,7 @@ use vector_client::VectorClientConfig;
 /// # Examples
 ///
 /// ```rust
-/// use graphdb_config::config::Config;
+/// use graphdb_config::Config;
 ///
 /// // Create default configuration
 /// let config = Config::default();
@@ -357,7 +357,7 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use graphdb_config::config::Config;
+    /// use graphdb_config::Config;
     ///
     /// let config = Config::load("config.toml").expect("Failed to load config");
     /// ```
@@ -393,7 +393,7 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use graphdb_config::config::Config;
+    /// use graphdb_config::Config;
     ///
     /// let config = Config::default();
     /// config.save("config.toml").expect("Failed to save config");

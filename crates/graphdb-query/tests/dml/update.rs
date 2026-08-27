@@ -9,7 +9,7 @@ use super::common;
 
 use common::test_scenario::TestScenario;
 use graphdb_query::core::Value;
-use graphdb_query::query::parser::Parser;
+use graphdb_query::parser::Parser;
 use std::collections::HashMap;
 
 // ==================== UPDATE VERTEX Parser Tests ====================
@@ -482,8 +482,8 @@ fn test_update_edge_yield_execution() {
 fn test_update_divide_by_zero() {
     use crate::common::TestStorage;
     use graphdb_query::core::stats::StatsManager;
-    use graphdb_query::query::optimizer::OptimizerEngine;
-    use graphdb_query::query::pipeline::QueryPipelineManager;
+    use graphdb_query::optimizer::OptimizerEngine;
+    use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::{StorageReader, StorageSchemaContextOps};
     use std::sync::Arc;
 

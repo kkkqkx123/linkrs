@@ -9,10 +9,10 @@
 //! Test cases: TC-FT-SYNC-001 ~ TC-FT-SYNC-010
 
 use super::common::FulltextTestContext;
-use graphdb_search::search::EngineType;
-use graphdb_sync::sync::batch::BatchConfig;
-use graphdb_sync::sync::coordinator::{ChangeType, SyncCoordinator};
-use graphdb_sync::sync::manager::SyncManager;
+use graphdb_search::EngineType;
+use graphdb_sync::batch::BatchConfig;
+use graphdb_sync::coordinator::{ChangeType, SyncCoordinator};
+use graphdb_sync::manager::SyncManager;
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -57,10 +57,10 @@ impl Drop for SyncTestContext {
     }
 }
 
-fn create_test_properties(content: &str) -> Vec<(String, graphdb_core::core::Value)> {
+fn create_test_properties(content: &str) -> Vec<(String, graphdb_core::Value)> {
     vec![(
         "content".to_string(),
-        graphdb_core::core::Value::string(content),
+        graphdb_core::Value::string(content),
     )]
 }
 
@@ -74,7 +74,7 @@ async fn test_vertex_insert_auto_sync_bm25() {
         .await
         .expect("Failed to create index");
 
-    let vertex_id = graphdb_core::core::Value::Int(1);
+    let vertex_id = graphdb_core::Value::Int(1);
     let properties = create_test_properties("Hello World");
 
     ctx.coordinator
@@ -93,7 +93,7 @@ async fn test_vertex_insert_auto_sync_bm25() {
         .await
         .expect("Search should succeed");
 
-    let expected_doc_id = graphdb_core::core::Value::string("1");
+    let expected_doc_id = graphdb_core::Value::string("1");
     assert!(
         results.iter().any(|r| r.doc_id == expected_doc_id),
         "Should find synced document with doc_id=1"
@@ -110,7 +110,7 @@ async fn test_vertex_update_auto_sync() {
         .await
         .expect("Failed to create index");
 
-    let vertex_id = graphdb_core::core::Value::Int(1);
+    let vertex_id = graphdb_core::Value::Int(1);
 
     // Insert vertex
     let insert_props = create_test_properties("Old Content");
@@ -149,7 +149,7 @@ async fn test_vertex_update_auto_sync() {
         .search(1, "Article", "content", "Old", 10)
         .await
         .expect("Search should succeed");
-    let old_doc_id = graphdb_core::core::Value::string("1");
+    let old_doc_id = graphdb_core::Value::string("1");
     assert!(
         !old_results.iter().any(|r| r.doc_id == old_doc_id),
         "Should not find old content"
@@ -161,7 +161,7 @@ async fn test_vertex_update_auto_sync() {
         .search(1, "Article", "content", "New", 10)
         .await
         .expect("Search should succeed");
-    let new_doc_id = graphdb_core::core::Value::string("1");
+    let new_doc_id = graphdb_core::Value::string("1");
     assert!(
         new_results.iter().any(|r| r.doc_id == new_doc_id),
         "Should find new content"
@@ -178,7 +178,7 @@ async fn test_vertex_delete_auto_sync() {
         .await
         .expect("Failed to create index");
 
-    let vertex_id = graphdb_core::core::Value::Int(1);
+    let vertex_id = graphdb_core::Value::Int(1);
 
     // Insert vertex
     let insert_props = create_test_properties("Hello World");
@@ -198,16 +198,16 @@ async fn test_vertex_delete_auto_sync() {
         .search(1, "Article", "content", "Hello", 10)
         .await
         .expect("Search should succeed");
-    let doc_id = graphdb_core::core::Value::string("1");
+    let doc_id = graphdb_core::Value::string("1");
     assert!(
         results_before.iter().any(|r| r.doc_id == doc_id),
         "Should find document before deletion"
     );
 
     // Delete vertex
-    let delete_props: Vec<(String, graphdb_core::core::Value)> = vec![(
+    let delete_props: Vec<(String, graphdb_core::Value)> = vec![(
         "content".to_string(),
-        graphdb_core::core::Value::string("Hello World"),
+        graphdb_core::Value::string("Hello World"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &delete_props, ChangeType::Delete)
@@ -225,7 +225,7 @@ async fn test_vertex_delete_auto_sync() {
         .search(1, "Article", "content", "Hello", 10)
         .await
         .expect("Search should succeed");
-    let doc_id_after = graphdb_core::core::Value::string("1");
+    let doc_id_after = graphdb_core::Value::string("1");
     assert!(
         !results_after.iter().any(|r| r.doc_id == doc_id_after),
         "Should not find document after deletion"
@@ -243,7 +243,7 @@ async fn test_multiple_vertex_inserts() {
         .expect("Failed to create index");
 
     for i in 1..=5 {
-        let vertex_id = graphdb_core::core::Value::Int(i);
+        let vertex_id = graphdb_core::Value::Int(i);
         let properties = create_test_properties(&format!("Content {}", i));
 
         ctx.coordinator
@@ -283,10 +283,10 @@ async fn test_sync_multiple_fields() {
         .await
         .expect("Failed to create content index");
 
-    let vertex_id = graphdb_core::core::Value::Int(1);
+    let vertex_id = graphdb_core::Value::Int(1);
     let title_props = vec![(
         "title".to_string(),
-        graphdb_core::core::Value::string("Test title"),
+        graphdb_core::Value::string("Test title"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &title_props, ChangeType::Insert)
@@ -295,7 +295,7 @@ async fn test_sync_multiple_fields() {
 
     let content_props = vec![(
         "content".to_string(),
-        graphdb_core::core::Value::string("Test content"),
+        graphdb_core::Value::string("Test content"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &content_props, ChangeType::Insert)
@@ -333,7 +333,7 @@ async fn test_sync_string_vertex_ids() {
         .expect("Failed to create index");
 
     // Use string vertex ID
-    let vertex_id = graphdb_core::core::Value::string("article_001");
+    let vertex_id = graphdb_core::Value::string("article_001");
     let properties = create_test_properties("String ID content");
 
     ctx.coordinator
@@ -352,7 +352,7 @@ async fn test_sync_string_vertex_ids() {
         .await
         .expect("Search should succeed");
 
-    let expected_doc_id = graphdb_core::core::Value::string("article_001");
+    let expected_doc_id = graphdb_core::Value::string("article_001");
     assert!(
         results.iter().any(|r| r.doc_id == expected_doc_id),
         "Should find document with string ID"
@@ -369,8 +369,8 @@ async fn test_sync_multiple_batches() {
         .await
         .expect("Failed to create index");
 
-    let vertex_ids: Vec<graphdb_core::core::Value> =
-        (1..=10).map(graphdb_core::core::Value::Int).collect();
+    let vertex_ids: Vec<graphdb_core::Value> =
+        (1..=10).map(graphdb_core::Value::Int).collect();
 
     // First batch
     for (idx, vertex_id) in vertex_ids.iter().take(5).enumerate() {
@@ -418,7 +418,7 @@ async fn test_sync_empty_properties() {
         .await
         .expect("Failed to create index");
 
-    let vertex_id = graphdb_core::core::Value::Int(1);
+    let vertex_id = graphdb_core::Value::Int(1);
 
     // Insert with content
     let props_with_content = create_test_properties("Has content");

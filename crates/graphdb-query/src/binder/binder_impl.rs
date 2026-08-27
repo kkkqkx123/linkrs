@@ -1,0 +1,1792 @@
+use std::sync::Arc;
+
+use crate::core::error::DBError;
+use crate::core::metadata::SchemaManager;
+use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::Expression;
+use crate::core::types::semantic::{AliasType, ValueType};
+use crate::core::types::EdgeDirection;
+use crate::core::value::NullType;
+use crate::core::DBResult;
+use crate::core::DataType;
+use crate::core::Value;
+use crate::parser::ast::pattern::{PathElement, Pattern};
+use crate::parser::ast::stmt::Ast;
+use crate::parser::ast::{
+    FetchTarget, MatchDeleteTarget, ReturnItem, SetOperationType, Stmt,
+};
+
+use super::bound::{
+    BoundAggregateCall, BoundExpression, BoundFetchEdgesStatement, BoundFetchVerticesStatement,
+    BoundFindPathStatement, BoundFunctionCall, BoundGoStatement, BoundGroupByStatement,
+    BoundLookupStatement, BoundLookupTarget, BoundMatchDeleteClause, BoundMatchDeleteTarget,
+    BoundMatchStatement, BoundPipeStatement, BoundReturnClause, BoundReturnItem,
+    BoundReturnStatement, BoundSetOperationStatement, BoundStatement, BoundSubgraphStatement,
+    BoundUnwindStatement, BoundWhereClause, BoundWithStatement, BoundYieldClause, BoundYieldItem,
+    SetOperationKind,
+};
+use super::expr_binder::ExpressionBinder;
+use super::query_graph::{
+    BoundEdgePattern, BoundEdgeTypeRef, BoundNodePattern, BoundTagRef, QueryGraph,
+};
+use super::scope::{BinderScope, BinderVariable};
+
+use crate::executor::streaming::interner::StrInterner;
+
+/// The Binder transforms a parsed AST into a fully resolved BoundStatement.
+pub struct Binder {
+    scope: BinderScope,
+    schema_manager: Option<Arc<SchemaManager>>,
+    space_name: Option<String>,
+    space_id: u64,
+    interner: StrInterner,
+}
+
+impl Binder {
+    pub fn new() -> Self {
+        Self {
+            scope: BinderScope::new(),
+            schema_manager: None,
+            space_name: None,
+            space_id: 0,
+            interner: StrInterner::new(),
+        }
+    }
+
+    pub fn with_schema_manager(mut self, sm: Arc<SchemaManager>) -> Self {
+        self.schema_manager = Some(sm);
+        self
+    }
+
+    pub fn with_space(mut self, space_name: Option<String>, space_id: u64) -> Self {
+        self.space_name = space_name;
+        self.space_id = space_id;
+        self
+    }
+
+    /// Bind an AST into a fully resolved BoundStatement.
+    pub fn bind(
+        mut self,
+        ast: Arc<Ast>,
+        _qctx: Arc<crate::QueryContext>,
+    ) -> DBResult<BoundStatement> {
+        let bound = self.bind_stmt(&ast.stmt)?;
+        Ok(bound)
+    }
+
+    // ── Statement dispatch ────────────────────────────────────────────────
+
+    fn bind_stmt(&mut self, stmt: &Stmt) -> DBResult<BoundStatement> {
+        match stmt {
+            Stmt::Match(m) => self.bind_match(m),
+            Stmt::Go(g) => self.bind_go(g),
+            Stmt::Lookup(l) => self.bind_lookup(l),
+            Stmt::Fetch(f) => self.bind_fetch(f),
+            Stmt::FindPath(p) => self.bind_find_path(p),
+            Stmt::Subgraph(s) => self.bind_subgraph(s),
+            Stmt::Return(r) => self.bind_return(r),
+            Stmt::With(w) => self.bind_with(w),
+            Stmt::Unwind(u) => self.bind_unwind(u),
+            Stmt::Pipe(p) => self.bind_pipe(p),
+            Stmt::SetOperation(s) => self.bind_set_operation(s),
+            Stmt::GroupBy(g) => self.bind_group_by(g),
+            _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
+        }
+    }
+
+    // ── Expression binding ─────────────────────────────────────────────────
+
+    fn bind_expr(&mut self, expr: &ContextualExpression) -> DBResult<BoundExpression> {
+        super::semantic_checker::validate_expression(expr)?;
+        let type_hint = expr.data_type();
+        let Some(inner) = expr.get_expression() else {
+            return Err(DBError::from(
+                crate::core::error::QueryError::invalid_query(
+                    "Expression not found in context".to_string(),
+                ),
+            ));
+        };
+        self.bind_inner_expr(&inner, type_hint.as_ref())
+    }
+
+    /// Walk an expression and reject any variable reference that is not
+    /// defined in the current binding scope.
+    ///
+    /// Used by clause binders that must validate their output variables
+    /// (e.g. RETURN), where an undefined reference is a user error rather
+    /// than a silently-null value.
+    fn ensure_variables_defined(
+        &self,
+        expr: &crate::core::types::ContextualExpression,
+    ) -> DBResult<()> {
+        fn check(scope: &crate::binder::scope::BinderScope, e: &Expression) -> DBResult<()> {
+            match e {
+                Expression::Variable(name) => {
+                    if !scope.contains(name) {
+                        return Err(DBError::from(
+                            crate::core::error::QueryError::invalid_query(format!(
+                                "Undefined variable: {}",
+                                name
+                            )),
+                        ));
+                    }
+                    Ok(())
+                }
+                Expression::Property { object, .. } => check(scope, object),
+                Expression::Binary { left, right, .. } => {
+                    check(scope, left)?;
+                    check(scope, right)
+                }
+                Expression::Unary { operand, .. } => check(scope, operand),
+                Expression::Function { args, .. } => args.iter().try_for_each(|a| check(scope, a)),
+                Expression::Aggregate { args, filter, .. } => {
+                    args.iter().try_for_each(|a| check(scope, a))?;
+                    if let Some(f) = filter {
+                        check(scope, f)?;
+                    }
+                    Ok(())
+                }
+                Expression::List(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::Map(pairs) => pairs.iter().try_for_each(|(_, v)| check(scope, v)),
+                Expression::Case {
+                    test_expr,
+                    conditions,
+                    default,
+                } => {
+                    if let Some(t) = test_expr {
+                        check(scope, t)?;
+                    }
+                    for (c, v) in conditions {
+                        check(scope, c)?;
+                        check(scope, v)?;
+                    }
+                    if let Some(d) = default {
+                        check(scope, d)?;
+                    }
+                    Ok(())
+                }
+                Expression::TypeCast { expression, .. } => check(scope, expression),
+                Expression::Subscript { collection, index } => {
+                    check(scope, collection)?;
+                    check(scope, index)
+                }
+                Expression::Range { collection, .. } => check(scope, collection),
+                Expression::Path(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::ListComprehension {
+                    variable,
+                    source,
+                    filter,
+                    map,
+                } => {
+                    check(scope, source)?;
+                    let inner = inner_scope_with_variable(scope, variable);
+                    if let Some(f) = filter {
+                        check(&inner, f)?;
+                    }
+                    if let Some(m) = map {
+                        check(&inner, m)?;
+                    }
+                    Ok(())
+                }
+                Expression::LabelTagProperty { tag, .. } => check(scope, tag),
+                Expression::Predicate { args, .. } => {
+                    // First argument is the locally bound iteration variable;
+                    // the source is checked in the outer scope and the
+                    // predicate condition in a scope where it is bound.
+                    let Some(Expression::Variable(variable)) = args.first() else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    let Some(source_expr) = args.get(1) else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    let Some(predicate_expr) = args.get(2) else {
+                        return args.iter().try_for_each(|a| check(scope, a));
+                    };
+                    check(scope, source_expr)?;
+                    let inner = inner_scope_with_variable(scope, variable);
+                    check(&inner, predicate_expr)
+                }
+                Expression::Reduce {
+                    accumulator,
+                    initial,
+                    variable,
+                    source,
+                    mapping,
+                } => {
+                    check(scope, initial)?;
+                    check(scope, source)?;
+                    let mut inner = inner_scope_with_variable(scope, variable);
+                    inner.define_variable(local_variable(accumulator));
+                    check(&inner, mapping)
+                }
+                Expression::PathBuild(items) => items.iter().try_for_each(|i| check(scope, i)),
+                Expression::WindowFunction { args, .. } => {
+                    args.iter().try_for_each(|a| check(scope, a))
+                }
+                _ => Ok(()),
+            }
+        }
+        let Some(inner) = expr.get_expression() else {
+            return Ok(());
+        };
+        check(&self.scope, &inner)
+    }
+
+    fn bind_inner_expr(
+        &mut self,
+        expr: &Expression,
+        type_hint: Option<&DataType>,
+    ) -> DBResult<BoundExpression> {
+        match expr {
+            Expression::Literal(v) => {
+                let dt = v.data_type();
+                Ok(BoundExpression::Literal(v.clone(), dt))
+            }
+            Expression::Variable(v) => {
+                let dt = type_hint.cloned().unwrap_or(DataType::String);
+                let _col_type = if let Some(var_info) = self.scope.lookup(v) {
+                    var_info.properties.get(v).cloned()
+                } else {
+                    None
+                };
+                Ok(BoundExpression::Variable(v.clone(), dt))
+            }
+            Expression::Property { object, property } => {
+                let obj = self.bind_inner_expr(object, type_hint)?;
+                let var_name = match object.as_ref() {
+                    Expression::Variable(v) => Some(v.clone()),
+                    _ => None,
+                };
+                let prop_type = if let Some(ref var_name) = var_name {
+                    self.resolve_property_type(var_name, property)
+                } else {
+                    DataType::String
+                };
+                Ok(BoundExpression::Property {
+                    object: Box::new(obj),
+                    property: property.clone(),
+                    value_type: prop_type,
+                })
+            }
+            Expression::StructField { base, field } => {
+                let obj = self.bind_inner_expr(base, None)?;
+                let field_type = self.resolve_struct_field_type(&obj, field);
+                // Binding bug guard: a resolved Struct base must not yield
+                // Empty; schema-resolved field types must flow downstream.
+                debug_assert!(
+                    !matches!(&obj.return_type(), DataType::Struct(_))
+                        || field_type != DataType::Empty,
+                    "StructField '{}' could not be resolved against its Struct base",
+                    field
+                );
+                Ok(BoundExpression::StructField {
+                    base: Box::new(obj),
+                    field: field.clone(),
+                    return_type: field_type,
+                })
+            }
+            Expression::Binary { left, op, right } => {
+                let left = self.bind_inner_expr(left, None)?;
+                let right = self.bind_inner_expr(right, None)?;
+                let return_type = type_hint.cloned().unwrap_or_else(|| {
+                    let expr_binder = ExpressionBinder::new(&self.scope);
+                    expr_binder.deduce_arithmetic_type(&left.return_type(), &right.return_type())
+                });
+                Ok(BoundExpression::BinaryOp {
+                    left: Box::new(left),
+                    op: *op,
+                    right: Box::new(right),
+                    return_type,
+                })
+            }
+            Expression::Unary { op, operand } => {
+                let operand = self.bind_inner_expr(operand, None)?;
+                let return_type = type_hint.cloned().unwrap_or(DataType::Bool);
+                Ok(BoundExpression::UnaryOp {
+                    op: *op,
+                    operand: Box::new(operand),
+                    return_type,
+                })
+            }
+            Expression::Function { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.bind_inner_expr(a, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                let arg_types: Vec<DataType> = args.iter().map(|a| a.return_type()).collect();
+                let return_type = {
+                    let expr_binder = ExpressionBinder::new(&self.scope);
+                    ValueType::from_data_type(
+                        &expr_binder.deduce_function_return_type(name, &arg_types),
+                    )
+                };
+                Ok(BoundExpression::Function(BoundFunctionCall {
+                    name: name.clone(),
+                    args,
+                    return_type,
+                }))
+            }
+            Expression::Aggregate {
+                func,
+                args,
+                distinct,
+                filter: _filter,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.bind_inner_expr(a, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                let arg_type = args
+                    .first()
+                    .map(|a| a.return_type())
+                    .unwrap_or(DataType::Unknown);
+                let return_type = {
+                    let expr_binder = ExpressionBinder::new(&self.scope);
+                    ValueType::from_data_type(
+                        &expr_binder.deduce_aggregate_return_type(func, &arg_type),
+                    )
+                };
+                Ok(BoundExpression::Aggregate(BoundAggregateCall {
+                    function_name: format!("{:?}", func),
+                    arguments: args,
+                    distinct: *distinct,
+                    alias: None,
+                    return_type,
+                }))
+            }
+            Expression::List(items) => {
+                let items = items
+                    .iter()
+                    .map(|i| self.bind_inner_expr(i, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                let element_type = {
+                    let mut common = DataType::Unknown;
+                    for item in &items {
+                        let item_type = item.return_type();
+                        common = if common == DataType::Unknown {
+                            item_type
+                        } else {
+                            crate::core::type_system::TypeUtils::get_common_type(
+                                &common, &item_type,
+                            )
+                        };
+                        if common == DataType::Empty {
+                            break;
+                        }
+                    }
+                    if common == DataType::Empty {
+                        DataType::Unknown
+                    } else {
+                        common
+                    }
+                };
+                Ok(BoundExpression::List(
+                    items,
+                    DataType::List(Box::new(element_type)),
+                ))
+            }
+            Expression::Map(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(k, v)| self.bind_inner_expr(v, None).map(|b| (k.clone(), b)))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundExpression::Map(
+                    entries,
+                    DataType::Map(Box::new(DataType::Empty)),
+                ))
+            }
+            Expression::Case {
+                test_expr,
+                conditions,
+                default,
+            } => {
+                let test = test_expr
+                    .as_ref()
+                    .map(|e| self.bind_inner_expr(e, None))
+                    .transpose()?;
+                let conds = conditions
+                    .iter()
+                    .map(|(c, r)| {
+                        self.bind_inner_expr(c, None)
+                            .and_then(|bc| self.bind_inner_expr(r, None).map(|br| (bc, br)))
+                    })
+                    .collect::<DBResult<Vec<_>>>()?;
+                let def = default
+                    .as_ref()
+                    .map(|e| self.bind_inner_expr(e, None))
+                    .transpose()?;
+                let return_type = conds
+                    .first()
+                    .map(|(_, v)| v.return_type())
+                    .or_else(|| def.as_ref().map(|d| d.return_type()))
+                    .unwrap_or(DataType::String);
+                Ok(BoundExpression::Case {
+                    expr: test.map(Box::new),
+                    when_then: conds,
+                    else_expr: def.map(Box::new),
+                    return_type,
+                })
+            }
+            Expression::TypeCast {
+                expression,
+                target_type,
+            } => {
+                let e = self.bind_inner_expr(expression, Some(target_type))?;
+                Ok(BoundExpression::Cast {
+                    expr: Box::new(e),
+                    target_type: target_type.clone(),
+                })
+            }
+            Expression::Subscript { collection, index } => {
+                let col = self.bind_inner_expr(collection, None)?;
+                let idx = self.bind_inner_expr(index, None)?;
+                Ok(BoundExpression::Subscript {
+                    collection: Box::new(col),
+                    index: Box::new(idx),
+                    return_type: DataType::String,
+                })
+            }
+            Expression::Range {
+                collection,
+                start,
+                end,
+            } => {
+                let col = self.bind_inner_expr(collection, None)?;
+                let s = start
+                    .as_ref()
+                    .map(|e| self.bind_inner_expr(e, None))
+                    .transpose()?;
+                let e = end
+                    .as_ref()
+                    .map(|r| self.bind_inner_expr(r, None))
+                    .transpose()?;
+                Ok(BoundExpression::List(
+                    vec![
+                        col,
+                        s.unwrap_or(BoundExpression::Literal(
+                            Value::Null(NullType::Null),
+                            DataType::Null,
+                        )),
+                        e.unwrap_or(BoundExpression::Literal(
+                            Value::Null(NullType::Null),
+                            DataType::Null,
+                        )),
+                    ],
+                    DataType::List(Box::new(DataType::Empty)),
+                ))
+            }
+            Expression::Path(elements) => {
+                let elems = elements
+                    .iter()
+                    .map(|e| self.bind_inner_expr(e, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundExpression::Path(
+                    elems,
+                    DataType::List(Box::new(DataType::Unknown)),
+                ))
+            }
+            Expression::Label(l) => Ok(BoundExpression::Label(l.clone())),
+            Expression::ListComprehension {
+                variable,
+                source,
+                filter,
+                map,
+            } => {
+                let src = self.bind_inner_expr(source, None)?;
+                let flt = filter
+                    .as_ref()
+                    .map(|f| self.bind_inner_expr(f, None))
+                    .transpose()?;
+                let mp = map
+                    .as_ref()
+                    .map(|m| self.bind_inner_expr(m, None))
+                    .transpose()?;
+                Ok(BoundExpression::ListComprehension {
+                    variable: variable.clone(),
+                    source: Box::new(src),
+                    filter: flt.map(Box::new),
+                    map: mp.map(Box::new),
+                    return_type: DataType::List(Box::new(DataType::Unknown)),
+                })
+            }
+            Expression::LabelTagProperty { tag, property } => {
+                let tag_name = match tag.as_ref() {
+                    Expression::Variable(v) => v.clone(),
+                    _ => format!("{:?}", tag),
+                };
+                Ok(BoundExpression::TagProperty {
+                    tag_name,
+                    property: property.clone(),
+                    value_type: DataType::String,
+                })
+            }
+            Expression::TagProperty { tag_name, property } => Ok(BoundExpression::TagProperty {
+                tag_name: tag_name.clone(),
+                property: property.clone(),
+                value_type: DataType::String,
+            }),
+            Expression::EdgeProperty {
+                edge_name,
+                property,
+            } => Ok(BoundExpression::EdgeProperty {
+                edge_name: edge_name.clone(),
+                property: property.clone(),
+                value_type: DataType::String,
+            }),
+            Expression::Predicate { func, args } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.bind_inner_expr(a, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundExpression::Predicate {
+                    func: func.clone(),
+                    args,
+                    return_type: DataType::Bool,
+                })
+            }
+            Expression::Reduce {
+                accumulator,
+                initial,
+                variable,
+                source,
+                mapping,
+            } => {
+                let init = self.bind_inner_expr(initial, None)?;
+                let src = self.bind_inner_expr(source, None)?;
+                let map = self.bind_inner_expr(mapping, None)?;
+                // The REDUCE result type is the accumulator type: prefer the
+                // initial value type, fall back to the mapping result type.
+                let expr_binder = ExpressionBinder::new(&self.scope);
+                let mut return_type = init.return_type();
+                if return_type == DataType::Unknown {
+                    return_type = expr_binder.resolve_type(mapping);
+                }
+                Ok(BoundExpression::Reduce {
+                    accumulator: accumulator.clone(),
+                    initial: Box::new(init),
+                    variable: variable.clone(),
+                    source: Box::new(src),
+                    mapping: Box::new(map),
+                    return_type,
+                })
+            }
+            Expression::PathBuild(elements) => {
+                let elems = elements
+                    .iter()
+                    .map(|e| self.bind_inner_expr(e, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundExpression::PathBuild(
+                    elems,
+                    DataType::List(Box::new(DataType::Unknown)),
+                ))
+            }
+            Expression::Parameter(p) => {
+                Ok(BoundExpression::ParameterRef(p.clone(), DataType::String))
+            }
+            Expression::SessionVariable(name) => Ok(BoundExpression::SessionVariable(
+                name.clone(),
+                DataType::Unknown,
+            )),
+            Expression::Vector(v) => Ok(BoundExpression::Vector(v.clone())),
+            Expression::WindowFunction {
+                name,
+                args,
+                over_partition_by,
+                over_order_by,
+                over_order_desc,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.bind_inner_expr(a, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                let part_by = over_partition_by
+                    .iter()
+                    .map(|p| self.bind_inner_expr(p, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                let order_by = over_order_by
+                    .iter()
+                    .map(|o| self.bind_inner_expr(o, None))
+                    .collect::<DBResult<Vec<_>>>()?;
+                // Window functions derive their return type from the
+                // underlying function name and argument types.
+                let return_type = {
+                    let expr_binder = ExpressionBinder::new(&self.scope);
+                    let arg_types: Vec<DataType> = args.iter().map(|a| a.return_type()).collect();
+                    expr_binder.deduce_function_return_type(name, &arg_types)
+                };
+                Ok(BoundExpression::WindowFunction {
+                    name: name.clone(),
+                    args,
+                    over_partition_by: part_by,
+                    over_order_by: order_by,
+                    over_order_desc: over_order_desc.clone(),
+                    return_type,
+                })
+            }
+            Expression::Exists { body } => {
+                let query = self.bind_subquery_body(body)?;
+                Ok(BoundExpression::Exists {
+                    query: Box::new(query),
+                })
+            }
+            Expression::In {
+                expr: innerexpr,
+                subquery,
+                negated,
+            } => {
+                let bound_expr = self.bind_inner_expr(innerexpr, None)?;
+                let query = self.bind_subquery_body(subquery)?;
+                Ok(BoundExpression::In {
+                    expr: Box::new(bound_expr),
+                    subquery: Box::new(query),
+                    negated: *negated,
+                })
+            }
+        }
+    }
+
+    fn resolve_property_type(&self, var_name: &str, property: &str) -> DataType {
+        if let Some(var_info) = self.scope.lookup(var_name) {
+            if let Some(vt) = var_info.properties.get(property) {
+                return vt.to_data_type();
+            }
+            if let Some(ref sm) = self.schema_manager {
+                if let Some(ref space_name) = self.space_name {
+                    for tag_name in &var_info.tags {
+                        if let Ok(Some(tag_info)) = sm.get_tag(space_name, tag_name) {
+                            for prop in &tag_info.properties {
+                                if prop.name == property {
+                                    return prop.data_type.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        DataType::String
+    }
+
+    /// Resolve the type of a STRUCT field access `base.field`.
+    ///
+    /// The base expression carries its own concrete type when schema context
+    /// is available (a `STRUCT{...}` literal, or a `Property` whose schema
+    /// declares a Struct type). Falls back to `String` otherwise, mirroring
+    /// `Property` semantics.
+    fn resolve_struct_field_type(&self, base: &BoundExpression, field: &str) -> DataType {
+        if let DataType::Struct(info) = base.return_type() {
+            if let Some((_, field_type)) = info.fields.iter().find(|(name, _)| name == field) {
+                return field_type.clone();
+            }
+        }
+        DataType::String
+    }
+
+    // ── MATCH binding (produces QueryGraph) ────────────────────────────────
+
+    fn bind_match(
+        &mut self,
+        stmt: &crate::parser::ast::MatchStmt,
+    ) -> DBResult<BoundStatement> {
+        let query_graph = self.build_query_graph(&stmt.patterns)?;
+
+        // Register MATCH variables in scope BEFORE binding WHERE / RETURN /
+        // ORDER BY so those clauses can reference the matched entities.
+        for node in &query_graph.nodes {
+            self.scope.define_variable(BinderVariable {
+                name: node.variable.clone(),
+                alias_type: AliasType::Node,
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+        for edge in &query_graph.edges {
+            self.scope.define_variable(BinderVariable {
+                name: edge.variable.clone(),
+                alias_type: AliasType::Edge,
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
+            .transpose()?;
+
+        let return_clause = stmt
+            .return_clause
+            .as_ref()
+            .map(|rc| self.bind_return_clause(rc))
+            .transpose()?;
+
+        let order_by = stmt
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
+                                expression: be,
+                                direction: item.direction,
+                            })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        let delete_clause = stmt
+            .delete_clause
+            .as_ref()
+            .map(|dc| self.bind_match_delete(dc))
+            .transpose()?;
+
+        Ok(BoundStatement::Match(BoundMatchStatement {
+            span: stmt.span,
+            query_graph,
+            where_clause,
+            return_clause,
+            order_by,
+            limit: stmt.limit.clone(),
+            skip: stmt.skip.clone(),
+            optional: stmt.optional,
+            delete_clause,
+        }))
+    }
+
+    /// Wrap a raw expression into a contextual expression for binding.
+    fn plain_expression(expr: Expression) -> crate::core::types::ContextualExpression {
+        let ctx = Arc::new(
+            crate::core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let id = ctx.register_expression(crate::core::types::expr::ExpressionMeta::new(expr));
+        crate::core::types::ContextualExpression::new(id, ctx)
+    }
+
+    /// Bind the body of an EXISTS / IN subquery into a nested MATCH
+    /// statement.
+    ///
+    /// The subquery patterns (stored as re-parseable strings) are parsed
+    /// into pattern ASTs and bound inside a child scope whose parent is the
+    /// enclosing scope, so variables defined by the outer query resolve as
+    /// correlated references.
+    fn bind_subquery_body(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> DBResult<BoundStatement> {
+        let parent = self.scope.clone();
+        let outer_scope = std::mem::replace(&mut self.scope, BinderScope::with_parent(parent));
+        let result = self.bind_subquery_body_inner(body);
+        self.scope = outer_scope;
+        result
+    }
+
+    fn bind_subquery_body_inner(
+        &mut self,
+        body: &crate::core::types::expr::SubqueryBody,
+    ) -> DBResult<BoundStatement> {
+        let mut patterns = Vec::with_capacity(body.patterns.len());
+        let mut parser = crate::parser::parsing::TraversalParser::new();
+        for pattern_str in &body.patterns {
+            let pattern = parser
+                .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
+                .map_err(|e| {
+                    DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                        "Invalid subquery pattern `{pattern_str}`: {e}"
+                    )))
+                })?;
+            patterns.push(pattern);
+        }
+
+        let query_graph = self.build_query_graph(&patterns)?;
+
+        // Register subquery MATCH variables in the child scope before
+        // binding the subquery WHERE / RETURN expressions.
+        for node in &query_graph.nodes {
+            self.scope.define_variable(BinderVariable {
+                name: node.variable.clone(),
+                alias_type: AliasType::Node,
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
+                properties: node
+                    .tags
+                    .iter()
+                    .flat_map(|t| t.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+        for edge in &query_graph.edges {
+            self.scope.define_variable(BinderVariable {
+                name: edge.variable.clone(),
+                alias_type: AliasType::Edge,
+                tags: edge
+                    .edge_types
+                    .iter()
+                    .map(|e| e.edge_type_name.to_string())
+                    .collect(),
+                properties: edge
+                    .edge_types
+                    .iter()
+                    .flat_map(|e| e.properties.clone())
+                    .collect(),
+                is_defined: true,
+            });
+        }
+
+        let where_clause = body
+            .where_clause
+            .as_ref()
+            .map(|cond| -> DBResult<BoundWhereClause> {
+                let bound = self.bind_expr(&Self::plain_expression(cond.as_ref().clone()))?;
+                Ok(BoundWhereClause { condition: bound })
+            })
+            .transpose()?;
+
+        let return_clause = body
+            .return_expr
+            .as_ref()
+            .map(|ret| -> DBResult<BoundReturnClause> {
+                let bound = self.bind_expr(&Self::plain_expression(ret.as_ref().clone()))?;
+                Ok(BoundReturnClause {
+                    items: vec![BoundReturnItem {
+                        expression: bound,
+                        alias: None,
+                    }],
+                    distinct: false,
+                    order_by: None,
+                    limit: None,
+                    skip: None,
+                    sample: None,
+                })
+            })
+            .transpose()?;
+
+        Ok(BoundStatement::Match(BoundMatchStatement {
+            span: crate::core::types::Span::default(),
+            query_graph,
+            where_clause,
+            return_clause,
+            order_by: None,
+            limit: None,
+            skip: None,
+            optional: false,
+            delete_clause: None,
+        }))
+    }
+
+    fn build_query_graph(&mut self, patterns: &[Pattern]) -> DBResult<QueryGraph> {
+        let mut graph = QueryGraph::new();
+
+        for pattern in patterns {
+            self.process_pattern(pattern, &mut graph, None)?;
+        }
+
+        Ok(graph)
+    }
+
+    fn process_pattern(
+        &mut self,
+        pattern: &Pattern,
+        graph: &mut QueryGraph,
+        prev_node_var: Option<String>,
+    ) -> DBResult<Option<String>> {
+        match pattern {
+            Pattern::Node(np) => {
+                let var = np
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("__anon_n{}", graph.node_count()));
+
+                let tags = self.resolve_tags(&np.labels)?;
+                graph.add_node(BoundNodePattern {
+                    variable: var.clone(),
+                    tags,
+                });
+                Ok(Some(var))
+            }
+            Pattern::Edge(ep) => {
+                let var = ep
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("__anon_e{}", graph.edge_count()));
+
+                let edge_types = self.resolve_edge_types(&ep.edge_types)?;
+
+                let src = prev_node_var
+                    .clone()
+                    .unwrap_or_else(|| format!("__src_{}", var));
+                let dst = format!("__dst_{}", var);
+
+                graph.add_edge(BoundEdgePattern {
+                    variable: var,
+                    edge_types,
+                    direction: ep.direction,
+                    src_variable: src,
+                    dst_variable: dst,
+                });
+                Ok(None)
+            }
+            Pattern::Path(pp) => {
+                let mut last_var = prev_node_var;
+                for element in &pp.elements {
+                    last_var = self.process_path_element(element, graph, last_var)?;
+                }
+                Ok(last_var)
+            }
+            Pattern::Variable(vp) => {
+                if !self.scope.contains(&vp.name) {
+                    return Err(DBError::from(
+                        crate::core::error::QueryError::invalid_query(format!(
+                            "Undefined variable: {}",
+                            vp.name
+                        )),
+                    ));
+                }
+                Ok(Some(vp.name.clone()))
+            }
+        }
+    }
+
+    fn process_path_element(
+        &mut self,
+        element: &PathElement,
+        graph: &mut QueryGraph,
+        prev_node_var: Option<String>,
+    ) -> DBResult<Option<String>> {
+        match element {
+            PathElement::Node(np) => {
+                let var = np
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("__anon_n{}", graph.node_count()));
+                let tags = self.resolve_tags(&np.labels)?;
+                graph.add_node(BoundNodePattern {
+                    variable: var.clone(),
+                    tags,
+                });
+                Ok(Some(var))
+            }
+            PathElement::Edge(ep) => {
+                let var = ep
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("__anon_e{}", graph.edge_count()));
+                let edge_types = self.resolve_edge_types(&ep.edge_types)?;
+
+                let src = prev_node_var
+                    .clone()
+                    .unwrap_or_else(|| format!("__src_{}", var));
+                let dst = format!("__dst_{}", var);
+
+                graph.add_edge(BoundEdgePattern {
+                    variable: var,
+                    edge_types,
+                    direction: ep.direction,
+                    src_variable: src,
+                    dst_variable: dst,
+                });
+                Ok(None)
+            }
+            PathElement::Alternative(alt_patterns) => {
+                for alt in alt_patterns {
+                    self.process_pattern(alt, graph, prev_node_var.clone())?;
+                }
+                Ok(None)
+            }
+            PathElement::Optional(elem) => self.process_path_element(elem, graph, prev_node_var),
+            PathElement::Repeated(elem, _rep) => {
+                self.process_path_element(elem, graph, prev_node_var)
+            }
+        }
+    }
+
+    // ── Catalog resolution ─────────────────────────────────────────────────
+
+    fn resolve_tags(&self, labels: &[String]) -> DBResult<Vec<BoundTagRef>> {
+        if labels.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut resolved = Vec::new();
+        if let Some(ref sm) = self.schema_manager {
+            if let Some(ref space_name) = self.space_name {
+                for label in labels {
+                    let tag_info =
+                        sm.get_tag(space_name, label)
+                            .map_err(|e| {
+                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                    format!("Failed to resolve tag '{}': {}", label, e),
+                                ))
+                            })?
+                            .ok_or_else(|| {
+                                DBError::from(crate::core::error::QueryError::invalid_query(
+                                    format!("Tag '{}' not found in space '{}'", label, space_name),
+                                ))
+                            })?;
+
+                    let mut properties = std::collections::HashMap::new();
+                    for prop in &tag_info.properties {
+                        properties.insert(
+                            prop.name.clone(),
+                            ValueType::from_data_type(&prop.data_type),
+                        );
+                    }
+
+                    resolved.push(BoundTagRef {
+                        tag_name: self.interner.intern(label),
+                        properties,
+                    });
+                }
+                return Ok(resolved);
+            }
+        }
+
+        for label in labels {
+            resolved.push(BoundTagRef {
+                tag_name: self.interner.intern(label),
+                properties: std::collections::HashMap::new(),
+            });
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_edge_types(&self, edge_types: &[String]) -> DBResult<Vec<BoundEdgeTypeRef>> {
+        if edge_types.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut resolved = Vec::new();
+        if let Some(ref sm) = self.schema_manager {
+            if let Some(ref space_name) = self.space_name {
+                for et in edge_types {
+                    let edge_info = sm
+                        .get_edge_type(space_name, et)
+                        .map_err(|e| {
+                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                                "Failed to resolve edge type '{}': {}",
+                                et, e
+                            )))
+                        })?
+                        .ok_or_else(|| {
+                            DBError::from(crate::core::error::QueryError::invalid_query(format!(
+                                "Edge type '{}' not found in space '{}'",
+                                et, space_name
+                            )))
+                        })?;
+
+                    let mut properties = std::collections::HashMap::new();
+                    for prop in &edge_info.properties {
+                        properties.insert(
+                            prop.name.clone(),
+                            ValueType::from_data_type(&prop.data_type),
+                        );
+                    }
+
+                    resolved.push(BoundEdgeTypeRef {
+                        edge_type_name: self.interner.intern(et),
+                        properties,
+                    });
+                }
+                return Ok(resolved);
+            }
+        }
+
+        for et in edge_types {
+            resolved.push(BoundEdgeTypeRef {
+                edge_type_name: self.interner.intern(et),
+                properties: std::collections::HashMap::new(),
+            });
+        }
+        Ok(resolved)
+    }
+
+    // ── Other statement binders ────────────────────────────────────────────
+
+    fn bind_go(&mut self, stmt: &crate::parser::ast::GoStmt) -> DBResult<BoundStatement> {
+        let from = stmt
+            .from
+            .vertices
+            .iter()
+            .map(|v| self.bind_expr(v))
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
+            .transpose()?;
+
+        let yield_clause = stmt
+            .yield_clause
+            .as_ref()
+            .map(|yc| self.bind_yield_clause(yc))
+            .transpose()?;
+
+        if let Some(ref o) = stmt.over {
+            self.resolve_edge_types(&o.edge_types)?;
+        }
+
+        let over = stmt.over.as_ref().map(|o| o.edge_types.clone());
+
+        Ok(BoundStatement::Go(BoundGoStatement {
+            span: stmt.span,
+            steps: stmt.steps.clone(),
+            from,
+            over,
+            direction: stmt
+                .over
+                .as_ref()
+                .map(|o| o.direction)
+                .unwrap_or(EdgeDirection::Out),
+            where_clause,
+            yield_clause,
+        }))
+    }
+
+    fn bind_lookup(
+        &mut self,
+        stmt: &crate::parser::ast::LookupStmt,
+    ) -> DBResult<BoundStatement> {
+        let target = match &stmt.target {
+            crate::parser::ast::LookupTarget::Tag(t) => {
+                self.resolve_tags(std::slice::from_ref(t))?;
+                BoundLookupTarget::Tag(t.clone())
+            }
+            crate::parser::ast::LookupTarget::Edge(e) => {
+                self.resolve_edge_types(std::slice::from_ref(e))?;
+                BoundLookupTarget::Edge(e.clone())
+            }
+            crate::parser::ast::LookupTarget::Unspecified(s) => {
+                let is_edge = match self.resolve_tags(std::slice::from_ref(s)) {
+                    Ok(_) => false,
+                    Err(_) => {
+                        self.resolve_edge_types(std::slice::from_ref(s))?;
+                        true
+                    }
+                };
+                if is_edge {
+                    BoundLookupTarget::Edge(s.clone())
+                } else {
+                    BoundLookupTarget::Tag(s.clone())
+                }
+            }
+        };
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
+            .transpose()?;
+
+        let yield_clause = stmt
+            .yield_clause
+            .as_ref()
+            .map(|yc| self.bind_yield_clause(yc))
+            .transpose()?;
+
+        Ok(BoundStatement::Lookup(BoundLookupStatement {
+            span: stmt.span,
+            target,
+            where_clause,
+            yield_clause,
+        }))
+    }
+
+    fn bind_fetch(
+        &mut self,
+        stmt: &crate::parser::ast::FetchStmt,
+    ) -> DBResult<BoundStatement> {
+        match &stmt.target {
+            FetchTarget::Vertices {
+                tag_name,
+                ids,
+                properties,
+            } => {
+                if let Some(tag_name) = tag_name {
+                    self.resolve_tags(std::slice::from_ref(tag_name))?;
+                }
+                let bound_ids = ids
+                    .iter()
+                    .map(|id| self.bind_expr(id))
+                    .collect::<DBResult<Vec<_>>>()?;
+                Ok(BoundStatement::FetchVertices(BoundFetchVerticesStatement {
+                    span: stmt.span,
+                    tag_name: tag_name.clone(),
+                    ids: bound_ids,
+                    properties: properties.clone(),
+                }))
+            }
+            FetchTarget::Edges {
+                src,
+                dst,
+                edge_type,
+                rank,
+                properties,
+            } => {
+                let bound_src = self.bind_expr(src)?;
+                let bound_dst = self.bind_expr(dst)?;
+                let bound_rank = rank.as_ref().map(|r| self.bind_expr(r)).transpose()?;
+                Ok(BoundStatement::FetchEdges(BoundFetchEdgesStatement {
+                    span: stmt.span,
+                    src: bound_src,
+                    dst: bound_dst,
+                    edge_type: edge_type.clone(),
+                    rank: bound_rank,
+                    properties: properties.clone(),
+                }))
+            }
+        }
+    }
+
+    fn bind_find_path(
+        &mut self,
+        stmt: &crate::parser::ast::FindPathStmt,
+    ) -> DBResult<BoundStatement> {
+        let from = stmt
+            .from
+            .vertices
+            .iter()
+            .map(|v| self.bind_expr(v))
+            .collect::<DBResult<Vec<_>>>()?;
+        let to = self.bind_expr(&stmt.to)?;
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
+            .transpose()?;
+
+        let yield_clause = stmt
+            .yield_clause
+            .as_ref()
+            .map(|yc| self.bind_yield_clause(yc))
+            .transpose()?;
+
+        let over = stmt
+            .over
+            .as_ref()
+            .map(|o| (o.edge_types.clone(), o.direction));
+
+        Ok(BoundStatement::FindPath(BoundFindPathStatement {
+            span: stmt.span,
+            from,
+            to,
+            over,
+            where_clause,
+            shortest: stmt.shortest,
+            max_steps: stmt.max_steps,
+            limit: stmt.limit.clone(),
+            skip: stmt.skip.clone(),
+            yield_clause,
+        }))
+    }
+
+    fn bind_subgraph(
+        &mut self,
+        stmt: &crate::parser::ast::SubgraphStmt,
+    ) -> DBResult<BoundStatement> {
+        let from = stmt
+            .from
+            .vertices
+            .iter()
+            .map(|v| self.bind_expr(v))
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| {
+                self.bind_expr(c)
+                    .map(|be| BoundWhereClause { condition: be })
+            })
+            .transpose()?;
+
+        let yield_clause = stmt
+            .yield_clause
+            .as_ref()
+            .map(|yc| self.bind_yield_clause(yc))
+            .transpose()?;
+
+        let over = stmt
+            .over
+            .as_ref()
+            .map(|o| (o.edge_types.clone(), o.direction));
+
+        Ok(BoundStatement::Subgraph(BoundSubgraphStatement {
+            span: stmt.span,
+            steps: stmt.steps.clone(),
+            from,
+            over,
+            where_clause,
+            yield_clause,
+        }))
+    }
+
+    fn bind_return(
+        &mut self,
+        stmt: &crate::parser::ast::ReturnStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| match item {
+                ReturnItem::Expression { expression, alias } => {
+                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                        expression: be,
+                        alias: alias.clone(),
+                    })
+                }
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let order_by = stmt
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
+                                expression: be,
+                                direction: item.direction,
+                            })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        Ok(BoundStatement::Return(BoundReturnStatement {
+            span: stmt.span,
+            items,
+            distinct: stmt.distinct,
+            order_by,
+            skip: stmt.skip.clone(),
+            limit: stmt.limit.clone(),
+        }))
+    }
+
+    fn bind_with(
+        &mut self,
+        stmt: &crate::parser::ast::WithStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| match item {
+                ReturnItem::Expression { expression, alias } => {
+                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                        expression: be,
+                        alias: alias.clone(),
+                    })
+                }
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        // Register WITH aliases in scope so the WITH condition and subsequent
+        // clauses can reference them.
+        for item in &items {
+            if let Some(alias) = &item.alias {
+                self.scope.define_variable(BinderVariable {
+                    name: alias.clone(),
+                    alias_type: AliasType::Expression,
+                    tags: Vec::new(),
+                    properties: std::collections::HashMap::new(),
+                    is_defined: true,
+                });
+            }
+        }
+
+        let condition = stmt
+            .where_clause
+            .as_ref()
+            .map(|c| self.bind_expr(c))
+            .transpose()?;
+
+        Ok(BoundStatement::With(BoundWithStatement {
+            span: stmt.span,
+            items,
+            condition,
+        }))
+    }
+
+    fn bind_unwind(
+        &mut self,
+        stmt: &crate::parser::ast::UnwindStmt,
+    ) -> DBResult<BoundStatement> {
+        let expr = self.bind_expr(&stmt.expression)?;
+        Ok(BoundStatement::Unwind(BoundUnwindStatement {
+            span: stmt.span,
+            expression: expr,
+            alias: stmt.variable.clone(),
+        }))
+    }
+
+    fn bind_pipe(
+        &mut self,
+        stmt: &crate::parser::ast::PipeStmt,
+    ) -> DBResult<BoundStatement> {
+        let statements = vec![self.bind_stmt(&stmt.left)?, self.bind_stmt(&stmt.right)?];
+
+        Ok(BoundStatement::Pipe(BoundPipeStatement {
+            span: stmt.span,
+            statements,
+        }))
+    }
+
+    fn bind_set_operation(
+        &mut self,
+        stmt: &crate::parser::ast::SetOperationStmt,
+    ) -> DBResult<BoundStatement> {
+        let left = Box::new(self.bind_stmt(&stmt.left)?);
+        let right = Box::new(self.bind_stmt(&stmt.right)?);
+        let operation = match stmt.op_type {
+            SetOperationType::Union | SetOperationType::UnionAll => SetOperationKind::Union,
+            SetOperationType::Intersect => SetOperationKind::Intersect,
+            SetOperationType::Minus => SetOperationKind::Minus,
+        };
+        Ok(BoundStatement::SetOperation(BoundSetOperationStatement {
+            span: stmt.span,
+            left,
+            right,
+            operation,
+        }))
+    }
+
+    fn bind_group_by(
+        &mut self,
+        stmt: &crate::parser::ast::GroupByStmt,
+    ) -> DBResult<BoundStatement> {
+        let keys = stmt
+            .group_items
+            .iter()
+            .map(|k| self.bind_expr(k))
+            .collect::<DBResult<Vec<_>>>()?;
+
+        Ok(BoundStatement::GroupBy(BoundGroupByStatement {
+            span: stmt.span,
+            keys,
+            aggregates: Vec::new(),
+        }))
+    }
+
+    // ── Clause helpers ─────────────────────────────────────────────────────
+
+    fn bind_return_clause(
+        &mut self,
+        rc: &crate::parser::ast::ReturnClause,
+    ) -> DBResult<BoundReturnClause> {
+        let items = rc
+            .items
+            .iter()
+            .map(|item| match item {
+                ReturnItem::Expression { expression, alias } => {
+                    // Reject references to variables that are not defined in
+                    // the current binding scope (e.g. `RETURN undefined_var`).
+                    self.ensure_variables_defined(expression)?;
+                    self.bind_expr(expression).map(|be| BoundReturnItem {
+                        expression: be,
+                        alias: alias.clone(),
+                    })
+                }
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let order_by = rc
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
+                                expression: be,
+                                direction: item.direction,
+                            })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        Ok(BoundReturnClause {
+            items,
+            distinct: rc.distinct,
+            order_by,
+            limit: rc.limit.clone(),
+            skip: rc.skip.clone(),
+            sample: rc.sample.clone(),
+        })
+    }
+
+    fn bind_yield_clause(
+        &mut self,
+        yc: &crate::parser::ast::YieldClause,
+    ) -> DBResult<BoundYieldClause> {
+        let items = yc
+            .items
+            .iter()
+            .map(|item| {
+                self.bind_expr(&item.expression).map(|be| BoundYieldItem {
+                    expression: be,
+                    alias: item.alias.clone(),
+                })
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let order_by = yc
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression)
+                            .map(|be| super::bound::BoundOrderByItem {
+                                expression: be,
+                                direction: item.direction,
+                            })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        Ok(BoundYieldClause {
+            items,
+            distinct: false,
+            order_by,
+            limit: yc.limit.clone(),
+            skip: yc.skip.clone(),
+        })
+    }
+
+    fn bind_match_delete(
+        &mut self,
+        dc: &crate::parser::ast::MatchDeleteClause,
+    ) -> DBResult<BoundMatchDeleteClause> {
+        let target = match &dc.target {
+            MatchDeleteTarget::Vertices(exprs) => {
+                let bound = exprs
+                    .iter()
+                    .map(|e| self.bind_expr(e))
+                    .collect::<DBResult<Vec<_>>>()?;
+                BoundMatchDeleteTarget::Vertices(bound)
+            }
+            MatchDeleteTarget::Edges(exprs) => {
+                let bound = exprs
+                    .iter()
+                    .map(|e| self.bind_expr(e))
+                    .collect::<DBResult<Vec<_>>>()?;
+                BoundMatchDeleteTarget::Edges(bound)
+            }
+            MatchDeleteTarget::EdgeRefs(refs) => {
+                let mut bound = Vec::new();
+                for (src, dst, rank) in refs {
+                    let bsrc = self.bind_expr(src)?;
+                    let bdst = self.bind_expr(dst)?;
+                    let brank = rank.as_ref().map(|r| self.bind_expr(r)).transpose()?;
+                    bound.push((bsrc, bdst, brank));
+                }
+                BoundMatchDeleteTarget::EdgeRefs(bound)
+            }
+        };
+        Ok(BoundMatchDeleteClause {
+            target,
+            with_edge: dc.with_edge,
+        })
+    }
+}
+
+impl Default for Binder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Scope helpers for runtime-context expressions ──────────────────────────
+
+/// Create a child scope that additionally binds `variable` as a local
+/// iteration variable (list comprehension / predicate / reduce).
+fn inner_scope_with_variable(
+    scope: &crate::binder::scope::BinderScope,
+    variable: &str,
+) -> crate::binder::scope::BinderScope {
+    let mut inner = crate::binder::scope::BinderScope::with_parent(scope.clone());
+    inner.define_variable(local_variable(variable));
+    inner
+}
+
+/// Build a runtime-typed local binder variable for a scope-local
+/// iteration variable.
+fn local_variable(name: &str) -> crate::binder::scope::BinderVariable {
+    crate::binder::scope::BinderVariable {
+        name: name.to_string(),
+        alias_type: crate::core::types::semantic::AliasType::Runtime,
+        tags: Vec::new(),
+        properties: std::collections::HashMap::new(),
+        is_defined: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn test_qctx() -> Arc<crate::QueryContext> {
+        Arc::new(crate::QueryContext::new(Arc::new(
+            crate::QueryRequestContext {
+                session_id: None,
+                user_name: None,
+                space_name: None,
+                query: String::new(),
+                parameters: std::collections::HashMap::new(),
+                ..Default::default()
+            },
+        )))
+    }
+
+    fn bind_query(query: &str) -> DBResult<BoundStatement> {
+        let mut parser = crate::parser::Parser::new(query);
+        let result = parser
+            .parse()
+            .map_err(|e| DBError::from(crate::core::error::QueryError::pipeline_parse_error(e)))?;
+        Binder::new()
+            .with_space(None, 0)
+            .bind(result.ast, test_qctx())
+    }
+
+    #[test]
+    fn test_bind_exists_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age > 30 } RETURN t.name",
+        )
+        .expect("EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert!(sub.where_clause.is_some(), "subquery WHERE must be bound");
+                assert_eq!(sub.query_graph.nodes.len(), 1);
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_exists_bare_pattern() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { p:person-[:knows]->q:person } RETURN t.name",
+        )
+        .expect("bare-pattern EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert_eq!(sub.query_graph.nodes.len(), 2, "two nodes in pattern");
+                assert_eq!(sub.query_graph.edges.len(), 1, "one edge in pattern");
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_in_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } RETURN t.name",
+        )
+        .expect("IN query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::In {
+                negated, subquery, ..
+            } => {
+                assert!(!negated);
+                assert!(subquery.as_match().is_some());
+            }
+            other => panic!("expected BoundExpression::In, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_correlated_subquery_resolves_outer_variable() {
+        // `t` is defined by the outer MATCH and referenced inside the
+        // subquery WHERE; binding must succeed via the parent scope.
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.name = t.name } RETURN t.name",
+        )
+        .expect("correlated EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert!(stmt.where_clause.is_some());
+    }
+
+    #[test]
+    fn test_bind_nested_exists() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) \
+             WHERE EXISTS { MATCH (q:person) WHERE q.age > p.age } } RETURN t.name",
+        )
+        .expect("nested EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query } => {
+                let sub = query.as_match().expect("outer subquery");
+                let sub_where = sub.where_clause.as_ref().expect("inner WHERE");
+                assert!(matches!(
+                    sub_where.condition,
+                    BoundExpression::Exists { .. }
+                ));
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+}

@@ -1,4 +1,4 @@
-use graphdb_query::query::parser::Parser;
+use graphdb_query::parser::Parser;
 
 #[test]
 fn test_copy_parsing() {
@@ -38,7 +38,7 @@ fn test_copy_parsing() {
             let parsed = result.unwrap();
             println!("  stmt kind: {}", parsed.ast.stmt().kind());
             match parsed.ast.stmt() {
-                graphdb_query::query::parser::ast::Stmt::Copy(copy) => {
+                graphdb_query::parser::ast::Stmt::Copy(copy) => {
                     println!(
                         "  Copy target: {:?} dir: {:?} file: {} header: {} delim: '{}' batch: {:?}",
                         copy.target,
@@ -51,7 +51,7 @@ fn test_copy_parsing() {
                     if sql.contains(" TO ") {
                         assert_eq!(
                             copy.direction,
-                            graphdb_query::query::parser::ast::stmt::CopyDirection::To,
+                            graphdb_query::parser::ast::stmt::CopyDirection::To,
                             "'{sql}' must parse as export"
                         );
                     }

@@ -1,0 +1,53 @@
+//! Plan Analysis Module
+//!
+//! Provides an analysis of query plans, supporting decision-making processes related to optimization.
+//! Quote Count Analysis: Identifying Sub-plans That Are Cited Multiple Times
+//! Expression analysis: Examining the characteristics of an expression (such as determinacy, complexity, etc.)
+//! Fingerprint calculation: Calculating the structural fingerprint of the planning nodes
+//!
+//! # Explanation of the module locations
+//!
+//! This module is located in `src/query/optimizer/analysis/` and is at the same level as the `cost` module.
+//! Reason for placing it in the optimizer rather than the planner:
+//! Separation of responsibilities: The planner is responsible for generating plans, while the optimizer is responsible for optimizing these plans.
+//! 2. Calculation on demand: Analysis is only performed during the optimization phase, as and when necessary.
+//! 3. Dependency relationships: The optimizer already depends on the planner; therefore, no circular dependencies will be introduced.
+//!
+//! # Usage Examples
+//!
+//! ```rust
+//! use graphdb_query::optimizer::analysis::{
+//!     ExpressionAnalyzer,
+//!     ReferenceCountAnalyzer,
+//! };
+//!
+//! let ref_analyzer = ReferenceCountAnalyzer::new();
+//! let expr_analyzer = ExpressionAnalyzer::new();
+//!
+//! // Count how many times sub-plans are referenced (needs a full plan):
+//! // let ref_analysis = ref_analyzer.analyze(plan.root());
+//! // Analyze an expression's characteristics (determinism, complexity, etc.):
+//! // let expr_analysis = expr_analyzer.analyze(condition);
+//! ```
+
+pub mod batch;
+pub mod expression;
+pub mod fingerprint;
+pub mod reference_count;
+pub mod required_properties;
+
+// Re-export the main types
+pub use batch::{AggregatedExpressionAnalysis, BatchPlanAnalysis, BatchPlanAnalyzer};
+pub use expression::{
+    AnalysisMode, AnalysisOptions, ExpressionAnalysis, ExpressionAnalyzer, NondeterministicChecker,
+};
+pub use fingerprint::{FingerprintCalculator, PlanFingerprint};
+pub use reference_count::{
+    ReferenceCountAnalysis, ReferenceCountAnalyzer, SubplanId, SubplanReferenceInfo,
+};
+pub use required_properties::{
+    binding_var, PropertyRequirement, RequiredPropertiesMap, RequiredPropertyAnalyzer,
+};
+
+#[cfg(test)]
+mod integration_test;

@@ -5,14 +5,14 @@
 
 #[cfg(test)]
 mod tests {
-    use graphdb_core::core::types::DataType;
+    use graphdb_core::types::DataType;
     use std::str::FromStr;
 
     /// Every core `DataType` a property can carry roundtrips through the
     /// wire format (Display output) and back via the core `FromStr` parser.
     #[test]
     fn test_wire_format_roundtrip() {
-        use graphdb_core::core::types::{ArrayTypeInfo, StructTypeInfo};
+        use graphdb_core::types::{ArrayTypeInfo, StructTypeInfo};
         use std::sync::Arc;
 
         let types = vec![

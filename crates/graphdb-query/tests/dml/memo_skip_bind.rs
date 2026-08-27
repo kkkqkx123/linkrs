@@ -8,8 +8,8 @@
 use super::common::TestStorage;
 use graphdb_query::core::stats::StatsManager;
 use graphdb_query::core::types::VertexId;
-use graphdb_query::query::optimizer::OptimizerEngine;
-use graphdb_query::query::pipeline::QueryPipelineManager;
+use graphdb_query::optimizer::OptimizerEngine;
+use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::StorageReader;
 use parking_lot::RwLock;
 use std::sync::Arc;

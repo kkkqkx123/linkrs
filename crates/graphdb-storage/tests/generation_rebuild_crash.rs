@@ -3,7 +3,7 @@
 mod common;
 
 use graphdb_storage::core::Value;
-use graphdb_storage::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 #[test]
 fn generation_rebuild_restarts_after_publish_io_failure() {

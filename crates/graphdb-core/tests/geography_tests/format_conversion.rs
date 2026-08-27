@@ -7,7 +7,7 @@
 //! - Error handling - invalid formats
 
 use super::common::{create_test_linestring, create_test_point, create_test_polygon};
-use graphdb_core::core::value::geography::{GeoJsonGeometry, Geography};
+use graphdb_core::value::geography::{GeoJsonGeometry, Geography};
 
 /// TC-GEO-FMT-001: WKT Point Round-trip
 #[test]

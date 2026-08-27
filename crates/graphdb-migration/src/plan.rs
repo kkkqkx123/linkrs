@@ -1,4 +1,4 @@
-use graphdb_core::core::{DataType, Value};
+use graphdb_core::{DataType, Value};
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,2649 @@
+//! Column Store
+//!
+//! Columnar storage for vertex properties.
+//! Each column stores values of a single property type.
+//!
+//! The storage is split into two variants:
+//! - `FixedWidthColumn`: For fixed-length types (Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, Uuid)
+//! - `VariableWidthColumn`: For variable-length types (String)
+//! - `Column`: Public wrapper that selects the appropriate variant at construction time
+
+use crate::core::types::Timestamp;
+use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
+use crate::core::{DataType, StorageError, StorageResult, Value};
+
+use crate::column_stats::ColumnStats;
+use crate::encoding::{
+    AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
+    FsstEncoder, RleIntColumn,
+};
+use crate::utils::NullBitmap;
+use bitvec::prelude::*;
+
+/// Unified column storage interface.
+pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
+    fn get(&self, row_idx: usize) -> Option<Value>;
+    fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()>;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn is_null(&self, row_idx: usize) -> bool;
+    fn memory_usage(&self) -> usize;
+    /// Pre-allocate capacity for `additional` more rows.
+    ///
+    /// Batch inserts call this once before writing a run of rows so the
+    /// underlying buffers (raw data, offsets, null bitmap) avoid repeated
+    /// reallocation. The default is a no-op so single-row/small-batch paths
+    /// are unaffected.
+    fn reserve(&mut self, additional: usize);
+    fn clear(&mut self);
+    fn resize(&mut self, new_count: usize);
+    fn null_bitmap(&self) -> Option<&BitVec<u8, Lsb0>>;
+    fn null_count(&self) -> usize;
+    fn load_data_from_raw(
+        &mut self,
+        data: Vec<u8>,
+        offsets: Vec<u64>,
+        null_bitmap_raw: Option<Vec<u8>>,
+        bitmap_bit_len: usize,
+    );
+    fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>);
+}
+
+/// Returns the element size for fixed-width data types.
+/// Returns 0 for variable-length types.
+pub fn element_size(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::Bool => 1,
+        DataType::SmallInt => 2,
+        DataType::Int => 4,
+        DataType::BigInt => 8,
+        DataType::Float => 4,
+        DataType::Double => 8,
+        DataType::Date => 12,
+        DataType::Time => 8,
+        DataType::DateTime => 28,
+        DataType::Uuid => 16,
+        _ => 0,
+    }
+}
+
+/// Returns true if the data type is variable-length.
+pub fn is_variable_length_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::String
+            | DataType::Geography
+            | DataType::List(_)
+            | DataType::Map(_)
+            | DataType::Set(_)
+            | DataType::Vertex
+            | DataType::Edge
+            | DataType::Path
+            | DataType::Vector
+            | DataType::VectorDense(_)
+            | DataType::VectorSparse(_)
+            | DataType::DataSet
+            | DataType::Json
+            | DataType::JsonB
+            | DataType::Interval
+            | DataType::Null
+            // Composite types have no fixed element size; they must never fall
+            // into FixedWidthColumn (element_size = 0 would corrupt offsets).
+            | DataType::Struct(_)
+            | DataType::Array(_)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// FixedWidthColumn
+// ---------------------------------------------------------------------------
+
+/// Column storage for fixed-width (primitive) types.
+///
+/// Values are stored in a flat `Vec<u8>` with direct offset calculation:
+/// `offset = row_idx * element_size`.
+/// This provides O(1) random access without any branching on type.
+#[derive(Debug, Clone)]
+pub struct FixedWidthColumn {
+    data: Vec<u8>,
+    data_type: DataType,
+    element_size: usize,
+    null_bitmap: Option<BitVec<u8, Lsb0>>,
+    row_count: usize,
+    /// O(1) count of null rows, maintained incrementally on set/resize/clear
+    /// so `used_memory_size` does not rescan the bitmap (which is O(n)).
+    null_count: usize,
+}
+
+impl FixedWidthColumn {
+    pub fn new(data_type: DataType, nullable: bool) -> Self {
+        let elem_size = element_size(&data_type);
+        Self {
+            data: Vec::new(),
+            data_type: data_type.clone(),
+            element_size: elem_size,
+            null_bitmap: if nullable { Some(BitVec::new()) } else { None },
+            row_count: 0,
+            null_count: 0,
+        }
+    }
+}
+
+impl ColumnStorage for FixedWidthColumn {
+    fn get(&self, row_idx: usize) -> Option<Value> {
+        if self.is_null(row_idx) {
+            return None;
+        }
+
+        let offset = row_idx * self.element_size;
+        if offset + self.element_size > self.data.len() {
+            return None;
+        }
+
+        let raw = read_fixed_value(&self.data, offset, self.element_size)?;
+        Some(convert_to_type(raw, &self.data_type))
+    }
+
+    fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        let was_null = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false);
+
+        let offset = row_idx * self.element_size;
+        if offset + self.element_size > self.data.len() {
+            self.data.resize(offset + self.element_size, 0);
+        }
+
+        match value {
+            Some(v) => {
+                write_fixed_value(&mut self.data, offset, self.element_size, v)?;
+                if let Some(ref mut bitmap) = self.null_bitmap {
+                    ensure_bitmap_len(bitmap, row_idx + 1);
+                    bitmap.set(row_idx, false);
+                }
+            }
+            None => {
+                if let Some(ref mut bitmap) = self.null_bitmap {
+                    ensure_bitmap_len(bitmap, row_idx + 1);
+                    bitmap.set(row_idx, true);
+                }
+            }
+        }
+
+        if self.null_bitmap.is_some() {
+            match value {
+                Some(v) if !v.is_null() => {
+                    if was_null {
+                        self.null_count = self.null_count.saturating_sub(1);
+                    }
+                }
+                _ => {
+                    if !was_null {
+                        self.null_count += 1;
+                    }
+                }
+            }
+        }
+
+        if row_idx >= self.row_count {
+            self.row_count = row_idx + 1;
+        }
+
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        self.row_count
+    }
+
+    fn is_null(&self, row_idx: usize) -> bool {
+        self.null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false)
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.data.reserve(additional * self.element_size.max(1));
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.reserve(additional);
+        }
+    }
+
+    fn memory_usage(&self) -> usize {
+        let data_size = self.data.len();
+        let bitmap_size = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.as_raw_slice().len())
+            .unwrap_or(0);
+        data_size + bitmap_size
+    }
+
+    fn clear(&mut self) {
+        self.data.clear();
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.clear();
+        }
+        self.row_count = 0;
+        self.null_count = 0;
+    }
+
+    fn resize(&mut self, new_count: usize) {
+        let old_count = self.row_count;
+        self.data.resize(new_count * self.element_size, 0);
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.resize(new_count, false);
+            for i in old_count..new_count {
+                bitmap.set(i, true);
+            }
+        }
+        if let Some(bitmap) = &self.null_bitmap {
+            if new_count >= old_count {
+                self.null_count += new_count - old_count;
+            } else {
+                // Shrink: recompute (rare; happens during load/compaction).
+                self.null_count = bitmap.count_ones();
+            }
+        }
+        self.row_count = new_count;
+    }
+
+    fn null_bitmap(&self) -> Option<&BitVec<u8, Lsb0>> {
+        self.null_bitmap.as_ref()
+    }
+
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn load_data_from_raw(
+        &mut self,
+        data: Vec<u8>,
+        _offsets: Vec<u64>,
+        null_bitmap_raw: Option<Vec<u8>>,
+        bitmap_bit_len: usize,
+    ) {
+        self.data = data;
+        let elem_size = self.element_size.max(1);
+        let remainder = self.data.len() % elem_size;
+        if remainder != 0 {
+            self.data
+                .resize(self.data.len() + (elem_size - remainder), 0);
+        }
+        self.null_bitmap = null_bitmap_raw.map(|raw| {
+            let mut bv = BitVec::from_vec(raw);
+            bv.resize(bitmap_bit_len, false);
+            bv
+        });
+        self.null_count = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.count_ones())
+            .unwrap_or(0);
+        self.row_count = self.data.len() / elem_size;
+    }
+
+    fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+        (self.data.clone(), Vec::new(), self.null_bitmap.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// VariableWidthColumn
+// ---------------------------------------------------------------------------
+
+/// Column storage for variable-length types (String, and future Bytes/JSON).
+///
+/// Values are stored as concatenated byte data with an offsets array.
+/// Each value is prefixed with its length (8 bytes, little-endian).
+/// O(1) random access via the offsets array.
+#[derive(Debug, Clone)]
+pub struct VariableWidthColumn {
+    data: Vec<u8>,
+    offsets: Vec<usize>,
+    null_bitmap: Option<BitVec<u8, Lsb0>>,
+    row_count: usize,
+    data_type: DataType,
+    /// O(1) count of null rows, maintained incrementally (see
+    /// [`FixedWidthColumn::null_count`]).
+    null_count: usize,
+}
+
+impl VariableWidthColumn {
+    pub fn new(data_type: DataType, nullable: bool) -> Self {
+        Self {
+            data: Vec::new(),
+            offsets: Vec::new(),
+            null_bitmap: if nullable { Some(BitVec::new()) } else { None },
+            row_count: 0,
+            data_type,
+            null_count: 0,
+        }
+    }
+}
+
+impl ColumnStorage for VariableWidthColumn {
+    fn get(&self, row_idx: usize) -> Option<Value> {
+        if self.is_null(row_idx) {
+            return None;
+        }
+
+        if row_idx >= self.offsets.len() {
+            return None;
+        }
+
+        let start = self.offsets[row_idx];
+        if start == usize::MAX {
+            return None;
+        }
+
+        if start + 8 > self.data.len() {
+            return None;
+        }
+
+        let len_bytes: [u8; 8] = self.data[start..start + 8].try_into().ok()?;
+        let len = u64::from_le_bytes(len_bytes) as usize;
+
+        if start + 8 + len > self.data.len() {
+            return None;
+        }
+
+        let bytes = &self.data[start + 8..start + 8 + len];
+        if matches!(self.data_type, DataType::Geography) {
+            postcard::from_bytes::<crate::core::value::Geography>(bytes)
+                .ok()
+                .map(Value::Geography)
+        } else if matches!(self.data_type, DataType::Vector) {
+            if bytes.len().is_multiple_of(std::mem::size_of::<f32>()) {
+                let dim = bytes.len() / std::mem::size_of::<f32>();
+                let mut data = Vec::with_capacity(dim);
+                for i in 0..dim {
+                    let chunk: [u8; 4] = bytes[i * 4..(i + 1) * 4].try_into().ok()?;
+                    data.push(f32::from_le_bytes(chunk));
+                }
+                Some(Value::Vector(VectorValue::dense(data)))
+            } else {
+                None
+            }
+        } else if matches!(self.data_type, DataType::Json) {
+            let s = String::from_utf8(bytes.to_vec()).ok()?;
+            crate::core::value::Json::parse(&s)
+                .ok()
+                .map(|j| Value::Json(Box::new(j)))
+        } else if matches!(self.data_type, DataType::JsonB) {
+            let s = String::from_utf8(bytes.to_vec()).ok()?;
+            crate::core::value::JsonB::parse(&s)
+                .ok()
+                .map(|jb| Value::JsonB(Box::new(jb)))
+        } else if matches!(self.data_type, DataType::Struct(_) | DataType::Array(_)) {
+            // Composite values are stored as postcard-encoded whole `Value`s
+            // (the serde single-track format).
+            postcard::from_bytes::<Value>(bytes).ok()
+        } else {
+            String::from_utf8(bytes.to_vec()).ok().map(Value::string)
+        }
+    }
+
+    fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        let was_null = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false);
+
+        while self.offsets.len() <= row_idx {
+            self.offsets.push(self.data.len());
+        }
+
+        match value {
+            Some(v) => {
+                let start = self.data.len();
+                write_variable_value(&mut self.data, v)?;
+                self.offsets[row_idx] = start;
+
+                if let Some(ref mut bitmap) = self.null_bitmap {
+                    ensure_bitmap_len(bitmap, row_idx + 1);
+                    bitmap.set(row_idx, false);
+                }
+            }
+            None => {
+                self.offsets[row_idx] = usize::MAX;
+
+                if let Some(ref mut bitmap) = self.null_bitmap {
+                    ensure_bitmap_len(bitmap, row_idx + 1);
+                    bitmap.set(row_idx, true);
+                }
+            }
+        }
+
+        if self.null_bitmap.is_some() {
+            let becomes_null = value.is_none_or(|v| v.is_null());
+            if becomes_null {
+                if !was_null {
+                    self.null_count += 1;
+                }
+            } else if was_null {
+                self.null_count = self.null_count.saturating_sub(1);
+            }
+        }
+
+        if row_idx >= self.row_count {
+            self.row_count = row_idx + 1;
+        }
+
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        self.row_count
+    }
+
+    fn is_null(&self, row_idx: usize) -> bool {
+        self.null_bitmap
+            .as_ref()
+            .map(|b| row_idx < b.len() && b[row_idx])
+            .unwrap_or(false)
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.offsets.reserve(additional);
+        // String payloads vary per row; reserve the per-row length prefix
+        // overhead plus a small slack so extend_from_slice rarely reallocs.
+        self.data.reserve(additional * 16);
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.reserve(additional);
+        }
+    }
+
+    fn memory_usage(&self) -> usize {
+        let data_size = self.data.len();
+        let offsets_size = self.offsets.len() * std::mem::size_of::<usize>();
+        let bitmap_size = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.as_raw_slice().len())
+            .unwrap_or(0);
+        data_size + offsets_size + bitmap_size
+    }
+
+    fn clear(&mut self) {
+        self.data.clear();
+        self.offsets.clear();
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.clear();
+        }
+        self.row_count = 0;
+        self.null_count = 0;
+    }
+
+    fn resize(&mut self, new_count: usize) {
+        let old_count = self.row_count;
+        self.offsets.resize(new_count, self.data.len());
+        if let Some(ref mut bitmap) = self.null_bitmap {
+            bitmap.resize(new_count, false);
+            for i in old_count..new_count {
+                bitmap.set(i, true);
+            }
+        }
+        if let Some(bitmap) = &self.null_bitmap {
+            if new_count >= old_count {
+                self.null_count += new_count - old_count;
+            } else {
+                self.null_count = bitmap.count_ones();
+            }
+        }
+        self.row_count = new_count;
+    }
+
+    fn null_bitmap(&self) -> Option<&BitVec<u8, Lsb0>> {
+        self.null_bitmap.as_ref()
+    }
+
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn load_data_from_raw(
+        &mut self,
+        data: Vec<u8>,
+        offsets: Vec<u64>,
+        null_bitmap_raw: Option<Vec<u8>>,
+        bitmap_bit_len: usize,
+    ) {
+        self.data = data;
+        self.null_bitmap = null_bitmap_raw.map(|raw| {
+            let mut bv = BitVec::from_vec(raw);
+            bv.resize(bitmap_bit_len, false);
+            bv
+        });
+        self.null_count = self
+            .null_bitmap
+            .as_ref()
+            .map(|b| b.count_ones())
+            .unwrap_or(0);
+        if !offsets.is_empty() {
+            self.offsets = offsets.into_iter().map(|o| o as usize).collect();
+            self.row_count = self.offsets.len();
+        } else {
+            self.offsets.clear();
+            self.row_count = 0;
+        }
+    }
+
+    fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+        let offsets: Vec<u64> = self.offsets.iter().map(|&o| o as u64).collect();
+        (self.data.clone(), offsets, self.null_bitmap.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers (shared between Fixed and Variable)
+// ---------------------------------------------------------------------------
+
+fn ensure_bitmap_len(bitmap: &mut BitVec<u8, Lsb0>, min_len: usize) {
+    if bitmap.len() < min_len {
+        bitmap.resize(min_len, false);
+    }
+}
+
+/// Rough heap footprint of a `Value`'s payload (used for MVCC memory
+/// accounting of retained version chains). Non-string payloads are counted
+/// by the fixed `Value`/`VersionEntry` sizes.
+fn value_payload_bytes(value: &Value) -> usize {
+    match value {
+        Value::String(s) => s.len(),
+        _ => 0,
+    }
+}
+
+/// Timestamp-aware variant of [`decode_column_values`]: decodes each row's
+/// value as visible at `query_ts` through the MVCC version chain.
+fn decode_column_values_at_ts(
+    column: &Column,
+    rows: &[usize],
+    query_ts: Timestamp,
+) -> crate::cursor::ColumnValues {
+    match &column.data_type {
+        DataType::BigInt => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::BigInt(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0),
+                }
+            }
+            crate::cursor::ColumnValues::I64 { values, valid }
+        }
+        DataType::Double => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::Double(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0.0),
+                }
+            }
+            crate::cursor::ColumnValues::F64 { values, valid }
+        }
+        DataType::Int => {
+            let mut values = Vec::with_capacity(rows.len());
+            let mut valid = vec![0u8; rows.len()];
+            for (i, &row) in rows.iter().enumerate() {
+                match column.get_at_ts(row, query_ts) {
+                    Some(Value::Int(v)) => {
+                        values.push(v);
+                        valid[i] = 1;
+                    }
+                    Some(_) => return general_column_at_ts(column, rows, query_ts),
+                    None => values.push(0),
+                }
+            }
+            crate::cursor::ColumnValues::I32 { values, valid }
+        }
+        _ => general_column_at_ts(column, rows, query_ts),
+    }
+}
+
+fn general_column_at_ts(
+    column: &Column,
+    rows: &[usize],
+    query_ts: Timestamp,
+) -> crate::cursor::ColumnValues {
+    crate::cursor::ColumnValues::General(
+        rows.iter()
+            .map(|&r| column.get_at_ts(r, query_ts))
+            .collect(),
+    )
+}
+
+fn write_fixed_value(
+    data: &mut [u8],
+    offset: usize,
+    element_size: usize,
+    value: &Value,
+) -> StorageResult<()> {
+    let required_size = match value {
+        Value::Bool(_) => 1,
+        Value::SmallInt(_) => 2,
+        Value::Int(_) => 4,
+        Value::BigInt(_) => 8,
+        Value::Float(_) => 4,
+        Value::Double(_) => 8,
+        Value::Date(_) => 12,
+        Value::Time(_) => 8,
+        Value::DateTime(_) => 28,
+        _ => {
+            return Err(StorageError::type_mismatch(
+                value.data_type(),
+                value.data_type(),
+            ));
+        }
+    };
+
+    if offset + required_size > data.len() {
+        return Err(StorageError::invalid_input(format!(
+            "Column data buffer too small: offset={}, required_size={}, data_len={}, element_size={}",
+            offset,
+            required_size,
+            data.len(),
+            element_size
+        )));
+    }
+
+    match value {
+        Value::Bool(b) => {
+            data[offset] = if *b { 1 } else { 0 };
+        }
+        Value::SmallInt(i) => {
+            data[offset..offset + 2].copy_from_slice(&i.to_le_bytes());
+        }
+        Value::Int(i) => {
+            data[offset..offset + 4].copy_from_slice(&i.to_le_bytes());
+        }
+        Value::BigInt(i) => {
+            data[offset..offset + 8].copy_from_slice(&i.to_le_bytes());
+        }
+        Value::Float(f) => {
+            data[offset..offset + 4].copy_from_slice(&f.to_le_bytes());
+        }
+        Value::Double(d) => {
+            data[offset..offset + 8].copy_from_slice(&d.to_le_bytes());
+        }
+        Value::Date(d) => {
+            data[offset..offset + 4].copy_from_slice(&d.year.to_le_bytes());
+            data[offset + 4..offset + 8].copy_from_slice(&d.month.to_le_bytes());
+            data[offset + 8..offset + 12].copy_from_slice(&d.day.to_le_bytes());
+        }
+        Value::Time(t) => {
+            let micros = t.hour as u64 * 3_600_000_000
+                + t.minute as u64 * 60_000_000
+                + t.sec as u64 * 1_000_000
+                + t.microsec as u64;
+            data[offset..offset + 8].copy_from_slice(&micros.to_le_bytes());
+        }
+        Value::DateTime(dt) => {
+            data[offset..offset + 4].copy_from_slice(&dt.year.to_le_bytes());
+            data[offset + 4..offset + 8].copy_from_slice(&dt.month.to_le_bytes());
+            data[offset + 8..offset + 12].copy_from_slice(&dt.day.to_le_bytes());
+            data[offset + 12..offset + 16].copy_from_slice(&dt.hour.to_le_bytes());
+            data[offset + 16..offset + 20].copy_from_slice(&dt.minute.to_le_bytes());
+            data[offset + 20..offset + 24].copy_from_slice(&dt.sec.to_le_bytes());
+            data[offset + 24..offset + 28].copy_from_slice(&dt.microsec.to_le_bytes());
+        }
+        _ => {
+            return Err(StorageError::type_mismatch(
+                value.data_type(),
+                value.data_type(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> StorageResult<()> {
+    match value {
+        Value::String(s) => {
+            let bytes = s.as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+        Value::Geography(geo) => {
+            let bytes = postcard::to_allocvec(geo).map_err(|e| {
+                StorageError::invalid_input(format!("Failed to serialize Geography: {}", e))
+            })?;
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        Value::Vector(vec) => {
+            let dense = vec.to_dense();
+            let bytes = dense
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect::<Vec<u8>>();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        Value::Json(j) => {
+            let bytes = j.as_str().as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+        Value::JsonB(j) => {
+            let text = j.to_json_string();
+            let bytes = text.as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+        // Composite values (Struct/Array) serialize the whole `Value` via
+        // postcard (serde single-track format, same as the undo log).
+        Value::Struct(_) | Value::Array(_) => {
+            let bytes = postcard::to_allocvec(value).map_err(|e| {
+                StorageError::invalid_input(format!("Failed to serialize composite value: {}", e))
+            })?;
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        _ => {
+            return Err(StorageError::type_mismatch(
+                value.data_type(),
+                value.data_type(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_fixed_value(data: &[u8], offset: usize, element_size: usize) -> Option<Value> {
+    if offset + element_size > data.len() {
+        return None;
+    }
+
+    match element_size {
+        1 => Some(Value::Bool(data[offset] != 0)),
+        2 => {
+            let bytes: [u8; 2] = data[offset..offset + 2].try_into().ok()?;
+            Some(Value::SmallInt(i16::from_le_bytes(bytes)))
+        }
+        4 => {
+            let bytes: [u8; 4] = data[offset..offset + 4].try_into().ok()?;
+            Some(Value::Int(i32::from_le_bytes(bytes)))
+        }
+        8 => {
+            let bytes: [u8; 8] = data[offset..offset + 8].try_into().ok()?;
+            Some(Value::BigInt(i64::from_le_bytes(bytes)))
+        }
+        12 => {
+            let year_bytes: [u8; 4] = data[offset..offset + 4].try_into().ok()?;
+            let month_bytes: [u8; 4] = data[offset + 4..offset + 8].try_into().ok()?;
+            let day_bytes: [u8; 4] = data[offset + 8..offset + 12].try_into().ok()?;
+            Some(Value::Date(DateValue {
+                year: i32::from_le_bytes(year_bytes),
+                month: u32::from_le_bytes(month_bytes),
+                day: u32::from_le_bytes(day_bytes),
+            }))
+        }
+        28 => {
+            let year_bytes: [u8; 4] = data[offset..offset + 4].try_into().ok()?;
+            let month_bytes: [u8; 4] = data[offset + 4..offset + 8].try_into().ok()?;
+            let day_bytes: [u8; 4] = data[offset + 8..offset + 12].try_into().ok()?;
+            let hour_bytes: [u8; 4] = data[offset + 12..offset + 16].try_into().ok()?;
+            let minute_bytes: [u8; 4] = data[offset + 16..offset + 20].try_into().ok()?;
+            let sec_bytes: [u8; 4] = data[offset + 20..offset + 24].try_into().ok()?;
+            let microsec_bytes: [u8; 4] = data[offset + 24..offset + 28].try_into().ok()?;
+            Some(Value::DateTime(DateTimeValue {
+                year: i32::from_le_bytes(year_bytes),
+                month: u32::from_le_bytes(month_bytes),
+                day: u32::from_le_bytes(day_bytes),
+                hour: u32::from_le_bytes(hour_bytes),
+                minute: u32::from_le_bytes(minute_bytes),
+                sec: u32::from_le_bytes(sec_bytes),
+                microsec: u32::from_le_bytes(microsec_bytes),
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// Convert a raw read_fixed_value result to the correct Value variant based on the declared DataType.
+/// This handles ambiguous element sizes where multiple types share the same width.
+fn convert_to_type(raw: Value, data_type: &DataType) -> Value {
+    match (data_type, &raw) {
+        (DataType::Double, Value::BigInt(n)) => Value::Double(f64::from_bits(*n as u64)),
+        (DataType::Float, Value::Int(n)) => Value::Float(f32::from_bits(*n as u32)),
+        (DataType::Float, Value::BigInt(n)) => Value::Float(f32::from_bits(*n as u32)),
+        (DataType::Time, Value::BigInt(n)) => {
+            let micros = *n as u64;
+            let hour = (micros / 3_600_000_000) as u32;
+            let rem = micros % 3_600_000_000;
+            let minute = (rem / 60_000_000) as u32;
+            let rem = rem % 60_000_000;
+            let sec = (rem / 1_000_000) as u32;
+            let microsec = (rem % 1_000_000) as u32;
+            Value::Time(TimeValue {
+                hour,
+                minute,
+                sec,
+                microsec,
+            })
+        }
+        _ => raw,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Column (public wrapper enum)
+// ---------------------------------------------------------------------------
+
+/// Internal dispatch between fixed-width and variable-width storage.
+#[derive(Debug, Clone)]
+enum ColumnInner {
+    Fixed(FixedWidthColumn),
+    Variable(VariableWidthColumn),
+}
+
+/// One before-image of a row's value, valid on `[start_ts, end_ts)`.
+///
+/// The version chain per row stores the newest entry first. The current value
+/// lives in the column storage and is valid from `row_start_ts` onward; each
+/// write pushes the previous current value here with its lifetime.
+#[derive(Debug, Clone)]
+pub struct VersionEntry {
+    /// First timestamp at which this version is visible.
+    pub start_ts: Timestamp,
+    /// One past the last timestamp at which this version is visible.
+    pub end_ts: Timestamp,
+    /// The before-image value; `None` denotes a null (missing) value.
+    pub value: Option<Value>,
+}
+
+/// Column storage that automatically selects fixed-width or variable-width
+/// layout based on the `DataType` at construction time.
+///
+/// # Variant Selection
+///
+/// | `DataType` | Storage variant |
+/// |---|---|
+/// | Bool, SmallInt, Int, BigInt, Float, Double, Date, Time, Uuid | `FixedWidthColumn` |
+/// | String | `VariableWidthColumn` |
+///
+/// # MVCC
+///
+/// Property updates are versioned through [`Column::set_versioned`] /
+/// [`Column::get_at_ts`]: each row keeps a chain of before-images
+/// (`row_start_ts` + `version_chains`), so a snapshot read at a historical
+/// timestamp returns the value visible then instead of the current one.
+/// Old versions are reclaimed by [`Column::gc_versions`].
+#[derive(Debug, Clone)]
+pub struct Column {
+    pub name: String,
+    pub col_id: i32,
+    pub data_type: DataType,
+    pub nullable: bool,
+    inner: ColumnInner,
+    encoding: ColumnEncoding,
+    stats: Option<ColumnStats>,
+    /// Per-chunk min/max bounds over written values, used by scans for
+    /// zone-map pruning. Bounds only ever widen after writes (deletes and
+    /// nulls leave them stale but conservative), so pruning stays correct
+    /// for any MVCC snapshot.
+    zone_maps: Vec<ZoneBounds>,
+    /// Timestamp at which each row's current value became visible (0 means
+    /// "current from the beginning", used for loaded/legacy rows).
+    row_start_ts: Vec<Timestamp>,
+    /// Per-row version chains (before-images), newest first.
+    version_chains: Vec<Vec<VersionEntry>>,
+}
+
+/// Rows per zone-map chunk of a [`Column`].
+pub const ZONE_MAP_CHUNK_ROWS: usize = 1024;
+
+/// Compare two scalar values with the same semantics as pushed-predicate
+/// evaluation: exact `i64` for integer kinds, `f64` when a float is
+/// involved, otherwise `Value` ordering.
+pub(crate) fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn as_i64(value: &Value) -> Option<i64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as i64),
+            Value::Int(v) => Some(*v as i64),
+            Value::BigInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn as_f64(value: &Value) -> Option<f64> {
+        match value {
+            Value::SmallInt(v) => Some(*v as f64),
+            Value::Int(v) => Some(*v as f64),
+            Value::BigInt(v) => Some(*v as f64),
+            Value::Float(v) => Some(*v as f64),
+            Value::Double(v) => Some(*v),
+            _ => None,
+        }
+    }
+    match (as_i64(a), as_i64(b)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        _ => match (as_f64(a), as_f64(b)) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            _ => Value::cmp(a, b),
+        },
+    }
+}
+
+/// Conservative min/max bounds over the non-null values of one chunk.
+#[derive(Debug, Clone, Default)]
+pub struct ZoneBounds {
+    pub min: Option<Value>,
+    pub max: Option<Value>,
+}
+
+impl Column {
+    pub fn new(name: String, col_id: i32, data_type: DataType, nullable: bool) -> Self {
+        let inner = if is_variable_length_type(&data_type) {
+            ColumnInner::Variable(VariableWidthColumn::new(data_type.clone(), nullable))
+        } else {
+            ColumnInner::Fixed(FixedWidthColumn::new(data_type.clone(), nullable))
+        };
+
+        Self {
+            name,
+            col_id,
+            data_type,
+            nullable,
+            inner,
+            encoding: ColumnEncoding::None,
+            stats: None,
+            zone_maps: Vec::new(),
+            row_start_ts: Vec::new(),
+            version_chains: Vec::new(),
+        }
+    }
+
+    fn inner(&self) -> &dyn ColumnStorage {
+        match &self.inner {
+            ColumnInner::Fixed(c) => c,
+            ColumnInner::Variable(c) => c,
+        }
+    }
+
+    fn inner_mut(&mut self) -> &mut dyn ColumnStorage {
+        match &mut self.inner {
+            ColumnInner::Fixed(c) => c,
+            ColumnInner::Variable(c) => c,
+        }
+    }
+
+    /// Ensure the MVCC metadata vectors are at least `n` rows long.
+    /// New (never-written) rows default to start_ts 0, i.e. their loaded or
+    /// not-yet-written value is treated as current.
+    fn ensure_row_meta(&mut self, n: usize) {
+        if self.row_start_ts.len() < n {
+            self.row_start_ts.resize(n, 0);
+            self.version_chains.resize(n, Vec::new());
+        }
+    }
+
+    /// Write `value` into the column, handling the encoded and raw paths.
+    /// Does not touch the MVCC metadata.
+    fn write_value(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        if self.encoding.is_encoded() {
+            if self.encoding.set(row_idx, value).is_ok() {
+                if row_idx >= self.len() {
+                    self.sync_row_count_from_encoding();
+                }
+                self.update_zone_maps(row_idx, value);
+                return Ok(());
+            }
+            // Encoded set failed (e.g., row_idx >= row_count during WAL replay).
+            // Decode back to raw column format and fall through to the raw path.
+            self.decode_encoding_to_raw()?;
+        }
+
+        if let Some(v) = value {
+            if v.is_null() {
+                if !self.nullable {
+                    return Err(StorageError::null_value_not_allowed(self.name.clone()));
+                }
+                self.inner_mut().set(row_idx, None)?;
+            } else {
+                self.inner_mut().set(row_idx, Some(v))?;
+            }
+        } else {
+            if !self.nullable {
+                return Err(StorageError::null_value_not_allowed(self.name.clone()));
+            }
+            self.inner_mut().set(row_idx, None)?;
+        }
+
+        self.update_zone_maps(row_idx, value);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Core read / write
+    // -----------------------------------------------------------------------
+
+    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
+        // Plain set treats the value as "current from the beginning": it
+        // resets the row's MVCC metadata (no historical version recorded).
+        self.ensure_row_meta(row_idx + 1);
+        self.row_start_ts[row_idx] = 0;
+        self.version_chains[row_idx].clear();
+        self.write_value(row_idx, value)
+    }
+
+    /// Versioned write: records the current value as a before-image valid on
+    /// `[row_start_ts, ts)`, then stores `value` as the current value valid
+    /// from `ts` onward. Rows written for the first time get no before-image.
+    pub fn set_versioned(
+        &mut self,
+        row_idx: usize,
+        value: Option<&Value>,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.ensure_row_meta(row_idx + 1);
+        // Only record a before-image when the current value genuinely predates
+        // this write (guards against zero-length ranges from rollback writes
+        // that reuse the transaction's original timestamp).
+        if row_idx < self.len() && self.row_start_ts[row_idx] < ts {
+            let current = self.get(row_idx);
+            if current.is_some() || self.is_null(row_idx) {
+                self.version_chains[row_idx].push(VersionEntry {
+                    start_ts: self.row_start_ts[row_idx],
+                    end_ts: ts,
+                    value: current,
+                });
+            }
+        }
+        self.write_value(row_idx, value)?;
+        self.row_start_ts[row_idx] = ts;
+        Ok(())
+    }
+
+    /// Read the value visible at `query_ts` for a row.
+    ///
+    /// Returns the current value when it was written at or before `query_ts`;
+    /// otherwise searches the version chain for the before-image covering
+    /// `query_ts`. A `None` return means the value is null at `query_ts`.
+    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Option<Value> {
+        let start_ts = self.row_start_ts.get(row_idx).copied().unwrap_or(0);
+        if start_ts <= query_ts {
+            return if self.encoding.is_encoded() {
+                self.encoding.get(row_idx)
+            } else {
+                self.inner().get(row_idx)
+            };
+        }
+        if let Some(chain) = self.version_chains.get(row_idx) {
+            for entry in chain {
+                if entry.start_ts <= query_ts && entry.end_ts > query_ts {
+                    return entry.value.clone();
+                }
+            }
+        }
+        None
+    }
+
+    /// Garbage-collect version-chain entries no longer visible to any active
+    /// snapshot at `min_active_snapshot_ts`. Returns the number of entries
+    /// removed.
+    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        let mut removed = 0;
+        for chain in &mut self.version_chains {
+            let before = chain.len();
+            chain.retain(|entry| entry.end_ts > min_active_snapshot_ts);
+            removed += before - chain.len();
+        }
+        removed
+    }
+
+    /// Snapshot the MVCC metadata of `from` into `to` (used by table
+    /// compaction to preserve version history when rows are remapped).
+    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
+        if from >= self.len() {
+            return;
+        }
+        self.ensure_row_meta(to + 1);
+        self.row_start_ts[to] = self.row_start_ts[from];
+        self.version_chains[to] = self.version_chains[from].clone();
+    }
+
+    pub fn get(&self, row_idx: usize) -> Option<Value> {
+        if self.encoding.is_encoded() {
+            return self.encoding.get(row_idx);
+        }
+        self.inner().get(row_idx)
+    }
+
+    pub fn is_null(&self, row_idx: usize) -> bool {
+        self.inner().is_null(row_idx)
+    }
+
+    pub fn null_count(&self) -> usize {
+        self.inner().null_count()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner().is_empty()
+    }
+
+    pub fn null_bitmap(&self) -> Option<&BitVec<u8, Lsb0>> {
+        self.inner().null_bitmap()
+    }
+
+    pub fn memory_usage(&self) -> usize {
+        let version_bytes = self
+            .version_chains
+            .iter()
+            .map(|chain| {
+                chain.len() * std::mem::size_of::<VersionEntry>()
+                    + chain
+                        .iter()
+                        .map(|entry| {
+                            // Approximate heap payload for the retained Value.
+                            entry.value.as_ref().map(value_payload_bytes).unwrap_or(0)
+                        })
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+            + self.row_start_ts.len() * std::mem::size_of::<Timestamp>();
+        self.inner().memory_usage() + self.encoding.memory_usage() + version_bytes
+    }
+
+    pub fn memory_size(&self) -> usize {
+        self.memory_usage() + std::mem::size_of::<Self>()
+    }
+
+    pub fn used_memory_size(&self) -> usize {
+        let non_null_count = self.len() - self.null_count();
+        let elem_size = element_size(&self.data_type);
+        non_null_count * elem_size + std::mem::size_of::<Self>()
+    }
+
+    pub fn clear(&mut self) {
+        self.inner_mut().clear();
+        self.encoding = ColumnEncoding::None;
+        self.zone_maps.clear();
+        self.row_start_ts.clear();
+        self.version_chains.clear();
+    }
+
+    /// Pre-allocate capacity for `additional` more rows in the underlying
+    /// storage buffers (used by batch inserts).
+    pub fn reserve(&mut self, additional: usize) {
+        self.inner_mut().reserve(additional);
+        self.row_start_ts.reserve(additional);
+        self.version_chains.reserve(additional);
+    }
+
+    pub fn resize(&mut self, new_count: usize) {
+        self.inner_mut().resize(new_count);
+        self.ensure_row_meta(new_count);
+        self.row_start_ts.resize(new_count, 0);
+        self.version_chains.resize(new_count, Vec::new());
+    }
+
+    pub fn load_data_from_raw(
+        &mut self,
+        data: Vec<u8>,
+        offsets: Vec<u64>,
+        null_bitmap_raw: Option<Vec<u8>>,
+        bitmap_bit_len: usize,
+    ) {
+        self.inner_mut()
+            .load_data_from_raw(data, offsets, null_bitmap_raw, bitmap_bit_len);
+        // MVCC metadata is intentionally left untouched: a freshly-loaded
+        // column starts with empty metadata (rows read as "current"), and
+        // in-memory decode paths must preserve existing version chains.
+    }
+
+    pub fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
+        if !self.encoding.is_encoded() {
+            return self.inner().get_flush_data();
+        }
+
+        let row_count = self.len();
+        let mut new_data = Vec::new();
+        let mut new_offsets = Vec::new();
+        let mut new_bitmap = self.null_bitmap().map(|_| BitVec::with_capacity(row_count));
+
+        let is_var = is_variable_length_type(&self.data_type);
+
+        for i in 0..row_count {
+            let value = self.encoding.get(i);
+            match value {
+                Some(v) => {
+                    if let Some(ref mut bm) = new_bitmap {
+                        bm.push(false);
+                    }
+                    if is_var {
+                        new_offsets.push(new_data.len() as u64);
+                        match &v {
+                            Value::String(s) => {
+                                let bytes = s.as_bytes();
+                                new_data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                                new_data.extend_from_slice(bytes);
+                            }
+                            _ => {
+                                new_offsets.pop();
+                                new_offsets.push(u64::MAX);
+                            }
+                        }
+                    } else {
+                        let elem_size = element_size(&self.data_type);
+                        let start = new_data.len();
+                        new_data.resize(start + elem_size, 0);
+                        let _ = write_fixed_value(&mut new_data, start, elem_size, &v);
+                    }
+                }
+                None => {
+                    if let Some(ref mut bm) = new_bitmap {
+                        bm.push(true);
+                    }
+                    if is_var {
+                        new_offsets.push(u64::MAX);
+                    }
+                }
+            }
+        }
+
+        (new_data, new_offsets, new_bitmap)
+    }
+
+    // -----------------------------------------------------------------------
+    // Encoding
+    // -----------------------------------------------------------------------
+
+    pub fn encoding_type(&self) -> EncodingType {
+        self.encoding.encoding_type()
+    }
+
+    pub fn encoding(&self) -> &ColumnEncoding {
+        &self.encoding
+    }
+
+    pub fn set_stats(&mut self, stats: ColumnStats) {
+        self.stats = Some(stats);
+        // Loaded data bypasses write_value, so the zone maps must be
+        // rebuilt from the persisted column contents.
+        self.rebuild_zone_maps();
+    }
+
+    /// Widen the chunk bounds covering `row_idx` with `value`.
+    ///
+    /// Bounds never shrink: a later update that removes a chunk's extreme
+    /// leaves stale-but-conservative bounds, which keeps pruning sound.
+    fn update_zone_maps(&mut self, row_idx: usize, value: Option<&Value>) {
+        let Some(v) = value else {
+            return;
+        };
+        if v.is_null() {
+            return;
+        }
+        let chunk = row_idx / ZONE_MAP_CHUNK_ROWS;
+        if chunk >= self.zone_maps.len() {
+            self.zone_maps.resize_with(chunk + 1, ZoneBounds::default);
+        }
+        let bounds = &mut self.zone_maps[chunk];
+        match &bounds.min {
+            Some(min) if compare_values(min, v) != std::cmp::Ordering::Greater => {}
+            _ => bounds.min = Some(v.clone()),
+        }
+        match &bounds.max {
+            Some(max) if compare_values(max, v) != std::cmp::Ordering::Less => {}
+            _ => bounds.max = Some(v.clone()),
+        }
+    }
+
+    /// Recompute all chunk bounds from the current column contents.
+    pub fn rebuild_zone_maps(&mut self) {
+        self.zone_maps.clear();
+        for row_idx in 0..self.len() {
+            let value = if self.encoding.is_encoded() {
+                self.encoding.get(row_idx)
+            } else {
+                self.inner().get(row_idx)
+            };
+            self.update_zone_maps(row_idx, value.as_ref());
+        }
+    }
+
+    /// Per-chunk min/max bounds (one entry per [`ZONE_MAP_CHUNK_ROWS`] rows).
+    pub fn zone_maps(&self) -> &[ZoneBounds] {
+        &self.zone_maps
+    }
+
+    /// Persisted column statistics meta (min/max/null/distinct from the last
+    /// flush), if any. Complements the always-fresh zone maps with counts.
+    pub fn stats(&self) -> Option<&crate::column_stats::ColumnStats> {
+        self.stats.as_ref()
+    }
+
+    /// Compute statistics for the bytes that this column will persist.
+    ///
+    /// Encoded columns persist their encoding metadata, while unencoded
+    /// columns persist the raw buffers. Keeping the size calculation here
+    /// makes flush-time statistics reflect the actual column format.
+    pub fn compute_stats(&self) -> StorageResult<ColumnStats> {
+        let values = (0..self.len())
+            .map(|row_idx| self.get(row_idx))
+            .collect::<Vec<_>>();
+        let (data, offsets, bitmap) = self.get_flush_data();
+        let raw_size = data
+            .len()
+            .saturating_add(offsets.len().saturating_mul(std::mem::size_of::<u64>()))
+            .saturating_add(
+                bitmap
+                    .as_ref()
+                    .map(|bits| bits.as_raw_slice().len())
+                    .unwrap_or(0),
+            ) as u64;
+
+        let compressed_size = if self.encoding.is_encoded() {
+            let mut metadata = Vec::new();
+            self.encoding.serialize_meta(&mut metadata)?;
+            metadata.len() as u64
+        } else {
+            raw_size
+        };
+
+        Ok(crate::column_stats::compute_stats(
+            &values,
+            self.encoding_type(),
+            compressed_size,
+            raw_size,
+        ))
+    }
+
+    fn sync_row_count_from_encoding(&mut self) {
+        let encoded_len = self.encoding.len();
+        self.inner_mut().resize(encoded_len);
+    }
+
+    /// Decode the compressed encoding back into the raw column storage.
+    ///
+    /// This is needed when WAL replay needs to write rows beyond the encoded
+    /// column's row_count (e.g., new vertices after a checkpoint load).
+    /// After decoding, the column falls back to its uncompressed representation.
+    fn decode_encoding_to_raw(&mut self) -> StorageResult<()> {
+        let (data, offsets, bitmap) = self.get_flush_data();
+        self.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), self.len());
+        self.encoding = ColumnEncoding::None;
+        Ok(())
+    }
+
+    pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {
+        if self.data_type != DataType::String && self.data_type != DataType::Json {
+            return Err(StorageError::not_supported(format!(
+                "FSST encoding does not support type {:?}",
+                self.data_type
+            )));
+        }
+
+        let mut strings: Vec<Option<String>> = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            if self.is_null(i) {
+                strings.push(None);
+            } else {
+                match self.get(i) {
+                    Some(Value::String(s)) => strings.push(Some(s.to_string())),
+                    Some(Value::Json(j)) => strings.push(Some(j.as_str().to_string())),
+                    _ => strings.push(None),
+                }
+            }
+        }
+
+        let string_refs: Vec<Option<&str>> = strings.iter().map(|s| s.as_deref()).collect();
+        let non_null: Vec<&str> = string_refs.iter().filter_map(|s| *s).collect();
+
+        if non_null.is_empty() {
+            return Ok(());
+        }
+
+        let encoder = FsstEncoder::train(&non_null, max_symbols);
+
+        let mut encoded_data = Vec::with_capacity(self.len());
+        let mut null_bitmap = NullBitmap::with_capacity(self.len());
+
+        for s in &string_refs {
+            match s {
+                Some(val) => {
+                    encoded_data.push(encoder.encode(val));
+                    null_bitmap.push(false);
+                }
+                None => {
+                    encoded_data.push(Vec::new());
+                    null_bitmap.push(true);
+                }
+            }
+        }
+
+        let fsst_col = FsstColumn {
+            encoder,
+            encoded_data,
+            null_bitmap,
+            updates_since_rebuild: 0,
+        };
+
+        self.encoding = ColumnEncoding::Fsst(fsst_col);
+
+        Ok(())
+    }
+
+    pub fn apply_dictionary_encoding(&mut self) -> StorageResult<()> {
+        if self.data_type != DataType::String {
+            return Err(StorageError::not_supported(
+                "Dictionary encoding only supports String type".to_string(),
+            ));
+        }
+
+        use crate::encoding::DictionaryColumn;
+
+        let mut dict_col = DictionaryColumn::new();
+        for i in 0..self.len() {
+            let value = self.get(i);
+            dict_col.set(i, value.as_ref())?;
+        }
+
+        self.encoding = ColumnEncoding::Dictionary(dict_col);
+
+        Ok(())
+    }
+
+    pub fn apply_rle_encoding(&mut self) -> StorageResult<()> {
+        use crate::encoding::{RleBoolColumn, RleIntColumn};
+
+        match self.data_type {
+            DataType::Bool => {
+                let mut rle_col = RleBoolColumn::new();
+                for i in 0..self.len() {
+                    let value = self.get(i);
+                    rle_col.append(value.as_ref())?;
+                }
+                self.encoding = ColumnEncoding::RleBool(rle_col);
+            }
+            DataType::SmallInt | DataType::Int | DataType::BigInt => {
+                let mut rle_col = RleIntColumn::new();
+                for i in 0..self.len() {
+                    let value = self.get(i);
+                    rle_col.append(value.as_ref())?;
+                }
+                self.encoding = ColumnEncoding::RleInt(rle_col);
+            }
+            _ => {
+                return Err(StorageError::not_supported(format!(
+                    "RLE encoding not supported for {:?}",
+                    self.data_type
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_bitpacking_encoding(&mut self) -> StorageResult<()> {
+        use crate::encoding::BitPackedIntColumn;
+
+        match self.data_type {
+            DataType::SmallInt | DataType::Int | DataType::BigInt => {
+                let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
+                for i in 0..self.len() {
+                    values.push(self.get(i));
+                }
+                let bp_col = BitPackedIntColumn::analyze(&values, self.data_type.clone())?;
+                self.encoding = ColumnEncoding::BitPacked(bp_col);
+            }
+            _ => {
+                return Err(StorageError::not_supported(format!(
+                    "BitPacking encoding not supported for {:?}",
+                    self.data_type
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_alp_encoding(&mut self) -> StorageResult<()> {
+        use crate::encoding::AlpColumn;
+
+        match self.data_type {
+            DataType::Float | DataType::Double => {
+                let mut values: Vec<Option<Value>> = Vec::with_capacity(self.len());
+                for i in 0..self.len() {
+                    values.push(self.get(i));
+                }
+                let alp_col = AlpColumn::analyze_values(&values, self.data_type.clone())?;
+                self.encoding = ColumnEncoding::Alp(alp_col);
+            }
+            _ => {
+                return Err(StorageError::not_supported(format!(
+                    "ALP encoding not supported for {:?}",
+                    self.data_type
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn apply_fsst_from_meta(&mut self, fsst_col: FsstColumn) -> StorageResult<()> {
+        let encoded_len = fsst_col.len();
+        self.encoding = ColumnEncoding::Fsst(fsst_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_dictionary_from_meta(&mut self, dict_col: DictionaryColumn) -> StorageResult<()> {
+        let encoded_len = dict_col.len();
+        self.encoding = ColumnEncoding::Dictionary(dict_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_rle_int_from_meta(&mut self, rle_col: RleIntColumn) -> StorageResult<()> {
+        let encoded_len = rle_col.len();
+        self.encoding = ColumnEncoding::RleInt(rle_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_rle_bool_from_meta(
+        &mut self,
+        rle_col: crate::encoding::RleBoolColumn,
+    ) -> StorageResult<()> {
+        if self.data_type != DataType::Bool {
+            return Err(StorageError::type_mismatch(
+                DataType::Bool,
+                self.data_type.clone(),
+            ));
+        }
+        let encoded_len = rle_col.len();
+        self.encoding = ColumnEncoding::RleBool(rle_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_bitpacked_from_meta(&mut self, bp_col: BitPackedIntColumn) -> StorageResult<()> {
+        let encoded_len = bp_col.len();
+        self.encoding = ColumnEncoding::BitPacked(bp_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_alp_from_meta(&mut self, alp_col: AlpColumn) -> StorageResult<()> {
+        let encoded_len = alp_col.len();
+        self.encoding = ColumnEncoding::Alp(alp_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ColumnStore
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ColumnStore {
+    columns: Vec<Column>,
+    name_to_index: std::collections::HashMap<String, usize>,
+}
+
+impl ColumnStore {
+    pub fn new() -> Self {
+        Self {
+            columns: Vec::new(),
+            name_to_index: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            columns: Vec::with_capacity(capacity),
+            name_to_index: std::collections::HashMap::with_capacity(capacity),
+        }
+    }
+
+    /// Per-chunk min/max bounds of one column, for zone-map pruning.
+    /// `None` when the column does not exist in this store.
+    pub fn zone_maps_for_column(&self, name: &str) -> Option<&[ZoneBounds]> {
+        self.name_to_index
+            .get(name)
+            .map(|&index| self.columns[index].zone_maps())
+    }
+
+    /// Global min/max bounds of one column, merged across all chunks with the
+    /// same numeric comparison semantics used by pushed-predicate evaluation.
+    /// `None` when the column is absent or has no recorded bounds.
+    pub fn aggregate_zone_bounds(&self, name: &str) -> Option<ZoneBounds> {
+        let zones = self.zone_maps_for_column(name)?;
+        let mut merged = ZoneBounds::default();
+        for zone in zones {
+            if let Some(v) = &zone.min {
+                match &merged.min {
+                    Some(cur) if compare_values(cur, v) != std::cmp::Ordering::Greater => {}
+                    _ => merged.min = Some(v.clone()),
+                }
+            }
+            if let Some(v) = &zone.max {
+                match &merged.max {
+                    Some(cur) if compare_values(cur, v) != std::cmp::Ordering::Less => {}
+                    _ => merged.max = Some(v.clone()),
+                }
+            }
+        }
+        (merged.min.is_some() || merged.max.is_some()).then_some(merged)
+    }
+
+    pub fn add_column(&mut self, name: String, data_type: DataType, nullable: bool) -> i32 {
+        let col_id = self.columns.len() as i32;
+        let column = Column::new(name.clone(), col_id, data_type, nullable);
+        self.name_to_index.insert(name, self.columns.len());
+        self.columns.push(column);
+        col_id
+    }
+
+    pub fn get_column(&self, name: &str) -> Option<&Column> {
+        self.name_to_index
+            .get(name)
+            .and_then(|&idx| self.columns.get(idx))
+    }
+
+    /// The declared data type of the column `name`, if it exists.
+    pub fn data_type_of(&self, name: &str) -> Option<DataType> {
+        self.get_column(name).map(|c| c.data_type.clone())
+    }
+
+    pub fn get_column_mut(&mut self, name: &str) -> Option<&mut Column> {
+        self.name_to_index
+            .get(name)
+            .and_then(|&idx| self.columns.get_mut(idx))
+    }
+
+    pub fn get_column_by_id(&self, col_id: i32) -> Option<&Column> {
+        self.columns.get(col_id as usize)
+    }
+
+    pub fn get_column_by_id_mut(&mut self, col_id: i32) -> Option<&mut Column> {
+        self.columns.get_mut(col_id as usize)
+    }
+
+    pub fn set(&mut self, row_idx: usize, values: &[(String, Value)]) -> StorageResult<()> {
+        for (name, value) in values {
+            if let Some(col) = self.get_column_mut(name) {
+                col.set(row_idx, Some(value))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, row_idx: usize) -> Vec<(String, Option<Value>)> {
+        self.columns
+            .iter()
+            .map(|col| (col.name.clone(), col.get(row_idx)))
+            .collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // MVCC (versioned) read / write
+    // -----------------------------------------------------------------------
+
+    /// Versioned write of multiple properties for one row at `ts`.
+    pub fn set_versioned(
+        &mut self,
+        row_idx: usize,
+        values: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        for (name, value) in values {
+            if let Some(col) = self.get_column_mut(name) {
+                col.set_versioned(row_idx, Some(value), ts)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Versioned write of a single property for one row at `ts`.
+    pub fn set_property_versioned(
+        &mut self,
+        row_idx: usize,
+        col_name: &str,
+        value: Option<&Value>,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let col = self
+            .get_column_mut(col_name)
+            .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
+        col.set_versioned(row_idx, value, ts)
+    }
+
+    /// Read all columns for one row as visible at `query_ts`.
+    pub fn get_at_ts(&self, row_idx: usize, query_ts: Timestamp) -> Vec<(String, Option<Value>)> {
+        self.columns
+            .iter()
+            .map(|col| (col.name.clone(), col.get_at_ts(row_idx, query_ts)))
+            .collect()
+    }
+
+    /// Read only the requested columns for one row as visible at `query_ts`.
+    pub fn get_projected_at_ts(
+        &self,
+        row_idx: usize,
+        projection: &[String],
+        query_ts: Timestamp,
+    ) -> Vec<(String, Option<Value>)> {
+        projection
+            .iter()
+            .filter_map(|name| {
+                self.get_column(name)
+                    .map(|column| (name.clone(), column.get_at_ts(row_idx, query_ts)))
+            })
+            .collect()
+    }
+
+    /// Batch read of all columns for multiple rows at `query_ts`.
+    pub fn get_batch_at_ts(
+        &self,
+        rows: &[usize],
+        query_ts: Timestamp,
+    ) -> Vec<Vec<(String, Option<Value>)>> {
+        let mut out = vec![Vec::with_capacity(self.columns.len()); rows.len()];
+        for col in &self.columns {
+            for (ri, &row) in rows.iter().enumerate() {
+                out[ri].push((col.name.clone(), col.get_at_ts(row, query_ts)));
+            }
+        }
+        out
+    }
+
+    /// Batch variant of [`get_projected_at_ts`].
+    pub fn get_projected_batch_at_ts(
+        &self,
+        rows: &[usize],
+        projection: &[String],
+        query_ts: Timestamp,
+    ) -> Vec<Vec<(String, Option<Value>)>> {
+        let mut out = vec![Vec::with_capacity(projection.len()); rows.len()];
+        for name in projection {
+            if let Some(column) = self.get_column(name) {
+                for (ri, &row) in rows.iter().enumerate() {
+                    out[ri].push((name.clone(), column.get_at_ts(row, query_ts)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Column-major batch decode at `query_ts` (A1 column-block path).
+    pub fn get_projected_columns_at_ts(
+        &self,
+        rows: &[usize],
+        names: &[String],
+        query_ts: Timestamp,
+    ) -> Vec<(String, crate::cursor::ColumnValues)> {
+        if names.is_empty() {
+            self.columns
+                .iter()
+                .map(|column| {
+                    let values = decode_column_values_at_ts(column, rows, query_ts);
+                    (column.name.clone(), values)
+                })
+                .collect()
+        } else {
+            names
+                .iter()
+                .map(|name| {
+                    let values = match self.get_column(name) {
+                        Some(column) => decode_column_values_at_ts(column, rows, query_ts),
+                        None => {
+                            crate::cursor::ColumnValues::General(vec![None; rows.len()])
+                        }
+                    };
+                    (name.clone(), values)
+                })
+                .collect()
+        }
+    }
+
+    /// Garbage-collect version chains across all columns, returning the total
+    /// number of before-images removed.
+    pub fn gc_versions(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
+        let mut removed = 0;
+        for col in &mut self.columns {
+            removed += col.gc_versions(min_active_snapshot_ts);
+        }
+        removed
+    }
+
+    /// Copy the MVCC row state (current version timestamp + version chain)
+    /// from `from` to `to`, used by table compaction to preserve version
+    /// history when rows are remapped.
+    pub(crate) fn copy_row_state(&mut self, from: usize, to: usize) {
+        for col in &mut self.columns {
+            col.copy_row_state(from, to);
+        }
+    }
+
+    pub fn remove_column(&mut self, name: &str) -> StorageResult<()> {
+        let index = self
+            .name_to_index
+            .get(name)
+            .copied()
+            .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
+
+        self.columns.remove(index);
+
+        self.name_to_index.clear();
+        for (idx, column) in self.columns.iter_mut().enumerate() {
+            column.col_id = idx as i32;
+            self.name_to_index.insert(column.name.clone(), idx);
+        }
+
+        Ok(())
+    }
+
+    pub fn rename_column(&mut self, old_name: &str, new_name: String) -> StorageResult<()> {
+        if self.name_to_index.contains_key(&new_name) {
+            return Err(StorageError::column_already_exists(new_name));
+        }
+
+        let index = self
+            .name_to_index
+            .get(old_name)
+            .copied()
+            .ok_or_else(|| StorageError::column_not_found(old_name.to_string()))?;
+
+        if let Some(column) = self.columns.get_mut(index) {
+            column.name = new_name;
+        }
+
+        self.name_to_index.clear();
+        for (idx, column) in self.columns.iter().enumerate() {
+            self.name_to_index.insert(column.name.clone(), idx);
+        }
+
+        Ok(())
+    }
+
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Pre-allocate capacity for `additional` more rows in every column.
+    pub fn reserve(&mut self, additional: usize) {
+        for column in &mut self.columns {
+            column.reserve(additional);
+        }
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.columns.first().map(|c| c.len()).unwrap_or(0)
+    }
+
+    pub fn clear(&mut self) {
+        for col in &mut self.columns {
+            col.clear();
+        }
+    }
+
+    pub fn resize(&mut self, new_count: usize) {
+        for col in &mut self.columns {
+            col.resize(new_count);
+        }
+    }
+
+    pub fn columns(&self) -> &[Column] {
+        &self.columns
+    }
+
+    pub fn load_column_from_raw(
+        &mut self,
+        name: &str,
+        data: Vec<u8>,
+        offsets: Vec<u64>,
+        null_bitmap_raw: Option<Vec<u8>>,
+        bitmap_bit_len: usize,
+    ) -> StorageResult<()> {
+        if let Some(col) = self.get_column_mut(name) {
+            col.load_data_from_raw(data, offsets, null_bitmap_raw, bitmap_bit_len);
+            Ok(())
+        } else {
+            Err(StorageError::column_not_found(name.to_string()))
+        }
+    }
+
+    pub fn apply_encoding_to_column(
+        &mut self,
+        col_name: &str,
+        encoding_type: EncodingType,
+        fsst_max_symbols: usize,
+    ) -> StorageResult<()> {
+        let col = self
+            .get_column_mut(col_name)
+            .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
+
+        if col.is_empty() {
+            return Ok(());
+        }
+
+        match encoding_type {
+            EncodingType::Fsst => {
+                if col.data_type != DataType::String && col.data_type != DataType::Json {
+                    return Err(StorageError::not_supported(format!(
+                        "FSST encoding does not support type {:?}",
+                        col.data_type
+                    )));
+                }
+                col.apply_fsst_encoding(fsst_max_symbols)?;
+            }
+            EncodingType::Dictionary => {
+                col.apply_dictionary_encoding()?;
+            }
+            EncodingType::Rle => {
+                col.apply_rle_encoding()?;
+            }
+            EncodingType::BitPacking => {
+                col.apply_bitpacking_encoding()?;
+            }
+            EncodingType::Alp => {
+                col.apply_alp_encoding()?;
+            }
+            EncodingType::None => {}
+        }
+
+        Ok(())
+    }
+
+    pub fn memory_size(&self) -> usize {
+        let mut total = std::mem::size_of::<Self>();
+
+        for col in &self.columns {
+            total += col.memory_size();
+        }
+
+        total += self.name_to_index.len()
+            * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
+
+        total
+    }
+
+    pub fn used_memory_size(&self) -> usize {
+        let mut total = std::mem::size_of::<Self>();
+
+        for col in &self.columns {
+            total += col.used_memory_size();
+        }
+
+        total
+    }
+}
+
+impl Default for ColumnStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{ArrayTypeInfo, StructTypeInfo};
+
+    #[test]
+    fn test_column_basic() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+
+        col.set(0, Some(&Value::Int(25))).unwrap();
+        col.set(1, Some(&Value::Int(30))).unwrap();
+        col.set(2, None).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::Int(25)));
+        assert_eq!(col.get(1), Some(Value::Int(30)));
+        assert!(col.is_null(2));
+        assert_eq!(col.len(), 3);
+    }
+
+    #[test]
+    fn test_column_string() {
+        let mut col = Column::new("name".to_string(), 0, DataType::String, false);
+
+        col.set(0, Some(&Value::string("Alice"))).unwrap();
+        col.set(1, Some(&Value::string("Bob"))).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::string("Alice")));
+        assert_eq!(col.get(1), Some(Value::string("Bob")));
+        assert_eq!(col.len(), 2);
+    }
+
+    #[test]
+    fn test_column_store_batch_reads() {
+        let mut store = ColumnStore::new();
+
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, true);
+
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+            )
+            .unwrap();
+        store
+            .set(
+                1,
+                &[
+                    ("name".to_string(), Value::string("Bob")),
+                    ("age".to_string(), Value::Int(25)),
+                ],
+            )
+            .unwrap();
+        store
+            .set(2, &[("name".to_string(), Value::string("Carol"))])
+            .unwrap();
+
+        // Full batch read, aligned with input order.
+        let all = store.get_batch_at_ts(&[1, 0, 2], 100);
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all[0].iter().find(|(n, _)| n == "name").unwrap().1,
+            Some(Value::string("Bob"))
+        );
+        assert_eq!(all[1][1], ("age".to_string(), Some(Value::Int(30))));
+        assert_eq!(all[2][1], ("age".to_string(), None));
+
+        // Projected batch read only touches the requested columns.
+        let projected = store.get_projected_batch_at_ts(&[0, 1], &["age".to_string()], 100);
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected[0],
+            vec![("age".to_string(), Some(Value::Int(30)))]
+        );
+        assert_eq!(
+            projected[1],
+            vec![("age".to_string(), Some(Value::Int(25)))]
+        );
+    }
+
+    #[test]
+    fn test_column_store() {
+        let mut store = ColumnStore::new();
+
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, true);
+
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+            )
+            .unwrap();
+
+        store
+            .set(
+                1,
+                &[
+                    ("name".to_string(), Value::string("Bob")),
+                    ("age".to_string(), Value::Int(25)),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.get_column("age").and_then(|col| col.get(0)),
+            Some(Value::Int(30))
+        );
+        assert_eq!(
+            store.get_column("name").and_then(|col| col.get(1)),
+            Some(Value::string("Bob"))
+        );
+    }
+
+    #[test]
+    fn test_column_store_remove_and_rename() {
+        let mut store = ColumnStore::new();
+
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, true);
+
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                ],
+            )
+            .unwrap();
+
+        store
+            .rename_column("age", "years".to_string())
+            .expect("rename should succeed");
+        assert!(store.get_column("age").is_none());
+        assert_eq!(
+            store.get_column("years").and_then(|col| col.get(0)),
+            Some(Value::Int(30))
+        );
+
+        store.remove_column("name").expect("remove should succeed");
+        assert!(store.get_column("name").is_none());
+        assert_eq!(store.column_count(), 1);
+        assert_eq!(
+            store.get_column("years").and_then(|col| col.get(0)),
+            Some(Value::Int(30))
+        );
+    }
+
+    #[test]
+    fn test_fixed_width_multiple_types() {
+        let mut col = Column::new("mixed".to_string(), 0, DataType::BigInt, false);
+        col.set(0, Some(&Value::BigInt(100))).unwrap();
+        col.set(1, Some(&Value::BigInt(200))).unwrap();
+        assert_eq!(col.get(0), Some(Value::BigInt(100)));
+        assert_eq!(col.get(1), Some(Value::BigInt(200)));
+        assert_eq!(col.len(), 2);
+
+        let mut col2 = Column::new("flag".to_string(), 1, DataType::Bool, true);
+        col2.set(0, Some(&Value::Bool(true))).unwrap();
+        col2.set(1, Some(&Value::Bool(false))).unwrap();
+        col2.set(2, None).unwrap();
+        assert_eq!(col2.get(0), Some(Value::Bool(true)));
+        assert_eq!(col2.get(1), Some(Value::Bool(false)));
+        assert!(col2.is_null(2));
+    }
+
+    #[test]
+    fn test_flush_and_reload_fixed() {
+        let mut col = Column::new("val".to_string(), 0, DataType::Int, true);
+        col.set(0, Some(&Value::Int(10))).unwrap();
+        col.set(1, Some(&Value::Int(20))).unwrap();
+        col.set(2, None).unwrap();
+
+        let (data, offsets, bitmap) = col.get_flush_data();
+        assert!(offsets.is_empty());
+
+        let mut restored = Column::new("val".to_string(), 0, DataType::Int, true);
+        restored.load_data_from_raw(data, Vec::new(), bitmap.map(|b| b.into_vec()), col.len());
+
+        assert_eq!(restored.get(0), Some(Value::Int(10)));
+        assert_eq!(restored.get(1), Some(Value::Int(20)));
+        assert!(restored.is_null(2));
+        assert_eq!(restored.len(), 3);
+    }
+
+    #[test]
+    fn test_flush_and_reload_variable() {
+        let mut col = Column::new("name".to_string(), 0, DataType::String, true);
+        col.set(0, Some(&Value::string("Hello"))).unwrap();
+        col.set(1, Some(&Value::string("World"))).unwrap();
+        col.set(2, None).unwrap();
+
+        let (data, offsets, bitmap) = col.get_flush_data();
+        assert!(!offsets.is_empty());
+
+        let mut restored = Column::new("name".to_string(), 0, DataType::String, true);
+        restored.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), 3);
+
+        assert_eq!(restored.get(0), Some(Value::string("Hello")));
+        assert_eq!(restored.get(1), Some(Value::string("World")));
+        assert!(restored.is_null(2));
+        assert_eq!(restored.len(), 3);
+    }
+
+    // ==================== Priority Tests ====================
+
+    /// Test: Verify large property values (>256 bytes) are handled correctly
+    #[test]
+    fn test_column_set_large_string_property() {
+        let mut col = Column::new("description".to_string(), 0, DataType::String, false);
+
+        // Create a string larger than typical storage boundaries
+        let large_value = "a".repeat(1000);
+        col.set(0, Some(&Value::string(large_value.clone())))
+            .unwrap();
+        col.set(1, Some(&Value::string("short"))).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::string(large_value.clone())));
+        assert_eq!(col.get(1), Some(Value::string("short")));
+        assert_eq!(col.len(), 2);
+    }
+
+    /// Test: Verify updating single property doesn't affect others
+    #[test]
+    fn test_column_store_update_single_property_preserves_others() {
+        let mut store = ColumnStore::new();
+        store.add_column("name".to_string(), DataType::String, false);
+        store.add_column("age".to_string(), DataType::Int, false);
+        store.add_column("city".to_string(), DataType::String, false);
+
+        // Insert initial row
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(30)),
+                    ("city".to_string(), Value::string("NYC")),
+                ],
+            )
+            .unwrap();
+
+        // Update only the age property
+        store
+            .set(
+                0,
+                &[
+                    ("name".to_string(), Value::string("Alice")),
+                    ("age".to_string(), Value::Int(31)),
+                    ("city".to_string(), Value::string("NYC")),
+                ],
+            )
+            .unwrap();
+
+        // Verify all properties are correct
+        assert_eq!(
+            store.get_column("name").and_then(|col| col.get(0)),
+            Some(Value::string("Alice"))
+        );
+        assert_eq!(
+            store.get_column("age").and_then(|col| col.get(0)),
+            Some(Value::Int(31))
+        );
+        assert_eq!(
+            store.get_column("city").and_then(|col| col.get(0)),
+            Some(Value::string("NYC"))
+        );
+    }
+
+    /// Test: Verify very large property values can be stored and retrieved
+    #[test]
+    fn test_column_large_string_roundtrip() {
+        let mut col = Column::new("data".to_string(), 0, DataType::String, false);
+
+        // Test different sizes around potential boundaries
+        let sizes = [255, 256, 257, 1000, 10000];
+        for (idx, size) in sizes.iter().enumerate() {
+            let value = format!("x-{}", "a".repeat(*size));
+            col.set(idx, Some(&Value::string(value.clone()))).unwrap();
+            assert_eq!(
+                col.get(idx),
+                Some(Value::string(value)),
+                "Failed at size {}",
+                size
+            );
+        }
+    }
+
+    /// Test: Verify string column with mixed null and non-null values
+    #[test]
+    fn test_column_string_with_nulls() {
+        let mut col = Column::new("text".to_string(), 0, DataType::String, true);
+
+        col.set(0, Some(&Value::string("hello"))).unwrap();
+        col.set(1, None).unwrap();
+        col.set(2, Some(&Value::string("world"))).unwrap();
+        col.set(3, None).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::string("hello")));
+        assert!(col.is_null(1));
+        assert_eq!(col.get(2), Some(Value::string("world")));
+        assert!(col.is_null(3));
+        assert_eq!(col.null_count(), 2);
+    }
+
+    /// the O(1) `null_count` counter must stay in sync with the null
+    /// bitmap through set / re-set / resize operations.
+    #[test]
+    fn test_null_count_counter_tracks_bitmap() {
+        let mut col = Column::new("text".to_string(), 0, DataType::String, true);
+
+        col.set(0, Some(&Value::string("a"))).unwrap();
+        col.set(1, None).unwrap();
+        col.set(2, Some(&Value::string("b"))).unwrap();
+        col.set(3, None).unwrap();
+        assert_eq!(col.null_count(), 2);
+
+        // Flip existing null → non-null and non-null → null.
+        col.set(1, Some(&Value::string("c"))).unwrap();
+        col.set(2, None).unwrap();
+        assert_eq!(col.null_count(), 2);
+
+        // Grow via resize: new rows are null.
+        col.resize(6);
+        assert_eq!(col.null_count(), 4);
+
+        // Setting values into grown rows.
+        col.set(4, Some(&Value::string("d"))).unwrap();
+        assert_eq!(col.null_count(), 3);
+
+        let expected = col.null_bitmap().map(|b| b.count_ones()).unwrap_or(0);
+        assert_eq!(col.null_count(), expected);
+
+        col.clear();
+        assert_eq!(col.null_count(), 0);
+    }
+
+    /// Test: Verify integer column type conversions and boundaries
+    #[test]
+    fn test_column_integer_types_boundaries() {
+        let mut col_small = Column::new("small".to_string(), 0, DataType::SmallInt, false);
+        col_small.set(0, Some(&Value::SmallInt(i16::MAX))).unwrap();
+        col_small.set(1, Some(&Value::SmallInt(i16::MIN))).unwrap();
+        assert_eq!(col_small.get(0), Some(Value::SmallInt(i16::MAX)));
+        assert_eq!(col_small.get(1), Some(Value::SmallInt(i16::MIN)));
+
+        let mut col_big = Column::new("big".to_string(), 0, DataType::BigInt, false);
+        col_big.set(0, Some(&Value::BigInt(i64::MAX))).unwrap();
+        col_big.set(1, Some(&Value::BigInt(i64::MIN))).unwrap();
+        assert_eq!(col_big.get(0), Some(Value::BigInt(i64::MAX)));
+        assert_eq!(col_big.get(1), Some(Value::BigInt(i64::MIN)));
+    }
+
+    /// Test: Verify float/double precision preservation
+    #[test]
+    fn test_column_float_precision() {
+        let mut col_f = Column::new("float_val".to_string(), 0, DataType::Float, false);
+        let f_value = 1.5_f32;
+        col_f.set(0, Some(&Value::Float(f_value))).unwrap();
+        assert_eq!(col_f.get(0), Some(Value::Float(f_value)));
+
+        let mut col_d = Column::new("double_val".to_string(), 0, DataType::Double, false);
+        let d_value = std::f64::consts::PI;
+        col_d.set(0, Some(&Value::Double(d_value))).unwrap();
+        assert_eq!(col_d.get(0), Some(Value::Double(d_value)));
+    }
+
+    /// Test: Verify column resize operation maintains data integrity
+    #[test]
+    fn test_column_resize_maintains_data() {
+        let mut col = Column::new("num".to_string(), 0, DataType::Int, false);
+        col.set(0, Some(&Value::Int(10))).unwrap();
+        col.set(1, Some(&Value::Int(20))).unwrap();
+        col.set(2, Some(&Value::Int(30))).unwrap();
+
+        // Simulate resize operation
+        col.resize(5);
+        assert_eq!(col.len(), 5);
+
+        // Verify original data is intact
+        assert_eq!(col.get(0), Some(Value::Int(10)));
+        assert_eq!(col.get(1), Some(Value::Int(20)));
+        assert_eq!(col.get(2), Some(Value::Int(30)));
+    }
+
+    // ==================== Priority Encoding Tests ====================
+
+    /// Test: Column with repetitive integer values (RLE compression eligible)
+    #[test]
+    fn test_column_repetitive_integer_values() {
+        let mut col = Column::new("status".to_string(), 0, DataType::Int, false);
+
+        // Insert repetitive values that could benefit from RLE
+        for i in 0..100 {
+            let value = match i % 3 {
+                0 => Value::Int(1),
+                1 => Value::Int(2),
+                _ => Value::Int(3),
+            };
+            col.set(i, Some(&value)).unwrap();
+        }
+
+        // Verify all values are stored correctly
+        for i in 0..100 {
+            let expected = match i % 3 {
+                0 => Value::Int(1),
+                1 => Value::Int(2),
+                _ => Value::Int(3),
+            };
+            assert_eq!(col.get(i), Some(expected));
+        }
+    }
+
+    /// Test: String column with low cardinality (Dictionary compression eligible)
+    #[test]
+    fn test_column_low_cardinality_strings() {
+        let mut col = Column::new("category".to_string(), 0, DataType::String, false);
+
+        let categories = ["A", "B", "C", "A", "B", "C"];
+
+        // Insert low cardinality strings
+        for (i, category) in categories.iter().enumerate() {
+            col.set(i, Some(&Value::string(category))).unwrap();
+        }
+
+        // Verify all values are stored and retrievable
+        for (i, expected_category) in categories.iter().enumerate() {
+            let value = col.get(i);
+            assert_eq!(value, Some(Value::string(expected_category)));
+        }
+    }
+
+    /// Test: Numeric column suitable for bitpacking
+    #[test]
+    fn test_column_small_range_integers() {
+        let mut col = Column::new("priority".to_string(), 0, DataType::Int, false);
+
+        // Insert values with small range [0-15] - good for bitpacking
+        for i in 0..256 {
+            let value = Value::Int((i % 16) as i32);
+            col.set(i, Some(&value)).unwrap();
+        }
+
+        // Verify all values are correctly preserved
+        for i in 0..256 {
+            let expected = Value::Int((i % 16) as i32);
+            assert_eq!(col.get(i), Some(expected));
+        }
+    }
+
+    /// Test: Long string column suitable for FSST compression
+    #[test]
+    fn test_column_long_strings_compression() {
+        let mut col = Column::new("description".to_string(), 0, DataType::String, false);
+
+        let long_strings = [
+            "The quick brown fox jumps over the lazy dog",
+            "A Rust programming language feature",
+            "GraphDB storage compression techniques",
+            "The quick brown fox jumps over the lazy dog", // Repetition
+            "Efficient data compression algorithms",
+        ];
+
+        // Insert long strings
+        for (i, s) in long_strings.iter().enumerate() {
+            col.set(i, Some(&Value::string(s))).unwrap();
+        }
+
+        // Verify retrieval works correctly
+        for (i, expected_str) in long_strings.iter().enumerate() {
+            assert_eq!(col.get(i), Some(Value::string(expected_str)));
+        }
+    }
+
+    /// Test: i64 boundary values
+    #[test]
+    fn test_column_i64_boundaries() {
+        let mut col = Column::new("bigint_val".to_string(), 0, DataType::BigInt, false);
+
+        // Test MAX and MIN values
+        col.set(0, Some(&Value::BigInt(i64::MAX))).unwrap();
+        col.set(1, Some(&Value::BigInt(i64::MIN))).unwrap();
+        col.set(2, Some(&Value::BigInt(0))).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::BigInt(i64::MAX)));
+        assert_eq!(col.get(1), Some(Value::BigInt(i64::MIN)));
+        assert_eq!(col.get(2), Some(Value::BigInt(0)));
+    }
+
+    /// Test: Empty string handling
+    #[test]
+    fn test_column_empty_string() {
+        let mut col = Column::new("text".to_string(), 0, DataType::String, false);
+
+        // Test empty string
+        col.set(0, Some(&Value::string(""))).unwrap();
+        col.set(1, Some(&Value::string("normal"))).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::string("")));
+        assert_eq!(col.get(1), Some(Value::string("normal")));
+    }
+
+    /// Test: Special characters in strings
+    #[test]
+    fn test_column_special_characters() {
+        let mut col = Column::new("special".to_string(), 0, DataType::String, false);
+
+        let special_strings = [
+            "\n\t\r",     // Whitespace
+            "\\\"'",      // Quotes and backslash
+            "你好世界🌍", // Unicode and emoji
+            "\0null",     // Control character
+        ];
+
+        for (idx, s) in special_strings.iter().enumerate() {
+            col.set(idx, Some(&Value::string(s))).unwrap();
+            assert_eq!(col.get(idx), Some(Value::string(s)));
+        }
+    }
+
+    /// Test: Float special values
+    #[test]
+    fn test_column_float_special_values() {
+        let mut col = Column::new("float_val".to_string(), 0, DataType::Float, false);
+
+        // Test normal, zero, negative
+        col.set(0, Some(&Value::Float(0.0))).unwrap();
+        col.set(1, Some(&Value::Float(-1.5))).unwrap();
+        col.set(2, Some(&Value::Float(f32::MAX))).unwrap();
+        col.set(3, Some(&Value::Float(f32::MIN))).unwrap();
+
+        assert_eq!(col.get(0), Some(Value::Float(0.0)));
+        assert_eq!(col.get(1), Some(Value::Float(-1.5)));
+        assert_eq!(col.get(2), Some(Value::Float(f32::MAX)));
+        assert_eq!(col.get(3), Some(Value::Float(f32::MIN)));
+    }
+
+    #[test]
+    fn test_versioned_writes_keep_before_images() {
+        let mut col = Column::new("age".to_string(), 0, DataType::Int, true);
+
+        // Insert at ts=10, then two updates at increasing timestamps.
+        col.set_versioned(0, Some(&Value::Int(1)), 10).unwrap();
+        col.set_versioned(0, Some(&Value::Int(2)), 20).unwrap();
+        col.set_versioned(0, Some(&Value::Int(3)), 30).unwrap();
+
+        // Current value is the latest.
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+        // Snapshot reads resolve the visible version per timestamp.
+        assert_eq!(col.get_at_ts(0, 30), Some(Value::Int(3)));
+        assert_eq!(col.get_at_ts(0, 29), Some(Value::Int(2)));
+        assert_eq!(col.get_at_ts(0, 20), Some(Value::Int(2)));
+        assert_eq!(col.get_at_ts(0, 19), Some(Value::Int(1)));
+        assert_eq!(col.get_at_ts(0, 10), Some(Value::Int(1)));
+        // Before the row existed the value is null.
+        assert_eq!(col.get_at_ts(0, 9), None);
+
+        // GC removes versions older than the minimum active snapshot.
+        let removed = col.gc_versions(21);
+        assert!(removed >= 1, "old versions should be reclaimed");
+        assert_eq!(
+            col.get_at_ts(0, 29),
+            Some(Value::Int(2)),
+            "still-visible version survives"
+        );
+        assert_eq!(col.get(0), Some(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_versioned_null_and_string_types() {
+        let mut col = Column::new("name".to_string(), 0, DataType::String, true);
+
+        col.set_versioned(0, Some(&Value::string("alice")), 10)
+            .unwrap();
+        col.set_versioned(0, None, 20).unwrap();
+        col.set_versioned(0, Some(&Value::string("bob")), 30)
+            .unwrap();
+
+        assert_eq!(col.get_at_ts(0, 10), Some(Value::string("alice")));
+        assert_eq!(col.get_at_ts(0, 20), None, "null before-image");
+        assert_eq!(col.get_at_ts(0, 30), Some(Value::string("bob")));
+        assert_eq!(col.get_at_ts(0, 25), None);
+    }
+
+    #[test]
+    fn test_versioned_write_at_or_before_start_is_noop_range() {
+        let mut col = Column::new("v".to_string(), 0, DataType::BigInt, true);
+        col.set_versioned(0, Some(&Value::BigInt(7)), 100).unwrap();
+        // Rollback-style write reusing the same timestamp must not create a
+        // zero-length version range.
+        col.set_versioned(0, Some(&Value::BigInt(9)), 100).unwrap();
+        assert_eq!(col.get_at_ts(0, 100), Some(Value::BigInt(9)));
+        assert_eq!(col.get_at_ts(0, 101), Some(Value::BigInt(9)));
+        // The before-image at 100 was already superseded at the same ts.
+        assert_eq!(col.get_at_ts(0, 99), None);
+    }
+
+    #[test]
+    fn test_composite_types_use_variable_width_column() {
+        // Struct/Array must never fall into FixedWidthColumn (element_size 0
+        // would corrupt offsets).
+        let struct_type = DataType::Struct(std::sync::Arc::new(StructTypeInfo::new(vec![(
+            "city".to_string(),
+            DataType::String,
+        )])));
+        let array_type = DataType::Array(std::sync::Arc::new(ArrayTypeInfo::new(
+            DataType::Double,
+            Some(3),
+        )));
+        for (data_type, value) in [
+            (
+                struct_type,
+                Value::struct_(vec![("city".to_string(), Value::string("x"))]),
+            ),
+            (
+                array_type,
+                Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
+            ),
+        ] {
+            let mut col = Column::new("c".to_string(), 0, data_type.clone(), true);
+            assert!(is_variable_length_type(&data_type));
+            col.set_versioned(0, Some(&value), 10).unwrap();
+            assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
+            // MVCC before-image roundtrip through the undo path.
+            col.set_versioned(0, None, 20).unwrap();
+            assert_eq!(col.get_at_ts(0, 10), Some(value.clone()));
+            assert_eq!(col.get_at_ts(0, 20), None);
+        }
+    }
+}

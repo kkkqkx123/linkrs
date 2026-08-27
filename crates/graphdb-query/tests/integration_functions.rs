@@ -13,7 +13,7 @@ mod common;
 use graphdb_query::core::types::VertexId;
 use graphdb_query::core::vertex_edge_path::{Edge, Path, Step, Tag, Vertex};
 use graphdb_query::core::{List, NullType, Value};
-use graphdb_query::query::executor::expression::functions::FunctionRegistry;
+use graphdb_query::executor::expression::functions::FunctionRegistry;
 use std::collections::HashMap;
 
 /// Create vertices for testing purposes.

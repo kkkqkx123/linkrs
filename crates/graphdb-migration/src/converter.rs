@@ -1,4 +1,4 @@
-use graphdb_core::core::{DataType, Value};
+use graphdb_core::{DataType, Value};
 
 #[derive(Debug, Clone)]
 pub struct ConversionError {
@@ -46,7 +46,7 @@ fn type_name(dt: &DataType) -> &'static str {
 
 pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, ConversionError> {
     if value.is_null() || value.is_empty() {
-        return Ok(Value::Null(graphdb_core::core::value::null::NullType::Null));
+        return Ok(Value::Null(graphdb_core::value::null::NullType::Null));
     }
 
     let source_type = value.get_type();
@@ -190,7 +190,7 @@ pub fn is_compatible_type(from: &DataType, to: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::core::value::null::NullType;
+    use graphdb_core::value::null::NullType;
 
     #[test]
     fn test_identity_conversion() {

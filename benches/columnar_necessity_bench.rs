@@ -19,8 +19,8 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::streaming::chunk::DataChunk;
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
+use graphdb_query::executor::streaming::chunk::DataChunk;
+use graphdb_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -283,7 +283,7 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
 /// vs. the materialized path (1% selectivity).
 fn bench_selection_chain(c: &mut Criterion) {
     use graphdb_query::core::types::expr::Expression;
-    use graphdb_query::query::executor::streaming::chunk::set_selection_propagation_enabled;
+    use graphdb_query::executor::streaming::chunk::set_selection_propagation_enabled;
 
     let mut group = c.benchmark_group("selection_propagation_chain");
     group.measurement_time(Duration::from_secs(2));

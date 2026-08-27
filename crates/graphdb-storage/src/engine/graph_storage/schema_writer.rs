@@ -1,0 +1,714 @@
+use crate::core::error::storage::StorageErrorKind;
+use crate::core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
+use crate::core::{StorageError, StorageResult};
+use crate::engine::params::CreateEdgeTypeParams;
+use crate::types::StoragePropertyDef;
+use crate::transaction::wal::{
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo,
+    DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, WalOpType,
+};
+use crate::transaction::MutationResult;
+
+use super::context::GraphStorageContext;
+use super::ops::{
+    edge_type_storage_name, endpoint_label_id, tag_label_id, vertex_type_storage_name,
+};
+
+fn schema_properties(properties: &[PropertyDef]) -> Vec<(String, String, bool)> {
+    properties
+        .iter()
+        .map(|prop| (prop.name.clone(), prop.data_type.to_string(), prop.serial))
+        .collect()
+}
+
+/// Validate SERIAL column constraints before a DDL change is applied.
+///
+/// - A SERIAL column cannot carry a DEFAULT.
+/// - A tag / edge type can have at most one SERIAL column.
+fn validate_serial_columns(properties: &[PropertyDef]) -> StorageResult<()> {
+    let serials: Vec<&PropertyDef> = properties.iter().filter(|prop| prop.serial).collect();
+    if serials.len() > 1 {
+        return Err(StorageError::invalid_operation(
+            "only one SERIAL column is allowed".to_string(),
+        ));
+    }
+    for prop in serials {
+        if prop.default.is_some() {
+            return Err(StorageError::invalid_operation(format!(
+                "SERIAL column '{}' cannot have DEFAULT",
+                prop.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn append_schema_redo<T: serde::Serialize>(
+    ctx: &GraphStorageContext,
+    op_type: WalOpType,
+    redo: &T,
+) -> StorageResult<crate::transaction::wal::TransactionWalEntry> {
+    let timestamp = ctx.get_write_timestamp()?;
+
+    let result = ctx.append_wal_redo(op_type, timestamp, redo);
+    match result {
+        Ok(entry) => {
+            if let Some(recorder) = ctx.mutation_recorder() {
+                recorder
+                    .record_mutation(MutationResult {
+                        redo_entry: Some(entry.clone()),
+                        modified_table: Some("schema".to_string()),
+                        ..MutationResult::default()
+                    })
+                    .map_err(|error| StorageError::db_error(error.to_string()))?;
+                match op_type {
+                    WalOpType::CreateTagIndex
+                    | WalOpType::DropTagIndex
+                    | WalOpType::CreateEdgeIndex
+                    | WalOpType::DropEdgeIndex => recorder.record_index_write("index"),
+                    _ => recorder
+                        .record_schema_write("schema")
+                        .map_err(|error| StorageError::db_error(error.to_string()))?,
+                }
+            }
+            ctx.commit_write_timestamp(timestamp);
+            Ok(entry)
+        }
+        Err(error) => {
+            ctx.abort_write_timestamp(timestamp);
+            Err(error)
+        }
+    }
+}
+
+fn validate_index_space(
+    ctx: &GraphStorageContext,
+    space: &str,
+    _index: &Index,
+) -> StorageResult<u64> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    Ok(space_id)
+}
+
+pub(crate) fn create_space(
+    ctx: &GraphStorageContext,
+    space: &mut SpaceInfo,
+) -> StorageResult<bool> {
+    if ctx.schema_manager().get_space(&space.space_name)?.is_some() {
+        return Ok(false);
+    }
+
+    if space.space_id == 0 {
+        space.space_id = ctx.schema_manager().peek_next_space_id();
+    }
+
+    append_schema_redo(
+        ctx,
+        WalOpType::CreateSpace,
+        &CreateSpaceRedo {
+            space: space.clone(),
+        },
+    )?;
+
+    ctx.schema_manager().create_space(space)
+}
+
+pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResult<bool> {
+    let Some(space_info) = ctx.schema_manager().get_space(space)? else {
+        return Ok(false);
+    };
+    let space_id = space_info.space_id;
+    let tags = ctx.schema_manager().list_tags(space)?;
+    let edge_types = ctx.schema_manager().list_edge_types(space)?;
+
+    append_schema_redo(
+        ctx,
+        WalOpType::DropSpace,
+        &DropSpaceRedo {
+            space_name: space_info.space_name.clone(),
+        },
+    )?;
+
+    for et in edge_types {
+        let storage_name = edge_type_storage_name(space_id, &et.edge_type_name);
+        ctx.drop_edge_type(&storage_name)?;
+    }
+    for tag in tags {
+        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
+        ctx.drop_vertex_type(&storage_name)?;
+    }
+
+    ctx.schema_manager().drop_space(space)?;
+    ctx.serial_allocator().clear_space(space_id);
+    Ok(true)
+}
+
+pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResult<bool> {
+    let Some(space_info) = ctx.schema_manager().get_space(space)? else {
+        return Ok(false);
+    };
+    let space_id = space_info.space_id;
+    let tags = ctx.schema_manager().list_tags(space)?;
+    let edge_types = ctx.schema_manager().list_edge_types(space)?;
+
+    append_schema_redo(
+        ctx,
+        WalOpType::ClearSpace,
+        &ClearSpaceRedo {
+            space_name: space_info.space_name.clone(),
+        },
+    )?;
+
+    for et in edge_types {
+        let storage_name = edge_type_storage_name(space_id, &et.edge_type_name);
+        ctx.drop_edge_type(&storage_name)?;
+    }
+    for tag in tags {
+        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
+        ctx.drop_vertex_type(&storage_name)?;
+    }
+
+    ctx.schema_manager().clear_space(space)?;
+    ctx.serial_allocator().clear_space(space_id);
+    Ok(true)
+}
+
+pub(crate) fn alter_space_comment(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    comment: String,
+) -> StorageResult<bool> {
+    if ctx.schema_manager().get_space_by_id(space_id)?.is_none() {
+        return Ok(false);
+    }
+
+    append_schema_redo(
+        ctx,
+        WalOpType::AlterSpaceComment,
+        &AlterSpaceCommentRedo {
+            space_id,
+            comment: comment.clone(),
+        },
+    )?;
+
+    ctx.schema_manager().alter_space_comment(space_id, comment)
+}
+
+pub(crate) fn create_tag_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index: &Index,
+) -> StorageResult<bool> {
+    let space_id = validate_index_space(ctx, space, index)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::CreateTagIndex,
+        &CreateTagIndexRedo {
+            space_id,
+            index_name: index.name.clone(),
+            fields: index
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), String::new()))
+                .collect(),
+            properties: index.properties.clone(),
+            is_unique: index.is_unique,
+        },
+    )?;
+    super::index_manager::create_tag_index(ctx, space, index)
+}
+
+pub(crate) fn drop_tag_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::DropTagIndex,
+        &DropTagIndexRedo {
+            space_id,
+            index_name: index_name.to_string(),
+        },
+    )?;
+    super::index_manager::drop_tag_index(ctx, space, index_name)
+}
+
+pub(crate) fn create_edge_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index: &Index,
+) -> StorageResult<bool> {
+    let space_id = validate_index_space(ctx, space, index)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::CreateEdgeIndex,
+        &CreateEdgeIndexRedo {
+            space_id,
+            index_name: index.name.clone(),
+            fields: index
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), String::new()))
+                .collect(),
+            properties: index.properties.clone(),
+            is_unique: index.is_unique,
+        },
+    )?;
+    super::index_manager::create_edge_index(ctx, space, index)
+}
+
+pub(crate) fn drop_edge_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::DropEdgeIndex,
+        &DropEdgeIndexRedo {
+            space_id,
+            index_name: index_name.to_string(),
+        },
+    )?;
+    super::index_manager::drop_edge_index(ctx, space, index_name)
+}
+
+pub(crate) fn create_tag(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &TagInfo,
+) -> StorageResult<u32> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    if ctx
+        .schema_manager()
+        .get_tag(space, &tag.tag_name)?
+        .is_some()
+    {
+        return Err(StorageError::label_already_exists(tag.tag_name.clone()));
+    }
+    let tag_id = ctx.schema_manager().peek_next_tag_id();
+
+    validate_serial_columns(&tag.properties)?;
+
+    // Prepare WAL data before executing storage changes
+    let wal_redo = CreateVertexTypeRedo {
+        space_name: space.to_string(),
+        label_id: Some(tag_id),
+        label_name: tag.tag_name.clone(),
+        schema: schema_properties(&tag.properties),
+    };
+
+    let properties: Vec<StoragePropertyDef> = tag
+        .properties
+        .iter()
+        .map(StoragePropertyDef::from_core)
+        .collect();
+
+    let primary_key = tag
+        .properties
+        .first()
+        .map(|p| p.name.as_str())
+        .unwrap_or("id");
+
+    // IMPORTANT: Transaction order (fixed from previous implementation):
+    // 1. Create in schema_manager first (metadata update)
+    // 2. Create in storage_engine (memory structures)
+    // 3. Only if both succeed, append WAL record
+    //
+    // This ensures: if create_tag_internal fails, no WAL is written
+    // If create_vertex_type fails, schema_manager can be rolled back manually if needed
+    // The WAL record is only written when all changes are committed
+
+    let tag_id_returned = ctx.schema_manager().create_tag(space, tag)?;
+
+    ctx.create_vertex_type_with_id(
+        &vertex_type_storage_name(space_id, &tag.tag_name),
+        &tag.tag_name,
+        tag_id_returned,
+        properties,
+        primary_key,
+    )?;
+
+    // Only append WAL after successful execution
+    append_schema_redo(ctx, WalOpType::CreateVertexType, &wal_redo)?;
+
+    Ok(tag_id_returned)
+}
+
+pub(crate) fn drop_tag(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    if ctx.schema_manager().get_tag(space, tag_name)?.is_none() {
+        return Ok(false);
+    }
+
+    // A tag that still contains data cannot be dropped.
+    let has_data = ctx.data_store().with_vertex_tables(|vertex_tables| {
+        ctx.schema_manager()
+            .get_tag(space, tag_name)
+            .ok()
+            .flatten()
+            .and_then(|tag| vertex_tables.get(&tag.tag_id))
+            .map(|table| {
+                table
+                    .id_hole_stats(crate::transaction::wal::Timestamp::MAX)
+                    .0
+                    > 0
+            })
+            .unwrap_or(false)
+    });
+    if has_data {
+        return Err(StorageError::invalid_operation(format!(
+            "Tag '{}' still has data and cannot be dropped",
+            tag_name
+        )));
+    }
+
+    append_schema_redo(
+        ctx,
+        WalOpType::DeleteVertexType,
+        &DeleteVertexTypeRedo {
+            space_name: Some(space.to_string()),
+            label_name: tag_name.to_string(),
+        },
+    )?;
+
+    let storage_name = vertex_type_storage_name(space_id, tag_name);
+    ctx.drop_vertex_type(&storage_name)?;
+
+    ctx.schema_manager().drop_tag(space, tag_name)?;
+    ctx.serial_allocator()
+        .remove(&super::serial::SerialKey::new(
+            space_id,
+            tag_name.to_string(),
+        ));
+    Ok(true)
+}
+
+pub(crate) fn alter_tag(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+    additions: Vec<PropertyDef>,
+    deletions: Vec<String>,
+) -> StorageResult<bool> {
+    let _ = ctx.schema_manager().get_space_id(space)?;
+    let tag = ctx
+        .schema_manager()
+        .get_tag(space, tag_name)?
+        .ok_or_else(|| StorageError::label_not_found(tag_name.to_string()))?;
+
+    let mut combined = tag.properties.clone();
+    for addition in &additions {
+        if !combined.iter().any(|prop| prop.name == addition.name) {
+            combined.push(addition.clone());
+        }
+    }
+    validate_serial_columns(&combined)?;
+
+    // Execute modifications in schema_manager first
+    let result =
+        ctx.schema_manager()
+            .alter_tag(space, tag_name, additions.clone(), deletions.clone())?;
+
+    if !result {
+        return Ok(false);
+    }
+
+    // Then apply to storage engine
+    if let Some(label_id) = tag_label_id(ctx, space, tag_name)? {
+        for deletion in &deletions {
+            ctx.delete_vertex_property(label_id, deletion)?;
+        }
+        for prop in &additions {
+            let storage_prop = StoragePropertyDef::from_core(prop);
+            ctx.add_vertex_property(label_id, storage_prop)?;
+        }
+    }
+
+    // Only append WAL records after successful execution
+    if !deletions.is_empty() {
+        append_schema_redo(
+            ctx,
+            WalOpType::DeleteVertexProp,
+            &DeleteVertexPropRedo {
+                label: tag.tag_id,
+                prop_names: deletions,
+            },
+        )?;
+    }
+
+    if !additions.is_empty() {
+        append_schema_redo(
+            ctx,
+            WalOpType::AddVertexProp,
+            &AddVertexPropRedo {
+                label: tag.tag_id,
+                properties: schema_properties(&additions),
+            },
+        )?;
+    }
+
+    Ok(true)
+}
+
+pub(crate) fn create_edge_type(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &EdgeTypeInfo,
+) -> StorageResult<u32> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    if ctx
+        .schema_manager()
+        .get_edge_type(space, &edge_type.edge_type_name)?
+        .is_some()
+    {
+        return Err(StorageError::label_already_exists(
+            edge_type.edge_type_name.clone(),
+        ));
+    }
+    let src_label_id =
+        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
+        })?;
+    let dst_label_id =
+        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            ))
+        })?;
+    let edge_type_id = ctx.schema_manager().peek_next_edge_type_id();
+
+    validate_serial_columns(&edge_type.properties)?;
+
+    // Prepare WAL data before executing storage changes
+    let wal_redo = CreateEdgeTypeRedo {
+        space_name: space.to_string(),
+        label_id: Some(edge_type_id),
+        src_label: edge_type.src_tag_name.clone(),
+        dst_label: edge_type.dst_tag_name.clone(),
+        edge_label: edge_type.edge_type_name.clone(),
+        schema: schema_properties(&edge_type.properties),
+    };
+
+    // Fixed transaction order: execute storage operations before WAL
+    let edge_type_id = ctx.schema_manager().create_edge_type(space, edge_type)?;
+
+    let properties: Vec<StoragePropertyDef> = edge_type
+        .properties
+        .iter()
+        .map(StoragePropertyDef::from_core)
+        .collect();
+
+    ctx.create_edge_type_with_id(
+        CreateEdgeTypeParams {
+            name: &edge_type_storage_name(space_id, &edge_type.edge_type_name),
+            user_name: &edge_type.edge_type_name,
+            src_label: src_label_id,
+            dst_label: dst_label_id,
+            properties,
+            oe_strategy: edge_type.oe_strategy,
+            ie_strategy: edge_type.ie_strategy,
+        },
+        edge_type_id,
+    )?;
+
+    // Only append WAL after successful execution
+    append_schema_redo(ctx, WalOpType::CreateEdgeType, &wal_redo)?;
+
+    Ok(edge_type_id)
+}
+
+pub(crate) fn drop_edge_type(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    let Some(edge_type) = ctx.schema_manager().get_edge_type(space, edge_type_name)? else {
+        return Ok(false);
+    };
+
+    append_schema_redo(
+        ctx,
+        WalOpType::DeleteEdgeType,
+        &DeleteEdgeTypeRedo {
+            space_name: Some(space.to_string()),
+            src_label: edge_type.src_tag_name.clone(),
+            dst_label: edge_type.dst_tag_name.clone(),
+            edge_label: edge_type.edge_type_name.clone(),
+        },
+    )?;
+
+    let storage_name = edge_type_storage_name(space_id, edge_type_name);
+    ctx.drop_edge_type(&storage_name)?;
+
+    ctx.schema_manager().drop_edge_type(space, edge_type_name)?;
+    ctx.serial_allocator()
+        .remove(&super::serial::SerialKey::new(
+            space_id,
+            edge_type_name.to_string(),
+        ));
+    Ok(true)
+}
+
+pub(crate) fn ensure_graph_types_from_schema(ctx: &GraphStorageContext) -> StorageResult<()> {
+    for space in ctx.schema_manager().list_spaces()? {
+        let space_id = space.space_id;
+        for tag in ctx.schema_manager().list_tags(&space.space_name)? {
+            let properties: Vec<StoragePropertyDef> = tag
+                .properties
+                .iter()
+                .map(StoragePropertyDef::from_core)
+                .collect();
+            let primary_key = tag
+                .properties
+                .first()
+                .map(|p| p.name.as_str())
+                .unwrap_or("id");
+            let result = ctx.create_vertex_type_with_id(
+                &vertex_type_storage_name(space_id, &tag.tag_name),
+                &tag.tag_name,
+                tag.tag_id,
+                properties,
+                primary_key,
+            );
+            if let Err(e) = result {
+                if e.kind() != StorageErrorKind::LabelAlreadyExists {
+                    return Err(e);
+                }
+            }
+        }
+
+        for edge_type in ctx.schema_manager().list_edge_types(&space.space_name)? {
+            let src_label = endpoint_label_id(ctx, &space.space_name, &edge_type.src_tag_name)?
+                .ok_or_else(|| {
+                    StorageError::not_found(format!(
+                        "Source tag {} not found",
+                        edge_type.src_tag_name
+                    ))
+                })?;
+            let dst_label = endpoint_label_id(ctx, &space.space_name, &edge_type.dst_tag_name)?
+                .ok_or_else(|| {
+                    StorageError::not_found(format!(
+                        "Destination tag {} not found",
+                        edge_type.dst_tag_name
+                    ))
+                })?;
+            let properties: Vec<StoragePropertyDef> = edge_type
+                .properties
+                .iter()
+                .map(StoragePropertyDef::from_core)
+                .collect();
+            let result = ctx.create_edge_type_with_id(
+                CreateEdgeTypeParams {
+                    name: &edge_type_storage_name(space_id, &edge_type.edge_type_name),
+                    user_name: &edge_type.edge_type_name,
+                    src_label,
+                    dst_label,
+                    properties,
+                    oe_strategy: edge_type.oe_strategy,
+                    ie_strategy: edge_type.ie_strategy,
+                },
+                edge_type.edge_type_id,
+            );
+            if let Err(e) = result {
+                if e.kind() != StorageErrorKind::LabelAlreadyExists {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn alter_edge_type(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type_name: &str,
+    additions: Vec<PropertyDef>,
+    deletions: Vec<String>,
+) -> StorageResult<bool> {
+    let _ = ctx.schema_manager().get_space_id(space)?;
+    let edge_type = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type_name)?
+        .ok_or_else(|| StorageError::label_not_found(edge_type_name.to_string()))?;
+    let mut combined = edge_type.properties.clone();
+    for addition in &additions {
+        if !combined.iter().any(|prop| prop.name == addition.name) {
+            combined.push(addition.clone());
+        }
+    }
+    validate_serial_columns(&combined)?;
+    let src_label_id =
+        endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))
+        })?;
+    let dst_label_id =
+        endpoint_label_id(ctx, space, &edge_type.dst_tag_name)?.ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Destination tag {} not found",
+                edge_type.dst_tag_name
+            ))
+        })?;
+
+    if !deletions.is_empty() {
+        append_schema_redo(
+            ctx,
+            WalOpType::DeleteEdgeProp,
+            &DeleteEdgePropRedo {
+                src_label: src_label_id,
+                dst_label: dst_label_id,
+                edge_label: edge_type.edge_type_id,
+                prop_names: deletions.clone(),
+            },
+        )?;
+    }
+
+    if !additions.is_empty() {
+        append_schema_redo(
+            ctx,
+            WalOpType::AddEdgeProp,
+            &AddEdgePropRedo {
+                src_label: src_label_id,
+                dst_label: dst_label_id,
+                edge_label: edge_type.edge_type_id,
+                properties: schema_properties(&additions),
+            },
+        )?;
+    }
+
+    let result = ctx.schema_manager().alter_edge_type(
+        space,
+        edge_type_name,
+        additions.clone(),
+        deletions.clone(),
+    )?;
+
+    if !result {
+        return Ok(false);
+    }
+
+    if let Some(edge_label_id) = super::ops::edge_label_id(ctx, space, edge_type_name)? {
+        for deletion in &deletions {
+            ctx.delete_edge_property(edge_label_id, deletion)?;
+        }
+        for prop in additions {
+            let storage_prop = StoragePropertyDef::from_core(&prop);
+            ctx.add_edge_property(edge_label_id, storage_prop)?;
+        }
+    }
+
+    Ok(true)
+}

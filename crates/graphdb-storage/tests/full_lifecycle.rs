@@ -18,7 +18,7 @@ mod common;
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, VertexId};
 use graphdb_storage::core::DataType;
 use graphdb_storage::core::Value;
-use graphdb_storage::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 // ── Scenario 1: Schema → Vertex → Edge Full Lifecycle ──
 

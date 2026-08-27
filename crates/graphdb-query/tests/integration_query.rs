@@ -16,12 +16,12 @@ use common::{assertions::assert_ok, TestStorage};
 
 use graphdb_query::core::types::SpaceInfo;
 use graphdb_query::core::StatsManager;
-use graphdb_query::query::optimizer::OptimizerEngine;
-use graphdb_query::query::parser::Parser;
-use graphdb_query::query::pipeline::QueryPipelineManager;
-use graphdb_query::query::planning::PlannerConfig;
-use graphdb_query::query::QueryContext;
-use graphdb_query::query::QueryRequestContext;
+use graphdb_query::optimizer::OptimizerEngine;
+use graphdb_query::parser::Parser;
+use graphdb_query::pipeline::QueryPipelineManager;
+use graphdb_query::planning::PlannerConfig;
+use graphdb_query::QueryContext;
+use graphdb_query::QueryRequestContext;
 use graphdb_query::storage::StorageSchemaOps;
 use std::sync::Arc;
 

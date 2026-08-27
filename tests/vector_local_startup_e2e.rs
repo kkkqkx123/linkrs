@@ -13,7 +13,7 @@ use std::sync::Arc;
 use graphdb::config::{Config, VectorEngineKind};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig};
 use graphdb::sync::vector_sync::{DistanceMetric, PointId, SearchOptions, VectorPoint};
-use graphdb_server::server::GraphService;
+use graphdb_server::GraphService;
 
 fn point(id: i64, vector: Vec<f32>, group_id: &str) -> VectorPoint {
     let mut payload = HashMap::new();

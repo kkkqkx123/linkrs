@@ -14,10 +14,10 @@ use graphdb_storage::core::types::VertexId;
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::Value;
 use graphdb_storage::core::Vertex;
-use graphdb_storage::storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
+use graphdb_storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
 
 /// Helper: save and checkpoint so that prior WAL entries are not replayed.
-fn save_and_checkpoint(storage: &mut graphdb_storage::storage::GraphStorage) {
+fn save_and_checkpoint(storage: &mut graphdb_storage::GraphStorage) {
     storage.save_to_disk().expect("save_to_disk failed");
     storage
         .create_checkpoint()

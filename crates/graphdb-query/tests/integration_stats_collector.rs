@@ -3,7 +3,7 @@ mod common;
 use graphdb_query::core::types::{PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId};
 use graphdb_query::core::value::Value;
 use graphdb_query::core::vertex_edge_path::{Tag, Vertex};
-use graphdb_query::query::optimizer::stats::{StatisticsCollector, StatisticsManager};
+use graphdb_query::optimizer::stats::{StatisticsCollector, StatisticsManager};
 use graphdb_query::storage::{
     GraphStorage, PropertyGraphConfig, StorageCommitOps, StorageOperationContext,
     StorageOperationContextOps, StorageSchemaOps, StorageWriter,

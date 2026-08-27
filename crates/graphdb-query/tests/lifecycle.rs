@@ -9,22 +9,22 @@
 //! - DDL invalidating cached (partitioned) plans
 
 use graphdb_query::core::types::expr::expression_context::ExpressionAnalysisContext;
-use graphdb_query::query::executor::base::ExecutionContext;
-use graphdb_query::query::executor::streaming::instance::{
+use graphdb_query::executor::base::ExecutionContext;
+use graphdb_query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
 };
-use graphdb_query::query::executor::streaming::parameters::ParameterSchema;
-use graphdb_query::query::executor::streaming::plan::types::{
+use graphdb_query::executor::streaming::parameters::ParameterSchema;
+use graphdb_query::executor::streaming::plan::types::{
     CapabilitySet, FragmentGraph, FragmentId, OutputContract, PhysicalPlan, PipelineMode,
     PlanCompatibility, PlanFingerprint,
 };
-use graphdb_query::query::executor::streaming::query_registry::CancelToken;
-use graphdb_query::query::executor::streaming::query_registry::{QueryId, QueryRegistry};
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
-use graphdb_query::query::executor::streaming::transaction_scope::CancelReason;
-use graphdb_query::query::executor::streaming::transaction_scope::TransactionScope;
-use graphdb_query::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
-use graphdb_query::query::planning::plan::PlanNodeEnum;
+use graphdb_query::executor::streaming::query_registry::CancelToken;
+use graphdb_query::executor::streaming::query_registry::{QueryId, QueryRegistry};
+use graphdb_query::executor::streaming::slot::SlotLayout;
+use graphdb_query::executor::streaming::transaction_scope::CancelReason;
+use graphdb_query::executor::streaming::transaction_scope::TransactionScope;
+use graphdb_query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+use graphdb_query::planning::plan::PlanNodeEnum;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,9 +46,9 @@ fn expr_ctx() -> Arc<ExpressionAnalysisContext> {
 fn start_plan() -> Arc<PhysicalPlan> {
     let start = StartNode::new();
     let node = PlanNodeEnum::Start(start);
-    let mut ctx = graphdb_query::query::executor::streaming::plan::PhysicalPlanBuildContext::new();
+    let mut ctx = graphdb_query::executor::streaming::plan::PhysicalPlanBuildContext::new();
     let exec_ctx = ExecutionContext::new(expr_ctx());
-    let plan = graphdb_query::query::executor::streaming::plan::PhysicalPlanBuilder::build(
+    let plan = graphdb_query::executor::streaming::plan::PhysicalPlanBuilder::build(
         &node, &mut ctx, &exec_ctx,
     )
     .expect("build start plan");
@@ -283,8 +283,8 @@ fn lifecycle_diagnostic_scopes_instantiate_all_variants() {
 
 fn make_partition_spec(
     ranges: &[(i64, i64)],
-) -> graphdb_query::query::planning::plan::execution_plan::PartitionSpec {
-    use graphdb_query::query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
+) -> graphdb_query::planning::plan::execution_plan::PartitionSpec {
+    use graphdb_query::planning::plan::execution_plan::{PartitionSource, PartitionSpec};
     PartitionSpec::try_new(
         ranges.iter().map(|&(s, e)| s..e).collect(),
         PartitionSource::VertexId {
@@ -327,8 +327,8 @@ fn empty_plan_with_hash(hash: u64) -> Arc<PhysicalPlan> {
     })
 }
 
-fn cache_context() -> graphdb_query::query::cache::plan_cache::PlanCacheContext {
-    graphdb_query::query::cache::plan_cache::PlanCacheContext {
+fn cache_context() -> graphdb_query::cache::plan_cache::PlanCacheContext {
+    graphdb_query::cache::plan_cache::PlanCacheContext {
         space_name: Some("lifecycle_space".to_string()),
         schema_version: Some(1),
         index_version: Some(1),
@@ -338,9 +338,9 @@ fn cache_context() -> graphdb_query::query::cache::plan_cache::PlanCacheContext 
     }
 }
 
-fn put_context() -> graphdb_query::query::cache::plan_cache::PlanCachePutContext {
+fn put_context() -> graphdb_query::cache::plan_cache::PlanCachePutContext {
     let ctx = cache_context();
-    graphdb_query::query::cache::plan_cache::PlanCachePutContext {
+    graphdb_query::cache::plan_cache::PlanCachePutContext {
         dependent_tables: vec!["lifecycle_space".to_string()],
         space_name: ctx.space_name.clone(),
         schema_version: ctx.schema_version,
@@ -354,7 +354,7 @@ fn put_context() -> graphdb_query::query::cache::plan_cache::PlanCachePutContext
 
 #[test]
 fn lifecycle_partition_cache_hit_returns_same_plan() {
-    use graphdb_query::query::cache::plan_cache::QueryPlanCache;
+    use graphdb_query::cache::plan_cache::QueryPlanCache;
     let cache = QueryPlanCache::default();
     let query = "MATCH (n:Node) RETURN n";
     let spec = make_partition_spec(&[(0, 100)]);
@@ -376,7 +376,7 @@ fn lifecycle_partition_cache_hit_returns_same_plan() {
     );
 
     // Miss: same layout but different schema version must not hit.
-    let stale_context = graphdb_query::query::cache::plan_cache::PlanCacheContext {
+    let stale_context = graphdb_query::cache::plan_cache::PlanCacheContext {
         schema_version: Some(0),
         ..cache_context()
     };
@@ -390,7 +390,7 @@ fn lifecycle_partition_cache_hit_returns_same_plan() {
 
 #[test]
 fn lifecycle_partition_cache_ddl_invalidates_partitioned_plans() {
-    use graphdb_query::query::cache::plan_cache::QueryPlanCache;
+    use graphdb_query::cache::plan_cache::QueryPlanCache;
     let cache = QueryPlanCache::default();
     let query = "MATCH (n:Node) RETURN n";
     let spec = make_partition_spec(&[(0, 100)]);
@@ -421,7 +421,7 @@ fn lifecycle_partition_cache_hit_returns_exact_compiled_instance() {
     // Regression: a partition-plan cache hit must serve the exact plan
     // instance that a miss would compile (identity, not just equivalence),
     // so hit/miss execution cannot diverge.
-    use graphdb_query::query::cache::plan_cache::QueryPlanCache;
+    use graphdb_query::cache::plan_cache::QueryPlanCache;
     let cache = QueryPlanCache::default();
     let query = "MATCH (n:Node) RETURN n";
     let spec = make_partition_spec(&[(0, 100)]);
@@ -456,7 +456,7 @@ fn lifecycle_partition_cache_hit_returns_exact_compiled_instance() {
 
 #[test]
 fn lifecycle_explain_plan_description_round_trips_cbo_notes() {
-    use graphdb_query::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description;
+    use graphdb_query::executor::explain::physical_plan_explain::physical_plan_to_plan_description;
     let plan = start_plan();
     let desc = physical_plan_to_plan_description(&plan);
     assert!(
@@ -481,8 +481,8 @@ fn lifecycle_read_statement_binds_and_finalizes_read_operation_context() {
     use graphdb_query::core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb_query::core::vertex_edge_path::Tag;
     use graphdb_query::core::{DataType, Value, Vertex};
-    use graphdb_query::query::optimizer::OptimizerEngine;
-    use graphdb_query::query::pipeline::QueryPipelineManager;
+    use graphdb_query::optimizer::OptimizerEngine;
+    use graphdb_query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::StorageOperationContextOps;
     use graphdb_query::storage::{
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,

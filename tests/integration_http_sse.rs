@@ -23,10 +23,10 @@ use graphdb::core::vertex_edge_path::{Tag, Vertex};
 use graphdb::core::{DataType, Value};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig, StorageSchemaOps, StorageWriter};
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
-use graphdb_server::server::http::handlers::execute_stream;
-use graphdb_server::server::http::server::HttpServer;
-use graphdb_server::server::http::state::AppState;
-use graphdb_server::server::GraphService;
+use graphdb_server::http::handlers::execute_stream;
+use graphdb_server::http::server::HttpServer;
+use graphdb_server::http::state::AppState;
+use graphdb_server::GraphService;
 use parking_lot::RwLock;
 use tower::ServiceExt;
 

@@ -1,0 +1,1134 @@
+//! Storage Layer Synchronous Wrapper
+//!
+//! Decorator pattern implementation that wraps any StorageClient to automatically
+//! synchronize storage operations with external index systems (fulltext, vector).
+
+use crate::core::metadata::{IndexMetadataManager, SchemaManager};
+use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
+use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use crate::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
+};
+use crate::engine::graph_storage::AutoCommitBatchWindow;
+use crate::macros::forward_methods;
+use crate::{
+    StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
+    StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
+    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
+    StorageSyncContextOps,
+};
+use std::fmt::Debug;
+use std::sync::Arc;
+
+/// Decorator that wraps a StorageClient to provide automatic index synchronization.
+#[derive(Clone, Debug)]
+pub struct SyncWrapper<S: StorageClient + Debug> {
+    inner: S,
+    sync_manager: Option<Arc<crate::sync::SyncManager>>,
+    enabled: bool,
+    auto_commit_owner: bool,
+}
+
+impl<S: StorageClient> SyncWrapper<S> {
+    /// Create a new wrapper without synchronization.
+    pub fn new(storage: S) -> Self {
+        Self {
+            inner: storage,
+            sync_manager: None,
+            enabled: false,
+            auto_commit_owner: false,
+        }
+    }
+
+    /// Create a new wrapper with a SyncManager for index synchronization.
+    pub fn with_sync_manager(storage: S, sync_manager: Arc<crate::sync::SyncManager>) -> Self {
+        let frontier_manager = sync_manager.clone();
+        storage.set_outbox_materialized_lsn_provider(Arc::new(move || {
+            frontier_manager
+                .outbox_materialized_lsn()
+                .map_err(|error| StorageError::db_error(error.to_string()))
+        }));
+        Self {
+            inner: storage,
+            sync_manager: Some(sync_manager),
+            enabled: true,
+            auto_commit_owner: false,
+        }
+    }
+
+    /// Enable or disable synchronization.
+    pub fn enable_sync(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Check if synchronization is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Get reference to the sync manager.
+    pub fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+        self.sync_manager.clone()
+    }
+
+    /// Get reference to the inner storage client.
+    pub fn inner(&self) -> &S {
+        &self.inner
+    }
+
+    /// Get mutable reference to the inner storage client.
+    pub fn inner_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
+}
+
+impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps
+    for SyncWrapper<S>
+{
+    fn begin_auto_commit_batch(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_batch()
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        // Forward to the inner engine, preserving the wrapper's sync-manager
+        // configuration so fulltext/vector index synchronization still runs at
+        // commit time for each batch statement.
+        let inner = self.inner.bind_auto_commit_statement(window)?;
+        Ok(SyncWrapper {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: self.auto_commit_owner,
+        })
+    }
+
+    fn finalize_auto_commit_batch(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_batch(window)
+    }
+}
+
+impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps
+    for SyncWrapper<S>
+{
+    fn begin_auto_commit_group(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_group()
+    }
+
+    fn finalize_auto_commit_group(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_group(window)
+    }
+}
+
+impl<S: StorageClient> SyncWrapper<S> {
+    /// Get the current transaction ID from storage context.
+    fn get_current_txn_id(&self) -> Option<crate::core::types::TransactionId> {
+        self.inner
+            .operation_context()
+            .and_then(|ctx| ctx.transaction_id)
+    }
+    fn commit_transaction_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        self.commit_transaction_fact_with_durability(
+            transaction_id,
+            crate::core::types::DurabilityLevel::Sync,
+        )
+    }
+
+    fn commit_transaction_fact_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        durability: crate::core::types::DurabilityLevel,
+    ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        let intents = match self.sync_manager.as_ref() {
+            Some(manager) => manager
+                .pending_transaction_intents(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to build transaction index intents: {}",
+                        error
+                    ))
+                })?,
+            None => Vec::new(),
+        };
+        let commit_lsn = match self.inner.commit_staged_writes_with_durability(
+            transaction_id,
+            &intents,
+            durability,
+        ) {
+            Ok(commit_lsn) => commit_lsn,
+            Err(error) => {
+                // A failed durability fence must not leave redo or target
+                // intents attached to an auto-commit transaction that the
+                // caller is allowed to retry.
+                let _ = self.inner.abort_staged_writes(transaction_id);
+                if let Some(manager) = self.sync_manager.as_ref() {
+                    let _ = manager.rollback_transaction_sync(transaction_id);
+                }
+                return Err(error);
+            }
+        };
+        Ok(commit_lsn)
+    }
+
+    fn finalize_commit_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        commit_lsn: crate::core::types::CommitLsn,
+    ) -> Result<(), StorageError> {
+        if let Some(manager) = self.sync_manager.as_ref() {
+            let intents = manager
+                .pending_transaction_intents(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to load committed transaction intents: {}",
+                        error
+                    ))
+                })?;
+            if let Err(error) =
+                manager.materialize_committed_transaction(transaction_id, commit_lsn, &intents)
+            {
+                log::error!(
+                    "Committed transaction {} at {} but outbox materialization is pending recovery: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+            if let Err(error) = manager.rollback_transaction_sync(transaction_id) {
+                log::warn!(
+                    "Committed transaction {} at {} but staging cleanup failed: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+            manager.clear_transaction_intents(transaction_id);
+            if let Err(error) = manager.retry_outbox_sync() {
+                log::debug!(
+                    "Committed transaction {} at {}; target delivery will retry: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_auto_transaction(
+        &self,
+    ) -> Result<Option<crate::core::types::CommitLsn>, StorageError> {
+        let Some(context) = self.inner.operation_context() else {
+            return Ok(None);
+        };
+        if (!self.auto_commit_owner && !context.auto_commit) || context.read_only {
+            return Ok(None);
+        }
+        let transaction_id = context.transaction_id.ok_or_else(|| {
+            StorageError::db_error("Auto-commit write has no transaction ID".to_string())
+        })?;
+        let commit_lsn = self.commit_transaction_fact(transaction_id)?;
+        // Mirror the explicit-transaction sink flow: after the WAL durability
+        // fence, materialize the staged intents into the durable outbox and
+        // release them. Skipping this step would pin the outbox frontier at
+        // its pre-commit value forever, which in turn pins the checkpoint
+        // safe-WAL boundary at 0 (WAL never truncated) and leaks the staged
+        // intents in `pending_intents`.
+        self.finalize_commit_fact(transaction_id, commit_lsn)?;
+        Ok(Some(commit_lsn))
+    }
+
+    fn abort_transaction_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<(), StorageError> {
+        self.inner.abort_staged_writes(transaction_id)?;
+        if let Some(manager) = self.sync_manager.as_ref() {
+            manager
+                .rollback_transaction_sync(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to discard transaction index intents: {}",
+                        error
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
+    fn stage_index_create(
+        &self,
+        index: &crate::core::types::Index,
+        index_type: &str,
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        let fields = index
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field.value_type.clone()))
+            .collect::<Vec<_>>();
+        sync_manager
+            .on_index_create(
+                transaction_id,
+                crate::sync::manager::IndexCreateRequest {
+                    space_id: index.space_id,
+                    index_name: index.name.clone(),
+                    schema_name: index.schema_name.clone(),
+                    index_type: index_type.to_string(),
+                    fields,
+                    properties: index.properties.clone(),
+                },
+            )
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage index creation intent: {error}"))
+            })
+    }
+
+    fn validate_schema_sync_context(&self) -> Result<(), StorageError> {
+        if self.enabled && self.get_sync_manager().is_some() && self.get_current_txn_id().is_none()
+        {
+            return Err(StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stage_index_drop(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        schema_name: &str,
+        index_type: &str,
+        fields: &[String],
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        sync_manager
+            .on_index_drop(
+                transaction_id,
+                space_id,
+                index_name,
+                schema_name,
+                index_type,
+                fields,
+            )
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage index drop intent: {error}"))
+            })
+    }
+}
+
+impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
+    crate::transaction::TransactionCommitSink for SyncWrapper<S>
+{
+    fn commit_transaction(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<crate::core::types::CommitLsn, String> {
+        self.commit_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn commit_transaction_with_descriptor(
+        &self,
+        descriptor: &crate::transaction::TransactionCommitDescriptor,
+    ) -> Result<crate::core::types::CommitLsn, String> {
+        self.commit_transaction_fact_with_durability(
+            descriptor.transaction_id,
+            descriptor.durability,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn finalize_commit(
+        &self,
+        descriptor: &crate::transaction::TransactionCommitDescriptor,
+        commit_lsn: crate::core::types::CommitLsn,
+    ) -> Result<(), String> {
+        self.finalize_commit_fact(descriptor.transaction_id, commit_lsn)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<(), String> {
+        self.abort_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction_with_descriptor(
+        &self,
+        descriptor: &crate::transaction::TransactionAbortDescriptor,
+    ) -> Result<(), String> {
+        descriptor
+            .context
+            .execute_undo_logs(&self.inner)
+            .map_err(|error| error.to_string())?;
+        descriptor
+            .context
+            .clear_undo_logs()
+            .map_err(|error| error.to_string())?;
+        self.abort_transaction_fact(descriptor.transaction_id)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests;
+mod write;
+mod write_edge;
+mod write_vertex;
+
+impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::UndoTarget
+    for SyncWrapper<S>
+{
+    fn delete_vertex_type(
+        &self,
+        label: crate::core::types::LabelId,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.delete_vertex_type(label)
+    }
+
+    fn delete_edge_type(
+        &self,
+        edge_key: crate::core::types::EdgeKey,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.delete_edge_type(edge_key)
+    }
+
+    fn delete_vertex(
+        &self,
+        vertex: crate::core::types::VertexIdentifier,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.delete_vertex(vertex, ts)
+    }
+
+    fn delete_edge(
+        &self,
+        edge_ctx: crate::core::types::EdgeDeletionContext,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.delete_edge(edge_ctx)
+    }
+
+    fn restore_edge(
+        &self,
+        edge: crate::core::types::EdgeIdentifier,
+        properties: Vec<(String, crate::core::Value)>,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.restore_edge(edge, properties, ts)
+    }
+
+    fn undo_update_vertex_property(
+        &self,
+        vertex: crate::core::types::VertexIdentifier,
+        col_id: crate::core::types::ColumnId,
+        value: crate::core::Value,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .undo_update_vertex_property(vertex, col_id, value, ts)
+    }
+
+    fn undo_update_edge_property(
+        &self,
+        edge_id: crate::core::types::EdgeIdentifier,
+        col_id: crate::core::types::ColumnId,
+        value: crate::core::Value,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .undo_update_edge_property(edge_id, col_id, value, ts)
+    }
+
+    fn revert_delete_vertex(
+        &self,
+        vertex: crate::core::types::VertexIdentifier,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.revert_delete_vertex(vertex, ts)
+    }
+
+    fn revert_delete_edge(
+        &self,
+        edge_ctx: crate::core::types::EdgeDeletionContext,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.revert_delete_edge(edge_ctx)
+    }
+
+    fn revert_delete_vertex_properties(
+        &self,
+        label_name: &str,
+        prop_names: &[String],
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .revert_delete_vertex_properties(label_name, prop_names)
+    }
+
+    fn revert_delete_edge_properties(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+        prop_names: &[String],
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
+    }
+
+    fn revert_delete_vertex_label(
+        &self,
+        label_name: &str,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.revert_delete_vertex_label(label_name)
+    }
+
+    fn revert_delete_edge_label(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .revert_delete_edge_label(src_label, dst_label, edge_label)
+    }
+
+    fn revert_rename_vertex_properties(
+        &self,
+        label_name: &str,
+        current_names: &[String],
+        original_names: &[String],
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner
+            .revert_rename_vertex_properties(label_name, current_names, original_names)
+    }
+
+    fn revert_rename_edge_properties(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+        current_names: &[String],
+        original_names: &[String],
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.revert_rename_edge_properties(
+            src_label,
+            dst_label,
+            edge_label,
+            current_names,
+            original_names,
+        )
+    }
+}
+
+macro_rules! forward_auto_commit_methods {
+    ($field:ident; $(fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* $(,)?) -> $ret:ty;)+) => {
+        $(
+            fn $name(&mut self, $($arg: $ty),*) -> $ret {
+                let result = self.$field.$name($($arg),*);
+                if result.is_ok() {
+                    self.commit_auto_transaction()?;
+                }
+                result
+            }
+        )+
+    };
+}
+
+impl<S: StorageClient + 'static> crate::stats_reader::ColumnStatsReader
+    for SyncWrapper<S>
+{
+    fn vertex_column_stats(
+        &self,
+        space: &str,
+        tag: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.vertex_column_stats(space, tag, column)
+    }
+
+    fn edge_column_stats(
+        &self,
+        space: &str,
+        edge_type: &str,
+        column: &str,
+    ) -> Option<std::sync::Arc<crate::stats_reader::ColumnStatsSnapshot>> {
+        self.inner.edge_column_stats(space, edge_type, column)
+    }
+
+    fn stats_epoch(&self) -> u64 {
+        self.inner.stats_epoch()
+    }
+}
+
+impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn layout_version(&self) -> u64;
+        fn vertex_id_domain(&self, space: &str) -> Option<std::ops::Range<i64>>;
+        fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
+        fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
+        fn scan_vertices_by_prop(
+            &self,
+            space: &str,
+            tag: &str,
+            prop: &str,
+            value: &Value,
+        ) -> Result<Vec<Vertex>, StorageError>;
+        fn get_edge(
+            &self,
+            space: &str,
+            src: &VertexId,
+            dst: &VertexId,
+            edge_type: &str,
+            rank: i64,
+        ) -> Result<Option<Edge>, StorageError>;
+        fn get_node_edges(
+            &self,
+            space: &str,
+            node_id: &VertexId,
+            direction: crate::core::EdgeDirection,
+        ) -> Result<Vec<Edge>, StorageError>;
+        fn neighbor_dst_ids_batch(
+            &self,
+            space: &str,
+            src_ids: &[VertexId],
+            direction: crate::core::EdgeDirection,
+            edge_types: &[String],
+        ) -> Result<Vec<Vec<VertexId>>, StorageError>;
+        fn out_degree_batch(
+            &self,
+            space: &str,
+            src_ids: &[VertexId],
+            direction: crate::core::EdgeDirection,
+            edge_types: &[String],
+        ) -> Result<Vec<usize>, StorageError>;
+        fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
+        fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
+        fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+        fn lookup_index(
+            &self,
+            space: &str,
+            index: &str,
+            value: &Value,
+        ) -> Result<Vec<Value>, StorageError>;
+        fn get_vertex_with_schema(
+            &self,
+            space: &str,
+            tag: &str,
+            id: &Value,
+        ) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>;
+        fn get_edge_with_schema(
+            &self,
+            space: &str,
+            edge_type: &str,
+            src: &Value,
+            dst: &Value,
+        ) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
+        fn scan_vertices_with_schema(
+            &self,
+            space: &str,
+            tag: &str,
+        ) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>;
+        fn scan_edges_with_schema(
+            &self,
+            space: &str,
+            edge_type: &str,
+        ) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
+        fn get_space(
+            &self,
+            space: &str,
+        ) -> Result<Option<crate::core::types::SpaceInfo>, StorageError>;
+        fn get_space_by_id(
+            &self,
+            space_id: u64,
+        ) -> Result<Option<crate::core::types::SpaceInfo>, StorageError>;
+        fn list_spaces(&self) -> Result<Vec<crate::core::types::SpaceInfo>, StorageError>;
+        fn get_space_id(&self, space: &str) -> Result<u64, StorageError>;
+        fn space_exists(&self, space: &str) -> bool;
+        fn get_tag(
+            &self,
+            space: &str,
+            tag: &str,
+        ) -> Result<Option<crate::core::types::TagInfo>, StorageError>;
+        fn list_tags(&self, space: &str) -> Result<Vec<crate::core::types::TagInfo>, StorageError>;
+        fn get_edge_type(
+            &self,
+            space: &str,
+            edge: &str,
+        ) -> Result<Option<crate::core::types::EdgeTypeInfo>, StorageError>;
+        fn list_edge_types(
+            &self,
+            space: &str,
+        ) -> Result<Vec<crate::core::types::EdgeTypeInfo>, StorageError>;
+        fn get_tag_index(
+            &self,
+            space: &str,
+            index: &str,
+        ) -> Result<Option<crate::core::types::Index>, StorageError>;
+        fn list_tag_indexes(
+            &self,
+            space: &str,
+        ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        fn get_edge_index(
+            &self,
+            space: &str,
+            index: &str,
+        ) -> Result<Option<crate::core::types::Index>, StorageError>;
+        fn list_edge_indexes(
+            &self,
+            space: &str,
+        ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        fn get_vertex_version_history(
+            &self,
+            space: &str,
+            tag: &str,
+        ) -> Result<Option<crate::LabelVersionHistory>, StorageError>;
+        fn get_edge_version_history(
+            &self,
+            space: &str,
+            edge_type: &str,
+        ) -> Result<Option<crate::LabelVersionHistory>, StorageError>;
+        fn get_vertex_schema_changes(
+            &self,
+            space: &str,
+            tag: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::PropertyChange>, StorageError>;
+        fn get_edge_schema_changes(
+            &self,
+            space: &str,
+            edge_type: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::PropertyChange>, StorageError>;
+        fn detect_vertex_breaking_changes(
+            &self,
+            space: &str,
+            tag: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::PropertyChange>, StorageError>;
+        fn detect_edge_breaking_changes(
+            &self,
+            space: &str,
+            edge_type: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::PropertyChange>, StorageError>;
+        fn create_vertex_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn VertexCursor>, StorageError>;
+        fn create_edge_cursor(
+            &self,
+            space: &str,
+            options: &ScanOptions,
+        ) -> Result<Box<dyn EdgeCursor>, StorageError>;
+        fn create_index_cursor(
+            &self,
+            plan: &IndexScanPlan,
+        ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError>;
+    );
+}
+
+impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
+    forward_auto_commit_methods!(inner;
+        fn create_space(&mut self, space: &mut crate::core::types::SpaceInfo) -> Result<bool, StorageError>;
+        fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
+        fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
+        fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
+        fn create_tag(&mut self, space: &str, tag: &crate::core::types::TagInfo) -> Result<u32, StorageError>;
+        fn alter_tag(
+            &mut self,
+            space: &str,
+            tag: &str,
+            additions: Vec<crate::core::types::PropertyDef>,
+            deletions: Vec<String>,
+        ) -> Result<bool, StorageError>;
+        fn rename_vertex_property(
+            &mut self,
+            label: crate::core::types::LabelId,
+            old_name: &str,
+            new_name: &str,
+        ) -> Result<(), StorageError>;
+        fn rename_tag_property(
+            &mut self,
+            space: &str,
+            tag: &str,
+            old_name: &str,
+            new_name: &str,
+        ) -> Result<bool, StorageError>;
+        fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError>;
+        fn create_edge_type(
+            &mut self,
+            space: &str,
+            edge: &crate::core::types::EdgeTypeInfo,
+        ) -> Result<u32, StorageError>;
+        fn alter_edge_type(
+            &mut self,
+            space: &str,
+            edge_type: &str,
+            additions: Vec<crate::core::types::PropertyDef>,
+            deletions: Vec<String>,
+        ) -> Result<bool, StorageError>;
+        fn drop_edge_type(&mut self, space: &str, edge: &str) -> Result<bool, StorageError>;
+        fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+    );
+
+    fn create_tag_index(
+        &mut self,
+        space: &str,
+        info: &crate::core::types::Index,
+    ) -> Result<bool, StorageError> {
+        self.validate_schema_sync_context()?;
+        let result = self.inner.create_tag_index(space, info)?;
+        if result {
+            if let Err(error) = self.stage_index_create(info, "tag") {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
+        let space_id = self.inner.get_space_id(space)?;
+        let (fields, schema_name) = self
+            .inner
+            .get_tag_index(space, index)?
+            .map(|definition| {
+                (
+                    definition
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect(),
+                    definition.schema_name,
+                )
+            })
+            .unwrap_or_else(|| (Vec::new(), index.to_string()));
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_tag_index(space, index)?;
+        if result {
+            if let Err(error) = self.stage_index_drop(space_id, index, &schema_name, "tag", &fields)
+            {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn create_edge_index(
+        &mut self,
+        space: &str,
+        info: &crate::core::types::Index,
+    ) -> Result<bool, StorageError> {
+        self.validate_schema_sync_context()?;
+        let result = self.inner.create_edge_index(space, info)?;
+        if result {
+            if let Err(error) = self.stage_index_create(info, "edge") {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
+        let space_id = self.inner.get_space_id(space)?;
+        let (fields, schema_name) = self
+            .inner
+            .get_edge_index(space, index)?
+            .map(|definition| {
+                (
+                    definition
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect(),
+                    definition.schema_name,
+                )
+            })
+            .unwrap_or_else(|| (Vec::new(), index.to_string()));
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_edge_index(space, index)?;
+        if result {
+            if let Err(error) =
+                self.stage_index_drop(space_id, index, &schema_name, "edge", &fields)
+            {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+}
+
+impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn change_password(&mut self, info: &crate::core::types::PasswordInfo) -> Result<bool, StorageError>;
+        fn create_user(&mut self, info: &crate::core::types::UserInfo) -> Result<bool, StorageError>;
+        fn alter_user(&mut self, info: &crate::core::types::UserAlterInfo) -> Result<bool, StorageError>;
+        fn drop_user(&mut self, username: &str) -> Result<bool, StorageError>;
+        fn grant_role(
+            &mut self,
+            username: &str,
+            space_id: u64,
+            role: crate::core::RoleType,
+        ) -> Result<bool, StorageError>;
+        fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError>;
+    );
+
+    fn user_exists(&self, username: &str) -> bool {
+        self.inner.user_exists(username)
+    }
+
+    fn list_users(&self) -> Vec<String> {
+        self.inner.list_users()
+    }
+}
+
+impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn load_from_disk(&mut self) -> Result<(), StorageError>;
+        fn repair_dangling_edges(&mut self, space: &str) -> Result<usize, StorageError>;
+    );
+
+    forward_methods!(inner;
+        fn save_to_disk(&self) -> Result<(), StorageError>;
+        fn get_storage_stats(&self) -> crate::StorageStats;
+        fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn get_db_path(&self) -> &str;
+    );
+}
+
+impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn flush(&self) -> Result<(), StorageError>;
+        fn save_data(&self) -> crate::core::StorageResult<()>;
+        fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
+        fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool>;
+        fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize>;
+        fn snapshot_stats(&self) -> crate::SnapshotStats;
+        fn persistence_diagnostics(&self) -> Option<crate::PersistenceDiagnostics>;
+        fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()>;
+        fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool>;
+        fn should_flush(&self) -> bool;
+        fn should_checkpoint(&self) -> bool;
+    );
+
+    fn create_checkpoint(
+        &self,
+    ) -> crate::core::StorageResult<Option<crate::CheckpointStats>> {
+        if self.enabled {
+            let manager = self.sync_manager.as_ref().ok_or_else(|| {
+                StorageError::invalid_operation(
+                    "Synchronization is enabled without an outbox manager",
+                )
+            })?;
+            manager
+                .create_checkpoint_outbox_snapshot()
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to create checkpoint outbox snapshot: {error}"
+                    ))
+                })?;
+        }
+        self.inner.create_checkpoint()
+    }
+
+    fn auto_checkpoint_if_needed(
+        &self,
+    ) -> crate::core::StorageResult<Option<crate::CheckpointStats>> {
+        if !self.should_checkpoint() {
+            return Ok(None);
+        }
+        self.create_checkpoint()
+    }
+}
+
+impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextOps
+    for SyncWrapper<S>
+{
+    forward_methods!(inner;
+        fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
+        fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>>;
+    );
+}
+
+impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        let inner = self.inner.bind_auto_commit_context()?;
+        let inner = match inner.operation_context() {
+            Some(context) => inner.bind_operation_context((*context).clone()),
+            None => inner,
+        };
+        Ok(Self {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: true,
+        })
+    }
+
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        Self {
+            inner: self.inner.bind_operation_context(context),
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: false,
+        }
+    }
+
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        let inner = self.inner.bind_read_operation_context()?;
+        let inner = match inner.operation_context() {
+            Some(context) => inner.bind_operation_context((*context).clone()),
+            None => inner,
+        };
+        Ok(Self {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: true,
+        })
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.inner.operation_context()
+    }
+
+    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+        self.inner.finalize_operation(committed)
+    }
+}
+
+impl<S: StorageClient + 'static> StorageCommitOps for SyncWrapper<S> {
+    fn commit_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.inner.commit_staged_writes(transaction_id, intents)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> crate::core::StorageResult<()> {
+        self.inner.abort_staged_writes(transaction_id)
+    }
+
+    fn commit_staged_writes_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+        durability: crate::core::types::DurabilityLevel,
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.inner
+            .commit_staged_writes_with_durability(transaction_id, intents, durability)
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        sync_manager: &crate::sync::SyncManager,
+    ) -> crate::core::StorageResult<usize> {
+        self.inner.recover_outbox_projection(sync_manager)
+    }
+}
+
+impl<S: StorageClient + 'static> StorageSyncContextOps for SyncWrapper<S> {
+    fn get_sync_manager(&self) -> Option<Arc<crate::sync::SyncManager>> {
+        self.sync_manager.clone()
+    }
+}
+
+impl<S: StorageClient + 'static> StorageRecoveryOps for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn needs_recovery(&self) -> bool;
+        fn recover_from_wal(&self) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
+        fn recover_from_wal_with_config(
+            &self,
+            config: crate::transaction::wal::recovery::RecoveryConfig,
+        ) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
+        fn init_with_recovery(&self) -> crate::core::StorageResult<Option<crate::transaction::wal::recovery::RecoveryStats>>;
+    );
+}
+
+impl<S: StorageClient + 'static> StorageGcOps for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn is_index_gc_running(&self) -> bool;
+        fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
+    );
+
+    forward_methods!(inner;
+        fn stop_index_gc(&self);
+    );
+}
+
+impl<S: crate::client::StorageClient + StorageSnapshotOps + 'static>
+    crate::client::StorageSnapshotOps for SyncWrapper<S>
+{
+    forward_methods!(inner;
+        fn export_snapshot(&self, ts: crate::core::types::Timestamp) -> crate::core::StorageResult<Vec<crate::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
+        fn get_freeze_stats(&self) -> Option<crate::engine::background_freeze::FreezeStats>;
+    );
+
+    forward_methods!(inner;
+        fn trigger_background_freeze(&self) -> crate::core::StorageResult<()>;
+    );
+
+    forward_methods!(inner;
+        fn list_cold_snapshots(&self) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
+        fn load_cold_snapshot(&self, path: &std::path::Path) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo>;
+        fn remove_cold_snapshot(&self, label: crate::core::types::LabelId) -> crate::core::StorageResult<()>;
+        fn export_cold_snapshot(&self, label: crate::core::types::LabelId, path: &std::path::Path) -> crate::core::StorageResult<crate::client::ColdSnapshotInfo>;
+        fn merge_cold_snapshots(&self, labels: &[crate::core::types::LabelId]) -> crate::core::StorageResult<Vec<crate::client::ColdSnapshotInfo>>;
+        fn cold_snapshot_dir(&self) -> Option<std::path::PathBuf>;
+    );
+}

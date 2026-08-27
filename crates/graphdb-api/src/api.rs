@@ -22,7 +22,7 @@ pub use core::{VectorApi, VectorSearchResult};
 /// types; keeps the two crates decoupled from each other.
 #[cfg(feature = "vector")]
 pub mod vector_config {
-    use graphdb_config::config::LocalVectorConfig;
+    use graphdb_config::LocalVectorConfig;
 
     /// Map raw TOML IVF settings to the local engine's IVF configuration.
     pub fn local_ivf_config(local: &LocalVectorConfig) -> Option<vector_search::IvfConfig> {
@@ -131,7 +131,7 @@ pub mod vector_config {
 #[cfg(all(test, feature = "vector"))]
 mod vector_config_tests {
     use super::vector_config::{local_hnsw_config, local_ivf_config, local_quantization_config};
-    use graphdb_config::config::{HnswSettings, IvfSettings, LocalVectorConfig};
+    use graphdb_config::{HnswSettings, IvfSettings, LocalVectorConfig};
 
     #[test]
     fn zero_toml_fields_map_to_engine_defaults() {
@@ -182,7 +182,7 @@ mod vector_config_tests {
     #[test]
     fn quantization_toml_maps_to_engine_config() {
         let local = LocalVectorConfig {
-            quantization: Some(graphdb_config::config::QuantizationSettings {
+            quantization: Some(graphdb_config::QuantizationSettings {
                 enabled: true,
                 quantization_type: Some("scalar".to_string()),
                 quantile: Some(0.95),
@@ -197,7 +197,7 @@ mod vector_config_tests {
         assert!(!qc.always_ram());
 
         let local = LocalVectorConfig {
-            quantization: Some(graphdb_config::config::QuantizationSettings {
+            quantization: Some(graphdb_config::QuantizationSettings {
                 enabled: true,
                 quantization_type: Some("product".to_string()),
                 quantile: None,
@@ -212,7 +212,7 @@ mod vector_config_tests {
         assert!(qc.validate(128).is_ok());
 
         let disabled = LocalVectorConfig {
-            quantization: Some(graphdb_config::config::QuantizationSettings {
+            quantization: Some(graphdb_config::QuantizationSettings {
                 enabled: false,
                 quantization_type: Some("scalar".to_string()),
                 ..Default::default()

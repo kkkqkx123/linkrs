@@ -5,17 +5,17 @@
 //! (Decimal128, Date, DateTime, List, Map, Vector, ...) through postcard
 //! serialization and rollback, restoring the original value instead of Null.
 
-use graphdb_core::core::types::storage_ids::{EdgeIdentifier, VertexIdentifier};
-use graphdb_core::core::value::date_time::{DateTimeValue, DateValue};
-use graphdb_core::core::value::decimal128::Decimal128Value;
-use graphdb_core::core::value::null::NullType;
-use graphdb_core::core::value::uuid::UuidValue;
-use graphdb_core::core::value::List;
-use graphdb_core::core::Value;
-use graphdb_transaction::transaction::undo_log::{
+use graphdb_core::types::storage_ids::{EdgeIdentifier, VertexIdentifier};
+use graphdb_core::value::date_time::{DateTimeValue, DateValue};
+use graphdb_core::value::decimal128::Decimal128Value;
+use graphdb_core::value::null::NullType;
+use graphdb_core::value::uuid::UuidValue;
+use graphdb_core::value::List;
+use graphdb_core::Value;
+use graphdb_transaction::undo_log::{
     UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
-use graphdb_transaction::transaction::wal::{ColumnId, LabelId, Timestamp, VertexId};
+use graphdb_transaction::wal::{ColumnId, LabelId, Timestamp, VertexId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -40,7 +40,7 @@ impl UndoTarget for RecordingUndoTarget {
         Ok(())
     }
 
-    fn delete_edge_type(&self, _edge_key: graphdb_core::core::types::EdgeKey) -> UndoLogResult<()> {
+    fn delete_edge_type(&self, _edge_key: graphdb_core::types::EdgeKey) -> UndoLogResult<()> {
         Ok(())
     }
 
@@ -50,7 +50,7 @@ impl UndoTarget for RecordingUndoTarget {
 
     fn delete_edge(
         &self,
-        _edge_ctx: graphdb_core::core::types::EdgeDeletionContext,
+        _edge_ctx: graphdb_core::types::EdgeDeletionContext,
     ) -> UndoLogResult<()> {
         Ok(())
     }
@@ -83,7 +83,7 @@ impl UndoTarget for RecordingUndoTarget {
 
     fn revert_delete_edge(
         &self,
-        _edge_ctx: graphdb_core::core::types::EdgeDeletionContext,
+        _edge_ctx: graphdb_core::types::EdgeDeletionContext,
     ) -> UndoLogResult<()> {
         Ok(())
     }
@@ -287,7 +287,7 @@ fn failing_undo_returns_error() {
         }
         fn delete_edge_type(
             &self,
-            _edge_key: graphdb_core::core::types::EdgeKey,
+            _edge_key: graphdb_core::types::EdgeKey,
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -296,7 +296,7 @@ fn failing_undo_returns_error() {
         }
         fn delete_edge(
             &self,
-            _edge_ctx: graphdb_core::core::types::EdgeDeletionContext,
+            _edge_ctx: graphdb_core::types::EdgeDeletionContext,
         ) -> UndoLogResult<()> {
             Ok(())
         }
@@ -309,7 +309,7 @@ fn failing_undo_returns_error() {
         }
         fn revert_delete_edge(
             &self,
-            _edge_ctx: graphdb_core::core::types::EdgeDeletionContext,
+            _edge_ctx: graphdb_core::types::EdgeDeletionContext,
         ) -> UndoLogResult<()> {
             Ok(())
         }

@@ -10,7 +10,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
-use graphdb_query::query::parser::Parser;
+use graphdb_query::parser::Parser;
 
 // ==================== DELETE VERTEX Parser Tests ====================
 

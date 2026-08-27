@@ -5,8 +5,8 @@
 use super::TestResult;
 use graphdb_query::core::error::DBError;
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::base::ExecutionResult;
-use graphdb_query::query::pipeline::QueryPipelineManager;
+use graphdb_query::executor::base::ExecutionResult;
+use graphdb_query::pipeline::QueryPipelineManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ impl<S: graphdb_query::storage::StorageClient + 'static> QueryHelper<S> {
     /// Create a new query helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
         use graphdb_query::core::stats::StatsManager;
-        use graphdb_query::query::optimizer::OptimizerEngine;
+        use graphdb_query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

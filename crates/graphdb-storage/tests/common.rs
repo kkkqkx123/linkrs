@@ -7,7 +7,7 @@ use graphdb_storage::core::types::{
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::DataType;
 use graphdb_storage::core::{Edge, Value, Vertex};
-use graphdb_storage::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
 /// Create a new in-memory storage for integration testing.
 #[allow(dead_code)]

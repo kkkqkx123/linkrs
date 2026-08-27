@@ -14,10 +14,10 @@ use graphdb_query::core::types::DataType;
 use graphdb_query::core::value::{
     DateTimeValue, DateValue, GeographyValue, List, NullType, TimeValue, Value,
 };
-use graphdb_query::query::executor::expression::evaluation_context::DefaultExpressionContext;
-use graphdb_query::query::executor::expression::functions::FunctionRegistry;
-use graphdb_query::query::executor::expression::{ExpressionContext, ExpressionEvaluator};
-use graphdb_query::query::DataSet;
+use graphdb_query::executor::expression::evaluation_context::DefaultExpressionContext;
+use graphdb_query::executor::expression::functions::FunctionRegistry;
+use graphdb_query::executor::expression::{ExpressionContext, ExpressionEvaluator};
+use graphdb_query::DataSet;
 
 // ==================== Value 类型测试 ====================
 

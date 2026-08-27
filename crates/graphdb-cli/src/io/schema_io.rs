@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::session::manager::SessionManager;
-use graphdb_core::core::types::import_export::SchemaImportResult;
+use graphdb_core::types::import_export::SchemaImportResult;
 
 #[derive(Debug, Clone)]
 pub struct SchemaIoConfig {

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use graphdb_core::core::vector::{Payload, PayloadSchemaType, PayloadSelector, VectorFilter};
+pub use graphdb_core::vector::{Payload, PayloadSchemaType, PayloadSelector, VectorFilter};
 
 /// Vector search request.
 #[derive(Debug, Clone, Serialize, Deserialize)]

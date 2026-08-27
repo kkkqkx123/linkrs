@@ -2,7 +2,7 @@ use super::common::{
     assert_results_sorted_by_score, assert_search_result_contains, assert_search_result_count,
     assert_search_result_not_contains, generate_test_docs, FulltextTestContext,
 };
-use graphdb_search::search::EngineType;
+use graphdb_search::EngineType;
 
 /// TC-FT-001: Create Fulltext Index with BM25
 #[tokio::test]
@@ -54,7 +54,7 @@ async fn test_create_duplicate_index() {
     assert!(
         matches!(
             result2.unwrap_err(),
-            graphdb_search::search::SearchError::IndexAlreadyExists(_)
+            graphdb_search::SearchError::IndexAlreadyExists(_)
         ),
         "Should return IndexAlreadyExists error"
     );
@@ -98,7 +98,7 @@ async fn test_get_index_metadata() {
     assert_eq!(metadata.space_id, 1);
     assert_eq!(metadata.tag_name, "Article");
     assert_eq!(metadata.field_name, "content");
-    assert!(metadata.status == graphdb_search::search::IndexStatus::Active);
+    assert!(metadata.status == graphdb_search::IndexStatus::Active);
     assert_eq!(metadata.doc_count, 0);
 }
 

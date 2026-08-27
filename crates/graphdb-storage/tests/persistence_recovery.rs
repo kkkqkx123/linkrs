@@ -15,7 +15,7 @@ use graphdb_storage::core::types::{Index, IndexConfig, IndexField, IndexType, Ve
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::Value;
 use graphdb_storage::core::Vertex;
-use graphdb_storage::storage::{
+use graphdb_storage::{
     StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 

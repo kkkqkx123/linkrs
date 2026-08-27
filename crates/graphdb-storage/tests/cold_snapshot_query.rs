@@ -9,7 +9,7 @@ mod common;
 
 use graphdb_storage::core::types::VertexId;
 use graphdb_storage::core::EdgeDirection;
-use graphdb_storage::storage::{GraphStorage, StorageReader, StorageWriter};
+use graphdb_storage::{GraphStorage, StorageReader, StorageWriter};
 
 fn setup_snapshot_pair() -> (tempfile::TempDir, GraphStorage, u64) {
     let dir = common::create_test_workdir();

@@ -11,10 +11,10 @@
 
 use super::common::FulltextTestContext;
 use graphdb_search::core::types::TransactionId;
-use graphdb_search::search::EngineType;
-use graphdb_sync::sync::batch::BatchConfig;
-use graphdb_sync::sync::coordinator::{ChangeContext, ChangeType, SyncCoordinator};
-use graphdb_sync::sync::manager::SyncManager;
+use graphdb_search::EngineType;
+use graphdb_sync::batch::BatchConfig;
+use graphdb_sync::coordinator::{ChangeContext, ChangeType, SyncCoordinator};
+use graphdb_sync::manager::SyncManager;
 use std::sync::Arc;
 
 #[allow(dead_code)]

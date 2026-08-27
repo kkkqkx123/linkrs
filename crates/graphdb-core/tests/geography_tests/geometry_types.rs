@@ -14,7 +14,7 @@ use super::common::{
     assert_distance_within, create_test_linestring, create_test_multilinestring,
     create_test_multipoint, create_test_multipolygon, create_test_point, create_test_polygon,
 };
-use graphdb_core::core::value::geography::{Geography, GeographyValue};
+use graphdb_core::value::geography::{Geography, GeographyValue};
 
 // ==================== Point Operations Tests ====================
 

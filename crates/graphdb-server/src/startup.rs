@@ -17,7 +17,7 @@ use vector_client::VectorManager;
 use crate::config::Config;
 use crate::core::error::DBResult;
 use crate::core::types::set_bcrypt_cost;
-use crate::server::{GraphService, HttpServer};
+use crate::{GraphService, HttpServer};
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
     StorageCommitOps, SyncWrapper,
@@ -90,7 +90,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         Option<Arc<vector_search::LocalVectorEngine>>,
     ) = if config.is_vector_enabled() {
         match config.vector_config().engine {
-            graphdb_config::config::VectorEngineKind::Local => {
+            graphdb_config::VectorEngineKind::Local => {
                 let data_dir = config.vector_data_dir();
                 match vector_search::LocalVectorEngine::open(&data_dir) {
                     Ok(engine) => {
@@ -125,7 +125,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 }
             }
             #[cfg(feature = "vector-qdrant")]
-            graphdb_config::config::VectorEngineKind::Qdrant => {
+            graphdb_config::VectorEngineKind::Qdrant => {
                 match VectorManager::new(config.vector_config().qdrant.clone()).await {
                     Ok(vm) => {
                         info!("VectorManager initialized");
@@ -141,7 +141,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 }
             }
             #[cfg(not(feature = "vector-qdrant"))]
-            graphdb_config::config::VectorEngineKind::Qdrant => {
+            graphdb_config::VectorEngineKind::Qdrant => {
                 warn!("Qdrant engine requested but the `vector-qdrant` feature is not enabled. Vector search will be disabled.");
                 (None, None)
             }
@@ -488,7 +488,7 @@ pub async fn execute_query(query_str: &str) -> DBResult<()> {
         Err(e) => {
             error!("Failed to create session: {}", e);
             return Err(crate::core::error::DBError::from(
-                crate::server::session::SessionError::manager_error(format!(
+                crate::session::SessionError::manager_error(format!(
                     "Failed to create session: {}",
                     e
                 )),

@@ -13,7 +13,7 @@ use graphdb_storage::core::types::{PropertyDef, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::DataType;
 use graphdb_storage::core::{Edge, EdgeDirection, Value, Vertex};
-use graphdb_storage::storage::{
+use graphdb_storage::{
     StorageAdmin, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 

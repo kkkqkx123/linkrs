@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use graphdb_sync::sync::vector_sync::SearchOptions;
-use graphdb_sync::sync::{
+use graphdb_sync::vector_sync::SearchOptions;
+use graphdb_sync::{
     VectorBackend, VectorChangeContext, VectorChangeType, VectorPointData, VectorSyncCoordinator,
 };
 
@@ -60,7 +60,7 @@ async fn test_local_index_create_and_search() {
     assert!(coordinator.index_exists(1, "user", "embedding"));
     assert_eq!(
         coordinator.engine_state(),
-        graphdb_sync::sync::VectorEngineState::Active
+        graphdb_sync::VectorEngineState::Active
     );
 
     // Duplicate index creation is tolerated (config conflict check passes).

@@ -1,4 +1,4 @@
-use graphdb_config::config::Config;
+use graphdb_config::Config;
 use std::env;
 use std::fs;
 use tempfile::TempDir;

@@ -6,7 +6,7 @@
 mod common;
 
 use graphdb_storage::core::Value;
-use graphdb_storage::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{StorageReader, StorageSchemaOps, StorageWriter};
 
 /// Verify that a single rebuild cycle preserves indexed data and the
 /// rebuilt index returns correct results for both old and new data.

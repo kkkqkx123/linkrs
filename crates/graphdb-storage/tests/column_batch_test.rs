@@ -7,7 +7,7 @@ use std::sync::Arc;
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, StorageError, Value, Vertex};
-use graphdb_storage::storage::{
+use graphdb_storage::{
     open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate, StorageSchemaOps,
     StorageWriter, VertexColumnBatch,
 };
@@ -230,11 +230,11 @@ fn column_batch_typed_columns_are_scalar() {
     assert_eq!(batch.columns.len(), 2);
     assert!(matches!(
         batch.columns[0].values,
-        graphdb_storage::storage::ColumnValues::I64 { .. }
+        graphdb_storage::ColumnValues::I64 { .. }
     ));
     assert!(matches!(
         batch.columns[1].values,
-        graphdb_storage::storage::ColumnValues::I64 { .. }
+        graphdb_storage::ColumnValues::I64 { .. }
     ));
     let _ = batch;
 }

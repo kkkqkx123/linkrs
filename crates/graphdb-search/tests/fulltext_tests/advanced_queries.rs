@@ -10,7 +10,7 @@
 //! Test cases: TC-FT-ADV-001 ~ TC-FT-ADV-010
 
 use super::common::{assert_search_result_contains, FulltextTestContext};
-use graphdb_search::search::EngineType;
+use graphdb_search::EngineType;
 
 /// TC-FT-ADV-001: Boolean OR Query (Default Behavior)
 #[tokio::test]
@@ -76,13 +76,13 @@ async fn test_multi_term_search_scoring() {
 
     let doc_4_score = results
         .iter()
-        .find(|r| r.doc_id == graphdb_core::core::Value::string("doc_4"))
+        .find(|r| r.doc_id == graphdb_core::Value::string("doc_4"))
         .map(|r| r.score)
         .unwrap_or(0.0);
 
     let doc_2_score = results
         .iter()
-        .find(|r| r.doc_id == graphdb_core::core::Value::string("doc_2"))
+        .find(|r| r.doc_id == graphdb_core::Value::string("doc_2"))
         .map(|r| r.score)
         .unwrap_or(0.0);
 

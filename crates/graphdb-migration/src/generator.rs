@@ -1,5 +1,5 @@
-use graphdb_core::core::{StorageError, StorageResult};
-use graphdb_storage::storage::{ChangeDetails, PropertyChange, StorageReader};
+use graphdb_core::{StorageError, StorageResult};
+use graphdb_storage::{ChangeDetails, PropertyChange, StorageReader};
 
 use crate::converter::ConversionError;
 use crate::plan::{MigrationPlan, MigrationStep, MigrationTarget, SafetyLevel, VersionRange};

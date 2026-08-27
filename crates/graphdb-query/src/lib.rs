@@ -1,4 +1,39 @@
-pub mod query;
+// Query module for the graph database
+//
+// This module provides the complete query processing pipeline including:
+// - Parsing query strings into AST
+// - Planning and optimizing execution plans
+// - Executing queries against the storage engine
+// - Managing query contexts and validation
+
+// Sub-modules
+pub mod binder;
+pub mod cache;
+pub mod context;
+pub mod query_core;
+pub mod data_set;
+pub mod executor;
+pub mod metadata;
+pub mod optimizer;
+pub mod parser;
+pub mod pipeline;
+pub mod planning;
+pub mod query_manager;
+
+// Re-export DataSet for convenience
+pub use data_set::DataSet;
+// Re-export error types from core module
+pub use crate::core::{DBResult, QueryError};
+// Re-export execution result from executor module
+pub use executor::base::ExecutionResult;
+// Re-export QueryPipelineManager
+pub use pipeline::QueryPipelineManager;
+// Re-export context types from context module
+pub use context::{QueryContext, QueryContextBuilder, QueryRequestContext};
+// Re-export QueryManager
+pub use query_manager::{QueryInfo, QueryManager, QueryStats, QueryStatus};
+// Re-export OptimizerEngine
+pub use optimizer::OptimizerEngine;
 
 pub use graphdb_core::core;
 pub use graphdb_core::utils;
@@ -6,8 +41,8 @@ pub use graphdb_search::search;
 pub use graphdb_sync::sync;
 
 pub mod storage {
-    pub use graphdb_storage::storage::*;
+    pub use graphdb_storage::*;
 
     #[cfg(test)]
-    pub use graphdb_storage::storage::MockStorage;
+    pub use graphdb_storage::MockStorage;
 }

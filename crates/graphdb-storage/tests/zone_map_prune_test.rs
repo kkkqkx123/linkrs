@@ -12,7 +12,7 @@ use std::sync::Arc;
 use graphdb_storage::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, Value, Vertex};
-use graphdb_storage::storage::{
+use graphdb_storage::{
     open_vertex_scan, GraphStorage, ScanOptions, ScanPredicate, StorageSchemaOps, StorageWriter,
 };
 use parking_lot::RwLock;

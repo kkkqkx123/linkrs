@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, Edge, Value, Vertex};
-use graphdb_storage::storage::{
+use graphdb_storage::{
     GraphStorage, ScanOptions, StoragePersistenceOps, StorageReader, StorageSchemaOps,
     StorageWriter,
 };

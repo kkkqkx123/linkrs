@@ -14,7 +14,7 @@ use super::common::{
     create_test_multipoint, create_test_multipolygon, create_test_point, create_test_polygon,
     get_edge_case_geometries, get_standard_test_geometries,
 };
-use graphdb_core::core::value::geography::Geography;
+use graphdb_core::value::geography::Geography;
 
 // ==================== Geometry Creation Tests ====================
 

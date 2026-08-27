@@ -6,7 +6,7 @@ use log::info;
 
 use crate::config::Config;
 use crate::core::error::DBResult;
-use crate::server::HttpServer;
+use crate::HttpServer;
 use crate::storage::UndoTarget;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
@@ -36,12 +36,12 @@ pub async fn start_http_server<
     use axum::serve;
     use tokio::net::TcpListener;
 
-    let state = crate::server::http::AppState::new(server.clone());
+    let state = crate::http::AppState::new(server.clone());
 
     // Create WebState for web management APIs
     let storage_path = format!("{}/metadata.db", config.storage_path());
-    let web_router = match crate::server::web::WebState::new(&storage_path, state.clone()).await {
-        Ok(web_state) => Some(crate::server::web::create_router(web_state)),
+    let web_router = match crate::web::WebState::new(&storage_path, state.clone()).await {
+        Ok(web_state) => Some(crate::web::create_router(web_state)),
         Err(e) => {
             log::warn!(
                 "Failed to initialize web management: {}, continuing without it",
@@ -51,7 +51,7 @@ pub async fn start_http_server<
         }
     };
 
-    let app = crate::server::http::router::create_router(state, web_router);
+    let app = crate::http::router::create_router(state, web_router);
 
     let addr = format!("{}:{}", config.host(), config.port());
     let listener = TcpListener::bind(&addr).await?;
@@ -86,13 +86,13 @@ pub async fn start_http_and_grpc_servers<
     use axum::serve;
     use tokio::net::TcpListener;
 
-    let http_state = crate::server::http::AppState::new(http_server.clone());
+    let http_state = crate::http::AppState::new(http_server.clone());
 
     // Create WebState for web management APIs
     let storage_path = format!("{}/metadata.db", config.storage_path());
     let web_router =
-        match crate::server::web::WebState::new(&storage_path, http_state.clone()).await {
-            Ok(web_state) => Some(crate::server::web::create_router(web_state)),
+        match crate::web::WebState::new(&storage_path, http_state.clone()).await {
+            Ok(web_state) => Some(crate::web::create_router(web_state)),
             Err(e) => {
                 log::warn!(
                     "Failed to initialize web management: {}, continuing without it",
@@ -102,7 +102,7 @@ pub async fn start_http_and_grpc_servers<
             }
         };
 
-    let http_app = crate::server::http::router::create_router(http_state.clone(), web_router);
+    let http_app = crate::http::router::create_router(http_state.clone(), web_router);
 
     // Setup gRPC address
     let grpc_addr = format!("{}:{}", config.host(), config.grpc_port())
@@ -130,7 +130,7 @@ pub async fn start_http_and_grpc_servers<
 
     // Start gRPC server
     let grpc_future = async move {
-        crate::server::grpc::run_server(grpc_state, grpc_config, grpc_addr)
+        crate::grpc::run_server(grpc_state, grpc_config, grpc_addr)
             .await
             .map_err(|e| crate::core::error::DBError::internal(e.to_string()))?;
         Ok::<(), crate::core::error::DBError>(())

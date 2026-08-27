@@ -4,7 +4,7 @@ mod common;
 
 use graphdb_storage::core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
 use graphdb_storage::core::Value;
-use graphdb_storage::storage::{
+use graphdb_storage::{
     GenerationBuildState, GenerationState, StoragePersistenceOps, StorageReader, StorageSchemaOps,
     StorageWriter,
 };
@@ -46,7 +46,7 @@ fn split_uses_persisted_manifest_and_survives_restart() {
 
     println!("split test work directory: {}", work_dir.display());
     std::mem::forget(directory);
-    let storage = graphdb_storage::storage::GraphStorage::open_with_persistence(
+    let storage = graphdb_storage::GraphStorage::open_with_persistence(
         work_dir.clone(),
         false,
         None,
@@ -152,7 +152,7 @@ fn split_startup_reconciles_publishing_state() {
             .expect("build state should be durable");
     }
 
-    let storage = graphdb_storage::storage::GraphStorage::open(work_dir.clone())
+    let storage = graphdb_storage::GraphStorage::open(work_dir.clone())
         .expect("storage should recover split state");
     assert!(
         !work_dir

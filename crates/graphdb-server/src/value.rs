@@ -6,7 +6,7 @@
 //! already emitted (complete variant coverage; `Vertex`/`Edge`/`Path` are
 //! serialized through their own `Serialize` impls).
 
-use graphdb_core::core::{List, Value};
+use graphdb_core::{List, Value};
 
 /// Encode a core [`Value`] into its JSON wire representation.
 pub fn to_json(value: Value) -> serde_json::Value {
@@ -99,7 +99,7 @@ pub fn from_json(value: &serde_json::Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphdb_core::core::types::DataType;
+    use graphdb_core::types::DataType;
 
     #[test]
     fn scalars_encode() {

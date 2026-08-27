@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
-use graphdb_core::core::types::VertexId;
-use graphdb_core::core::value::Value;
-use graphdb_core::core::vertex_edge_path::{Edge, Tag, Vertex};
+use graphdb_core::types::VertexId;
+use graphdb_core::value::Value;
+use graphdb_core::vertex_edge_path::{Edge, Tag, Vertex};
 use std::collections::HashMap;
 
 pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> Vertex {

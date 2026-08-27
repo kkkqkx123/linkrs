@@ -5,8 +5,8 @@
 use super::TestResult;
 use graphdb_query::core::types::VertexId;
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::base::ExecutionResult;
-use graphdb_query::query::pipeline::QueryPipelineManager;
+use graphdb_query::executor::base::ExecutionResult;
+use graphdb_query::pipeline::QueryPipelineManager;
 use graphdb_query::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl TestScenario {
         let storage = test_storage.storage();
 
         use graphdb_query::core::stats::StatsManager;
-        use graphdb_query::query::optimizer::OptimizerEngine;
+        use graphdb_query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());
@@ -119,7 +119,7 @@ impl TestScenario {
     // ==================== Setup Methods ====================
 
     /// Access the optimizer statistics manager.
-    pub fn stats_manager(&self) -> &graphdb_query::query::optimizer::stats::StatisticsManager {
+    pub fn stats_manager(&self) -> &graphdb_query::optimizer::stats::StatisticsManager {
         self.pipeline.optimizer_engine().stats_manager()
     }
 

@@ -5,7 +5,7 @@
 mod common;
 
 use graphdb_storage::core::types::VertexId;
-use graphdb_storage::storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
+use graphdb_storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
 
 /// Test: Recovery after partial write during vertex insertion
 #[test]

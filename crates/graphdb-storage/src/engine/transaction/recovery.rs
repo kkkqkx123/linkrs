@@ -1,0 +1,1313 @@
+use crate::core::error::storage::StorageErrorKind;
+use crate::core::types::{
+    DataType, EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
+};
+use crate::core::wal::traits::RecoveryApplier;
+use crate::core::{StorageError, StorageResult, Value};
+use crate::edge::EdgeStrategy;
+use crate::engine::graph_storage::GraphStorageContext;
+use crate::engine::params::{CreateEdgeTypeParams, EdgeOperationParams};
+use crate::engine::transaction::{AddEdgeParams, TransactionOps};
+use crate::index::{EdgeIndexOps, VertexIndexOps};
+use crate::types::StoragePropertyDef;
+use crate::transaction::wal::{
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+};
+use graphdb_core::metadata::IndexMetadataManager;
+
+impl RecoveryApplier for GraphStorageContext {
+    // ========================================================================
+    // Data Operations
+    // ========================================================================
+
+    fn replay_insert_vertex(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        properties: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.data_store().with_vertex_tables_mut(|vertex_tables| {
+            if let Err(e) = TransactionOps::add_vertex(vertex_tables, label, vid, properties, ts) {
+                if e.to_string().contains("already exists") {
+                    // Vertex already exists — idempotent replay, skip.
+                    return Ok(());
+                }
+                // For other errors (e.g. schema issues), propagate them.
+                return Err(StorageError::db_error(format!(
+                    "Failed to replay insert vertex: {}",
+                    e
+                )));
+            }
+            Ok(())
+        })?;
+        self.mark_vertex_modified(label);
+
+        // Replay vertex index updates so indexes stay consistent after crash recovery.
+        // Without this, a crash between vertex-write and index-update in the normal
+        // write path would leave indexes permanently stale.
+        self.replay_vertex_index_update(label, vid, properties, ts)?;
+
+        Ok(())
+    }
+
+    fn replay_insert_edge(&self, redo: &InsertEdgeRedo, ts: Timestamp) -> StorageResult<()> {
+        // Check if endpoints exist
+        let endpoints_exist = self.data_store().with_vertex_tables(|vertex_tables| {
+            let src_exists = vertex_tables
+                .get(&redo.src_label)
+                .map(|t| t.as_ref())
+                .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.src_vid, ts))
+                .is_some();
+
+            let dst_exists = vertex_tables
+                .get(&redo.dst_label)
+                .map(|t| t.as_ref())
+                .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.dst_vid, ts))
+                .is_some();
+            src_exists && dst_exists
+        });
+
+        // If endpoints don't exist, defer this edge to phase 2
+        if !endpoints_exist {
+            self.defer_edge_insert(redo.clone(), ts);
+            return Ok(());
+        }
+
+        // Endpoints exist, proceed with insertion
+        self.do_replay_insert_edge(redo, ts)
+    }
+
+    fn replay_delete_edge(&self, redo: &DeleteEdgeRedo, ts: Timestamp) -> StorageResult<()> {
+        // Check if endpoints exist
+        let endpoints_exist = self.data_store().with_vertex_tables(|vertex_tables| {
+            let src_exists = vertex_tables.contains_key(&redo.src_label)
+                && resolve_external_vid(vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
+
+            let dst_exists = vertex_tables.contains_key(&redo.dst_label)
+                && resolve_external_vid(vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some();
+            src_exists && dst_exists
+        });
+
+        // If endpoints don't exist, defer this deletion to phase 2
+        if !endpoints_exist {
+            self.defer_edge_delete(redo.clone(), ts);
+            return Ok(());
+        }
+
+        // Endpoints exist, proceed with deletion
+        self.do_replay_delete_edge(redo, ts)
+    }
+
+    fn replay_update_vertex_prop(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        prop_name: &str,
+        value: &Value,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.data_store().with_vertex_tables_mut(|vertex_tables| {
+            Ok(TransactionOps::update_vertex_property_by_vid(
+                vertex_tables,
+                label,
+                vid,
+                prop_name,
+                value,
+                ts,
+            )?)
+        })?;
+
+        self.mark_vertex_modified(label);
+        Ok(())
+    }
+
+    fn replay_update_edge_prop(
+        &self,
+        redo: &UpdateEdgePropRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let params = EdgeOperationParams {
+            src_label: redo.src_label,
+            src_id: redo.src_vid,
+            dst_label: redo.dst_label,
+            dst_id: redo.dst_vid,
+            edge_label: redo.edge_label,
+            rank: redo.rank,
+        };
+
+        {
+            let mut catalog = self.data_store().catalog_write_set();
+            TransactionOps::update_edge_property(
+                &mut catalog.edge_tables,
+                &catalog.vertex_tables,
+                params,
+                &redo.prop_name,
+                &redo.value,
+                ts,
+            )?;
+        }
+        self.mark_edge_modified(redo.edge_label);
+
+        Ok(())
+    }
+
+    fn replay_delete_vertex(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.data_store().with_vertex_tables_mut(|vertex_tables| {
+            match TransactionOps::delete_vertex_by_external_vid(vertex_tables, label, vid, ts) {
+                Ok(_) => {}
+                Err(_) => {
+                    // Vertex may have already been deleted (idempotent replay).
+                    // This is expected during re-recovery scenarios.
+                }
+            }
+            Ok(())
+        })?;
+        self.mark_vertex_modified(label);
+
+        self.replay_vertex_index_delete(label, vid, ts)?;
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Schema Operations
+    // ========================================================================
+
+    fn replay_create_space(&self, redo: &CreateSpaceRedo, _ts: Timestamp) -> StorageResult<()> {
+        let mut space = redo.space.clone();
+        let _ = self.schema_manager().create_space(&mut space)?;
+        Ok(())
+    }
+
+    fn replay_drop_space(&self, redo: &DropSpaceRedo, _ts: Timestamp) -> StorageResult<()> {
+        let Some(space_info) = self.schema_manager().get_space(&redo.space_name)? else {
+            return Ok(());
+        };
+
+        let space_id = space_info.space_id;
+        let tags = self.schema_manager().list_tags(&redo.space_name)?;
+        let edge_types = self.schema_manager().list_edge_types(&redo.space_name)?;
+
+        for edge_type in edge_types {
+            let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
+            let _ = self.drop_edge_type(&storage_name);
+        }
+        for tag in tags {
+            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
+            let _ = self.drop_vertex_type(&storage_name);
+        }
+
+        let _ = self.schema_manager().drop_space(&redo.space_name)?;
+        Ok(())
+    }
+
+    fn replay_clear_space(&self, redo: &ClearSpaceRedo, _ts: Timestamp) -> StorageResult<()> {
+        let Some(space_info) = self.schema_manager().get_space(&redo.space_name)? else {
+            return Ok(());
+        };
+
+        let space_id = space_info.space_id;
+        let tags = self.schema_manager().list_tags(&redo.space_name)?;
+        let edge_types = self.schema_manager().list_edge_types(&redo.space_name)?;
+
+        for edge_type in edge_types {
+            let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
+            let _ = self.drop_edge_type(&storage_name);
+        }
+        for tag in tags {
+            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
+            let _ = self.drop_vertex_type(&storage_name);
+        }
+
+        let _ = self.schema_manager().clear_space(&redo.space_name)?;
+        Ok(())
+    }
+
+    fn replay_alter_space_comment(
+        &self,
+        redo: &AlterSpaceCommentRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = self
+            .schema_manager()
+            .alter_space_comment(redo.space_id, redo.comment.clone())?;
+        Ok(())
+    }
+
+    fn replay_create_vertex_type(
+        &self,
+        redo: &CreateVertexTypeRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let mut properties = Vec::with_capacity(redo.schema.len());
+        for (name, type_name, _serial) in &redo.schema {
+            properties.push(StoragePropertyDef::new(
+                name.clone(),
+                parse_data_type(type_name)?,
+            ));
+        }
+
+        if properties.is_empty() {
+            log::warn!(
+                "replay_create_vertex_type skipped because schema is empty: {}",
+                redo.label_name
+            );
+            return Ok(());
+        }
+
+        let primary_key = properties
+            .first()
+            .map(|prop| prop.name.clone())
+            .unwrap_or_else(|| redo.label_name.clone());
+
+        self.ensure_recovery_space(&redo.space_name)?;
+
+        let space_id = self
+            .schema_manager()
+            .get_space_id(&redo.space_name)
+            .unwrap_or(0);
+        let label_id = if let Some(label_id) = redo.label_id {
+            let storage_name = format!("space_{space_id}:tag:{}", redo.label_name);
+            match self.create_vertex_type_with_id(
+                &storage_name,
+                &redo.label_name,
+                label_id,
+                properties.clone(),
+                &primary_key,
+            ) {
+                Ok(id) => id,
+                Err(e) if e.kind() == StorageErrorKind::LabelAlreadyExists => label_id,
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.create_vertex_type(&redo.label_name, properties.clone(), &primary_key)?
+        };
+        let tag = TagInfo::new(redo.label_name.clone()).with_properties(
+            redo.schema
+                .iter()
+                .map(|(name, type_name, serial)| {
+                    parse_data_type(type_name).map(|data_type| {
+                        PropertyDef::new(name.clone(), data_type)
+                            .with_nullable(false)
+                            .with_serial(*serial)
+                    })
+                })
+                .collect::<StorageResult<Vec<_>>>()?,
+        );
+        match self
+            .schema_manager()
+            .create_tag_with_id(&redo.space_name, &tag, label_id)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == StorageErrorKind::LabelAlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    fn replay_create_edge_type(
+        &self,
+        redo: &CreateEdgeTypeRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let get_label_id = |tag_name: &str| -> StorageResult<LabelId> {
+            if tag_name.is_empty() {
+                return Ok(0);
+            }
+            self.schema_manager()
+                .get_tag(&redo.space_name, tag_name)?
+                .map(|t| t.tag_id)
+                .ok_or_else(|| {
+                    StorageError::db_error(format!(
+                        "Source vertex label not found during recovery: {}",
+                        tag_name
+                    ))
+                })
+        };
+        let src_label = get_label_id(&redo.src_label)?;
+        let dst_label = get_label_id(&redo.dst_label)?;
+
+        let mut properties = Vec::with_capacity(redo.schema.len());
+        for (name, type_name, _serial) in &redo.schema {
+            properties.push(StoragePropertyDef::new(
+                name.clone(),
+                parse_data_type(type_name)?,
+            ));
+        }
+
+        self.ensure_recovery_space(&redo.space_name)?;
+
+        let space_id = self
+            .schema_manager()
+            .get_space_id(&redo.space_name)
+            .unwrap_or(0);
+        let label_id = if let Some(label_id) = redo.label_id {
+            let _space_id = self
+                .schema_manager()
+                .get_space_id(&redo.space_name)
+                .unwrap_or(0);
+            let storage_name = format!("space_{space_id}:edge:{}", redo.edge_label);
+            match self.create_edge_type_with_id(
+                CreateEdgeTypeParams {
+                    name: &storage_name,
+                    user_name: &redo.edge_label,
+                    src_label,
+                    dst_label,
+                    properties,
+                    oe_strategy: EdgeStrategy::Multiple,
+                    ie_strategy: EdgeStrategy::Multiple,
+                },
+                label_id,
+            ) {
+                Ok(id) => id,
+                Err(e) if e.kind() == StorageErrorKind::LabelAlreadyExists => label_id,
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.create_edge_type(
+                &redo.edge_label,
+                src_label,
+                dst_label,
+                properties,
+                EdgeStrategy::Multiple,
+                EdgeStrategy::Multiple,
+            )?
+        };
+        let edge_type = EdgeTypeInfo::new(redo.edge_label.clone())
+            .with_src_tag(redo.src_label.clone())
+            .with_dst_tag(redo.dst_label.clone())
+            .with_properties(
+                redo.schema
+                    .iter()
+                    .map(|(name, type_name, serial)| {
+                        parse_data_type(type_name).map(|data_type| {
+                            PropertyDef::new(name.clone(), data_type)
+                                .with_nullable(false)
+                                .with_serial(*serial)
+                        })
+                    })
+                    .collect::<StorageResult<Vec<_>>>()?,
+            );
+        match self
+            .schema_manager()
+            .create_edge_type_with_id(&redo.space_name, &edge_type, label_id)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == StorageErrorKind::LabelAlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    fn replay_delete_vertex_type(
+        &self,
+        redo: &DeleteVertexTypeRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _space_name = redo.space_name.as_deref().unwrap_or("");
+        if let Some(space_name) = &redo.space_name {
+            if let Ok(Some(space_info)) = self.schema_manager().get_space(space_name) {
+                let storage_name = format!("space_{}:tag:{}", space_info.space_id, redo.label_name);
+                self.drop_vertex_type(&storage_name)?;
+            }
+        }
+        if let Some(space_name) = &redo.space_name {
+            let _ = self.schema_manager().drop_tag(space_name, &redo.label_name);
+        }
+        Ok(())
+    }
+
+    fn replay_delete_edge_type(
+        &self,
+        redo: &DeleteEdgeTypeRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _space_name = redo.space_name.as_deref().unwrap_or("");
+        if let Some(space_name) = &redo.space_name {
+            if let Ok(Some(space_info)) = self.schema_manager().get_space(space_name) {
+                let storage_name =
+                    format!("space_{}:edge:{}", space_info.space_id, redo.edge_label);
+                self.drop_edge_type(&storage_name)?;
+            }
+        }
+        if let Some(space_name) = &redo.space_name {
+            let _ = self
+                .schema_manager()
+                .drop_edge_type(space_name, &redo.edge_label);
+        }
+        Ok(())
+    }
+
+    fn replay_add_vertex_prop(
+        &self,
+        redo: &AddVertexPropRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let mut props = Vec::with_capacity(redo.properties.len());
+        for (name, type_name, _serial) in &redo.properties {
+            props.push(StoragePropertyDef::new(
+                name.clone(),
+                parse_data_type(type_name)?,
+            ));
+        }
+
+        // First, try to add properties normally
+        let mut added_props = Vec::new();
+        for prop in props {
+            match self.add_vertex_property(redo.label, prop.clone()) {
+                Ok(()) => {
+                    added_props.push((prop.name, prop.data_type));
+                }
+                Err(e) => {
+                    // If column already exists, just record the schema change for version_history
+                    if e.to_string().contains("already exists") {
+                        // Column exists - need to record schema change for recovery
+                        self.data_store().with_vertex_tables_mut(|vertex_tables| {
+                            if let Some(table) = vertex_tables.get(&redo.label) {
+                                let change_details =
+                                    crate::schema::ChangeDetails::PropertyAdded {
+                                        name: prop.name.clone(),
+                                        data_type: prop.data_type.clone(),
+                                        nullable: prop.nullable,
+                                        default_value: None,
+                                    };
+                                table.rebuild_schema_change_from_redo(change_details)?;
+                                added_props.push((prop.name, prop.data_type));
+                            }
+                            Ok(())
+                        })?;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        if let Some((space_name, mut tag)) = self.schema_manager().find_tag_by_id(redo.label) {
+            for (name, type_name, serial) in &redo.properties {
+                let prop = PropertyDef::new(name.clone(), parse_data_type(type_name)?)
+                    .with_nullable(false)
+                    .with_serial(*serial);
+                if !tag
+                    .properties
+                    .iter()
+                    .any(|existing| existing.name == prop.name)
+                {
+                    tag.properties.push(prop);
+                }
+            }
+            self.schema_manager().update_tag(&space_name, &tag)?;
+        }
+        Ok(())
+    }
+
+    fn replay_add_edge_prop(&self, redo: &AddEdgePropRedo, _ts: Timestamp) -> StorageResult<()> {
+        let mut props = Vec::with_capacity(redo.properties.len());
+        for (name, type_name, _serial) in &redo.properties {
+            props.push(StoragePropertyDef::new(
+                name.clone(),
+                parse_data_type(type_name)?,
+            ));
+        }
+
+        // First, try to add properties normally
+        for prop in props {
+            match self.add_edge_property(redo.edge_label, prop.clone()) {
+                Ok(()) => {}
+                Err(e) => {
+                    // If column already exists, just record the schema change for version_history
+                    if e.to_string().contains("already exists") {
+                        // Column exists - need to record schema change for recovery
+                        let key = self.data_store().with_edge_label_index(|edge_label_index| {
+                            edge_label_index
+                                .get(&redo.edge_label)
+                                .and_then(|keys| keys.first().copied())
+                        });
+                        let Some(key) = key else {
+                            return Err(e);
+                        };
+                        let arc = self
+                            .data_store()
+                            .with_edge_tables(|tables| tables.get(&key).cloned());
+                        if let Some(arc) = arc {
+                            let mut table = arc.write();
+                            let change_details =
+                                crate::schema::ChangeDetails::PropertyAdded {
+                                    name: prop.name.clone(),
+                                    data_type: prop.data_type.clone(),
+                                    nullable: prop.nullable,
+                                    default_value: None,
+                                };
+                            table.rebuild_schema_change_from_redo(change_details)?;
+                        }
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        if let Some((space_name, mut edge_type)) =
+            self.schema_manager().find_edge_type_by_id(redo.edge_label)
+        {
+            for (name, type_name, serial) in &redo.properties {
+                let prop = PropertyDef::new(name.clone(), parse_data_type(type_name)?)
+                    .with_nullable(false)
+                    .with_serial(*serial);
+                if !edge_type
+                    .properties
+                    .iter()
+                    .any(|existing| existing.name == prop.name)
+                {
+                    edge_type.properties.push(prop);
+                }
+            }
+            self.schema_manager()
+                .update_edge_type(&space_name, &edge_type)?;
+        }
+        Ok(())
+    }
+
+    fn replay_delete_vertex_prop(
+        &self,
+        redo: &DeleteVertexPropRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (space_name, mut tag) = self
+            .schema_manager()
+            .find_tag_by_id(redo.label)
+            .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", redo.label)))?;
+
+        tag.properties
+            .retain(|prop| !redo.prop_names.iter().any(|name| name == &prop.name));
+        self.schema_manager().update_tag(&space_name, &tag)?;
+
+        for prop_name in &redo.prop_names {
+            self.delete_vertex_property(redo.label, prop_name)?;
+        }
+        Ok(())
+    }
+
+    fn replay_delete_edge_prop(
+        &self,
+        redo: &DeleteEdgePropRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (space_name, mut edge_type) = self
+            .schema_manager()
+            .find_edge_type_by_id(redo.edge_label)
+            .ok_or_else(|| {
+                StorageError::label_not_found(format!("edge label {}", redo.edge_label))
+            })?;
+
+        edge_type
+            .properties
+            .retain(|prop| !redo.prop_names.iter().any(|name| name == &prop.name));
+        self.schema_manager()
+            .update_edge_type(&space_name, &edge_type)?;
+
+        for prop_name in &redo.prop_names {
+            self.delete_edge_property(redo.edge_label, prop_name)?;
+        }
+        Ok(())
+    }
+
+    fn replay_rename_vertex_prop(
+        &self,
+        redo: &RenameVertexPropRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (space_name, mut tag) = self
+            .schema_manager()
+            .find_tag_by_id(redo.label)
+            .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", redo.label)))?;
+
+        let prop = tag
+            .properties
+            .iter_mut()
+            .find(|prop| prop.name == redo.old_name)
+            .ok_or_else(|| StorageError::column_not_found(redo.old_name.clone()))?;
+        prop.name = redo.new_name.clone();
+
+        self.schema_manager().update_tag(&space_name, &tag)?;
+        self.rename_vertex_property(redo.label, &redo.old_name, &redo.new_name)?;
+        Ok(())
+    }
+
+    fn replay_rename_edge_prop(
+        &self,
+        redo: &RenameEdgePropRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (space_name, mut edge_type) = self
+            .schema_manager()
+            .find_edge_type_by_id(redo.edge_label)
+            .ok_or_else(|| {
+                StorageError::label_not_found(format!("edge label {}", redo.edge_label))
+            })?;
+
+        let prop = edge_type
+            .properties
+            .iter_mut()
+            .find(|prop| prop.name == redo.old_name)
+            .ok_or_else(|| StorageError::column_not_found(redo.old_name.clone()))?;
+        prop.name = redo.new_name.clone();
+
+        self.schema_manager()
+            .update_edge_type(&space_name, &edge_type)?;
+        self.rename_edge_property(redo.edge_label, &redo.old_name, &redo.new_name)?;
+        Ok(())
+    }
+
+    fn replay_create_tag_index(
+        &self,
+        redo: &CreateTagIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let index = Index::new(crate::core::types::IndexConfig {
+            id: 0,
+            name: redo.index_name.clone(),
+            space_id: redo.space_id,
+            schema_name: String::new(),
+            fields: redo
+                .fields
+                .iter()
+                .map(|(name, _typ)| {
+                    crate::core::types::IndexField::new(
+                        name.clone(),
+                        crate::core::Value::string(""),
+                        true,
+                    )
+                })
+                .collect(),
+            properties: redo.properties.clone(),
+            index_type: crate::core::types::IndexType::TagIndex,
+            is_unique: redo.is_unique,
+            covering: false,
+            partial_condition: None,
+        });
+        match self
+            .index_metadata_manager()
+            .create_tag_index(redo.space_id, &index)
+        {
+            Ok(_) => {}
+            Err(e) => log::warn!("create_tag_index replay: {}", e),
+        }
+        let stored = self
+            .index_metadata_manager()
+            .get_tag_index(redo.space_id, &redo.index_name)?
+            .unwrap_or(index);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.register_native_index(redo.space_id, &stored);
+        Ok(())
+    }
+
+    fn replay_drop_tag_index(&self, redo: &DropTagIndexRedo, _ts: Timestamp) -> StorageResult<()> {
+        let _ = self
+            .index_metadata_manager()
+            .drop_tag_index(redo.space_id, &redo.index_name);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.clear_tag_index(redo.space_id, &redo.index_name);
+        data_mgr.unregister_native_index(redo.space_id, &redo.index_name);
+        Ok(())
+    }
+
+    fn replay_create_edge_index(
+        &self,
+        redo: &CreateEdgeIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let index = Index::new(crate::core::types::IndexConfig {
+            id: 0,
+            name: redo.index_name.clone(),
+            space_id: redo.space_id,
+            schema_name: String::new(),
+            fields: redo
+                .fields
+                .iter()
+                .map(|(name, _typ)| {
+                    crate::core::types::IndexField::new(
+                        name.clone(),
+                        crate::core::Value::string(""),
+                        true,
+                    )
+                })
+                .collect(),
+            properties: redo.properties.clone(),
+            index_type: crate::core::types::IndexType::EdgeIndex,
+            is_unique: redo.is_unique,
+            covering: false,
+            partial_condition: None,
+        });
+        match self
+            .index_metadata_manager()
+            .create_edge_index(redo.space_id, &index)
+        {
+            Ok(_) => {}
+            Err(e) => log::warn!("create_edge_index replay: {}", e),
+        }
+        let stored = self
+            .index_metadata_manager()
+            .get_edge_index(redo.space_id, &redo.index_name)?
+            .unwrap_or(index);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.register_native_index(redo.space_id, &stored);
+        Ok(())
+    }
+
+    fn replay_drop_edge_index(
+        &self,
+        redo: &DropEdgeIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = self
+            .index_metadata_manager()
+            .drop_edge_index(redo.space_id, &redo.index_name);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.clear_edge_index(redo.space_id, &redo.index_name);
+        data_mgr.unregister_native_index(redo.space_id, &redo.index_name);
+        Ok(())
+    }
+}
+
+/// Resolve an external VertexId to its internal u32 ID.
+fn resolve_external_vid(
+    vertex_tables: &std::collections::HashMap<
+        LabelId,
+        std::sync::Arc<crate::vertex::ShardedVertexTable>,
+    >,
+    label: LabelId,
+    vid: VertexId,
+    ts: Timestamp,
+) -> Option<u32> {
+    let table = vertex_tables.get(&label)?;
+    if let Some(int_id) = vid.as_int64() {
+        table.get_internal_id_by_i64(int_id, ts)
+    } else if let Some(str_id) = vid.as_str() {
+        table.get_internal_id(str_id, ts)
+    } else {
+        None
+    }
+}
+
+impl GraphStorageContext {
+    /// Perform actual edge insertion after checking endpoints exist.
+    /// This is called from phase 1 if endpoints exist, or from phase 2 if they don't.
+    pub(crate) fn do_replay_insert_edge(
+        &self,
+        redo: &InsertEdgeRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (src_internal, dst_internal) =
+            self.data_store()
+                .with_vertex_tables(|vertex_tables| -> StorageResult<(u32, u32)> {
+                    let src_table = vertex_tables.get(&redo.src_label).ok_or_else(|| {
+                        StorageError::db_error(format!(
+                            "Source vertex label not found during recovery: label={}",
+                            redo.src_label
+                        ))
+                    })?;
+                    let dst_table = vertex_tables.get(&redo.dst_label).ok_or_else(|| {
+                        StorageError::db_error(format!(
+                            "Destination vertex label not found during recovery: label={}",
+                            redo.dst_label
+                        ))
+                    })?;
+
+                    let src_internal =
+                        TransactionOps::resolve_vertex_id(src_table, redo.src_vid, ts).ok_or_else(
+                            || {
+                                StorageError::db_error(format!(
+                                    "Source vertex not found during recovery: label={}, vid={:?}",
+                                    redo.src_label, redo.src_vid
+                                ))
+                            },
+                        )?;
+                    let dst_internal =
+                        TransactionOps::resolve_vertex_id(dst_table, redo.dst_vid, ts).ok_or_else(
+                            || {
+                                StorageError::db_error(format!(
+                            "Destination vertex not found during recovery: label={}, vid={:?}",
+                            redo.dst_label, redo.dst_vid
+                        ))
+                            },
+                        )?;
+                    Ok((src_internal, dst_internal))
+                })?;
+
+        let params = AddEdgeParams {
+            src_label: redo.src_label,
+            src_vid: src_internal,
+            dst_label: redo.dst_label,
+            dst_vid: dst_internal,
+            edge_label: redo.edge_label,
+            rank: redo.rank,
+        };
+
+        {
+            let mut catalog = self.data_store().catalog_write_set();
+
+            if let Err(e) = TransactionOps::add_edge(
+                &mut catalog.edge_tables,
+                &catalog.vertex_tables,
+                params,
+                &redo.properties,
+                ts,
+            ) {
+                if e.to_string().contains("already exists") {
+                    // edge already present — idempotent, skip
+                } else {
+                    return Err(StorageError::db_error(format!(
+                        "Failed to replay insert edge: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        self.mark_edge_modified(redo.edge_label);
+        Ok(())
+    }
+
+    /// Perform actual edge deletion after checking endpoints exist.
+    /// This is called from phase 1 if endpoints exist, or from phase 2 if they don't.
+    pub(crate) fn do_replay_delete_edge(
+        &self,
+        redo: &DeleteEdgeRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let key = crate::engine::data_store::EdgeTableKey::new(
+            redo.src_label,
+            redo.dst_label,
+            redo.edge_label,
+        );
+
+        let (src_internal, dst_internal) =
+            self.data_store()
+                .with_vertex_tables(|vertex_tables| -> StorageResult<(u32, u32)> {
+                    let src_internal =
+                        resolve_external_vid(vertex_tables, redo.src_label, redo.src_vid, ts)
+                            .ok_or_else(|| {
+                                StorageError::db_error(format!(
+                        "Source vertex not found during delete-edge recovery: label={}, vid={:?}",
+                        redo.src_label, redo.src_vid
+                    ))
+                            })?;
+                    let dst_internal =
+                        resolve_external_vid(vertex_tables, redo.dst_label, redo.dst_vid, ts)
+                            .ok_or_else(|| {
+                                StorageError::db_error(format!(
+                    "Destination vertex not found during delete-edge recovery: label={}, vid={:?}",
+                    redo.dst_label, redo.dst_vid
+                ))
+                            })?;
+                    Ok((src_internal, dst_internal))
+                })?;
+
+        let arc = self
+            .data_store()
+            .with_edge_tables(|tables| tables.get(&key).cloned());
+        if let Some(arc) = arc {
+            let mut table = arc.write();
+            let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;
+        }
+
+        self.mark_edge_modified(redo.edge_label);
+        Ok(())
+    }
+
+    /// Replay vertex index updates after a vertex insert recovery.
+    /// Ensures indexes are consistent with data even if the original
+    /// write crashed between the data-write and index-update steps.
+    fn replay_vertex_index_update(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        properties: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let Some((space_name, tag_info)) = self.schema_manager().find_tag_by_id(label) else {
+            return Ok(());
+        };
+        let Some(space_info) = self.schema_manager().get_space(&space_name)? else {
+            return Ok(());
+        };
+        let space_id = space_info.space_id;
+        if properties.is_empty() {
+            return Ok(());
+        }
+        let indexes = self.index_metadata_manager().list_tag_indexes(space_id)?;
+        let vid_value = Value::from(vid);
+        for index in indexes {
+            if index.schema_name == tag_info.tag_name {
+                self.update_vertex_indexes_mvcc(space_id, &vid_value, &index.name, properties, ts)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Replay vertex index deletion after a vertex delete recovery.
+    fn replay_vertex_index_delete(
+        &self,
+        label: LabelId,
+        vid: VertexId,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let Some((space_name, tag_info)) = self.schema_manager().find_tag_by_id(label) else {
+            return Ok(());
+        };
+        let Some(space_info) = self.schema_manager().get_space(&space_name)? else {
+            return Ok(());
+        };
+        let space_id = space_info.space_id;
+        let index_names: Vec<String> = self
+            .index_metadata_manager()
+            .list_tag_indexes(space_id)?
+            .into_iter()
+            .filter(|index| index.schema_name == tag_info.tag_name)
+            .map(|index| index.name)
+            .collect();
+        if !index_names.is_empty() {
+            let vid_value = Value::from(vid);
+            self.delete_vertex_indexes_mvcc(space_id, &vid_value, &index_names, ts)?;
+        }
+        Ok(())
+    }
+
+    /// Execute phase-2 recovery: replay all deferred edge operations.
+    /// This must be called after all vertices have been recovered.
+    pub(crate) fn replay_deferred_edges(&self) -> StorageResult<()> {
+        // Replay deferred edge insertions
+        let deferred_inserts = self.take_deferred_edge_inserts();
+        for (redo, ts) in deferred_inserts {
+            self.do_replay_insert_edge(&redo, ts)?;
+        }
+
+        // Replay deferred edge deletions
+        let deferred_deletes = self.take_deferred_edge_deletes();
+        for (redo, ts) in deferred_deletes {
+            self.do_replay_delete_edge(&redo, ts)?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_recovery_space(&self, space_name: &str) -> StorageResult<()> {
+        if self.schema_manager().get_space(space_name)?.is_some() {
+            return Ok(());
+        }
+
+        let mut space = SpaceInfo::new(space_name.to_string());
+        self.schema_manager().create_space(&mut space)?;
+        Ok(())
+    }
+}
+
+fn parse_data_type(raw: &str) -> StorageResult<DataType> {
+    let upper = raw.trim().to_ascii_uppercase();
+
+    let ty = match upper.as_str() {
+        "EMPTY" => DataType::Empty,
+        "NULL" => DataType::Null,
+        "BOOL" => DataType::Bool,
+        "SMALLINT" => DataType::SmallInt,
+        "INT" => DataType::Int,
+        "BIGINT" => DataType::BigInt,
+        "FLOAT" => DataType::Float,
+        "DOUBLE" => DataType::Double,
+        "DECIMAL128" => DataType::Decimal128,
+        "STRING" => DataType::String,
+        "DATE" => DataType::Date,
+        "TIME" => DataType::Time,
+        "DATETIME" => DataType::DateTime,
+        "VERTEX" => DataType::Vertex,
+        "EDGE" => DataType::Edge,
+        "PATH" => DataType::Path,
+        "LIST" => DataType::List(Box::new(DataType::Empty)),
+        "MAP" => DataType::Map(Box::new(DataType::Empty)),
+        "SET" => DataType::Set(Box::new(DataType::Empty)),
+        "GEOGRAPHY" => DataType::Geography,
+        "DATASET" => DataType::DataSet,
+        "BLOB" => DataType::Blob,
+        "TIMESTAMP" => DataType::DateTime,
+        "VECTOR" => DataType::Vector,
+        "JSON" => DataType::Json,
+        "JSONB" => DataType::JsonB,
+        "UUID" => DataType::Uuid,
+        "INTERVAL" => DataType::Interval,
+        value if value.starts_with("FIXEDSTRING(") && value.ends_with(')') => {
+            let inner = &value["FIXEDSTRING(".len()..value.len() - 1];
+            let size = inner.trim().parse::<usize>().map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "Invalid FIXEDSTRING size in WAL recovery: {}",
+                    e
+                ))
+            })?;
+            DataType::FixedString(size)
+        }
+        value if value.starts_with("VECTOR_DENSE(") && value.ends_with(')') => {
+            let inner = &value["VECTOR_DENSE(".len()..value.len() - 1];
+            let size = inner.trim().parse::<usize>().map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "Invalid VECTOR_DENSE size in WAL recovery: {}",
+                    e
+                ))
+            })?;
+            DataType::VectorDense(size)
+        }
+        value if value.starts_with("VECTOR_SPARSE(") && value.ends_with(')') => {
+            let inner = &value["VECTOR_SPARSE(".len()..value.len() - 1];
+            let size = inner.trim().parse::<usize>().map_err(|e| {
+                StorageError::deserialize_error(format!(
+                    "Invalid VECTOR_SPARSE size in WAL recovery: {}",
+                    e
+                ))
+            })?;
+            DataType::VectorSparse(size)
+        }
+        other => {
+            return Err(StorageError::deserialize_error(format!(
+                "Unsupported data type in WAL recovery: {}",
+                other
+            )));
+        }
+    };
+
+    Ok(ty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::wal::traits::RecoveryApplier;
+    use crate::core::Value;
+    use crate::engine::{EdgeOperationParams, InsertEdgeParams};
+
+    #[test]
+    fn test_schema_replay_roundtrip() {
+        let ctx = GraphStorageContext::new();
+
+        ctx.replay_create_vertex_type(
+            &CreateVertexTypeRedo {
+                space_name: "test_space".to_string(),
+                label_id: Some(1),
+                label_name: "Person".to_string(),
+                schema: vec![
+                    ("id".to_string(), "BIGINT".to_string(), true),
+                    ("name".to_string(), "STRING".to_string(), false),
+                ],
+            },
+            1,
+        )
+        .expect("Vertex type replay should succeed");
+
+        ctx.replay_create_vertex_type(
+            &CreateVertexTypeRedo {
+                space_name: "test_space".to_string(),
+                label_id: Some(2),
+                label_name: "City".to_string(),
+                schema: vec![
+                    ("id".to_string(), "BIGINT".to_string(), false),
+                    ("name".to_string(), "STRING".to_string(), false),
+                ],
+            },
+            1,
+        )
+        .expect("Second vertex type replay should succeed");
+
+        let person_label = ctx
+            .data_store()
+            .vertex_label_id("space_1:tag:Person")
+            .expect("Person label should exist");
+        let city_label = ctx
+            .data_store()
+            .vertex_label_id("space_1:tag:City")
+            .expect("City label should exist");
+
+        ctx.replay_add_vertex_prop(
+            &AddVertexPropRedo {
+                label: person_label,
+                properties: vec![("age".to_string(), "INT".to_string(), false)],
+            },
+            2,
+        )
+        .expect("Vertex property replay should succeed");
+
+        ctx.replay_rename_vertex_prop(
+            &RenameVertexPropRedo {
+                label: person_label,
+                old_name: "name".to_string(),
+                new_name: "full_name".to_string(),
+            },
+            2,
+        )
+        .expect("Vertex rename replay should succeed");
+
+        ctx.replay_delete_vertex_prop(
+            &DeleteVertexPropRedo {
+                label: person_label,
+                prop_names: vec!["age".to_string()],
+            },
+            2,
+        )
+        .expect("Vertex delete replay should succeed");
+
+        ctx.replay_create_edge_type(
+            &CreateEdgeTypeRedo {
+                space_name: "test_space".to_string(),
+                label_id: Some(3),
+                src_label: "Person".to_string(),
+                dst_label: "City".to_string(),
+                edge_label: "LIVES_IN".to_string(),
+                schema: vec![("since".to_string(), "INT".to_string(), false)],
+            },
+            3,
+        )
+        .expect("Edge type replay should succeed");
+
+        // label_id=3 was specified in replay_create_edge_type above
+        let lives_in_label = 3;
+
+        ctx.replay_add_edge_prop(
+            &AddEdgePropRedo {
+                src_label: person_label,
+                dst_label: city_label,
+                edge_label: lives_in_label,
+                properties: vec![("cost".to_string(), "INT".to_string(), false)],
+            },
+            3,
+        )
+        .expect("Edge property replay should succeed");
+
+        ctx.replay_rename_edge_prop(
+            &RenameEdgePropRedo {
+                src_label: person_label,
+                dst_label: city_label,
+                edge_label: lives_in_label,
+                old_name: "since".to_string(),
+                new_name: "started".to_string(),
+            },
+            3,
+        )
+        .expect("Edge rename replay should succeed");
+
+        ctx.replay_delete_edge_prop(
+            &DeleteEdgePropRedo {
+                src_label: person_label,
+                dst_label: city_label,
+                edge_label: lives_in_label,
+                prop_names: vec!["cost".to_string()],
+            },
+            3,
+        )
+        .expect("Edge delete replay should succeed");
+
+        let person_tag = ctx
+            .schema_manager()
+            .find_tag_by_id(person_label)
+            .expect("Person tag should exist")
+            .1;
+        assert_eq!(
+            person_tag
+                .properties
+                .iter()
+                .map(|prop| prop.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "full_name"]
+        );
+
+        let lives_in_type = ctx
+            .schema_manager()
+            .find_edge_type_by_id(lives_in_label)
+            .expect("Edge type should exist")
+            .1;
+        assert_eq!(
+            lives_in_type
+                .properties
+                .iter()
+                .map(|prop| prop.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["started"]
+        );
+
+        ctx.insert_vertex_by_i64(
+            person_label,
+            1001,
+            &[
+                ("id".to_string(), Value::BigInt(1001)),
+                ("full_name".to_string(), Value::string("Alice")),
+            ],
+            4,
+        )
+        .expect("Vertex insert should succeed after property replay");
+
+        ctx.insert_vertex_by_i64(
+            city_label,
+            2001,
+            &[
+                ("id".to_string(), Value::BigInt(2001)),
+                ("name".to_string(), Value::string("Shanghai")),
+            ],
+            4,
+        )
+        .expect("City vertex insert should succeed");
+
+        let vertex = ctx
+            .get_vertex_by_i64(person_label, 1001, 5)
+            .expect("Inserted vertex should be visible");
+        assert_eq!(
+            vertex
+                .properties
+                .iter()
+                .find(|(name, _)| name == "full_name")
+                .map(|(_, value)| value),
+            Some(&Value::string("Alice"))
+        );
+        assert!(vertex.properties.iter().all(|(name, _)| name != "age"));
+
+        ctx.insert_edge(InsertEdgeParams {
+            edge_label: lives_in_label,
+            src_label: person_label,
+            src_id: VertexId::from_int64(1001),
+            dst_label: city_label,
+            dst_id: VertexId::from_int64(2001),
+            rank: 0,
+            properties: &[("started".to_string(), Value::Int(2012))],
+            ts: 5,
+        })
+        .expect("Edge insert should succeed after property replay");
+
+        let edge = ctx
+            .get_edge(
+                &EdgeOperationParams {
+                    edge_label: lives_in_label,
+                    src_label: person_label,
+                    src_id: VertexId::from_int64(1001),
+                    dst_label: city_label,
+                    dst_id: VertexId::from_int64(2001),
+                    rank: 0,
+                },
+                5,
+            )
+            .expect("Inserted edge should be visible");
+        assert_eq!(
+            edge.properties
+                .iter()
+                .find(|(name, _)| name == "started")
+                .map(|(_, value)| value),
+            Some(&Value::Int(2012))
+        );
+        assert!(edge.properties.iter().all(|(name, _)| name != "cost"));
+        assert!(edge.properties.iter().all(|(name, _)| name != "since"));
+    }
+}

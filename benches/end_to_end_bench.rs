@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
 use graphdb_storage::core::{DataType, Edge, Value, Vertex};
-use graphdb_storage::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(

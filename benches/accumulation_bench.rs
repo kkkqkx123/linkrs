@@ -25,10 +25,10 @@ use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::streaming::chunk::DataChunk;
-use graphdb_query::query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
-use graphdb_query::query::executor::streaming::operators::join_operator::JoinKeyValue;
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
+use graphdb_query::executor::streaming::chunk::DataChunk;
+use graphdb_query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
+use graphdb_query::executor::streaming::operators::join_operator::JoinKeyValue;
+use graphdb_query::executor::streaming::slot::SlotLayout;
 
 const ROW_SIZES: [usize; 2] = [100_000, 1_000_000];
 

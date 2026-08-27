@@ -19,8 +19,8 @@ use std::sync::Arc;
 use graphdb::config::{Config, VectorEngineKind};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig};
 use graphdb::sync::vector_sync::{PointId, VectorPoint};
-use graphdb_api::api::core::VectorApi;
-use graphdb_server::server::GraphService;
+use graphdb_api::core::VectorApi;
+use graphdb_server::GraphService;
 
 type Service = Arc<GraphService<GraphStorage>>;
 

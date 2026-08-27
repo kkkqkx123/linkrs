@@ -15,7 +15,7 @@
 use super::common::{
     assert_search_result_contains, assert_search_result_count, FulltextTestContext,
 };
-use graphdb_search::search::EngineType;
+use graphdb_search::EngineType;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 

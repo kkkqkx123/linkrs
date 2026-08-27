@@ -1,9 +1,9 @@
-use graphdb_core::core::types::VertexId;
-use graphdb_core::core::types::{PropertyDef, SpaceInfo, TagInfo};
-use graphdb_core::core::vertex_edge_path::{Tag, Vertex};
-use graphdb_core::core::DataType;
-use graphdb_core::core::Value;
-use graphdb_storage::storage::{
+use graphdb_core::types::VertexId;
+use graphdb_core::types::{PropertyDef, SpaceInfo, TagInfo};
+use graphdb_core::vertex_edge_path::{Tag, Vertex};
+use graphdb_core::DataType;
+use graphdb_core::Value;
+use graphdb_storage::{
     GraphStorage, PropertyGraphConfig, StorageReader, StorageSchemaOps, StorageWriter,
 };
 use std::collections::HashMap;
