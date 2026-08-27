@@ -10,7 +10,9 @@ use std::time::Duration;
 use log::warn;
 use log::{error, info};
 #[cfg(feature = "vector-qdrant")]
-use vector_client::{EmbeddingService, VectorManager};
+use vector_client::VectorManager;
+#[cfg(feature = "vector-qdrant")]
+use graphdb_embedding::EmbeddingService;
 
 use crate::config::Config;
 use crate::core::error::DBResult;

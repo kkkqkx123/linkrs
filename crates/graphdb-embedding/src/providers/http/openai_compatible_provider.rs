@@ -10,10 +10,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::embedding::config::EmbeddingConfig;
-use crate::embedding::error::{EmbeddingError, Result};
-use crate::embedding::preprocessor::PreprocessorImpl;
-use crate::embedding::provider::EmbeddingProvider;
+use crate::config::EmbeddingConfig;
+use crate::error::{EmbeddingError, Result};
+use crate::preprocessor::PreprocessorImpl;
+use crate::provider::EmbeddingProvider;
 
 /// OpenAI-compatible HTTP provider
 ///
@@ -93,7 +93,7 @@ impl OpenAICompatibleProvider {
     /// # Example
     ///
     /// ```
-    /// use vector_client::embedding::{EmbeddingConfig, OpenAICompatibleProvider};
+    /// use graphdb_embedding::{EmbeddingConfig, OpenAICompatibleProvider};
     ///
     /// let config = EmbeddingConfig::new(
     ///     "https://api.openai.com/v1/embeddings",
@@ -248,8 +248,8 @@ impl EmbeddingProvider for OpenAICompatibleProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embedding::preprocessor::NomicTaskType;
-    use crate::embedding::PreprocessorConfig;
+    use crate::preprocessor::NomicTaskType;
+    use crate::PreprocessorConfig;
 
     #[test]
     fn test_create_provider() {
@@ -452,7 +452,7 @@ mod tests {
         let config = EmbeddingConfig::new("http://example.com", "stella")
             .with_dimension(768)
             .with_preprocessor(PreprocessorConfig::Stella {
-                task_type: crate::embedding::StellaTaskType::S2PQuery,
+                task_type: crate::StellaTaskType::S2PQuery,
             });
         let provider = OpenAICompatibleProvider::new(config).unwrap();
         let result = provider.preprocessor().preprocess("test");

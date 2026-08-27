@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "embedding")]
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -15,8 +15,8 @@ use crate::core::Value;
 use crate::sync::backend::VectorBackend;
 use crate::sync::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 
-#[cfg(feature = "vector-qdrant")]
-use vector_client::EmbeddingService;
+#[cfg(feature = "embedding")]
+use graphdb_embedding::EmbeddingService;
 pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use vector_search::{
     CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, VectorFilter,
@@ -50,13 +50,7 @@ fn validate_metric_for_backend(
     distance: DistanceMetric,
 ) -> VectorCoordinatorResult<()> {
     validate_metric(distance)?;
-    if distance == DistanceMetric::Manhattan && !backend.is_local() {
-        return Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
-            "distance metric Manhattan is only supported by the local engine; \
-             the remote Qdrant backend supports Cosine, Euclid and Dot only"
-                .to_string(),
-        )));
-    }
+    let _ = backend;
     Ok(())
 }
 
@@ -211,7 +205,7 @@ impl VectorChangeContext {
 /// Vector synchronization coordinator
 pub struct VectorSyncCoordinator {
     backend: VectorBackend,
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "embedding")]
     embedding_service: Option<Arc<EmbeddingService>>,
     /// Tracks registered logical indexes by key "space_{space_id}_{tag}_{field}" -> metadata
     logical_indexes: DashMap<VectorIndexLocation, IndexMetadata>,
@@ -230,7 +224,7 @@ impl std::fmt::Debug for VectorSyncCoordinator {
         debug
             .field("backend", &self.backend)
             .field("logical_index_count", &self.logical_indexes.len());
-        #[cfg(feature = "vector-qdrant")]
+        #[cfg(feature = "embedding")]
         debug.field("embedding_service", &self.embedding_service.is_some());
         debug.finish()
     }
@@ -273,12 +267,12 @@ impl VectorSyncCoordinator {
     /// In sync contexts (e.g. tests), create a runtime and pass its handle.
     pub fn new(
         backend: VectorBackend,
-        #[cfg(feature = "vector-qdrant")] embedding_service: Option<Arc<EmbeddingService>>,
+        #[cfg(feature = "embedding")] embedding_service: Option<Arc<EmbeddingService>>,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
             backend,
-            #[cfg(feature = "vector-qdrant")]
+            #[cfg(feature = "embedding")]
             embedding_service,
             logical_indexes: DashMap::new(),
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
@@ -291,11 +285,11 @@ impl VectorSyncCoordinator {
     /// Avoids the `#[cfg]` feature-unification pitfall where callers in other
     /// crates see a different function signature than the one compiled here.
     pub fn new_without_embedding(backend: VectorBackend, runtime: tokio::runtime::Handle) -> Self {
-        #[cfg(feature = "vector-qdrant")]
+        #[cfg(feature = "embedding")]
         {
             Self::new(backend, None, runtime)
         }
-        #[cfg(not(feature = "vector-qdrant"))]
+        #[cfg(not(feature = "embedding"))]
         {
             Self::new(backend, runtime)
         }
@@ -312,7 +306,7 @@ impl VectorSyncCoordinator {
     }
 
     /// Get the embedding service
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "embedding")]
     pub fn embedding_service(&self) -> Option<&Arc<EmbeddingService>> {
         self.embedding_service.as_ref()
     }
@@ -669,7 +663,7 @@ impl VectorSyncCoordinator {
     }
 
     /// Embed text to vector
-    #[cfg(feature = "vector-qdrant")]
+    #[cfg(feature = "embedding")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
         if let Some(embedding) = &self.embedding_service {
             let vector = embedding

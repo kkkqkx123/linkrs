@@ -1,4 +1,5 @@
-use crate::embedding::EmbeddingError;
+#[cfg(feature = "embedding")]
+use graphdb_embedding::EmbeddingError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, VectorClientError>;
@@ -96,6 +97,7 @@ impl VectorClientError {
     }
 }
 
+#[cfg(feature = "embedding")]
 impl From<EmbeddingError> for VectorClientError {
     fn from(err: EmbeddingError) -> Self {
         VectorClientError::InternalError(err.to_string())

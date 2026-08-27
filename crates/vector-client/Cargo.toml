@@ -13,6 +13,7 @@ default = ["qdrant"]
 qdrant = ["qdrant-grpc"]
 qdrant-http = []
 qdrant-grpc = ["dep:tonic", "dep:prost", "dep:prost-types"]
+embedding = []
 
 [dependencies]
 async-trait.workspace = true
@@ -29,6 +30,7 @@ chrono.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 vector-search = { path = "../vector-search" }
+graphdb-embedding = { path = "../graphdb-embedding" }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

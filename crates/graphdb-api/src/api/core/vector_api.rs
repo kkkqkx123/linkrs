@@ -13,8 +13,6 @@ use vector_search::{
 
 /// Metrics every backend accepts at index-creation time; anything else is
 /// rejected up front instead of failing deep inside one engine.
-/// Manhattan is local-only; remote Qdrant rejections are handled at the
-/// coordinator layer with a backend-aware check.
 fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
     if matches!(
         distance,
@@ -103,13 +101,6 @@ impl VectorApi {
         mut config: CollectionConfig,
     ) -> CoreResult<String> {
         validate_metric(config.distance)?;
-        if config.distance == DistanceMetric::Manhattan && !self.backend.is_local() {
-            return Err(CoreError::VectorError(
-                "distance metric Manhattan is only supported by the local engine; \
-                  the remote Qdrant backend supports Cosine, Euclid and Dot only"
-                    .to_string(),
-            ));
-        }
         if let Some(qc) = &config.quantization_config {
             qc.validate(config.vector_size)
                 .map_err(|e| CoreError::VectorError(e.to_string()))?;

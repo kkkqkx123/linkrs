@@ -64,25 +64,21 @@ pub enum DistanceMetric {
     Cosine,
     Euclid,
     Dot,
-    /// Manhattan distance (`Σ|a-b|`). Fully supported for both exact scan and
-    /// ANN tiers (HNSW/IVF) on the local engine. Qdrant does not natively
-    /// support it — queries against the remote backend will be rejected with
-    /// a clear error at the coordinator layer.
+    /// Manhattan distance (`Σ|a-b|`). Supported by both the local engine
+    /// and the remote Qdrant backend.
     Manhattan,
 }
 
 impl DistanceMetric {
     /// Whether the remote qdrant engine natively supports this metric.
-    /// Qdrant-specific semantics; kept only for the `vector-qdrant` path.
-    #[doc(hidden)]
     pub fn is_supported_by_qdrant(&self) -> bool {
-        matches!(self, Self::Cosine | Self::Euclid | Self::Dot)
+        matches!(self, Self::Cosine | Self::Euclid | Self::Dot | Self::Manhattan)
     }
 
     /// Inverse of [`DistanceMetric::is_supported_by_qdrant`].
     #[doc(hidden)]
     pub fn requires_custom_implementation(&self) -> bool {
-        matches!(self, Self::Manhattan)
+        false
     }
 }
 
@@ -1403,7 +1399,7 @@ mod tests {
         assert!(DistanceMetric::Cosine.is_supported_by_qdrant());
         assert!(DistanceMetric::Euclid.is_supported_by_qdrant());
         assert!(DistanceMetric::Dot.is_supported_by_qdrant());
-        assert!(!DistanceMetric::Manhattan.is_supported_by_qdrant());
+        assert!(DistanceMetric::Manhattan.is_supported_by_qdrant());
     }
 
     #[test]
@@ -1411,7 +1407,7 @@ mod tests {
         assert!(!DistanceMetric::Cosine.requires_custom_implementation());
         assert!(!DistanceMetric::Euclid.requires_custom_implementation());
         assert!(!DistanceMetric::Dot.requires_custom_implementation());
-        assert!(DistanceMetric::Manhattan.requires_custom_implementation());
+        assert!(!DistanceMetric::Manhattan.requires_custom_implementation());
     }
 
     #[test]

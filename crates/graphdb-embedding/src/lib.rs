@@ -16,5 +16,4 @@ pub use preprocessor::{NomicTaskType, PreprocessorConfig, PreprocessorImpl, Stel
 pub use provider::EmbeddingProvider;
 pub use service::EmbeddingService;
 
-// Re-export providers for advanced usage
 pub use providers::OpenAICompatibleProvider;

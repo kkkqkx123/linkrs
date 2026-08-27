@@ -1,7 +1,3 @@
-mod index;
-
-pub use index::IndexMetadata;
-
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
@@ -10,7 +6,9 @@ use tracing::{debug, info, warn};
 use crate::config::VectorClientConfig;
 use crate::engine::{create_engine as build_engine, DisabledEngine, VectorEngine};
 use crate::error::{Result, VectorClientError};
-use crate::types::{CollectionConfig, SearchQuery, SearchResult, VectorFilter, VectorPoint};
+use crate::types::{
+    CollectionConfig, IndexMetadata, SearchQuery, SearchResult, VectorFilter, VectorPoint,
+};
 
 pub struct VectorManager {
     engine: Arc<dyn VectorEngine>,

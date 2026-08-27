@@ -23,9 +23,9 @@ impl EmbeddingService {
     /// # Example
     ///
     /// ```
-    /// use vector_client::EmbeddingService;
+    /// use graphdb_embedding::EmbeddingService;
     ///
-    /// let config = vector_client::EmbeddingConfig::new(
+    /// let config = graphdb_embedding::EmbeddingConfig::new(
     ///     "http://localhost:11434/api/embeddings",
     ///     "all-minilm"
     /// ).with_dimension(384);

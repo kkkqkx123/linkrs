@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use std::sync::RwLock;
 use tempfile::TempDir;
-use vector_client::embedding::{EmbeddingError, EmbeddingProvider};
+use vector_client::{EmbeddingError, EmbeddingProvider};
 use vector_client::engine::VectorEngine;
 use vector_client::error::{Result, VectorClientError};
 use vector_client::manager::IndexMetadata;

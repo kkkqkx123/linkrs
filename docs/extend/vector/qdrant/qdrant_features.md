@@ -2,6 +2,8 @@
 
 > 分析日期: 2026-04-06
 > 来源: Qdrant官方文档和Rust Client文档
+>
+> **注意**: 本说明基于之前整理的qdrant特性文档， vendored gRPC proto 完全是client模块自己构建时生成的，不代表qdrant的完整功能。qdrant后续版本引入新距离度量时文档可能滞后。
 
 ---
 
@@ -121,6 +123,9 @@ VectorParamsBuilder::new(768, Distance::Euclid)
 
 // Dot Product
 VectorParamsBuilder::new(768, Distance::Dot)
+
+// Manhattan距离
+VectorParamsBuilder::new(768, Distance::Manhattan)
 ```
 
 ---

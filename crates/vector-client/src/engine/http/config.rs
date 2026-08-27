@@ -15,10 +15,7 @@ pub fn distance_to_qdrant(distance: DistanceMetric) -> Result<&'static str, Vect
         DistanceMetric::Cosine => Ok("Cosine"),
         DistanceMetric::Euclid => Ok("Euclid"),
         DistanceMetric::Dot => Ok("Dot"),
-        other => Err(VectorClientError::NotSupported(format!(
-            "distance metric {:?} is not supported by Qdrant",
-            other
-        ))),
+        DistanceMetric::Manhattan => Ok("Manhattan"),
     }
 }
 
@@ -28,6 +25,7 @@ pub fn distance_from_qdrant(name: &str) -> Option<DistanceMetric> {
         "cosine" => Some(DistanceMetric::Cosine),
         "euclid" => Some(DistanceMetric::Euclid),
         "dot" => Some(DistanceMetric::Dot),
+        "manhattan" => Some(DistanceMetric::Manhattan),
         _ => None,
     }
 }
@@ -333,8 +331,10 @@ mod tests {
             "Euclid"
         );
         assert_eq!(distance_to_qdrant(DistanceMetric::Dot).unwrap(), "Dot");
-        // Unsupported metrics are rejected instead of forwarded.
-        assert!(distance_to_qdrant(DistanceMetric::Manhattan).is_err());
+        assert_eq!(
+            distance_to_qdrant(DistanceMetric::Manhattan).unwrap(),
+            "Manhattan"
+        );
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(distance_from_qdrant("Cosine"), Some(DistanceMetric::Cosine));
         assert_eq!(distance_from_qdrant("euclid"), Some(DistanceMetric::Euclid));
         assert_eq!(distance_from_qdrant("DOT"), Some(DistanceMetric::Dot));
-        assert_eq!(distance_from_qdrant("Manhattan"), None);
+        assert_eq!(distance_from_qdrant("Manhattan"), Some(DistanceMetric::Manhattan));
     }
 
     #[test]
@@ -380,8 +380,8 @@ mod tests {
     }
 
     #[test]
-    fn test_build_create_collection_body_rejects_unsupported_metric() {
-        let err = build_create_collection_body(
+    fn test_build_create_collection_body_with_manhattan() {
+        let body = build_create_collection_body(
             "test",
             64,
             DistanceMetric::Manhattan,
@@ -393,8 +393,13 @@ mod tests {
             None,
             None,
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("Manhattan"));
+        .unwrap();
+        let vectors = body.get("vectors").unwrap();
+        assert_eq!(vectors.get("size").unwrap().as_u64(), Some(64));
+        assert_eq!(
+            vectors.get("distance").unwrap().as_str(),
+            Some("Manhattan")
+        );
     }
 
     #[test]

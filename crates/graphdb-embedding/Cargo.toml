@@ -1,0 +1,21 @@
+[package]
+name = "graphdb-embedding"
+version.workspace = true
+edition.workspace = true
+description = "Embedding service infrastructure, independent of vector backend"
+
+[lib]
+name = "graphdb_embedding"
+path = "src/lib.rs"
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"

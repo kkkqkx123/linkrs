@@ -7,14 +7,17 @@ edition.workspace = true
 # Built-in local vector engine. Enables the `vector_sync` module and
 # `VectorBackend::Local`.
 vector = ["dep:vector-search"]
+# Embedding infrastructure, independent of remote backend.
+embedding = ["vector", "dep:graphdb-embedding"]
 # Remote qdrant client on top of the local engine types.
-vector-qdrant = ["vector", "dep:vector-client"]
+vector-qdrant = ["vector", "embedding", "dep:vector-client"]
 fulltext-search = ["graphdb-search/fulltext-search"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
 graphdb-search = { path = "../graphdb-search" }
 graphdb-config = { path = "../graphdb-config" }
+graphdb-embedding = { path = "../graphdb-embedding", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

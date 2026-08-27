@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::config::VectorClientConfig;
-use crate::embedding::{EmbeddingConfig, EmbeddingService};
 use crate::engine::{DisabledEngine, VectorEngine};
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
@@ -47,14 +46,15 @@ impl VectorClient {
         SearchApi::new(self.engine.as_ref(), collection)
     }
 
+    #[cfg(feature = "embedding")]
     pub async fn search_with_text(
         &self,
         collection: impl Into<String>,
         text: &str,
-        embedding_config: EmbeddingConfig,
+        embedding_config: graphdb_embedding::EmbeddingConfig,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let embedding_service = EmbeddingService::from_config(embedding_config)
+        let embedding_service = graphdb_embedding::EmbeddingService::from_config(embedding_config)
             .map_err(|e| VectorClientError::InternalError(e.to_string()))?;
         let vector = embedding_service
             .embed(text)

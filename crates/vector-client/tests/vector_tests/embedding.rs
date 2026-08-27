@@ -9,7 +9,7 @@
 //! Test cases: TC-VEC-EMB-001 ~ TC-VEC-EMB-005
 
 use super::common::VectorTestContext;
-use vector_client::embedding::EmbeddingProvider;
+use vector_client::EmbeddingProvider;
 
 /// TC-VEC-EMB-001: Generate Single Embedding
 #[tokio::test]

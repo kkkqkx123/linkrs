@@ -162,10 +162,7 @@ pub fn distance_to_proto(distance: DistanceMetric) -> Result<proto::Distance, Ve
         DistanceMetric::Cosine => Ok(proto::Distance::Cosine),
         DistanceMetric::Euclid => Ok(proto::Distance::Euclid),
         DistanceMetric::Dot => Ok(proto::Distance::Dot),
-        other => Err(VectorClientError::NotSupported(format!(
-            "distance metric {:?} is not supported by Qdrant",
-            other
-        ))),
+        DistanceMetric::Manhattan => Ok(proto::Distance::Manhattan),
     }
 }
 
@@ -408,6 +405,7 @@ fn distance_from_proto(d: i32) -> DistanceMetric {
         Ok(proto::Distance::Cosine) => DistanceMetric::Cosine,
         Ok(proto::Distance::Euclid) => DistanceMetric::Euclid,
         Ok(proto::Distance::Dot) => DistanceMetric::Dot,
+        Ok(proto::Distance::Manhattan) => DistanceMetric::Manhattan,
         _ => DistanceMetric::Cosine,
     }
 }
