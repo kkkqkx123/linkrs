@@ -2,7 +2,7 @@
 //!
 //! Provide a method for converting expressions into strings.
 
-use crate::core::types::expr::Expression;
+use crate::types::expr::Expression;
 use std::fmt;
 
 impl Expression {

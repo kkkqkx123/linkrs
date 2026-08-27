@@ -9,6 +9,24 @@ use crate::query::parser::ast::stmt::Ast;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Consistency level for reads that may lag behind the sync frontier.
+///
+/// - `Eventual` (default) – no waiting, may observe `frontier_lag`.
+/// - `ReadYourWrites` – wait until the secondary index frontier has caught up
+///   to the caller's `commit_lsn` or the timeout expires. Degraded frontiers
+///   fail the read instead of returning stale data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsistencyLevel {
+    Eventual,
+    ReadYourWrites { timeout_ms: u64 },
+}
+
+impl Default for ConsistencyLevel {
+    fn default() -> Self {
+        Self::Eventual
+    }
+}
+
 /// Query request
 #[derive(Debug, Clone)]
 pub struct QueryRequest {
@@ -33,6 +51,13 @@ pub struct QueryRequest {
     /// carries its own expression analysis context, so expression ids stay
     /// consistent with the plan generated from it.
     pub parsed_statement: Option<Arc<Ast>>,
+    /// Consistency requirement for secondary-index reads (vector/fulltext).
+    /// `Eventual` is the default for backward compatibility; `ReadYourWrites`
+    /// makes a `SEARCH VECTOR` block until the outbox frontier catches up.
+    pub consistency: ConsistencyLevel,
+    /// Minimum LSN to wait for when `consistency` is `ReadYourWrites`. When
+    /// `None`, the current outbox `materialized_lsn` is used.
+    pub minimum_lsn: Option<crate::core::types::CommitLsn>,
 }
 
 impl Default for QueryRequest {
@@ -47,6 +72,8 @@ impl Default for QueryRequest {
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
+            consistency: ConsistencyLevel::default(),
+            minimum_lsn: None,
         }
     }
 }

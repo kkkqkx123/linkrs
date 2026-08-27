@@ -1,7 +1,7 @@
 //! Value Calculation Module
 //!
 //! This module provides methods for arithmetic, logical, and bitwise operations on values.
-use crate::core::value::Value;
+use crate::value::Value;
 
 impl Value {
     /// Addition operation

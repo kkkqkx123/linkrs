@@ -13,9 +13,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::types::VertexId;
-use crate::core::vertex_edge_path::Step;
-use crate::core::{Edge, Path, Vertex};
+use crate::types::VertexId;
+use crate::vertex_edge_path::Step;
+use crate::{Edge, Path, Vertex};
 
 /// NPath - path representation of a linked list structure
 ///
@@ -431,7 +431,7 @@ pub mod utils {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::VertexId;
+    use crate::types::VertexId;
 
     fn create_test_vertex(id: i64) -> Arc<Vertex> {
         Arc::new(Vertex::new(VertexId::from_int64(id), vec![]))

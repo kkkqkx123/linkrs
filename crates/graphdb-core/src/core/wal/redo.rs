@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{LabelId, SpaceInfo, VertexId};
-use crate::core::Value;
+use crate::types::{LabelId, SpaceInfo, VertexId};
+use crate::Value;
 
 // ============================================================================
 // Data Operations

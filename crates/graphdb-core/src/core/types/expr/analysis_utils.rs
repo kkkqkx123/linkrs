@@ -7,10 +7,10 @@
 //! - Runtime context requirement checking
 //! - Expression searching
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::visitor_checkers::ConstantChecker;
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
+use crate::types::expr::contextual::ContextualExpression;
+use crate::types::expr::visitor_checkers::ConstantChecker;
+use crate::types::expr::Expression;
+use crate::types::operators::AggregateFunction;
 
 /// Check if the context expression is a constant
 ///
@@ -480,11 +480,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_is_constant_expression() {
-        let expr = Expression::Literal(crate::core::Value::Int(1));
+        let expr = Expression::Literal(crate::Value::Int(1));
         assert!(is_constant_expression(&expr));
 
         let expr = Expression::Variable("v".to_string());
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_is_evaluable() {
-        let expr = Expression::Literal(crate::core::Value::Int(1));
+        let expr = Expression::Literal(crate::Value::Int(1));
         assert!(is_evaluable(&expr));
 
         let expr = Expression::Variable("v".to_string());

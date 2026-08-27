@@ -1,4 +1,4 @@
-use crate::core::value::{
+use crate::value::{
     date_time::{DateTimeValue, DateValue, TimeValue},
     geography::Geography,
     interval::IntervalValue,
@@ -511,7 +511,7 @@ impl Value {
 
     // Geographic comparison helper functions
     fn cmp_geography(a: &Geography, b: &Geography) -> CmpOrdering {
-        use crate::core::value::geography::Geography::*;
+        use crate::value::geography::Geography::*;
 
         fn type_priority(geo: &Geography) -> u8 {
             match geo {
@@ -525,8 +525,8 @@ impl Value {
         }
 
         fn cmp_points(
-            a: &[crate::core::value::geography::GeographyValue],
-            b: &[crate::core::value::geography::GeographyValue],
+            a: &[crate::value::geography::GeographyValue],
+            b: &[crate::value::geography::GeographyValue],
         ) -> CmpOrdering {
             a.len().cmp(&b.len()).then_with(|| {
                 for (pa, pb) in a.iter().zip(b.iter()) {
@@ -598,8 +598,8 @@ impl Value {
 
     // Struct comparison: field count, then field-name order, then field values.
     fn cmp_struct(
-        a: &crate::core::value::StructValue,
-        b: &crate::core::value::StructValue,
+        a: &crate::value::StructValue,
+        b: &crate::value::StructValue,
     ) -> CmpOrdering {
         a.fields.len().cmp(&b.fields.len()).then_with(|| {
             a.fields.iter().zip(b.fields.iter()).fold(
@@ -617,8 +617,8 @@ impl Value {
 
     // Array comparison: element-by-element lexicographic, then length.
     fn cmp_array(
-        a: &crate::core::value::ArrayValue,
-        b: &crate::core::value::ArrayValue,
+        a: &crate::value::ArrayValue,
+        b: &crate::value::ArrayValue,
     ) -> CmpOrdering {
         a.values
             .iter()

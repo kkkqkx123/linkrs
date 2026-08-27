@@ -1,5 +1,5 @@
-use crate::core::error::StorageError;
-use crate::core::StorageResult;
+use crate::error::StorageError;
+use crate::StorageResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StorageVersion {

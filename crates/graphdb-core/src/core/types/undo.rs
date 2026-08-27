@@ -6,7 +6,7 @@ use super::storage_ids::{
     ColumnId, EdgeDeletionContext, EdgeId, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexId,
     VertexIdentifier,
 };
-use crate::core::Value;
+use crate::Value;
 
 /// Undo log error
 #[derive(Debug, Clone, thiserror::Error)]

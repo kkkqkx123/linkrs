@@ -136,14 +136,159 @@ impl SyncManager {
         targets
     }
 
+    fn payload_needs_vector(&self, payload: &OutboxPayload) -> bool {
+        #[cfg(feature = "vector")]
+        {
+            let Some(coord) = self.vector_coordinator.as_ref() else {
+                return false;
+            };
+            match payload {
+                OutboxPayload::Vertex {
+                    space_id,
+                    tag_name,
+                    properties,
+                    change_type,
+                    ..
+                } => {
+                    if matches!(change_type, ChangeType::Delete) {
+                        // For deletes with empty properties, still need to fan out
+                        // to all vector fields of this tag if any index exists.
+                        if properties.is_empty() {
+                            return coord
+                                .list_indexes()
+                                .iter()
+                                .any(|m| m.space_id == *space_id && m.tag_name == *tag_name);
+                        }
+                    }
+                    for (field, value) in properties {
+                        if value.as_vector().is_some()
+                            && coord.index_exists(*space_id, tag_name, field)
+                        {
+                            return true;
+                        }
+                    }
+                    // Delete case with no matching field still handled above; for
+                    // Insert/Update with vector-like values but missing index, the
+                    // mutation will be filtered later in apply_vector_mutation, but
+                    // we pre-filter here to avoid write amplification. If no
+                    // indexed field matched, no vector intent is needed.
+                    false
+                }
+                OutboxPayload::CreateIndex { fields, .. } => {
+                    fields.iter().any(|(_, v)| v.as_vector().is_some())
+                }
+                OutboxPayload::DropIndex { space_id, schema_name, fields, .. } => {
+                    // Drop needs vector only if any dropped field is a vector index
+                    fields
+                        .iter()
+                        .any(|field| coord.index_exists(*space_id, schema_name, field))
+                }
+                OutboxPayload::EdgeInsert { .. } | OutboxPayload::EdgeDelete { .. } => false,
+            }
+        }
+        #[cfg(not(feature = "vector"))]
+        {
+            let _ = payload;
+            false
+        }
+    }
+
+    fn payload_needs_fulltext(&self, payload: &OutboxPayload) -> bool {
+        #[cfg(feature = "fulltext-search")]
+        {
+            let Some(coord) = self.sync_coordinator.as_ref() else {
+                return false;
+            };
+            let manager = coord.fulltext_manager();
+            match payload {
+                OutboxPayload::Vertex {
+                    space_id,
+                    tag_name,
+                    properties,
+                    change_type,
+                    ..
+                } => {
+                    if matches!(change_type, ChangeType::Delete) && properties.is_empty() {
+                        return manager
+                            .get_space_indexes(*space_id)
+                            .into_iter()
+                            .any(|meta| meta.tag_name == *tag_name);
+                    }
+                    for (field, value) in properties {
+                        let is_text = matches!(value, Value::String(_) | Value::FixedString(_));
+                        if is_text && manager.has_index(*space_id, tag_name, field) {
+                            return true;
+                        }
+                    }
+                    false
+                }
+                OutboxPayload::CreateIndex { fields, .. } => fields.iter().any(|(_, v)| {
+                    matches!(v, Value::String(_) | Value::FixedString(_))
+                }),
+                OutboxPayload::DropIndex {
+                    space_id,
+                    schema_name,
+                    fields,
+                    ..
+                } => fields.iter().any(|field| {
+                    manager
+                        .get_space_indexes(*space_id)
+                        .iter()
+                        .any(|meta| meta.tag_name == *schema_name && meta.field_name == *field)
+                }),
+                OutboxPayload::EdgeInsert { space_id, edge } => edge.props.iter().any(
+                    |(field, value)| {
+                        let is_text =
+                            matches!(value, Value::String(_) | Value::FixedString(_));
+                        is_text
+                            && manager.has_index(*space_id, &edge.edge_type, field)
+                    },
+                ),
+                OutboxPayload::EdgeDelete {
+                    space_id,
+                    edge_type,
+                    ..
+                } => manager
+                    .get_space_indexes(*space_id)
+                    .into_iter()
+                    .any(|meta| meta.tag_name == *edge_type),
+            }
+        }
+        #[cfg(not(feature = "fulltext-search"))]
+        {
+            let _ = payload;
+            false
+        }
+    }
+
     fn stage_intent(&self, txn_id: TransactionId, payload: OutboxPayload) -> Result<(), SyncError> {
-        if !self.delivery_target_names().is_empty() && self.sqlite_outbox.is_none() {
+        // Pre-filter by durable outbox requirement: if at least one target
+        // actually needs this payload and the outbox is not configured, fail fast.
+        let needs_vector = self.payload_needs_vector(&payload);
+        let needs_fulltext = self.payload_needs_fulltext(&payload);
+        let has_needed_target = needs_vector || needs_fulltext;
+        // If neither target needs the payload, skip entirely to avoid write
+        // amplification for pure-graph mutations.
+        if !has_needed_target {
+            // Still validate outbox presence if any target *could* have been
+            // needed but was filtered due to missing index: no intent needed.
+            return Ok(());
+        }
+        if has_needed_target && self.sqlite_outbox.is_none() {
             return Err(SyncError::PersistenceError(
                 "Synchronized writes require a configured durable outbox".to_string(),
             ));
         }
         let mut intents = self.pending_intents.entry(txn_id).or_default();
         for target_name in self.delivery_target_names() {
+            let should_deliver = match target_name {
+                "vector" => needs_vector,
+                "fulltext" => needs_fulltext,
+                _ => true,
+            };
+            if !should_deliver {
+                continue;
+            }
             let sequence = u32::try_from(intents.len()).map_err(|_| {
                 SyncError::PersistenceError(
                     "Transaction intent count exceeds u32 range".to_string(),
@@ -305,12 +450,16 @@ impl SyncManager {
             }
             Err(error) => return Err(error),
         };
-        self.sqlite_outbox = Some(Arc::new(outbox));
+        let outbox_arc = Arc::new(outbox);
+        self.sqlite_outbox = Some(outbox_arc.clone());
         #[cfg(feature = "vector")]
         {
             self.vector_receiver = Some(Arc::new(crate::sync::VectorReceiver::open(
                 work_dir.join("vector_receiver"),
             )));
+            if let Some(coord) = self.vector_coordinator.as_ref() {
+                coord.set_outbox(outbox_arc.clone());
+            }
         }
         Ok(())
     }
@@ -416,23 +565,40 @@ impl SyncManager {
                                     apply_started.elapsed().as_millis() as u64
                                 );
                             }
-                            let retry_count = outbox
-                                .retry_count(event.event_id)
-                                .await
-                                .map_err(SyncError::PersistenceError)?;
-                            if retry_count.saturating_add(1) >= self.outbox_consumer.max_retries {
-                                outbox
-                                    .dead_letter(&event, now, &error)
-                                    .await
-                                    .map_err(SyncError::PersistenceError)?;
-                            } else {
-                                let backoff = 100u64
-                                    .saturating_mul(1u64 << retry_count.min(16))
-                                    .min(300_000);
+                            // Qdrant disabled events are retained for retry after
+                            // engine recovery and must not be dead-lettered even after
+                            // max_retries. Detect by the EngineDisabled message.
+                            let is_disabled_error = error.contains("Vector engine is disabled")
+                                || error.contains("EngineDisabled");
+                            if is_disabled_error {
+                                // Fixed 5s backoff for disabled, not counting toward
+                                // dead-letter threshold.
+                                let backoff = 5_000u64;
                                 outbox
                                     .retry(&event, now.saturating_add(backoff), &error)
                                     .await
                                     .map_err(SyncError::PersistenceError)?;
+                            } else {
+                                let retry_count = outbox
+                                    .retry_count(event.event_id)
+                                    .await
+                                    .map_err(SyncError::PersistenceError)?;
+                                if retry_count.saturating_add(1)
+                                    >= self.outbox_consumer.max_retries
+                                {
+                                    outbox
+                                        .dead_letter(&event, now, &error)
+                                        .await
+                                        .map_err(SyncError::PersistenceError)?;
+                                } else {
+                                    let backoff = 100u64
+                                        .saturating_mul(1u64 << retry_count.min(16))
+                                        .min(300_000);
+                                    outbox
+                                        .retry(&event, now.saturating_add(backoff), &error)
+                                        .await
+                                        .map_err(SyncError::PersistenceError)?;
+                                }
                             }
                         }
                     }
@@ -464,6 +630,18 @@ impl SyncManager {
                     frontier_lag,
                     degraded,
                 });
+                // Per-target lag for granular alerting.
+                for target in &diagnostics.targets {
+                    stats.record_target_frontier_lag(&target.target, target.frontier_lag);
+                }
+                for index in &diagnostics.indexes {
+                    let label = format!("{}:{}", index.target, index.index_id);
+                    stats.record_target_frontier_lag(&label, index.frontier_lag);
+                }
+                #[cfg(feature = "vector")]
+                if let Some(coord) = self.vector_coordinator.as_ref() {
+                    stats.record_vector_disabled_skips(coord.disabled_skip_count());
+                }
             }
             Ok(processed)
         })
@@ -741,7 +919,7 @@ impl SyncManager {
                         field_name,
                         vector_change_type,
                         crate::sync::vector_sync::VectorPointData {
-                            id: format!("{}_{}_{}", vertex_id, tag_name, field_name),
+                            id: format_vector_point_id(vertex_id, tag_name, field_name),
                             vector,
                             payload,
                         },
@@ -763,9 +941,10 @@ impl SyncManager {
                                 &metadata.field_name,
                                 crate::sync::vector_sync::VectorChangeType::Delete,
                                 crate::sync::vector_sync::VectorPointData {
-                                    id: format!(
-                                        "{}_{}_{}",
-                                        vertex_id, tag_name, metadata.field_name
+                                    id: format_vector_point_id(
+                                        vertex_id,
+                                        tag_name,
+                                        &metadata.field_name,
                                     ),
                                     vector: Vec::new(),
                                     payload: HashMap::new(),
@@ -1082,12 +1261,17 @@ impl SyncManager {
                 "SQLite outbox is not configured".to_string(),
             ));
         };
-        self.execute_sync(|| async {
+        let mut diagnostics = self.execute_sync(|| async {
             outbox
                 .diagnostics()
                 .await
                 .map_err(SyncError::PersistenceError)
-        })
+        })?;
+        #[cfg(feature = "vector")]
+        if let Some(coord) = self.vector_coordinator.as_ref() {
+            diagnostics.vector_disabled_skips = coord.disabled_skip_count();
+        }
+        Ok(diagnostics)
     }
 
     /// Create a crash-safe immutable snapshot of the SQLite projection.
@@ -1412,8 +1596,32 @@ fn payload_to_intent(
     let sequence = u64::from(intent_sequence).saturating_add(1);
     let id = format!("{}:{}:{}", txn_id.0, target_name, sequence);
     let target = TargetId::new(target_name.to_string()).map_err(SyncError::PersistenceError)?;
-    let ordering_key = OrderingKey::new(format!("{}:default:{}", target_name, id))
-        .map_err(SyncError::PersistenceError)?;
+    // Entity-scoped ordering key so concurrent updates to the same graph
+    // entity are serialized by the SQLite `NOT EXISTS (ordering_key)` fence
+    // in `claim_next`. The previous per-event `default:{txn}:{seq}` made every
+    // ordering_key unique, so the fence was vacuously true. Now all events
+    // for the same logical entity share one key: {target}:{space}:{index}:{entity}.
+    let ordering_key = {
+        let entity_str = match payload {
+            OutboxPayload::Vertex { vertex_id, .. } => format!("{}", vertex_id),
+            OutboxPayload::EdgeInsert { edge, .. } => {
+                format!("{}->{}#{}", edge.src, edge.dst, edge.ranking)
+            }
+            OutboxPayload::EdgeDelete {
+                src,
+                dst,
+                ranking,
+                ..
+            } => format!("{}->{}#{}", src, dst, ranking),
+            OutboxPayload::CreateIndex { index_name, .. }
+            | OutboxPayload::DropIndex { index_name, .. } => {
+                // DDL is per-index; serialize all DDL for the same index.
+                format!("ddl:{}", index_name)
+            }
+        };
+        let key = format!("{}:{}:{}:{}", target_name, space_id, index_name, entity_str);
+        OrderingKey::new(key).map_err(SyncError::PersistenceError)?
+    };
     let idempotency_key = IdempotencyKey::new(id).map_err(SyncError::PersistenceError)?;
     Ok(crate::core::wal::OutboxIntent {
         wire_version: WAL_SYNC_WIRE_VERSION,
@@ -1458,6 +1666,16 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     // Index IDs are persisted in SQLite INTEGER columns, so keep the
     // deterministic hash within the signed 64-bit range.
     hash & (i64::MAX as u64)
+}
+
+fn format_vector_point_id(vertex_id: &crate::core::Value, tag: &str, field: &str) -> String {
+    let raw = format!("{}", vertex_id);
+    // Escape the delimiter '#' and the escape char '%' inside the vertex id
+    // so that decoding remains unambiguous across Local and Qdrant backends.
+    // Percent-encoding is minimal and deterministic; '%' is escaped first to
+    // avoid double-encoding.
+    let encoded = raw.replace('%', "%25").replace('#', "%23");
+    format!("{}#{}#{}", encoded, tag, field)
 }
 
 fn latest_manifest_outbox_snapshot(work_dir: &Path) -> Result<Option<OutboxSnapshot>, String> {

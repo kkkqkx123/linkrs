@@ -8,8 +8,8 @@ use std::sync::Arc;
 use super::contextual::ContextualExpression;
 use super::expression_context::ExpressionAnalysisContext;
 use super::{Expression, ExpressionId, ExpressionMeta};
-use crate::core::types::DataType;
-use crate::core::Value;
+use crate::types::DataType;
+use crate::Value;
 
 /// Serializable expression references (for storage/transmission)
 ///
@@ -136,7 +136,7 @@ impl Eq for SerializableExpression {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_serializable_expression_creation() {
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_serializable_expression_is_aggregate() {
-        use crate::core::types::operators::AggregateFunction;
+        use crate::types::operators::AggregateFunction;
 
         let expr =
             Expression::aggregate(AggregateFunction::Count, Expression::variable("x"), false);
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_serializable_expression_contains_aggregate() {
-        use crate::core::types::operators::AggregateFunction;
+        use crate::types::operators::AggregateFunction;
 
         let expr =
             Expression::aggregate(AggregateFunction::Count, Expression::variable("x"), false);

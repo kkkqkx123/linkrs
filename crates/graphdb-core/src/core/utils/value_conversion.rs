@@ -2,9 +2,9 @@
 //!
 //! Provides conversions between graphdb_value_t and core::Value.
 
-use crate::core::Value;
+use crate::Value;
 
-use crate::core::types::c_api::{
+use crate::types::c_api::{
     graphdb_string_t, graphdb_value_data_t, graphdb_value_t, graphdb_value_type_t,
 };
 

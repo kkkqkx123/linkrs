@@ -11,9 +11,9 @@
 //! - [`VariableContainsChecker`] - Check if the expression contains the specified variable
 //! - [`PathBuildContainsChecker`] - Check if the expression contains PathBuild
 
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::Expression;
+use crate::types::expr::visitor::ExpressionVisitor;
+use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::Expression;
 
 /// Constant Checker
 ///
@@ -59,7 +59,7 @@ impl ConstantChecker {
 }
 
 impl ExpressionVisitor for ConstantChecker {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {
         self.is_constant = false;
@@ -157,7 +157,7 @@ impl ExpressionVisitor for ConstantChecker {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         if self.is_constant {
             self.visit(expression);
@@ -341,7 +341,7 @@ impl PropertyContainsChecker {
 }
 
 impl ExpressionVisitor for PropertyContainsChecker {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {}
 
@@ -442,7 +442,7 @@ impl ExpressionVisitor for PropertyContainsChecker {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         if !self.contains {
             self.visit(expression);
@@ -847,7 +847,7 @@ impl AggregateFunctionChecker {
 }
 
 impl ExpressionVisitor for AggregateFunctionChecker {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {}
 
@@ -946,7 +946,7 @@ impl ExpressionVisitor for AggregateFunctionChecker {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         if !self.contains_aggregate {
             self.visit(expression);
@@ -1126,7 +1126,7 @@ impl VariableContainsChecker {
 }
 
 impl ExpressionVisitor for VariableContainsChecker {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, name: &str) {
         if name == self.variable_name {
@@ -1231,7 +1231,7 @@ impl ExpressionVisitor for VariableContainsChecker {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         if !self.contains {
             self.visit(expression);
@@ -1405,7 +1405,7 @@ impl PathBuildContainsChecker {
 }
 
 impl ExpressionVisitor for PathBuildContainsChecker {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {}
 
@@ -1506,7 +1506,7 @@ impl ExpressionVisitor for PathBuildContainsChecker {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         if !self.contains_path_build {
             self.visit(expression);

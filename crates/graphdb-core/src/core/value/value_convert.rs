@@ -1,4 +1,4 @@
-use crate::core::{
+use crate::{
     error::StorageError,
     error::StorageResult,
     types::DataType,
@@ -759,7 +759,7 @@ impl Value {
                             )
                         })
                         .collect();
-                    Value::Struct(Box::new(crate::core::StructValue::new(fields)))
+                    Value::Struct(Box::new(crate::StructValue::new(fields)))
                 }
                 _ => {
                     return Err(StorageError::type_mismatch(
@@ -773,7 +773,7 @@ impl Value {
                 Value::Array(_) => self.clone(),
                 // List -> Array: element copy; element type compatibility is
                 // validated by `TypeUtils::can_cast` before this path runs.
-                Value::List(list) => Value::Array(Box::new(crate::core::ArrayValue::new(
+                Value::List(list) => Value::Array(Box::new(crate::ArrayValue::new(
                     list.iter().cloned().collect(),
                 ))),
                 _ => {

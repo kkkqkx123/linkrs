@@ -2,9 +2,9 @@
 //!
 //! This module provides memory estimation for the Expression enum and related types.
 
-use crate::core::types::expr::{Expression, SubqueryBody};
-use crate::core::types::memory_estimation::MemoryEstimatable;
-use crate::core::value::Value;
+use crate::types::expr::{Expression, SubqueryBody};
+use crate::types::memory_estimation::MemoryEstimatable;
+use crate::value::Value;
 
 impl MemoryEstimatable for Expression {
     fn estimate_memory(&self) -> usize {
@@ -184,7 +184,7 @@ fn estimate_string_memory(s: &String) -> usize {
 
 /// Helper function to estimate Value memory
 fn estimate_value_memory(value: &Value) -> usize {
-    use crate::core::types::memory_estimation::MemoryEstimatable;
+    use crate::types::memory_estimation::MemoryEstimatable;
     value.estimate_memory()
 }
 
@@ -572,7 +572,7 @@ impl Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_simple_expression() {

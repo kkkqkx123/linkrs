@@ -1,7 +1,7 @@
 //! Value Type Definition - Core Enum and Basic Methods
 
-use crate::core::DataSet;
-use crate::core::{
+use crate::DataSet;
+use crate::{
     types::storage_ids::{EdgeId, VertexId},
     types::DataType,
     value::{
@@ -191,7 +191,7 @@ impl Value {
         let mut common = DataType::Empty;
         for element in elements {
             common =
-                crate::core::type_system::TypeUtils::get_common_type(&common, &element.get_type());
+                crate::type_system::TypeUtils::get_common_type(&common, &element.get_type());
             if common == DataType::Empty {
                 break;
             }

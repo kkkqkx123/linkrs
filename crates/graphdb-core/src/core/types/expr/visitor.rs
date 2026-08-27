@@ -16,11 +16,11 @@
 //! assert_eq!(collector.properties, vec!["name".to_string()]);
 //! ```
 
-use crate::core::types::expr::SubqueryBody;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::DataType;
-use crate::core::Expression;
-use crate::core::Value;
+use crate::types::expr::SubqueryBody;
+use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::types::DataType;
+use crate::Expression;
+use crate::Value;
 
 /// Expression Visitor trait
 ///

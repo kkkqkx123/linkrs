@@ -2,7 +2,7 @@
 //!
 //! Provide methods for traversing and accessing the expression tree.
 
-use crate::core::types::expr::Expression;
+use crate::types::expr::Expression;
 
 impl Expression {
     /// Obtain all the subexpressions of the expression.

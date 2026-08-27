@@ -2,8 +2,8 @@
 //!
 //! Provides methods for checking the properties and state of an expression.
 
-use crate::core::types::expr::Expression;
-use crate::core::Value;
+use crate::types::expr::Expression;
+use crate::Value;
 
 impl Expression {
     /// Checking if an expression is a constant

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::core::types::VertexId;
-use crate::core::value::Value;
+use crate::types::VertexId;
+use crate::value::Value;
 
 /// Represents a tag in the graph, similar to Nebula's Tag structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -8,7 +8,7 @@ use std::time::Duration;
 use crc32fast::Hasher;
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::Timestamp;
+use crate::types::Timestamp;
 
 pub const WAL_MAGIC: u32 = 0x47524150;
 pub const WAL_VERSION: u32 = 2;
@@ -39,7 +39,7 @@ pub fn blocks_needed(size: usize) -> usize {
 }
 
 // TransactionId is defined in core::types::storage_ids — use that definition.
-pub use crate::core::types::TransactionId;
+pub use crate::types::TransactionId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Lsn(pub u64);

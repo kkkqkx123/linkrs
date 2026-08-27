@@ -3,8 +3,8 @@
 //! Manages user account creation, modification, deletion, and role authorization.
 //! This is a pure in-memory storage for user metadata, separate from graph data storage.
 
-use crate::core::types::{PasswordInfo, UserAlterInfo, UserInfo};
-use crate::core::{RoleType, StorageError};
+use crate::types::{PasswordInfo, UserAlterInfo, UserInfo};
+use crate::{RoleType, StorageError};
 parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -147,7 +147,7 @@ impl UserStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RoleType;
+    use crate::RoleType;
 
     #[test]
     fn test_create_user() {

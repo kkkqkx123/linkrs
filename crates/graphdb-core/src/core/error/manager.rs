@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
+use crate::error::codes::{ErrorCode, PublicError, ToPublicError};
 
 /// Manager operation result type
 pub type ManagerResult<T> = Result<T, ManagerError>;

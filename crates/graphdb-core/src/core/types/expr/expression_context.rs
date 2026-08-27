@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use super::contextual::ContextualExpression;
 use super::{Expression, ExpressionId, ExpressionMeta};
-use crate::core::types::operators::BinaryOperator;
-use crate::core::types::operators::UnaryOperator;
-use crate::core::types::DataType;
-use crate::core::Value;
+use crate::types::operators::BinaryOperator;
+use crate::types::operators::UnaryOperator;
+use crate::types::DataType;
+use crate::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OptimizationFlags {
@@ -262,7 +262,7 @@ impl Default for ExpressionAnalysisContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_expression_context_creation() {

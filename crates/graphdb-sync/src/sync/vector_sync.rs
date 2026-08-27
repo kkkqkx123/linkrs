@@ -92,6 +92,26 @@ impl From<crate::sync::types::ChangeType> for VectorChangeType {
     }
 }
 
+/// Consistency level for vector search.
+///
+/// - `Eventual` (default): may lag behind the latest committed graph write
+///   (`frontier_lag` observable, no waiting).
+/// - `ReadYourWrites`: the calling session's last `commit_lsn` is waited on
+///   until the vector `index_frontier >= commit_lsn` or the timeout expires.
+///   If the frontier is marked `degraded` through that LSN, the search fails
+///   instead of returning stale data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchConsistency {
+    Eventual,
+    ReadYourWrites { timeout_ms: u64 },
+}
+
+impl Default for SearchConsistency {
+    fn default() -> Self {
+        Self::Eventual
+    }
+}
+
 /// Search options for vector search
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -102,6 +122,11 @@ pub struct SearchOptions {
     pub limit: usize,
     pub threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
+    pub consistency: SearchConsistency,
+    /// When `ReadYourWrites`, the minimum LSN to wait for. `None` means wait
+    /// for the current outbox `materialized_lsn` (i.e. all committed writes so
+    /// far).
+    pub minimum_lsn: Option<crate::core::types::CommitLsn>,
 }
 
 impl SearchOptions {
@@ -120,6 +145,8 @@ impl SearchOptions {
             limit,
             threshold: None,
             filter: None,
+            consistency: SearchConsistency::default(),
+            minimum_lsn: None,
         }
     }
 
@@ -130,6 +157,16 @@ impl SearchOptions {
 
     pub fn with_filter(mut self, filter: VectorFilter) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_consistency(mut self, consistency: SearchConsistency) -> Self {
+        self.consistency = consistency;
+        self
+    }
+
+    pub fn with_minimum_lsn(mut self, lsn: crate::core::types::CommitLsn) -> Self {
+        self.minimum_lsn = Some(lsn);
         self
     }
 }
@@ -216,6 +253,10 @@ pub struct VectorSyncCoordinator {
     /// Using `Handle` instead of `&Runtime` avoids lifetime issues while allowing
     /// the caller (API layer or tests) to control the runtime lifecycle.
     runtime: tokio::runtime::Handle,
+    /// Optional outbox handle for `ReadYourWrites` consistency waiting. Set by
+    /// `SyncManager::configure_outbox` when both outbox and coordinator are
+    /// present. Absent in coordinator-only (query-crate) instantiations.
+    outbox: parking_lot::RwLock<Option<std::sync::Arc<crate::sync::SqliteOutbox>>>,
 }
 
 impl std::fmt::Debug for VectorSyncCoordinator {
@@ -277,6 +318,7 @@ impl VectorSyncCoordinator {
             logical_indexes: DashMap::new(),
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
+            outbox: parking_lot::RwLock::new(None),
         }
     }
 
@@ -303,6 +345,19 @@ impl VectorSyncCoordinator {
     /// Get the vector backend
     pub fn backend(&self) -> &VectorBackend {
         &self.backend
+    }
+
+    pub fn set_outbox(&self, outbox: std::sync::Arc<crate::sync::SqliteOutbox>) {
+        *self.outbox.write() = Some(outbox);
+    }
+
+    fn vector_index_id(space_id: u64, tag_name: &str) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in format!("vector:{}:{}", space_id, tag_name).as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash & (i64::MAX as u64)
     }
 
     /// Get the embedding service
@@ -457,10 +512,12 @@ impl VectorSyncCoordinator {
     ///
     /// Delivery-plane semantics: when the engine is disabled the batch is
     /// *skipped and accounted* — logged with a warning, counted in
-    /// [`Self::disabled_skip_count`] — instead of failing. Failing here would
-    /// stall replication (the sync pipeline only records its LSN after this
-    /// returns), while silently pretending success is invisible; the skip is
-    /// observable through logs and the counter.
+    /// Delivery-plane handling for a disabled engine. For the local engine this
+    /// state is unreachable (Local never reports disabled); if it occurs it is
+    /// treated as a hard error. For the Qdrant backend the event is **not**
+    /// acknowledged – the outbox entry is retained and retried after the engine
+    /// recovers, preserving self-healing. The skip is still observable via
+    /// [`Self::disabled_skip_count`] and via metrics.
     pub async fn on_vector_change_batch(
         &self,
         contexts: Vec<VectorChangeContext>,
@@ -468,15 +525,20 @@ impl VectorSyncCoordinator {
         if self.is_disabled_engine() {
             self.disabled_skips
                 .fetch_add(contexts.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            // Qdrant disabled: preserve the outbox entry for retry after recovery
+            // instead of silently discarding it. Returning EngineDisabled makes
+            // `SyncManager::retry_outbox_sync` route the event to `retry()` rather
+            // than `acknowledge()` or `dead_letter()`.
             tracing::warn!(
                 count = contexts.len(),
                 total_skipped = self
                     .disabled_skips
                     .load(std::sync::atomic::Ordering::Relaxed),
-                "vector engine disabled: skipped delivering vector changes; \
-                 vector data diverges from graph data until re-synced"
+                "vector engine disabled: retaining {} vector changes for retry; \
+                 vector data diverges until engine recovers",
+                contexts.len()
             );
-            return Ok(());
+            return Err(VectorCoordinatorError::EngineDisabled);
         }
 
         let mut upsert_by_collection: HashMap<String, Vec<VectorPoint>> = HashMap::new();
@@ -611,6 +673,61 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         if self.is_disabled_engine() {
             return Err(VectorCoordinatorError::EngineDisabled);
+        }
+        // Read-your-writes consistency: wait for the vector frontier to catch
+        // up to the caller's commit LSN (or current materialized LSN when not
+        // supplied). Degraded frontiers fail the search instead of serving
+        // stale data.
+        if let SearchConsistency::ReadYourWrites { timeout_ms } = &options.consistency {
+            // Clone the outbox handle without holding the lock across an await.
+            let outbox_opt = {
+                let guard = self.outbox.read();
+                guard.clone()
+            };
+            if let Some(outbox) = outbox_opt {
+                let minimum_lsn = if let Some(lsn) = options.minimum_lsn {
+                    lsn
+                } else {
+                    // Wait for all committed writes that have been materialized.
+                    match outbox.materialized_lsn().await {
+                        Ok(lsn) => lsn,
+                        Err(e) => {
+                            return Err(VectorCoordinatorError::Vector(
+                                crate::sync::vector_error::VectorError::Internal(e),
+                            ))
+                        }
+                    }
+                };
+                if minimum_lsn.get() != 0 {
+                    let target = crate::core::types::TargetId::new("vector".to_string())
+                        .map_err(|e| {
+                            VectorCoordinatorError::Vector(
+                                crate::sync::vector_error::VectorError::Internal(e),
+                            )
+                        })?;
+                    let index_id = Self::vector_index_id(options.space_id, &options.tag_name);
+                    let generation = 1u64;
+                    let waited = outbox
+                        .wait_for_minimum_lsn(
+                            &target,
+                            index_id,
+                            generation,
+                            minimum_lsn,
+                            *timeout_ms,
+                        )
+                        .await
+                        .map_err(|e| {
+                            VectorCoordinatorError::Vector(
+                                crate::sync::vector_error::VectorError::Internal(e),
+                            )
+                        })?;
+                    if !waited {
+                        return Err(VectorCoordinatorError::Vector(
+                            crate::sync::vector_error::VectorError::Timeout,
+                        ));
+                    }
+                }
+            }
         }
         let collection_name =
             VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name)

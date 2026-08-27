@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::ExpressionAnalysisContext;
 use super::{Expression, ExpressionId, ExpressionMeta};
-use crate::core::types::DataType;
-use crate::core::Value;
+use crate::types::DataType;
+use crate::Value;
 /// Equality is identity-based: two `ContextualExpression` values are equal
 /// only when they share the same `ExpressionId` **and** point to the same
 /// `ExpressionAnalysisContext` (`Arc::ptr_eq`). This is deliberate — the
@@ -322,7 +322,7 @@ impl std::hash::Hash for ContextualExpression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_contextual_expression_creation() {

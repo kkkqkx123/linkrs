@@ -32,7 +32,7 @@ pub use query::QueryResult;
 pub use storage::StorageError;
 pub use storage::StorageResult;
 
-pub use crate::core::types::DataType;
+pub use crate::types::DataType;
 
 // ==================== Error Classification ====================
 
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn test_dberror_creation() {
         let storage_err =
-            StorageError::node_not_found(crate::core::types::VertexId::from_int64(42));
+            StorageError::node_not_found(crate::types::VertexId::from_int64(42));
         let db_err: DBError = storage_err.into();
         assert_eq!(db_err.kind(), ErrorKind::Storage);
         assert!(!db_err.is_retryable());

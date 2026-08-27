@@ -297,7 +297,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -501,7 +501,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let mut query_api = self.db.query_api.write();
         if active {
             let txn_manager = self.txn_manager();
@@ -548,7 +548,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let result = {
             let mut query_api = self.db.query_api.write();
@@ -597,7 +597,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: Some(parsed_ast),
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.db.query_api.write();
         let result = if let Some(txn_id) = *self.current_transaction.read() {
@@ -714,7 +714,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -787,7 +787,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {

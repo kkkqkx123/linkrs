@@ -143,6 +143,7 @@ pub enum MetricType {
     VectorEmbeddingOps,
     VectorEmbeddingErrors,
     VectorEmbeddingLatencyMs,
+    VectorDisabledSkips,
     // CSR (Compressed Sparse Row) metrics
     CsrInsertions,
     CsrDeletions,
@@ -1070,6 +1071,17 @@ impl StatsManager {
         self.set_value(MetricType::OutboxFrontierLag, state.frontier_lag);
         self.set_value(MetricType::TargetFrontierLag, state.frontier_lag);
         self.set_value(MetricType::OutboxDegraded, u64::from(state.degraded));
+    }
+
+    pub fn record_vector_disabled_skips(&self, count: u64) {
+        self.set_value(MetricType::VectorDisabledSkips, count);
+    }
+
+    pub fn record_target_frontier_lag(&self, target: &str, lag: u64) {
+        // Per-target lag is exported as a tagged metric via the space_metrics
+        // map using the target name as the space key.
+        self.set_value(MetricType::TargetFrontierLag, lag);
+        self.add_space_metric_with_amount(target, MetricType::TargetFrontierLag, lag);
     }
 
     pub fn record_generation_build(&self) {

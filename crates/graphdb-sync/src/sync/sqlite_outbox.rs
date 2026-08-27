@@ -40,6 +40,11 @@ pub struct SyncDiagnostics {
     pub materialized_lsn: CommitLsn,
     pub targets: Vec<TargetSyncDiagnostics>,
     pub indexes: Vec<IndexSyncDiagnostics>,
+    /// Total vector change items skipped due to disabled engine (delivery-plane
+    /// accounting). Sourced from `VectorSyncCoordinator::disabled_skip_count`
+    /// and merged by `SyncManager::sync_diagnostics`; 0 when vector is not
+    /// configured.
+    pub vector_disabled_skips: u64,
 }
 
 /// Delivery health for one synchronization target.
@@ -1094,6 +1099,21 @@ impl SqliteOutbox {
         })
     }
 
+    pub async fn prune_applied_events(
+        &self,
+        retention_lsn: CommitLsn,
+    ) -> Result<u64, String> {
+        let retention = to_sql_i64(retention_lsn.get(), "retention LSN")?;
+        let result = sqlx::query(
+            "DELETE FROM events WHERE status IN ('applied','skipped') AND commit_lsn <= ?",
+        )
+        .bind(retention)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn retry_count(&self, event_id: i64) -> Result<u64, String> {
         let value: i64 = sqlx::query_scalar("SELECT retry_count FROM events WHERE id = ?")
             .bind(event_id)
@@ -1413,6 +1433,7 @@ impl SqliteOutbox {
             materialized_lsn,
             targets,
             indexes,
+            vector_disabled_skips: 0,
         })
     }
 }

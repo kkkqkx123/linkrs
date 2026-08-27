@@ -20,11 +20,11 @@
 //! Composite keys concatenate multiple field encodings; the entity tie-breaker
 //! is appended as the final field.
 
-use crate::core::types::storage_ids::VertexId;
-use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
-use crate::core::value::UuidValue;
-use crate::core::wal::EntityRef;
-use crate::core::{NullType, StorageError, Value};
+use crate::types::storage_ids::VertexId;
+use crate::value::date_time::{DateTimeValue, DateValue, TimeValue};
+use crate::value::UuidValue;
+use crate::wal::EntityRef;
+use crate::{NullType, StorageError, Value};
 use compact_str::CompactString;
 
 /// Current wire format version.
@@ -79,23 +79,23 @@ impl OrderedCodec {
     /// it must stay in sync with [`OrderedCodec::encode_value`]. A type that
     /// returns `false` here is rejected at index-creation time and would also
     /// be rejected at encode time.
-    pub fn supports_ordered_key(data_type: &crate::core::DataType) -> bool {
+    pub fn supports_ordered_key(data_type: &crate::DataType) -> bool {
         matches!(
             data_type,
-            crate::core::DataType::Bool
-                | crate::core::DataType::SmallInt
-                | crate::core::DataType::Int
-                | crate::core::DataType::BigInt
-                | crate::core::DataType::Float
-                | crate::core::DataType::Double
-                | crate::core::DataType::Decimal128
-                | crate::core::DataType::String
-                | crate::core::DataType::FixedString(_)
-                | crate::core::DataType::Blob
-                | crate::core::DataType::Date
-                | crate::core::DataType::Time
-                | crate::core::DataType::DateTime
-                | crate::core::DataType::Uuid
+            crate::DataType::Bool
+                | crate::DataType::SmallInt
+                | crate::DataType::Int
+                | crate::DataType::BigInt
+                | crate::DataType::Float
+                | crate::DataType::Double
+                | crate::DataType::Decimal128
+                | crate::DataType::String
+                | crate::DataType::FixedString(_)
+                | crate::DataType::Blob
+                | crate::DataType::Date
+                | crate::DataType::Time
+                | crate::DataType::DateTime
+                | crate::DataType::Uuid
         )
     }
 
@@ -286,7 +286,7 @@ impl OrderedCodec {
                 match entity {
                     EntityRef::Vertex(vid) => {
                         use std::collections::HashMap;
-                        let val = Value::Vertex(Box::new(crate::core::Vertex {
+                        let val = Value::Vertex(Box::new(crate::Vertex {
                             vid,
                             id: 0,
                             tags: Vec::new(),
@@ -660,7 +660,7 @@ fn decode_escaped_bytes(
 }
 
 fn encode_decimal(
-    decimal: &crate::core::value::Decimal128Value,
+    decimal: &crate::value::Decimal128Value,
     buf: &mut Vec<u8>,
 ) -> Result<(), StorageError> {
     let text = decimal.to_string();
@@ -758,7 +758,7 @@ fn decode_decimal(bytes: &[u8]) -> Result<(Value, usize), StorageError> {
     position += 1;
     if digits.iter().all(|digit| *digit == b'0') {
         let value = "0"
-            .parse::<crate::core::value::Decimal128Value>()
+            .parse::<crate::value::Decimal128Value>()
             .map_err(|error| {
                 StorageError::deserialize_error(format!("invalid decimal: {error}"))
             })?;
@@ -780,7 +780,7 @@ fn decode_decimal(bytes: &[u8]) -> Result<(Value, usize), StorageError> {
         text.push_str(&exponent10.to_string());
     }
     let value = text
-        .parse::<crate::core::value::Decimal128Value>()
+        .parse::<crate::value::Decimal128Value>()
         .map_err(|error| StorageError::deserialize_error(format!("invalid decimal: {error}")))?;
     Ok((Value::Decimal128(value), position))
 }
@@ -885,8 +885,8 @@ fn decode_f64_ordered(bits: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
-    use crate::core::value::UuidValue;
+    use crate::value::date_time::{DateTimeValue, DateValue, TimeValue};
+    use crate::value::UuidValue;
 
     fn codec() -> OrderedCodec {
         OrderedCodec::new()

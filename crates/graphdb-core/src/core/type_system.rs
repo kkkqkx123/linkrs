@@ -2,8 +2,8 @@
 //!
 //! Provide core functions such as type compatibility checking, type precedence, and type conversion.
 
-use crate::core::value::list::List;
-use crate::core::{ArrayTypeInfo, DataType, StructTypeInfo, Value};
+use crate::value::list::List;
+use crate::{ArrayTypeInfo, DataType, StructTypeInfo, Value};
 use std::sync::Arc;
 
 /// Type system tools
@@ -232,7 +232,7 @@ impl TypeUtils {
     }
 
     /// Obtaining the literal value type
-    pub fn literal_type(value: &crate::core::value::Value) -> DataType {
+    pub fn literal_type(value: &crate::value::Value) -> DataType {
         value.get_type()
     }
 
@@ -579,7 +579,7 @@ impl TypeUtils {
     /// Delegates to `OrderedCodec::supports_ordered_key` so the index-creation
     /// validation (DDL) and the index-write encoding share one source of truth.
     pub fn is_indexable_type(type_def: &DataType) -> bool {
-        crate::core::value::ordered_codec::OrderedCodec::supports_ordered_key(type_def)
+        crate::value::ordered_codec::OrderedCodec::supports_ordered_key(type_def)
     }
 
     /// Get the default value of the type.
@@ -935,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_literal_type() {
-        use crate::core::value::Value;
+        use crate::value::Value;
         use std::f64::consts::PI;
 
         assert_eq!(TypeUtils::literal_type(&Value::Int(42)), DataType::Int);

@@ -568,7 +568,7 @@ impl<
             session_variables: Some(session.variables_snapshot()),
             query_id: Some(query_id as u64),
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.query_api.write();
         let result = if let Some(txn_id) = session.current_transaction() {
@@ -1211,7 +1211,7 @@ impl<
             session_variables: merged_session_variables,
             query_id: None,
             parsed_statement: parsed_ast,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let mut query_api = self.query_api.write();
         let result = if let Some(execution) = execution.as_ref() {
@@ -1479,7 +1479,7 @@ where
             session_variables: None,
             query_id: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let outcomes = self
             .query_api
             .write()
@@ -1587,7 +1587,7 @@ where
             session_variables: None,
             query_id: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let outcomes =
             self.query_api
                 .write()

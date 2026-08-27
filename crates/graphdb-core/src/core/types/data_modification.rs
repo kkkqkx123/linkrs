@@ -1,6 +1,6 @@
 //! Data Modification Type Definition
 
-use crate::core::Value;
+use crate::Value;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

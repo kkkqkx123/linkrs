@@ -2,8 +2,8 @@
 //!
 //! This module provides memory estimation for the Value enum and related types.
 
-use crate::core::types::memory_estimation::MemoryEstimatable;
-use crate::core::value::Value;
+use crate::types::memory_estimation::MemoryEstimatable;
+use crate::value::Value;
 
 impl MemoryEstimatable for Value {
     fn estimate_memory(&self) -> usize {
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_list_value() {
-        use crate::core::value::list::List;
+        use crate::value::list::List;
         let list = vec![
             Value::Int(1),
             Value::Int(2),

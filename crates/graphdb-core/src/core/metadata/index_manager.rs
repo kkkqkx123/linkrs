@@ -1,5 +1,5 @@
-use crate::core::types::Index;
-use crate::core::StorageError;
+use crate::types::Index;
+use crate::StorageError;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ struct IndexSnapshot {
     edge_indexes: Vec<(u64, String, Index)>,
 }
 
-use crate::core::types::IndexStatus;
+use crate::types::IndexStatus;
 
 pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
     fn create_tag_index(&self, space_id: u64, index: &Index) -> Result<bool, StorageError>;

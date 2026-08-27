@@ -375,7 +375,7 @@ impl TestDb {
                 query_id: None,
                 parsed_statement: None,
                 isolation_level: None,
-            };
+             consistency: Default::default(), minimum_lsn: None, };
             let result = self
                 .query_api
                 .execute_with_execution(query, txn_ctx, &execution);
@@ -394,7 +394,7 @@ impl TestDb {
                 query_id: None,
                 parsed_statement: None,
                 isolation_level: None,
-            };
+             consistency: Default::default(), minimum_lsn: None, };
             let storage = self.bound_auto_commit_storage()?;
             self.query_api
                 .execute_with_operation_storage(query, ctx, storage)
@@ -422,7 +422,7 @@ impl TestDb {
             query_id: None,
             parsed_statement: None,
             isolation_level: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let storage = self.bound_auto_commit_storage()?;
         self.query_api
             .execute_stream_with_operation_storage(query, ctx, storage)
@@ -442,7 +442,7 @@ impl TestDb {
             query_id: None,
             parsed_statement: None,
             isolation_level: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let storage = self.bound_auto_commit_storage()?;
         self.query_api
             .execute_with_operation_storage(query, ctx, storage)
@@ -465,7 +465,7 @@ impl TestDb {
             query_id: None,
             parsed_statement: None,
             isolation_level: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let outcomes = self.query_api.execute_batch(statements, ctx);
         let mut results = Vec::with_capacity(outcomes.len());
         for outcome in outcomes {
@@ -494,7 +494,7 @@ impl TestDb {
             query_id: None,
             parsed_statement: None,
             isolation_level: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
         let outcomes = self
             .query_api
             .execute_batch_grouped(statements, ctx, group_size);

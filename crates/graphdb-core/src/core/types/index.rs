@@ -3,7 +3,7 @@
 //! Provide a unified index type definition, including index state, type, structure, etc.
 
 use super::property_trait::PropertyTypeTrait;
-use crate::core::Value;
+use crate::Value;
 use serde::{Deserialize, Serialize};
 
 /// Comparison operator for partial index conditions
@@ -76,7 +76,7 @@ impl PartialIndexCondition {
         Self::new(
             field.into(),
             ComparisonOperator::IsNull,
-            Value::Null(crate::core::NullType::Null),
+            Value::Null(crate::NullType::Null),
         )
     }
 
@@ -84,7 +84,7 @@ impl PartialIndexCondition {
         Self::new(
             field.into(),
             ComparisonOperator::IsNotNull,
-            Value::Null(crate::core::NullType::Null),
+            Value::Null(crate::NullType::Null),
         )
     }
 
@@ -162,14 +162,14 @@ impl PropertyTypeTrait for IndexField {
         &self.name
     }
 
-    fn data_type(&self) -> &crate::core::DataType {
+    fn data_type(&self) -> &crate::DataType {
         match &self.value_type {
-            Value::Int(_) => &crate::core::DataType::Int,
-            Value::Float(_) => &crate::core::DataType::Float,
-            Value::Bool(_) => &crate::core::DataType::Bool,
-            Value::String(_) => &crate::core::DataType::String,
-            Value::Null(_) => &crate::core::DataType::Null,
-            _ => &crate::core::DataType::String,
+            Value::Int(_) => &crate::DataType::Int,
+            Value::Float(_) => &crate::DataType::Float,
+            Value::Bool(_) => &crate::DataType::Bool,
+            Value::String(_) => &crate::DataType::String,
+            Value::Null(_) => &crate::DataType::Null,
+            _ => &crate::DataType::String,
         }
     }
 
@@ -189,7 +189,7 @@ impl PropertyTypeTrait for IndexField {
         self.name = name;
     }
 
-    fn set_data_type(&mut self, _data_type: crate::core::DataType) {}
+    fn set_data_type(&mut self, _data_type: crate::DataType) {}
 
     fn set_nullable(&mut self, nullable: bool) {
         self.is_nullable = nullable;

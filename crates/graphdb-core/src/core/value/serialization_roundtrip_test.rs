@@ -20,10 +20,10 @@ use super::null::NullType;
 use super::uuid::UuidValue;
 use super::vector::VectorValue;
 use super::{ArrayValue, StructValue};
-use crate::core::types::storage_ids::{EdgeId, VertexId};
-use crate::core::vertex_edge_path::{Edge, Path, Vertex};
-use crate::core::DataSet;
-use crate::core::Value;
+use crate::types::storage_ids::{EdgeId, VertexId};
+use crate::vertex_edge_path::{Edge, Path, Vertex};
+use crate::DataSet;
+use crate::Value;
 use std::collections::{HashMap, HashSet};
 
 /// Compile-time exhaustive check: a new `Value` variant must be listed here
@@ -83,7 +83,7 @@ fn all_sample_values() -> Vec<Value> {
     dataset.add_row(vec![Value::Int(2)]);
 
     let mut vertex = Vertex::with_vid(VertexId::from_int64(10));
-    vertex.tags.push(crate::core::vertex_edge_path::Tag::new(
+    vertex.tags.push(crate::vertex_edge_path::Tag::new(
         "Person".to_string(),
         HashMap::new(),
     ));

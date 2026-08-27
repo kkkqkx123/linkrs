@@ -5,10 +5,10 @@
 //! - Default alias generation
 //! - Property reference extraction
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::expr::visitor_collectors::PropertyCollector;
-use crate::core::types::expr::ExpressionVisitor;
-use crate::core::Value;
+use crate::types::expr::contextual::ContextualExpression;
+use crate::types::expr::visitor_collectors::PropertyCollector;
+use crate::types::expr::ExpressionVisitor;
+use crate::Value;
 
 /// Extracting String Values from Expressions
 ///
@@ -107,7 +107,7 @@ pub fn extract_property_refs(ctx_expr: &ContextualExpression) -> Vec<String> {
 /// # Returns
 /// - (group_keys, group_items)
 pub fn extract_group_info(
-    yield_columns: &[crate::core::types::YieldColumn],
+    yield_columns: &[crate::types::YieldColumn],
 ) -> (Vec<ContextualExpression>, Vec<ContextualExpression>) {
     let mut group_keys = Vec::new();
     let mut group_items = Vec::new();
@@ -129,9 +129,9 @@ pub fn extract_group_info(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::expr::def::Expression;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::types::expr::ExpressionMeta;
+    use crate::types::expr::def::Expression;
+    use crate::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::types::expr::ExpressionMeta;
     use std::sync::Arc;
 
     #[test]

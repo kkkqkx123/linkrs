@@ -1,4 +1,4 @@
-use crate::core::types::TransactionId;
+use crate::types::TransactionId;
 
 #[derive(Debug, Clone)]
 pub struct TransactionContextInfo {

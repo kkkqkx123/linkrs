@@ -1,6 +1,6 @@
-use crate::core::error::StorageResult;
-use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::core::Value;
+use crate::error::StorageResult;
+use crate::types::{LabelId, Timestamp, VertexId};
+use crate::Value;
 
 use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,

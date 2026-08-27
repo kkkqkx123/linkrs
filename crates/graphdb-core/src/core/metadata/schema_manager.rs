@@ -1,5 +1,5 @@
-use crate::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
-use crate::core::StorageError;
+use crate::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
+use crate::StorageError;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -868,7 +868,7 @@ impl Default for SchemaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::{EdgeTypeInfo, SpaceInfo, TagInfo};
+    use crate::types::{EdgeTypeInfo, SpaceInfo, TagInfo};
 
     #[test]
     fn schema_names_are_scoped_by_space() {

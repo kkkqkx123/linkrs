@@ -2,7 +2,7 @@
 //!
 //! This module defines types for dates, times, date-times, and intervals, as well as the related operations.
 
-use crate::core::value::interval::IntervalValue;
+use crate::value::interval::IntervalValue;
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 

@@ -10,10 +10,10 @@
 use std::error::Error;
 
 use super::BoxedError;
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
-use crate::core::error::manager::ManagerError;
-use crate::core::error::storage::StorageError;
-use crate::core::error::DBError;
+use crate::error::codes::{ErrorCode, PublicError, ToPublicError};
+use crate::error::manager::ManagerError;
+use crate::error::storage::StorageError;
+use crate::error::DBError;
 
 /// Query processing phase enumeration
 ///
@@ -123,7 +123,7 @@ pub struct StructuredParseError {
     /// Human-readable error message
     pub message: String,
     /// Line and column position in the source
-    pub position: crate::core::types::Position,
+    pub position: crate::types::Position,
     /// Byte offset in the source (if available)
     pub offset: Option<usize>,
     /// The unexpected token that caused the error
@@ -396,7 +396,7 @@ impl QueryError {
         Self::structured_parse_error(StructuredParseError {
             kind: ParseErrorKind::SyntaxError,
             message: message.into(),
-            position: crate::core::types::Position::new(0, 0),
+            position: crate::types::Position::new(0, 0),
             offset: None,
             unexpected_token: None,
             expected_tokens: Vec::new(),
@@ -410,7 +410,7 @@ impl QueryError {
         Self::structured_parse_error(StructuredParseError {
             kind: ParseErrorKind::SyntaxError,
             message: message.into(),
-            position: crate::core::types::Position::new(0, 0),
+            position: crate::types::Position::new(0, 0),
             offset: Some(offset),
             unexpected_token: None,
             expected_tokens: Vec::new(),
@@ -428,7 +428,7 @@ impl QueryError {
         Self::structured_parse_error(StructuredParseError {
             kind: ParseErrorKind::SyntaxError,
             message: message.into(),
-            position: crate::core::types::Position::new(0, 0),
+            position: crate::types::Position::new(0, 0),
             offset: Some(offset),
             unexpected_token: None,
             expected_tokens: Vec::new(),
@@ -462,7 +462,7 @@ impl QueryError {
         None
     }
 
-    pub fn parse_error_position(&self) -> Option<crate::core::types::Position> {
+    pub fn parse_error_position(&self) -> Option<crate::types::Position> {
         if self.kind == QueryErrorKind::Parse {
             if let Some(ref source) = self.source {
                 if let Some(pe) = source.downcast_ref::<StructuredParseError>() {
@@ -523,7 +523,7 @@ impl From<StorageError> for QueryError {
 
 impl From<DBError> for QueryError {
     fn from(e: DBError) -> Self {
-        use crate::core::error::ErrorKind;
+        use crate::error::ErrorKind;
         match e.kind() {
             ErrorKind::Query => {
                 if let Some(ref source) = e.source() {
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn test_queryerror_with_source() {
         let storage_err =
-            StorageError::node_not_found(crate::core::types::VertexId::from_int64(42));
+            StorageError::node_not_found(crate::types::VertexId::from_int64(42));
         let query_err = QueryError::from(storage_err);
         assert_eq!(query_err.kind(), QueryErrorKind::Storage);
     }

@@ -2,7 +2,7 @@
 //!
 //! Contains type definitions related to graph structures in the graph database
 
-use crate::core::DataType;
+use crate::DataType;
 use serde::{Deserialize, Serialize};
 
 /// Connection type enumeration

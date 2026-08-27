@@ -1,6 +1,6 @@
 //! Basic types in the graph space
 
-use crate::core::types::{DataType, EdgeTypeInfo, MetadataVersion, TagInfo};
+use crate::types::{DataType, EdgeTypeInfo, MetadataVersion, TagInfo};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

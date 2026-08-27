@@ -1,7 +1,7 @@
 //! Attribute Definition Base Type
 
 use super::property_trait::PropertyTypeTrait;
-use crate::core::{DataType, Value};
+use crate::{DataType, Value};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

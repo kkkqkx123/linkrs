@@ -3,7 +3,7 @@
 //! This module defines types related to full-text search queries, including query types,
 //! search options, highlight configuration, and result types.
 
-use crate::core::Value;
+use crate::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

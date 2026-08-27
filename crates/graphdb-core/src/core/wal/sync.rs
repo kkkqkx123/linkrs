@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{
+use crate::types::{
     IdempotencyKey, IndexGeneration, LabelId, OrderingKey, TargetId, TransactionId, VertexId,
 };
 
@@ -109,7 +109,7 @@ mod tests {
     use postcard::{from_bytes, to_allocvec};
 
     use super::{EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION};
-    use crate::core::types::{
+    use crate::types::{
         IdempotencyKey, IndexGeneration, OrderingKey, TargetId, TransactionId, VertexId,
     };
 

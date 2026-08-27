@@ -1,6 +1,6 @@
 //! Metadata version management type
 
-use crate::core::types::{EdgeTypeInfo, TagInfo};
+use crate::types::{EdgeTypeInfo, TagInfo};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -4,7 +4,7 @@
 //! - GroupSuite for grouping keys, items, and aggregates
 //! - Extraction of grouping information from expressions
 
-use crate::core::types::expr::Expression;
+use crate::types::expr::Expression;
 
 /// Group Suite for GROUP BY processing
 ///
@@ -236,7 +236,7 @@ fn is_groupable(expression: &Expression) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::{AggregateFunction, BinaryOperator};
+    use crate::types::operators::{AggregateFunction, BinaryOperator};
 
     #[test]
     fn test_group_suite_new() {

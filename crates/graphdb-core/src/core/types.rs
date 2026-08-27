@@ -513,14 +513,14 @@ pub use EdgeTypeInfo as EdgeTypeSchema;
 /// Indicates an output column in the YIELD clause
 #[derive(Debug, Clone)]
 pub struct YieldColumn {
-    pub expression: crate::core::types::expr::contextual::ContextualExpression,
+    pub expression: crate::types::expr::contextual::ContextualExpression,
     pub alias: String,
     pub is_matched: bool,
 }
 
 impl YieldColumn {
     pub fn new(
-        expression: crate::core::types::expr::contextual::ContextualExpression,
+        expression: crate::types::expr::contextual::ContextualExpression,
         alias: String,
     ) -> Self {
         Self {

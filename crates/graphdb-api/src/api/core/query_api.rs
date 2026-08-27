@@ -471,6 +471,8 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             query_id: ctx.query_id,
             isolation_level: ctx.isolation_level,
             parsed_statement: ctx.parsed_statement,
+            consistency: ctx.consistency,
+            minimum_lsn: ctx.minimum_lsn,
         };
         self.execute(query, new_ctx)
     }

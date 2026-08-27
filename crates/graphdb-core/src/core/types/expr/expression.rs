@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::Expression;
-use crate::core::types::{Position, Span};
-use crate::core::Value;
+use crate::types::{Position, Span};
+use crate::Value;
 
 /// Expression ID for caching and tracing
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -346,7 +346,7 @@ impl From<ExpressionMeta> for ExpressionMetaSerde {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::operators::BinaryOperator;
+    use crate::types::operators::BinaryOperator;
 
     #[test]
     fn test_expression_meta_creation() {

@@ -2,11 +2,11 @@
 //!
 //! Provide expression type derivation functions.
 
-use crate::core::types::expr::Expression;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::DataType;
-use crate::core::Value;
-use crate::core::{ArrayTypeInfo, StructTypeInfo};
+use crate::types::expr::Expression;
+use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::types::DataType;
+use crate::Value;
+use crate::{ArrayTypeInfo, StructTypeInfo};
 use std::sync::Arc;
 
 impl Expression {
@@ -173,7 +173,7 @@ impl Expression {
     /// A missing common type (e.g. String + Int) is reported as `Unknown`
     /// rather than `Empty`; the binder/executor validates the operands.
     fn deduce_arithmetic_type(left: &DataType, right: &DataType) -> DataType {
-        match crate::core::type_system::TypeUtils::get_common_type(left, right) {
+        match crate::type_system::TypeUtils::get_common_type(left, right) {
             DataType::Empty => DataType::Unknown,
             common => common,
         }
@@ -341,7 +341,7 @@ impl Expression {
             common = if common == DataType::Unknown {
                 item_type
             } else {
-                crate::core::type_system::TypeUtils::get_common_type(&common, &item_type)
+                crate::type_system::TypeUtils::get_common_type(&common, &item_type)
             };
             if common == DataType::Empty {
                 return DataType::Unknown;
@@ -359,7 +359,7 @@ impl Expression {
             common = if common == DataType::Unknown {
                 value_type
             } else {
-                crate::core::type_system::TypeUtils::get_common_type(&common, &value_type)
+                crate::type_system::TypeUtils::get_common_type(&common, &value_type)
             };
             if common == DataType::Empty {
                 return DataType::Unknown;
@@ -372,17 +372,17 @@ impl Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::types::storage_ids::{EdgeId, VertexId};
-    use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
-    use crate::core::value::decimal128::Decimal128Value;
-    use crate::core::value::geography::Geography;
-    use crate::core::value::interval::IntervalValue;
-    use crate::core::value::json::{Json, JsonB};
-    use crate::core::value::list::List;
-    use crate::core::value::null::NullType;
-    use crate::core::value::uuid::UuidValue;
-    use crate::core::vertex_edge_path::{Edge, Path, Vertex};
-    use crate::core::DataSet;
+    use crate::types::storage_ids::{EdgeId, VertexId};
+    use crate::value::date_time::{DateTimeValue, DateValue, TimeValue};
+    use crate::value::decimal128::Decimal128Value;
+    use crate::value::geography::Geography;
+    use crate::value::interval::IntervalValue;
+    use crate::value::json::{Json, JsonB};
+    use crate::value::list::List;
+    use crate::value::null::NullType;
+    use crate::value::uuid::UuidValue;
+    use crate::vertex_edge_path::{Edge, Path, Vertex};
+    use crate::DataSet;
     use std::collections::HashMap;
 
     fn literal(value: Value) -> Expression {

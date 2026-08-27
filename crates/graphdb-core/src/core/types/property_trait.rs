@@ -2,7 +2,7 @@
 //!
 //! This module defines a generic trait related to properties, which is used to abstract the common attributes of PropertyDef, PropertyType, and IndexField.
 
-use crate::core::{DataType, Value};
+use crate::{DataType, Value};
 
 /// Property type: trait
 ///

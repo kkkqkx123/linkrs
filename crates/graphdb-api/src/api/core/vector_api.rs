@@ -49,10 +49,36 @@ pub struct VectorSearchResult {
     pub payload: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
+/// Write mode for vector point mutations.
+///
+/// - `Direct`: bypass the transactional outbox and write straight to the
+///   backend (`VectorBackend::upsert`). Fast but not transactional: a graph
+///   transaction that rolls back will not roll back the vector point.
+/// - `Transactional`: stage the mutation through `SyncManager` into the durable
+///   outbox (`WAL + SQLite`) so it participates in the graph transaction's
+///   commit/abort and benefits from `read-your-writes` consistency.
+#[derive(Debug, Clone)]
+pub enum VectorWriteMode {
+    Direct,
+    Transactional {
+        txn_id: crate::core::types::TransactionId,
+        space_id: u64,
+        tag: String,
+        field: String,
+    },
+}
+
+impl Default for VectorWriteMode {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
 /// Vector Index API – Core Layer
 pub struct VectorApi {
     backend: VectorBackend,
     coordinator: Option<Arc<VectorSyncCoordinator>>,
+    sync_manager: Option<Arc<crate::sync::SyncManager>>,
 }
 
 impl VectorApi {
@@ -61,6 +87,7 @@ impl VectorApi {
         Self {
             backend,
             coordinator: None,
+            sync_manager: None,
         }
     }
 
@@ -72,7 +99,28 @@ impl VectorApi {
         Self {
             backend,
             coordinator: Some(coordinator),
+            sync_manager: None,
         }
+    }
+
+    /// Create a new VectorApi with both coordinator and sync manager (for
+    /// transactional vector writes).
+    pub fn with_coordinator_and_sync_manager(
+        backend: VectorBackend,
+        coordinator: Arc<VectorSyncCoordinator>,
+        sync_manager: Arc<crate::sync::SyncManager>,
+    ) -> Self {
+        Self {
+            backend,
+            coordinator: Some(coordinator),
+            sync_manager: Some(sync_manager),
+        }
+    }
+
+    /// Attach a sync manager after construction (for transactional writes).
+    pub fn with_sync_manager(mut self, sync_manager: Arc<crate::sync::SyncManager>) -> Self {
+        self.sync_manager = Some(sync_manager);
+        self
     }
 
     /// Get the vector backend
@@ -216,7 +264,12 @@ impl VectorApi {
             .collect()
     }
 
-    /// Insert a vector point
+    /// Insert a vector point (Direct, non-transactional).
+    ///
+    /// This is the legacy bypass: the point is written straight to the backend
+    /// and does not participate in graph transaction commit/rollback. Use
+    /// [`Self::insert_vector_with_mode`] with `Transactional` for transactional
+    /// semantics.
     pub async fn insert_vector(
         &self,
         space_id: u64,
@@ -224,16 +277,72 @@ impl VectorApi {
         field_name: &str,
         point: VectorPoint,
     ) -> CoreResult<()> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.backend
-            .upsert(&collection_name, point)
+        self.insert_vector_with_mode(space_id, tag_name, field_name, point, VectorWriteMode::Direct)
             .await
-            .map_err(|e| CoreError::VectorError(e.to_string()))?;
-        Ok(())
     }
 
-    /// Insert vector points in batch
+    /// Insert a vector point with explicit write mode.
+    pub async fn insert_vector_with_mode(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point: VectorPoint,
+        mode: VectorWriteMode,
+    ) -> CoreResult<()> {
+        match mode {
+            VectorWriteMode::Direct => {
+                let collection_name =
+                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+                self.backend
+                    .upsert(&collection_name, point)
+                    .await
+                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                Ok(())
+            }
+            VectorWriteMode::Transactional {
+                txn_id,
+                space_id: txn_space,
+                tag,
+                field,
+            } => {
+                let Some(manager) = self.sync_manager.as_ref() else {
+                    return Err(CoreError::VectorError(
+                        "Transactional vector writes require a configured SyncManager".to_string(),
+                    ));
+                };
+                // Stage as a vertex vector mutation so it flows through the
+                // durable outbox (WAL + SQLite) and participates in the graph
+                // transaction's commit/abort.
+                let vector = point.vector.clone();
+                let payload = point.payload.clone().unwrap_or_default();
+                let mut properties = Vec::new();
+                // Preserve existing payload fields as vertex properties; add the
+                // vector field explicitly.
+                for (k, v) in payload {
+                    if let Ok(val) = serde_json::from_value::<crate::core::Value>(v) {
+                        properties.push((k, val));
+                    }
+                }
+                // Use the vector field as the indexed property.
+                properties.push((field.clone(), crate::core::Value::vector(vector)));
+                let vertex_id = crate::core::Value::string(point.id.to_string());
+                manager
+                    .on_vertex_change_with_txn(
+                        txn_id,
+                        txn_space,
+                        &tag,
+                        &vertex_id,
+                        &properties,
+                        crate::sync::types::ChangeType::Insert,
+                    )
+                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Insert vector points in batch (Direct, non-transactional).
     pub async fn insert_vector_batch(
         &self,
         space_id: u64,
@@ -241,13 +350,65 @@ impl VectorApi {
         field_name: &str,
         points: Vec<VectorPoint>,
     ) -> CoreResult<()> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.backend
-            .upsert_batch(&collection_name, points)
+        self.insert_vector_batch_with_mode(space_id, tag_name, field_name, points, VectorWriteMode::Direct)
             .await
-            .map_err(|e| CoreError::VectorError(e.to_string()))?;
-        Ok(())
+    }
+
+    /// Insert vector points in batch with explicit write mode.
+    pub async fn insert_vector_batch_with_mode(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        points: Vec<VectorPoint>,
+        mode: VectorWriteMode,
+    ) -> CoreResult<()> {
+        match mode {
+            VectorWriteMode::Direct => {
+                let collection_name =
+                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+                self.backend
+                    .upsert_batch(&collection_name, points)
+                    .await
+                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                Ok(())
+            }
+            VectorWriteMode::Transactional {
+                txn_id,
+                space_id: txn_space,
+                tag,
+                field,
+            } => {
+                let Some(manager) = self.sync_manager.as_ref() else {
+                    return Err(CoreError::VectorError(
+                        "Transactional vector writes require a configured SyncManager".to_string(),
+                    ));
+                };
+                for point in points {
+                    let vector = point.vector.clone();
+                    let payload = point.payload.clone().unwrap_or_default();
+                    let mut properties = Vec::new();
+                    for (k, v) in payload {
+                        if let Ok(val) = serde_json::from_value::<crate::core::Value>(v) {
+                            properties.push((k, val));
+                        }
+                    }
+                    properties.push((field.clone(), crate::core::Value::vector(vector)));
+                    let vertex_id = crate::core::Value::string(point.id.to_string());
+                    manager
+                        .on_vertex_change_with_txn(
+                            txn_id,
+                            txn_space,
+                            &tag,
+                            &vertex_id,
+                            &properties,
+                            crate::sync::types::ChangeType::Insert,
+                        )
+                        .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Delete a vector point

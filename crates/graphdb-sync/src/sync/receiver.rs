@@ -197,8 +197,20 @@ impl FulltextReceiver {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct VectorCommitState {
     applied_lsn: u64,
+    receipts: std::collections::HashMap<String, u64>,
+}
+
+#[cfg(feature = "vector")]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct VectorCommitStateLegacy {
+    applied_lsn: u64,
     receipts: HashSet<String>,
 }
+
+#[cfg(feature = "vector")]
+const VECTOR_RECEIPT_MAX_ENTRIES: usize = 8192;
+#[cfg(feature = "vector")]
+const VECTOR_RECEIPT_RETENTION_LSN_WINDOW: u64 = 100_000;
 
 #[cfg(feature = "vector")]
 pub struct VectorReceiver {
@@ -220,7 +232,7 @@ impl VectorReceiver {
         Self {
             state: Arc::new(RwLock::new(VectorCommitState {
                 applied_lsn: CommitLsn::ZERO.get(),
-                receipts: HashSet::new(),
+                receipts: std::collections::HashMap::new(),
             })),
             apply_lock: Mutex::new(()),
             recovery_path: Arc::new(std::path::PathBuf::new()),
@@ -237,10 +249,26 @@ impl VectorReceiver {
         let state_path = Self::state_file_path(&path);
         let state = std::fs::read(&state_path)
             .ok()
-            .and_then(|bytes| postcard::from_bytes::<VectorCommitState>(&bytes).ok())
+            .and_then(|bytes| {
+                if let Ok(state) = postcard::from_bytes::<VectorCommitState>(&bytes) {
+                    return Some(state);
+                }
+                // Backward compatibility: legacy file stored HashSet
+                if let Ok(legacy) = postcard::from_bytes::<VectorCommitStateLegacy>(&bytes) {
+                    let mut receipts = std::collections::HashMap::new();
+                    for key in legacy.receipts {
+                        receipts.insert(key, legacy.applied_lsn);
+                    }
+                    return Some(VectorCommitState {
+                        applied_lsn: legacy.applied_lsn,
+                        receipts,
+                    });
+                }
+                None
+            })
             .unwrap_or(VectorCommitState {
                 applied_lsn: 0,
-                receipts: HashSet::new(),
+                receipts: std::collections::HashMap::new(),
             });
         Self {
             state: Arc::new(RwLock::new(state)),
@@ -279,7 +307,7 @@ impl VectorReceiver {
         idempotency_key: &str,
     ) -> LateArrivalResult {
         let state = self.state.read().await;
-        if state.receipts.contains(idempotency_key) {
+        if state.receipts.contains_key(idempotency_key) {
             return LateArrivalResult {
                 accepted: false,
                 reason: "duplicate idempotency key".to_string(),
@@ -288,6 +316,9 @@ impl VectorReceiver {
 
         let current = CommitLsn::new(state.applied_lsn);
         if commit_lsn < current {
+            // Below the water-level: considered late. Even if the key was
+            // pruned from the LRU window, the SQLite idempotency table still
+            // protects against re-application (see SqliteOutbox::materialize).
             return LateArrivalResult {
                 accepted: false,
                 reason: format!(
@@ -315,8 +346,31 @@ impl VectorReceiver {
     ) -> Result<(), String> {
         let _apply_guard = self.apply_lock.lock().await;
         let mut next = self.state.read().await.clone();
-        next.receipts.insert(idempotency_key.to_string());
+        next.receipts
+            .insert(idempotency_key.to_string(), commit_lsn.get());
         next.applied_lsn = next.applied_lsn.max(commit_lsn.get());
+        // LRU + water-level pruning: keep receipt set bounded. Entries whose
+        // LSN is far below the current water-level are dropped; the SQLite
+        // outbox `idempotency` table still guards against replay after a
+        // restart for those older LSNs.
+        if next.receipts.len() > VECTOR_RECEIPT_MAX_ENTRIES {
+            let water_level = next.applied_lsn.saturating_sub(VECTOR_RECEIPT_RETENTION_LSN_WINDOW);
+            next.receipts.retain(|_, lsn| *lsn >= water_level);
+            // If still over capacity (e.g. bursty LSNs within window), drop
+            // the oldest entries by LSN until under the limit.
+            if next.receipts.len() > VECTOR_RECEIPT_MAX_ENTRIES {
+                let mut entries: Vec<(String, u64)> = next
+                    .receipts
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect();
+                entries.sort_by_key(|(_, lsn)| *lsn);
+                let to_remove = entries.len() - VECTOR_RECEIPT_MAX_ENTRIES;
+                for (key, _) in entries.into_iter().take(to_remove) {
+                    next.receipts.remove(&key);
+                }
+            }
+        }
         if !self.recovery_path.as_os_str().is_empty() {
             self.persist_state(&next).await?;
         }

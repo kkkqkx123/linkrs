@@ -203,7 +203,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let result = {
             let mut query_api = self.session.query_api_mut();
@@ -243,7 +243,7 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             query_id: None,
             isolation_level: None,
             parsed_statement: None,
-        };
+         consistency: Default::default(), minimum_lsn: None, };
 
         let result = {
             let mut query_api = self.session.query_api_mut();

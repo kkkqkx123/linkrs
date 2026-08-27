@@ -10,7 +10,7 @@
 use std::error::Error;
 
 use super::BoxedError;
-use crate::core::error::codes::{ErrorCode, PublicError, ToPublicError};
+use crate::error::codes::{ErrorCode, PublicError, ToPublicError};
 
 /// Storage layer result type
 pub type StorageResult<T> = Result<T, StorageError>;
@@ -167,11 +167,11 @@ impl StorageError {
         Self::new(StorageErrorKind::DeserializeError, message)
     }
 
-    pub fn node_not_found(value: crate::core::types::VertexId) -> Self {
+    pub fn node_not_found(value: crate::types::VertexId) -> Self {
         Self::new(StorageErrorKind::NodeNotFound, format!("{}", value))
     }
 
-    pub fn edge_not_found(value: crate::core::types::VertexId) -> Self {
+    pub fn edge_not_found(value: crate::types::VertexId) -> Self {
         Self::new(StorageErrorKind::EdgeNotFound, format!("{}", value))
     }
 
@@ -271,7 +271,7 @@ impl StorageError {
         )
     }
 
-    pub fn type_mismatch(expected: crate::core::DataType, actual: crate::core::DataType) -> Self {
+    pub fn type_mismatch(expected: crate::DataType, actual: crate::DataType) -> Self {
         Self::new(
             StorageErrorKind::TypeMismatch,
             format!("Type mismatch: expected {:?}, got {:?}", expected, actual),
@@ -374,8 +374,8 @@ impl From<postcard::Error> for StorageError {
     }
 }
 
-impl From<crate::core::types::UndoLogError> for StorageError {
-    fn from(e: crate::core::types::UndoLogError) -> Self {
+impl From<crate::types::UndoLogError> for StorageError {
+    fn from(e: crate::types::UndoLogError) -> Self {
         Self::db_error(e.to_string())
     }
 }

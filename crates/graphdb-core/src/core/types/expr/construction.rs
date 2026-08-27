@@ -2,10 +2,10 @@
 //!
 //! Provide methods for creating various types of expressions.
 
-use crate::core::types::expr::{Expression, SubqueryBody};
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::DataType;
-use crate::core::{NullType, Value};
+use crate::types::expr::{Expression, SubqueryBody};
+use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::types::DataType;
+use crate::{NullType, Value};
 
 impl Expression {
     /// Creating literal expressions

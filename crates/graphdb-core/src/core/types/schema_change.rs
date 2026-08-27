@@ -1,6 +1,6 @@
 //! Definition of Schema change type
 
-use crate::core::types::property::PropertyDef;
+use crate::types::property::PropertyDef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

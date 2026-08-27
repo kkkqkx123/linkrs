@@ -8,10 +8,10 @@
 //! - [`VariableCollector`] - Collect all variable names used in the expression
 //! - [`FunctionCollector`] - Collect all function names used in the expression
 
-use crate::core::types::expr::visitor::ExpressionVisitor;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
-use crate::core::types::DataType;
-use crate::core::{Expression, Value};
+use crate::types::expr::visitor::ExpressionVisitor;
+use crate::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::types::DataType;
+use crate::{Expression, Value};
 
 /// Attribute Collector
 ///
@@ -48,7 +48,7 @@ impl PropertyCollector {
 }
 
 impl ExpressionVisitor for PropertyCollector {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {}
 
@@ -110,7 +110,7 @@ impl ExpressionVisitor for PropertyCollector {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         self.visit(expression);
     }
@@ -706,7 +706,7 @@ impl VariableCollector {
 }
 
 impl ExpressionVisitor for VariableCollector {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, name: &str) {
         let var_name = name.to_string();
@@ -770,7 +770,7 @@ impl ExpressionVisitor for VariableCollector {
     fn visit_type_cast(
         &mut self,
         expression: &Expression,
-        _target_type: &crate::core::types::DataType,
+        _target_type: &crate::types::DataType,
     ) {
         self.visit(expression);
     }
@@ -890,7 +890,7 @@ impl FunctionCollector {
 }
 
 impl ExpressionVisitor for FunctionCollector {
-    fn visit_literal(&mut self, _value: &crate::core::Value) {}
+    fn visit_literal(&mut self, _value: &crate::Value) {}
 
     fn visit_variable(&mut self, _name: &str) {}
 
@@ -900,7 +900,7 @@ impl ExpressionVisitor for FunctionCollector {
 
     fn visit_binary(
         &mut self,
-        _op: crate::core::types::operators::BinaryOperator,
+        _op: crate::types::operators::BinaryOperator,
         left: &Expression,
         right: &Expression,
     ) {
@@ -910,7 +910,7 @@ impl ExpressionVisitor for FunctionCollector {
 
     fn visit_unary(
         &mut self,
-        _op: crate::core::types::operators::UnaryOperator,
+        _op: crate::types::operators::UnaryOperator,
         operand: &Expression,
     ) {
         self.visit(operand);

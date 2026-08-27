@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign};
 
-use crate::core::Value;
+use crate::Value;
 
 // ============================================================================
 // Fundamental Type Aliases
@@ -378,7 +378,7 @@ impl AddAssign<u64> for VertexId {
 }
 
 impl TryFrom<&Value> for VertexId {
-    type Error = crate::core::StorageError;
+    type Error = crate::StorageError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match value {
@@ -388,12 +388,12 @@ impl TryFrom<&Value> for VertexId {
                 if let Ok(i) = s.parse::<i64>() {
                     Ok(Self::from_int64(i))
                 } else {
-                    Self::try_from_string(s).map_err(crate::core::StorageError::invalid_input)
+                    Self::try_from_string(s).map_err(crate::StorageError::invalid_input)
                 }
             }
             Value::Vertex(v) => Ok(v.vid),
             Value::VertexId(vid) => Ok(*vid),
-            _ => Err(crate::core::StorageError::invalid_input(
+            _ => Err(crate::StorageError::invalid_input(
                 "Cannot convert Value to VertexId",
             )),
         }
