@@ -157,6 +157,23 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         info!("vector metrics sampling enabled");
     }
 
+    // Forward remote (Qdrant) vector engine metrics into the shared StatsManager.
+    #[cfg(feature = "vector-qdrant")]
+    if let Some(crate::sync::backend::VectorBackend::Qdrant(manager)) = vector_backend.as_ref() {
+        let conn = &manager.config().connection;
+        let http_port = conn.http_port.unwrap_or(6333);
+        crate::vector_metrics::spawn_remote_vector_metrics_sampler(
+            conn.host.clone(),
+            http_port,
+            conn.api_key.clone(),
+            stats_manager.clone(),
+        );
+        info!(
+            "remote vector metrics sampling enabled ({}:{})",
+            conn.host, http_port
+        );
+    }
+
     let mut sync_manager = if config.fulltext.enabled || config.is_vector_enabled() {
         use crate::sync::SyncManager;
 

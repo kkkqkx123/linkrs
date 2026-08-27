@@ -12,6 +12,7 @@ use crate::types::{
 
 pub struct VectorManager {
     engine: Arc<dyn VectorEngine>,
+    config: VectorClientConfig,
     /// Indexes created through this manager, with full metadata.
     indexes: DashMap<String, IndexMetadata>,
     /// Collections known to exist on the server (warmed from
@@ -35,7 +36,7 @@ impl VectorManager {
         let enabled = config.enabled;
 
         let engine: Arc<dyn VectorEngine> = if enabled {
-            let engine = build_engine(config).await?;
+            let engine = build_engine(config.clone()).await?;
             engine
         } else {
             info!("Vector search is disabled, using no-op engine");
@@ -62,6 +63,7 @@ impl VectorManager {
 
         let manager = Self {
             engine,
+            config,
             indexes: DashMap::new(),
             known_collections: DashSet::new(),
         };
@@ -95,6 +97,11 @@ impl VectorManager {
 
     pub fn engine(&self) -> &Arc<dyn VectorEngine> {
         &self.engine
+    }
+
+    /// The client configuration (connection details, API key, etc.).
+    pub fn config(&self) -> &VectorClientConfig {
+        &self.config
     }
 
     pub async fn create_index(&self, name: &str, config: CollectionConfig) -> Result<()> {

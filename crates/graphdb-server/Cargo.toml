@@ -51,6 +51,7 @@ prost = { workspace = true, optional = true }
 vector-client = { path = "../vector-client", optional = true }
 vector-search = { path = "../vector-search", optional = true }
 graphdb-embedding = { path = "../graphdb-embedding", optional = true }
+reqwest = { workspace = true, optional = true }
 
 [features]
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:prost-build"]
@@ -70,6 +71,7 @@ vector-qdrant = [
     "vector",
     "embedding",
     "dep:vector-client",
+    "dep:reqwest",
     "graphdb-config/vector-qdrant",
     "graphdb-sync/vector-qdrant",
     "graphdb-query/vector-qdrant",

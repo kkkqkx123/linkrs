@@ -4,6 +4,7 @@ pub mod config;
 pub mod engine;
 pub mod error;
 pub mod manager;
+pub mod metrics;
 pub mod types;
 
 pub use config::*;

@@ -304,6 +304,180 @@ client.delete_alias("alias_name").await?;
 
 ---
 
+## 7. 监控与遥测
+
+Qdrant 提供两种指标获取方式，均可通过 HTTP REST API 访问。
+
+### 7.1 Prometheus 指标端点 `/metrics`
+
+返回 Prometheus/OpenMetrics 格式的文本，适合对接 Prometheus + Grafana。
+
+```
+GET http://localhost:6333/metrics
+```
+
+**核心 API 响应指标：**
+
+| 指标名 | 类型 | 含义 |
+|--------|------|------|
+| `rest_responses_total` | counter | REST API 响应总数（含 method/endpoint/status 标签） |
+| `rest_responses_fail_total` | counter | REST API 失败响应数 |
+| `rest_responses_avg_duration_seconds` | gauge | 平均响应时间 |
+| `rest_responses_duration_seconds` | histogram | 响应时间分布直方图 (v1.8+) |
+| `grpc_responses_total` | counter | gRPC API 响应总数 |
+| `grpc_responses_fail_total` | counter | gRPC API 失败响应数 |
+| `grpc_responses_avg_duration_seconds` | gauge | gRPC 平均响应时间 |
+| `grpc_responses_duration_seconds` | histogram | gRPC 响应时间分布 (v1.8+) |
+
+**Per-collection 模式** (v1.18+)：
+
+```
+GET http://localhost:6333/metrics?per_collection=true
+```
+
+启用后 `rest_responses_total` 增加 `collection` 标签：
+
+```
+rest_responses_total{method="POST",endpoint="/collections/{collection_name}/points/search",status="200",collection="my-collection"} 42
+```
+
+**已计量的 REST 端点白名单：**
+
+```
+/collections/{collection_name}/points          (upsert)
+/collections/{collection_name}/points/search   (search)
+/collections/{collection_name}/points/delete   (delete)
+/collections/{collection_name}/points/scroll   (scroll)
+/collections/{collection_name}/points/payload  (set payload)
+/collections/{collection_name}/points/payload/delete
+/collections/{collection_name}/index           (create payload index)
+```
+
+**其他指标：** `collections_total`, `app_info`, `cluster_enabled`, `memory_active_bytes` 等。
+
+### 7.2 遥测端点 `/telemetry`
+
+返回结构化 JSON，包含更丰富的 per-collection 和 per-shard 统计。
+
+```
+GET http://localhost:6333/telemetry?details_level=1
+```
+
+**响应结构（关键部分）：**
+
+```json
+{
+  "result": {
+    "requests": {
+      "rest": {
+        "responses": {
+          "POST /collections/{collection_name}/points/search": {
+            "200": {
+              "count": 42,
+              "fail_count": 0,
+              "avg_duration_micros": 1234.5,
+              "total_duration_micros": 51849,
+              "min_duration_micros": 800.0,
+              "max_duration_micros": 3200.0,
+              "last_responded": "2024-01-15T09:30:00Z"
+            }
+          },
+          "PUT /collections/{collection_name}/points": { "...": "..." },
+          "POST /collections/{collection_name}/points/delete": { "...": "..." },
+          "POST /collections/{collection_name}/points/scroll": { "...": "..." },
+          "POST /collections/{collection_name}/points/payload": { "...": "..." },
+          "POST /collections/{collection_name}/points/payload/delete": { "...": "..." }
+        },
+        "per_collection_responses": {
+          "my-collection": {
+            "POST /collections/{collection_name}/points/search": {
+              "200": { "count": 10, "fail_count": 0, "total_duration_micros": 12000 }
+            }
+          }
+        }
+      },
+      "grpc": {
+        "responses": {
+          "/qdrant.Points/Search": { "0": { "count": 42, "fail_count": 0, "total_duration_micros": 51849 } },
+          "/qdrant.Points/Upsert": { "...": "..." },
+          "/qdrant.Points/Delete": { "...": "..." },
+          "/qdrant.Points/Scroll": { "...": "..." },
+          "/qdrant.Points/SetPayload": { "...": "..." },
+          "/qdrant.Points/DeletePayload": { "...": "..." }
+        }
+      }
+    },
+    "collections": {
+      "collections": [
+        {
+          "id": "my-collection",
+          "shards": [
+            {
+              "remote": [
+                {
+                  "searches": { "count": 10, "fail_count": 0, "total_duration_micros": 12000 },
+                  "updates": { "count": 50, "fail_count": 0, "total_duration_micros": 25000 }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+**`OperationStats` 字段：**
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `count` | integer | 操作总数 |
+| `fail_count` | integer \| null | 失败操作数 |
+| `avg_duration_micros` | double \| null | 最近 128 次操作的加权平均耗时（微秒） |
+| `total_duration_micros` | uint64 \| null | 累计总耗时（微秒） |
+| `min_duration_micros` | double \| null | 最小耗时 |
+| `max_duration_micros` | double \| null | 最大耗时 |
+| `last_responded` | string \| null | 最后一次响应时间 |
+
+**gRPC 端点白名单：**
+
+```
+/qdrant.Points/Search
+/qdrant.Points/SearchBatch
+/qdrant.Points/Upsert
+/qdrant.Points/Delete
+/qdrant.Points/Scroll
+/qdrant.Points/SetPayload
+/qdrant.Points/DeletePayload
+/qdrant.Points/ClearPayload
+/qdrant.Points/Count
+/qdrant.Points/Recommend
+/qdrant.Points/Query
+```
+
+### 7.3 端点名到 GraphDB 指标的映射
+
+| Qdrant REST 端点 | Qdrant gRPC 端点 | GraphDB `MetricType` |
+|---|---|---|
+| `POST .../points/search` | `/qdrant.Points/Search` | `VectorSearchOps`, `VectorSearchErrors`, `VectorSearchLatencyMs` |
+| `PUT .../points` | `/qdrant.Points/Upsert` | `VectorUpsertOps`, `VectorUpsertErrors`, `VectorUpsertLatencyMs` |
+| `POST .../points/delete` | `/qdrant.Points/Delete` | `VectorDeleteOps`, `VectorDeleteErrors`, `VectorDeleteLatencyMs` |
+| `POST .../points/scroll` | `/qdrant.Points/Scroll` | (scroll 不单独计量) |
+| `POST .../points/payload` | `/qdrant.Points/SetPayload` | (payload 操作暂不计量) |
+| `POST .../points/payload/delete` | `/qdrant.Points/DeletePayload` | (payload 操作暂不计量) |
+
+**注意：** `total_duration_micros` 是累计值，采样器通过计算相邻两次采样的差值得到区间增量。`avg_duration_micros` 是最近 128 次操作的滑动窗口均值，不适合做区间差分。
+
+### 7.4 集成方式
+
+GraphDB 通过 `VectorMetricsSampler` 每 10 秒调用 `GET /telemetry` 获取全局统计数据，
+将 `rest.responses` 和 `grpc.responses` 中的 `count`/`fail_count`/`total_duration_micros`
+差分后写入 `StatsManager`。Embedding 指标由 `EmbeddingService` 自行记录，
+不属于 Qdrant 服务端指标范围。
+
+---
+
 ## 与GraphDB集成要点
 
 1. **集合命名规范**: 使用 `space_{space_id}_{tag}_{field}` 格式
