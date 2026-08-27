@@ -100,7 +100,8 @@ pub struct CollectionStore {
     payloads: Payloads,
     /// Gridstore-style payload storage. When present, payload operations
     /// are routed here instead of the legacy `Payloads` blob directory.
-    payload_store: parking_lot::RwLock<Option<PayloadStore>>,
+    /// Wrapped in `ArcSwap` for lock-free snapshot reads during search.
+    payload_store: ArcSwap<Option<PayloadStore>>,
     /// Optional quantized storage (Scalar/Binary/Product). `None` when
     /// quantization is disabled or not yet built.
     quant: parking_lot::RwLock<Option<QuantStore>>,
@@ -273,7 +274,7 @@ impl CollectionStore {
             vectors,
             keys,
             payloads,
-            payload_store: parking_lot::RwLock::new(Some(payload_store)),
+            payload_store: ArcSwap::from(Arc::new(Some(payload_store))),
             quant: parking_lot::RwLock::new(quant),
             wal,
             index: ArcSwap::from(Arc::new(None)),
@@ -411,7 +412,7 @@ impl CollectionStore {
             vectors,
             keys,
             payloads,
-            payload_store: parking_lot::RwLock::new(payload_store),
+            payload_store: ArcSwap::from(Arc::new(payload_store)),
             quant: parking_lot::RwLock::new(quant),
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
             index: ArcSwap::from(Arc::new(None)),
@@ -440,8 +441,8 @@ impl CollectionStore {
     /// Read the payload for a slot, preferring the new PayloadStore when
     /// available and falling back to the legacy blob directory.
     fn read_payload_at(&self, slot: u32) -> Result<Option<Payload>> {
-        let ps_guard = self.payload_store.read();
-        if let Some(ps) = ps_guard.as_ref() {
+        let ps_guard = self.payload_store.load();
+        if let Some(ps) = ps_guard.as_ref().as_ref() {
             ps.get(slot)
         } else {
             Payloads::read_payload(&self.payloads.snapshot(), slot as usize)
@@ -451,8 +452,8 @@ impl CollectionStore {
     /// Write a payload for a slot. When the new PayloadStore is present
     /// the write goes there; otherwise it goes to the legacy blob directory.
     fn write_payload_at(&self, slot: u32, payload: Option<&Payload>) -> Result<()> {
-        let ps_guard = self.payload_store.read();
-        if let Some(ps) = ps_guard.as_ref() {
+        let ps_guard = self.payload_store.load();
+        if let Some(ps) = ps_guard.as_ref().as_ref() {
             ps.put(slot, payload)
         } else {
             self.payloads.append_payload(slot as usize, payload)
@@ -462,8 +463,8 @@ impl CollectionStore {
     /// Delete specific keys from a slot's payload, preferring the new
     /// PayloadStore and falling back to the legacy blob directory.
     fn delete_keys_at(&self, slot: u32, keys: &[&str]) -> Result<()> {
-        let ps_guard = self.payload_store.read();
-        if let Some(ps) = ps_guard.as_ref() {
+        let ps_guard = self.payload_store.load();
+        if let Some(ps) = ps_guard.as_ref().as_ref() {
             ps.delete_keys(slot, keys)
         } else {
             // Legacy path: read-modify-write through the blob directory.
@@ -484,8 +485,8 @@ impl CollectionStore {
     /// A missing payload is created. Prefers the new PayloadStore and falls
     /// back to the legacy blob directory.
     fn merge_payload_at(&self, slot: u32, partial: &Payload) -> Result<()> {
-        let ps_guard = self.payload_store.read();
-        if let Some(ps) = ps_guard.as_ref() {
+        let ps_guard = self.payload_store.load();
+        if let Some(ps) = ps_guard.as_ref().as_ref() {
             return ps.merge(slot, partial.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         let mut current =

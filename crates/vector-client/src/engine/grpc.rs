@@ -592,7 +592,7 @@ impl VectorEngine for QdrantGrpcEngine {
         point_ids: Vec<&str>,
         payload: Payload,
     ) -> Result<()> {
-        debug!("Setting payload for {} points via gRPC", point_ids.len());
+        debug!("Replacing payload for {} points via gRPC", point_ids.len());
 
         let ids: Vec<proto::PointId> = point_ids.iter().map(|id| point_id_to_proto(id)).collect();
         let proto_payload = convert::payload_to_proto_map(&payload);
@@ -614,7 +614,7 @@ impl VectorEngine for QdrantGrpcEngine {
         };
 
         self.points()
-            .set_payload(self.into_request(request))
+            .overwrite_payload(self.into_request(request))
             .await?;
         Ok(())
     }

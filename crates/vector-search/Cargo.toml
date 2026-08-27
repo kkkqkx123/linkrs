@@ -36,6 +36,10 @@ arc-swap.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 crc32fast.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+async-trait.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

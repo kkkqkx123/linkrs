@@ -85,7 +85,10 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 
     // Build the shared vector backend from configuration (Local or Qdrant).
     #[cfg(feature = "vector")]
-    let vector_backend: Option<VectorBackend> = if config.is_vector_enabled() {
+    let (vector_backend, local_engine_handle): (
+        Option<VectorBackend>,
+        Option<Arc<vector_search::LocalVectorEngine>>,
+    ) = if config.is_vector_enabled() {
         match config.vector_config().engine {
             graphdb_config::config::VectorEngineKind::Local => {
                 let data_dir = config.vector_data_dir();
@@ -107,7 +110,9 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                             engine.set_default_quantization_config(quant);
                         }
                         info!("Local vector engine initialized at {}", data_dir.display());
-                        Some(VectorBackend::Local(Arc::new(engine)))
+                        let arc = Arc::new(engine);
+                        let handle = Arc::clone(&arc);
+                        (Some(VectorBackend::from_local_arc(arc)), Some(handle))
                     }
                     Err(e) => {
                         warn!(
@@ -115,7 +120,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                             data_dir.display(),
                             e
                         );
-                        None
+                        (None, None)
                     }
                 }
             }
@@ -124,42 +129,39 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
                 match VectorManager::new(config.vector_config().qdrant.clone()).await {
                     Ok(vm) => {
                         info!("VectorManager initialized");
-                        Some(VectorBackend::Qdrant(Arc::new(vm)))
+                        (Some(VectorBackend::qdrant(Arc::new(vm))), None)
                     }
                     Err(e) => {
                         warn!(
                             "Failed to create VectorManager: {}. Vector search will be disabled.",
                             e
                         );
-                        None
+                        (None, None)
                     }
                 }
             }
             #[cfg(not(feature = "vector-qdrant"))]
             graphdb_config::config::VectorEngineKind::Qdrant => {
                 warn!("Qdrant engine requested but the `vector-qdrant` feature is not enabled. Vector search will be disabled.");
-                None
+                (None, None)
             }
         }
     } else {
-        None
+        (None, None)
     };
     #[cfg(not(feature = "vector"))]
-    let _vector_backend = None::<()>;
+    let _vector_backend = (None::<()>, None::<()>);
 
     // Forward local vector engine metrics into the shared StatsManager.
     #[cfg(feature = "vector")]
-    if let Some(crate::sync::backend::VectorBackend::Local(engine)) = vector_backend.as_ref() {
-        crate::vector_metrics::spawn_vector_metrics_sampler(
-            Arc::clone(engine),
-            stats_manager.clone(),
-        );
+    if let Some(engine) = local_engine_handle {
+        crate::vector_metrics::spawn_vector_metrics_sampler(engine, stats_manager.clone());
         info!("vector metrics sampling enabled");
     }
 
     // Forward remote (Qdrant) vector engine metrics into the shared StatsManager.
     #[cfg(feature = "vector-qdrant")]
-    if let Some(crate::sync::backend::VectorBackend::Qdrant(manager)) = vector_backend.as_ref() {
+    if let Some(manager) = vector_backend.as_ref().and_then(|b| b.as_qdrant_manager()) {
         let conn = &manager.config().connection;
         let http_port = conn.http_port.unwrap_or(6333);
         crate::vector_metrics::spawn_remote_vector_metrics_sampler(

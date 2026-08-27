@@ -16,7 +16,7 @@ use graphdb_sync::sync::{SyncManager, VectorBackend, VectorSyncCoordinator};
 use vector_search::{DistanceMetric, LocalVectorEngine};
 
 fn make_manager(engine: Arc<LocalVectorEngine>) -> SyncManager {
-    let backend = VectorBackend::Local(engine);
+    let backend = VectorBackend::from_local_arc(engine);
     let coordinator = Arc::new(VectorSyncCoordinator::new_without_embedding(
         backend,
         tokio::runtime::Handle::current(),

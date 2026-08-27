@@ -17,7 +17,7 @@ use graphdb::sync::{
 };
 
 async fn disabled_coordinator() -> Arc<VectorSyncCoordinator> {
-    let backend = VectorBackend::Qdrant(Arc::new(
+    let backend = VectorBackend::qdrant(Arc::new(
         VectorManager::new(VectorClientConfig::disabled())
             .await
             .unwrap(),

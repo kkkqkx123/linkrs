@@ -323,7 +323,7 @@ impl CollectionStore {
         }
 
         // 3. payloads.bin (legacy) or PayloadStore (new)
-        if self.payload_store.read().is_some() {
+        if self.payload_store.load().as_ref().is_some() {
             // Compact the PayloadStore: read live payloads from the old store
             // and write them to a temporary compacted store.
             let tmp_payload_store = self.dir.join("payloads_store_tmp");
@@ -337,8 +337,8 @@ impl CollectionStore {
                 .filter(|(_, new_slot)| **new_slot != u32::MAX)
                 .map(|(old, &new)| (old as u32, new))
                 .collect();
-            let ps_guard = self.payload_store.read();
-            let old_store = ps_guard.as_ref().expect("checked above");
+            let ps_guard = self.payload_store.load();
+            let old_store = ps_guard.as_ref().as_ref().expect("checked above");
             let new_store = old_store.compact_to(&tmp_payload_store, &live_slots)?;
             let _ = old_store;
             drop(ps_guard);
@@ -401,7 +401,7 @@ impl CollectionStore {
 
         // Swap payload storage: either the new PayloadStore or legacy blobs.
         {
-            let ps_guard = self.payload_store.read();
+            let ps_guard = self.payload_store.load();
             if ps_guard.is_some() {
                 drop(ps_guard);
                 let live_store = self.dir.join("payloads_store");
@@ -413,7 +413,7 @@ impl CollectionStore {
                     std::fs::rename(&tmp_store, &live_store)?;
                     // Re-open the compacted PayloadStore and swap it in.
                     let new_ps = super::PayloadStore::open(&live_store)?;
-                    *self.payload_store.write() = Some(new_ps);
+                    self.payload_store.store(Arc::new(Some(new_ps)));
                 }
             } else {
                 self.payloads

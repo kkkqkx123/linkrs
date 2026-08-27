@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::config::VectorClientConfig;
 use crate::engine::{DisabledEngine, VectorEngine};
+#[allow(unused_imports)]
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
 

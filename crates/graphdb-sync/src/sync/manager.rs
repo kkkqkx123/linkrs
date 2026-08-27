@@ -20,6 +20,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
+
 #[cfg(feature = "vector")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 
@@ -60,8 +62,7 @@ pub struct SyncManager {
     vector_receiver: Option<Arc<crate::sync::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     stats_manager: Option<Arc<StatsManager>>,
-    #[allow(clippy::type_complexity)]
-    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    handle: JoinHandleGuard,
 }
 
 /// Delivery policy shared by one or more sync manager workers.

@@ -248,10 +248,7 @@ impl PayloadStore {
     where
         I: IntoIterator<Item = (String, serde_json::Value)>,
     {
-        let mut merged = match self.get(slot)? {
-            Some(p) => p,
-            None => Payload::new(),
-        };
+        let mut merged = self.get(slot)?.unwrap_or_default();
         for (key, value) in partial {
             merged.insert(key, value);
         }

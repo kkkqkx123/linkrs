@@ -84,9 +84,7 @@ impl NumericIndex {
     }
 
     fn eq_mask(&self, target: f64) -> Option<BitVec> {
-        let Some(t) = normalize(target) else {
-            return None;
-        };
+        let t = normalize(target)?;
         let mut mask = BitVec::repeat(false, self.capacity);
         let pos = self
             .sorted

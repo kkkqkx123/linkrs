@@ -18,6 +18,19 @@ use crate::core::wal::types::{
 };
 use crate::transaction::wal::parser::{LocalWalParser, WalParser};
 
+/// Parameters for building a WAL header, bundling the many fields
+/// that [`LocalWalWriter::build_wal_header`] needs.
+struct WalHeaderParams<'a> {
+    op_type: WalOpType,
+    timestamp: Timestamp,
+    payload_len: usize,
+    prev_lsn: Lsn,
+    new_lsn: Lsn,
+    record_type: RecordType,
+    payload: &'a [u8],
+    compression: WalCompression,
+}
+
 /// Local file-based WAL writer
 pub struct LocalWalWriter {
     wal_uri: String,
@@ -492,16 +505,16 @@ impl LocalWalWriter {
         let entry_size = WAL_HEADER_SIZE + payload.len();
         let new_lsn = Lsn::new(prev_lsn.as_u64() + entry_size as u64);
 
-        let header = self.build_wal_header(
+        let header = self.build_wal_header(WalHeaderParams {
             op_type,
             timestamp,
-            payload.len(),
+            payload_len: payload.len(),
             prev_lsn,
             new_lsn,
-            RecordType::Full,
+            record_type: RecordType::Full,
             payload,
             compression,
-        );
+        });
 
         self.write_entry(&header, payload, new_lsn)
     }
@@ -543,16 +556,16 @@ impl LocalWalWriter {
                 RecordType::Middle
             };
 
-            let header = self.build_wal_header(
+            let header = self.build_wal_header(WalHeaderParams {
                 op_type,
                 timestamp,
-                chunk_size,
+                payload_len: chunk_size,
                 prev_lsn,
                 new_lsn,
                 record_type,
-                chunk_data,
+                payload: chunk_data,
                 compression,
-            );
+            });
 
             if let Err(e) = self.write_entry(&header, chunk_data, new_lsn) {
                 log::error!(
@@ -614,24 +627,13 @@ impl LocalWalWriter {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_wal_header(
-        &self,
-        op_type: WalOpType,
-        timestamp: Timestamp,
-        payload_len: usize,
-        prev_lsn: Lsn,
-        new_lsn: Lsn,
-        record_type: RecordType,
-        payload: &[u8],
-        compression: WalCompression,
-    ) -> WalHeader {
-        let header = WalHeader::new(op_type, timestamp, payload_len as u32)
-            .with_lsn(new_lsn, prev_lsn)
-            .with_record_type(record_type)
-            .with_compression(compression);
+    fn build_wal_header(&self, params: WalHeaderParams<'_>) -> WalHeader {
+        let header = WalHeader::new(params.op_type, params.timestamp, params.payload_len as u32)
+            .with_lsn(params.new_lsn, params.prev_lsn)
+            .with_record_type(params.record_type)
+            .with_compression(params.compression);
         if self.config.checksum_enabled {
-            header.with_checksum(payload)
+            header.with_checksum(params.payload)
         } else {
             header
         }
@@ -686,16 +688,16 @@ impl LocalWalWriter {
             let entry_size = WAL_HEADER_SIZE + final_payload.len();
             let new_lsn = Lsn::new(prev_lsn.as_u64() + entry_size as u64);
 
-            let header = self.build_wal_header(
-                *op_type,
-                *timestamp,
-                final_payload.len(),
+            let header = self.build_wal_header(WalHeaderParams {
+                op_type: *op_type,
+                timestamp: *timestamp,
+                payload_len: final_payload.len(),
                 prev_lsn,
                 new_lsn,
-                RecordType::Full,
-                &final_payload,
+                record_type: RecordType::Full,
+                payload: &final_payload,
                 compression,
-            );
+            });
 
             total_len += WAL_HEADER_SIZE + final_payload.len();
             compressed_entries.push((header, final_payload));

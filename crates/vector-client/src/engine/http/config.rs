@@ -296,6 +296,14 @@ pub fn build_set_payload_body(ids: Vec<Value>, payload: Value) -> Value {
     })
 }
 
+pub fn build_set_payload_body_overwrite(ids: Vec<Value>, payload: Value) -> Value {
+    json!({
+        "payload": payload,
+        "points": ids,
+        "overwrite": true
+    })
+}
+
 pub fn build_delete_payload_body(ids: Vec<Value>, keys: Vec<String>) -> Value {
     json!({
         "keys": keys,

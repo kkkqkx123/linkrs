@@ -248,10 +248,10 @@ impl CompressionRatio {
         }
         let mut m = (dim * 4).div_ceil(ratio);
         m = m.clamp(1, dim);
-        while m > 1 && dim % m != 0 {
+        while m > 1 && !dim.is_multiple_of(m) {
             m -= 1;
         }
-        if dim % m != 0 {
+        if !dim.is_multiple_of(m) {
             1
         } else {
             m
@@ -370,7 +370,7 @@ impl QuantizationConfig {
             }
             QuantizationType::Product { compression, .. } => {
                 let m = compression.pq_m(dim);
-                if m == 0 || dim % m != 0 {
+                if m == 0 || !dim.is_multiple_of(m) {
                     return Err(VectorSearchError::InvalidConfig(format!(
                         "product quantization dim {dim} not divisible by M={m} for compression {compression:?}"
                     )));
@@ -387,7 +387,7 @@ impl QuantizationConfig {
         }
         match &self.quant_type {
             Some(QuantizationType::Scalar { .. }) => dim,
-            Some(QuantizationType::Binary { .. }) => (dim + 7) / 8,
+            Some(QuantizationType::Binary { .. }) => dim.div_ceil(8),
             Some(QuantizationType::Product { compression, .. }) => compression.pq_m(dim),
             None => 0,
         }

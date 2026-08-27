@@ -22,7 +22,7 @@ fn make_engine(root: &Path) -> Arc<LocalVectorEngine> {
 }
 
 fn make_coordinator(engine: Arc<LocalVectorEngine>) -> Arc<VectorSyncCoordinator> {
-    let backend = VectorBackend::Local(engine);
+    let backend = VectorBackend::from_local_arc(engine);
     Arc::new(VectorSyncCoordinator::new_without_embedding(
         backend,
         tokio::runtime::Handle::current(),
@@ -45,7 +45,7 @@ fn change_ctx(
     VectorChangeContext::new(space_id, tag_name, field_name, change_type, data)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_index_create_and_search() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
@@ -70,7 +70,7 @@ async fn test_local_index_create_and_search() {
         .unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_batch_delivery_applies_upserts_and_deletes() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
@@ -139,7 +139,7 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
         .is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_engine_replay_is_idempotent_per_txn_id() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
@@ -163,7 +163,7 @@ async fn test_engine_replay_is_idempotent_per_txn_id() {
     assert_eq!(engine.count("space_1").unwrap(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_batch_delivery_injects_group_id_payload() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
@@ -205,7 +205,7 @@ async fn test_batch_delivery_injects_group_id_payload() {
     assert_eq!(results.len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_crash_recovery_replays_delivered_changes() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("vec");
@@ -258,7 +258,7 @@ async fn test_crash_recovery_replays_delivered_changes() {
     assert_eq!(results[0].id.to_string(), "v1_item_vec");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_delete_then_compaction_keeps_search_consistent() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("vec");
@@ -350,7 +350,7 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
         .is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_drop_reclaims_group_points_and_physical_collection() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
@@ -420,14 +420,11 @@ async fn test_drop_reclaims_group_points_and_physical_collection() {
         .await
         .unwrap();
     assert!(embedding_hits.is_empty());
-    assert_eq!(
-        coordinator
-            .search_by_location(1, "user", "avatar", vec![0.0, 0.0, 1.0, 0.0], 10)
-            .await
-            .unwrap()
-            .len(),
-        2
-    );
+    let avatar_hits = coordinator
+        .search_by_location(1, "user", "avatar", vec![0.0, 0.0, 1.0, 0.0], 10)
+        .await
+        .unwrap();
+    assert_eq!(avatar_hits.len(), 2);
 
     // Dropping the last index reclaims the physical directory.
     coordinator

@@ -443,11 +443,11 @@ impl QuantStore {
                             // ADC: precompute distance tables per subspace.
                             // For Euclid we use squared L2.
                             let mut total = 0.0f32;
-                            for s in 0..m {
+                            for (s, &code_byte) in code.iter().enumerate().take(m) {
                                 let start = s * subdim;
                                 let qsub = &query[start..start + subdim];
                                 let base = s * 256 * subdim;
-                                let c = code[s] as usize;
+                                let c = code_byte as usize;
                                 let centroid = &cb[base + c * subdim..base + (c + 1) * subdim];
                                 total += squared_l2(qsub, centroid);
                             }
@@ -456,11 +456,11 @@ impl QuantStore {
                         DistanceMetric::Dot => {
                             // Approximate inner product via codebook.
                             let mut dot = 0.0f32;
-                            for s in 0..m {
+                            for (s, &code_byte) in code.iter().enumerate().take(m) {
                                 let start = s * subdim;
                                 let qsub = &query[start..start + subdim];
                                 let base = s * 256 * subdim;
-                                let c = code[s] as usize;
+                                let c = code_byte as usize;
                                 let centroid = &cb[base + c * subdim..base + (c + 1) * subdim];
                                 for (a, b) in qsub.iter().zip(centroid.iter()) {
                                     dot += a * b;
@@ -474,11 +474,11 @@ impl QuantStore {
                             let mut dot = 0.0f32;
                             let mut norm_q = 0.0f32;
                             let mut norm_c = 0.0f32;
-                            for s in 0..m {
+                            for (s, &code_byte) in code.iter().enumerate().take(m) {
                                 let start = s * subdim;
                                 let qsub = &query[start..start + subdim];
                                 let base = s * 256 * subdim;
-                                let c = code[s] as usize;
+                                let c = code_byte as usize;
                                 let centroid = &cb[base + c * subdim..base + (c + 1) * subdim];
                                 for (a, b) in qsub.iter().zip(centroid.iter()) {
                                     dot += a * b;
@@ -494,11 +494,11 @@ impl QuantStore {
                         }
                         DistanceMetric::Manhattan => {
                             let mut sum = 0.0f32;
-                            for s in 0..m {
+                            for (s, &code_byte) in code.iter().enumerate().take(m) {
                                 let start = s * subdim;
                                 let qsub = &query[start..start + subdim];
                                 let base = s * 256 * subdim;
-                                let c = code[s] as usize;
+                                let c = code_byte as usize;
                                 let centroid = &cb[base + c * subdim..base + (c + 1) * subdim];
                                 for (a, b) in qsub.iter().zip(centroid.iter()) {
                                     sum += (a - b).abs();
@@ -528,8 +528,7 @@ impl QuantStore {
             Some(QuantizationType::Scalar { quantile, .. }) => {
                 let quantile = quantile.unwrap_or(0.99);
                 // Gather all float values across live vectors for quantile clipping.
-                let mut values: Vec<f32> = Vec::new();
-                values.reserve(live_slots.len() * dim);
+                let mut values: Vec<f32> = Vec::with_capacity(live_slots.len() * dim);
                 for &slot in live_slots {
                     if let Some(v) = crate::storage::vectors::Vectors::read_slot(
                         vectors,
@@ -628,9 +627,7 @@ impl QuantStore {
                         .collect();
                     if sample.is_empty() {
                         // No data: fill with zeros
-                        for _ in 0..256 * subdim {
-                            codebook.push(0.0);
-                        }
+                        codebook.resize(codebook.len() + 256 * subdim, 0.0);
                         continue;
                     }
                     // If sample < 256, duplicate to reach 256 points for kmeans (k=256)
@@ -649,9 +646,7 @@ impl QuantStore {
                     let have = result_centroids_len(&sample, 256);
                     // pad remaining
                     let remaining = 256usize.saturating_sub(have);
-                    for _ in 0..remaining * subdim {
-                        codebook.push(0.0);
-                    }
+                    codebook.resize(codebook.len() + remaining * subdim, 0.0);
                     debug_assert_eq!(codebook.len(), (s + 1) * 256 * subdim);
                 }
 
@@ -720,6 +715,7 @@ impl QuantStore {
         map: &[u32],
     ) -> Result<()> {
         let total = new_capacity as usize * self.bytes_per_vector;
+        #[allow(unused_mut)]
         let mut file = File::create(tmp_path)?;
         if total > 0 {
             file.set_len(total as u64)?;
@@ -747,7 +743,7 @@ impl QuantStore {
                     self.bytes_per_vector,
                 ) {
                     let dst = new_slot as usize * self.bytes_per_vector;
-                    write_at(&mut file, code, dst as u64)?;
+                    write_at(&file, code, dst as u64)?;
                     continue;
                 }
             }
@@ -763,7 +759,7 @@ impl QuantStore {
                 if self.is_ready() {
                     if let Ok(code) = self.encode(v) {
                         let dst = new_slot as usize * self.bytes_per_vector;
-                        write_at(&mut file, &code, dst as u64)?;
+                        write_at(&file, &code, dst as u64)?;
                     }
                 }
             }
@@ -786,7 +782,7 @@ fn encode_binary(vector: &[f32]) -> Vec<u8> {
 }
 
 pub(crate) fn encode_binary_for_query(vector: &[f32]) -> Vec<u8> {
-    let bytes = (vector.len() + 7) / 8;
+    let bytes = vector.len().div_ceil(8);
     let mut out = vec![0u8; bytes];
     for (i, &v) in vector.iter().enumerate() {
         if v > 0.0 {

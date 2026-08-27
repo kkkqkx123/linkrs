@@ -10,7 +10,11 @@ vector = ["dep:vector-search"]
 # Embedding infrastructure, independent of remote backend.
 embedding = ["vector", "dep:graphdb-embedding"]
 # Remote qdrant client on top of the local engine types.
-vector-qdrant = ["vector", "embedding", "dep:vector-client"]
+vector-qdrant = ["vector", "embedding", "dep:vector-client", "graphdb-config/vector-qdrant"]
+# Transport-layer sub-features for the remote client. They are additive on
+# top of `vector-qdrant`; enabling both compiles in HTTP + gRPC.
+vector-http = ["vector-qdrant", "vector-client/qdrant-http"]
+vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
 fulltext-search = ["graphdb-search/fulltext-search"]
 
 [dependencies]

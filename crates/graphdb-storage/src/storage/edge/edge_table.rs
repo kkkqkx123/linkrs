@@ -899,27 +899,17 @@ impl core::TimeTravelEdgeStore {
             )));
         }
 
-        let (
-            label,
-            src_label,
-            dst_label,
-            label_name,
-            is_open,
-            schema,
-            next_edge_id,
-            tombstones,
-            min_snapshot_ts,
-        ) = persistence::load_metadata(&mut meta_cursor)?;
+        let meta = persistence::load_metadata(&mut meta_cursor)?;
 
-        self.label = label;
-        self.src_label = src_label;
-        self.dst_label = dst_label;
-        self.label_name = label_name;
-        self.is_open = is_open;
-        self.set_schema(schema);
-        self.next_edge_id = next_edge_id;
-        self.mvcc.tombstones = tombstones;
-        self.mvcc.min_active_snapshot_ts = min_snapshot_ts;
+        self.label = meta.label;
+        self.src_label = meta.src_label;
+        self.dst_label = meta.dst_label;
+        self.label_name = meta.label_name;
+        self.is_open = meta.is_open;
+        self.set_schema(meta.schema);
+        self.next_edge_id = meta.next_edge_id;
+        self.mvcc.tombstones = meta.tombstones;
+        self.mvcc.min_active_snapshot_ts = meta.min_snapshot_ts;
         self.properties
             .set_retention_horizon(self.mvcc.min_active_snapshot_ts);
         self.out_free_space.clear();

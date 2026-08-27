@@ -11,6 +11,17 @@ use vector_search::{
     CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
 
+/// Parameters for paginated vector point scanning.
+pub struct ScrollQuery<'a> {
+    pub space_id: u64,
+    pub tag_name: &'a str,
+    pub field_name: &'a str,
+    pub limit: usize,
+    pub offset: Option<&'a str>,
+    pub with_payload: Option<bool>,
+    pub with_vector: Option<bool>,
+}
+
 /// Metrics every backend accepts at index-creation time; anything else is
 /// rejected up front instead of failing deep inside one engine.
 fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
@@ -370,6 +381,24 @@ impl VectorApi {
             .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
+    /// Merge the given fields into the payload of the given points.
+    /// Only the supplied keys are updated; other existing keys are preserved.
+    pub async fn set_payload_fields(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: Vec<&str>,
+        fields: vector_search::types::Payload,
+    ) -> CoreResult<()> {
+        let collection_name =
+            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        self.backend
+            .set_payload_fields(&collection_name, point_ids, fields)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+
     /// Remove specific keys from the payload of the given points.
     pub async fn delete_payload(
         &self,
@@ -390,18 +419,18 @@ impl VectorApi {
     /// Paginated scan over points in a collection.
     pub async fn scroll(
         &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        limit: usize,
-        offset: Option<&str>,
-        with_payload: Option<bool>,
-        with_vector: Option<bool>,
+        query: ScrollQuery<'_>,
     ) -> CoreResult<(Vec<VectorPoint>, Option<String>)> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        let collection_name = VectorIndexLocation::new(query.space_id, query.tag_name, query.field_name)
+            .to_collection_name();
         self.backend
-            .scroll(&collection_name, limit, offset, with_payload, with_vector)
+            .scroll(
+                &collection_name,
+                query.limit,
+                query.offset,
+                query.with_payload,
+                query.with_vector,
+            )
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
     }

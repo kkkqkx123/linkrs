@@ -90,7 +90,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
                 if health.is_healthy {
                     let vector_coordinator = Arc::new(
                         graphdb::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-                            graphdb::sync::VectorBackend::Qdrant(Arc::new(vector_manager)),
+                            graphdb::sync::VectorBackend::qdrant(Arc::new(vector_manager)),
                             rt.handle().clone(),
                         ),
                     );

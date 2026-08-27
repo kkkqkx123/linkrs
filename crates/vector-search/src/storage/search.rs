@@ -22,7 +22,7 @@ use super::index_lifecycle::PublishedIndex;
 use super::keys::Keys;
 use super::quant::QuantStore;
 use super::vectors::Vectors;
-use super::{CollectionStore, TombstoneBits};
+use super::{CollectionStore, PayloadStore, TombstoneBits};
 use crate::error::{Result, VectorSearchError};
 use crate::index::hnsw::HnswSearchContext;
 use crate::index::IvfSearchContext;
@@ -30,11 +30,12 @@ use crate::index::{HnswIndex, IvfIndex};
 use crate::metrics::{SearchPath, SearchRetry};
 use crate::types::{PointId, SearchQuery, SearchResult};
 
-/// Snapshot of the immutable views used by a single search pass. Payload
-/// reads are NOT part of this snapshot: they go through
-/// [`CollectionStore::read_payload_at`] so collections backed by the
-/// Gridstore-style `PayloadStore` route correctly (the legacy `payloads.bin`
-/// blob stays empty for new collections).
+/// Snapshot of the immutable views used by a single search pass. All
+/// fields are captured under one `inner.read()` acquisition so a concurrent
+/// background compaction (which swaps every file under the write lock) cannot
+/// produce a mixed-generation view. The payload store reference is captured
+/// atomically via `ArcSwap::load()` to prevent compaction from swapping it
+/// during the search.
 struct SearchSnapshot<'a> {
     dim: usize,
     segment_slots: u32,
@@ -42,6 +43,10 @@ struct SearchSnapshot<'a> {
     vsnap: &'a [Arc<memmap2::Mmap>],
     keysnap: &'a DirView,
     filter_mask: Option<&'a BitVec>,
+    /// Snapshot of the payload store. Held via a read lock for the search
+    /// duration so a concurrent compaction cannot swap the store (and renumber
+    /// slots) while we are reading payloads.
+    payload_view: Option<&'a PayloadStore>,
 }
 
 impl CollectionStore {
@@ -62,6 +67,9 @@ impl CollectionStore {
         // store write lock), so a pending slot is always covered by these
         // snapshots. Loading it later could surface a slot whose key is
         // missing from the older key generation.
+        //
+        // The payload store is snapshotted atomically via ArcSwap so it
+        // cannot be swapped by a concurrent compaction during the search.
         let (
             dim,
             metric,
@@ -105,17 +113,20 @@ impl CollectionStore {
                 self.pending.load_full(),
             )
         };
+        let ps_guard = self.payload_store.load();
+        let payload_view: Option<&PayloadStore> = (*ps_guard).as_ref().as_ref();
         let filtered = query.filter.is_some();
+        let snap = SearchSnapshot {
+            dim,
+            segment_slots,
+            tombstones: &tombstones,
+            vsnap: &vsnap,
+            keysnap: &keysnap,
+            filter_mask: filter_mask.as_ref(),
+            payload_view,
+        };
         match published.as_ref() {
             Some(PublishedIndex::Ivf(index)) => {
-                let snap = SearchSnapshot {
-                    dim,
-                    segment_slots,
-                    tombstones: &tombstones,
-                    vsnap: &vsnap,
-                    keysnap: &keysnap,
-                    filter_mask: filter_mask.as_ref(),
-                };
                 let results = self.search_ivf(index.as_ref(), query, &snap, &pending);
                 self.metrics
                     .record_search(SearchPath::Ivf, filtered, started.elapsed());
@@ -123,14 +134,6 @@ impl CollectionStore {
                 return results;
             }
             Some(PublishedIndex::Hnsw(index)) => {
-                let snap = SearchSnapshot {
-                    dim,
-                    segment_slots,
-                    tombstones: &tombstones,
-                    vsnap: &vsnap,
-                    keysnap: &keysnap,
-                    filter_mask: filter_mask.as_ref(),
-                };
                 let results = self.search_hnsw(index.as_ref(), query, &snap, &pending);
                 self.metrics
                     .record_search(SearchPath::Hnsw, filtered, started.elapsed());
@@ -150,14 +153,9 @@ impl CollectionStore {
             // back to exact scan transparently.
             let quant_result = self.search_quantized(
                 query,
-                dim,
+                &snap,
                 metric,
-                segment_slots,
                 next_slot,
-                &tombstones,
-                &vsnap,
-                &keysnap,
-                filter_mask.as_ref(),
                 filtered,
                 started,
             );
@@ -190,6 +188,7 @@ impl CollectionStore {
                             vsnap: &vsnap,
                             keysnap: &keysnap,
                             filter_mask: None,
+                            payload_view,
                         },
                     );
                     acc
@@ -230,6 +229,7 @@ impl CollectionStore {
                 vsnap: &vsnap,
                 keysnap: &keysnap,
                 filter_mask: None,
+                payload_view,
             },
         )
     }
@@ -237,14 +237,9 @@ impl CollectionStore {
     fn search_quantized(
         &self,
         query: &SearchQuery,
-        dim: usize,
+        snap: &SearchSnapshot<'_>,
         metric: crate::types::DistanceMetric,
-        segment_slots: u32,
         next_slot: u64,
-        tombstones: &TombstoneBits,
-        vsnap: &[Arc<Mmap>],
-        keysnap: &DirView,
-        filter_mask: Option<&BitVec>,
         filtered: bool,
         started: Instant,
     ) -> Result<Vec<SearchResult>> {
@@ -285,7 +280,7 @@ impl CollectionStore {
 
         let heap: BinaryHeap<std::cmp::Reverse<ScoredSlot>> = (0..next_slot as u32)
             .into_par_iter()
-            .filter(|s| !tombstones.bit(*s as usize))
+            .filter(|s| !snap.tombstones.bit(*s as usize))
             .fold(
                 || BinaryHeap::with_capacity(quant_k),
                 |mut acc, s| {
@@ -298,9 +293,7 @@ impl CollectionStore {
                         quant,
                         &q_snap,
                         bytes_per_vector,
-                        segment_slots,
-                        keysnap,
-                        filter_mask,
+                        snap,
                         query_bits.as_deref(),
                     );
                     acc
@@ -337,12 +330,13 @@ impl CollectionStore {
                 Vec::new(),
                 query,
                 &SearchSnapshot {
-                    dim,
-                    segment_slots,
-                    tombstones,
-                    vsnap,
-                    keysnap,
+                    dim: snap.dim,
+                    segment_slots: snap.segment_slots,
+                    tombstones: snap.tombstones,
+                    vsnap: snap.vsnap,
+                    keysnap: snap.keysnap,
                     filter_mask: None,
+                    payload_view: snap.payload_view,
                 },
             );
         }
@@ -351,7 +345,8 @@ impl CollectionStore {
         // Rerank with exact distances.
         let mut reranked: Vec<(f32, u32)> = Vec::with_capacity(quant_candidates.len());
         for (_, slot) in quant_candidates {
-            let Some(v) = Vectors::read_slot(vsnap, slot as u64, segment_slots, dim) else {
+            let Some(v) = Vectors::read_slot(snap.vsnap, slot as u64, snap.segment_slots, snap.dim)
+            else {
                 continue;
             };
             let dist = crate::distance::distance(metric, &query.vector, v);
@@ -366,16 +361,20 @@ impl CollectionStore {
             reranked,
             query,
             &SearchSnapshot {
-                dim,
-                segment_slots,
-                tombstones,
-                vsnap,
-                keysnap,
+                dim: snap.dim,
+                segment_slots: snap.segment_slots,
+                tombstones: snap.tombstones,
+                vsnap: snap.vsnap,
+                keysnap: snap.keysnap,
                 filter_mask: None,
+                payload_view: snap.payload_view,
             },
         )
     }
 
+    /// Hot inner-loop function; parameters are kept flat for zero-cost
+    /// inlining in the parallel iterator closure.
+    #[allow(clippy::too_many_arguments)]
     fn quant_scan_step(
         &self,
         heap: &mut BinaryHeap<std::cmp::Reverse<ScoredSlot>>,
@@ -386,13 +385,11 @@ impl CollectionStore {
         quant: &QuantStore,
         q_snap: &[Arc<Mmap>],
         bytes_per_vector: usize,
-        segment_slots: u32,
-        keysnap: &DirView,
-        filter_mask: Option<&BitVec>,
+        snap: &SearchSnapshot<'_>,
         query_bits: Option<&[u8]>,
     ) {
         // Fast pre-filter via bitmap for equality payload conditions, when present.
-        if let Some(mask) = filter_mask {
+        if let Some(mask) = snap.filter_mask {
             if (slot as usize) >= mask.len() || !mask[slot as usize] {
                 return;
             }
@@ -403,21 +400,24 @@ impl CollectionStore {
         // equality filters this double-checks but keeps correctness simple; the
         // bitmap already eliminated most non-matching slots cheaply.
         if let Some(filter) = &query.filter {
-            let Some(id) = Keys::read_key(keysnap, slot as usize)
+            let Some(id) = Keys::read_key(snap.keysnap, slot as usize)
                 .ok()
                 .flatten()
                 .map(PointId::from)
             else {
                 return;
             };
-            let payload = self.read_payload_at(slot).ok().flatten();
+            let payload = match snap.payload_view {
+                Some(ps) => ps.get(slot).ok().flatten(),
+                None => self.read_payload_at(slot).ok().flatten(),
+            };
             let ok = crate::filter::matches(filter, &id, payload.as_ref()).unwrap_or(false);
             if !ok {
                 return;
             }
         }
         let Some(code) =
-            QuantStore::read_slot(q_snap, slot as u64, segment_slots, bytes_per_vector)
+            QuantStore::read_slot(q_snap, slot as u64, snap.segment_slots, bytes_per_vector)
         else {
             return;
         };
@@ -463,7 +463,11 @@ impl CollectionStore {
         query: &SearchQuery,
         snap: &SearchSnapshot<'_>,
     ) {
-        let SearchSnapshot { keysnap, .. } = snap;
+        let SearchSnapshot {
+            keysnap,
+            payload_view,
+            ..
+        } = snap;
         if let Some(filter) = &query.filter {
             let Some(id) = Keys::read_key(keysnap, slot as usize)
                 .ok()
@@ -472,7 +476,10 @@ impl CollectionStore {
             else {
                 return;
             };
-            let payload = self.read_payload_at(slot).ok().flatten();
+            let payload = match payload_view {
+                Some(ps) => ps.get(slot).ok().flatten(),
+                None => self.read_payload_at(slot).ok().flatten(),
+            };
             let ok = crate::filter::matches(filter, &id, payload.as_ref()).unwrap_or(false);
             if !ok {
                 return;
@@ -646,6 +653,7 @@ impl CollectionStore {
             vsnap,
             keysnap,
             filter_mask,
+            payload_view,
         } = snap;
         let _ = tombstones;
         let _ = filter_mask;
@@ -658,7 +666,10 @@ impl CollectionStore {
                     VectorSearchError::CorruptData(format!("slot {slot} has no key"))
                 })?;
                 let id = PointId::from(key);
-                let payload = self.read_payload_at(slot)?;
+                let payload = match payload_view {
+                    Some(ps) => ps.get(slot)?,
+                    None => self.read_payload_at(slot)?,
+                };
                 if crate::filter::matches(filter, &id, payload.as_ref())? {
                     kept.push((score, slot));
                 }
@@ -710,7 +721,11 @@ impl CollectionStore {
                 .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
             let mut result = SearchResult::new(PointId::from(key), score);
             if with_payload {
-                if let Some(payload) = self.read_payload_at(slot)? {
+                let payload = match payload_view {
+                    Some(ps) => ps.get(slot)?,
+                    None => self.read_payload_at(slot)?,
+                };
+                if let Some(payload) = payload {
                     // Field projection trims the payload after the read; a
                     // selector that removes everything yields an empty map.
                     let payload = match &query.payload_selector {

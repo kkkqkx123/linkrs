@@ -20,8 +20,8 @@ mod utils;
 use config::{
     build_create_collection_body, build_create_payload_index_body, build_delete_by_filter_body,
     build_delete_by_ids_body, build_delete_payload_body, build_get_body, build_scroll_body,
-    build_search_batch_body, build_search_body, build_set_payload_body, build_upsert_body,
-    distance_from_qdrant,
+    build_search_batch_body, build_search_body, build_set_payload_body,
+    build_set_payload_body_overwrite, build_upsert_body, distance_from_qdrant,
 };
 use filter::convert_filter;
 use utils::{parse_payload, QdrantSearchResult, QdrantUpsertResult, VectorValue};
@@ -293,6 +293,7 @@ impl QdrantEngine {
                             max_indexing_threads: h.max_indexing_threads.map(|x| x as usize),
                             on_disk: h.on_disk,
                             payload_m: h.payload_m.map(|x| x as usize),
+                            ..Default::default()
                         }),
                         quantization_config: v
                             .quantization_config
@@ -923,13 +924,13 @@ impl VectorEngine for QdrantEngine {
         payload: Payload,
     ) -> Result<()> {
         debug!(
-            "Setting payload for {} points in collection '{}'",
+            "Replacing payload for {} points in collection '{}'",
             point_ids.len(),
             collection
         );
 
         let ids: Vec<Value> = point_ids.iter().map(|id| point_id_to_json(id)).collect();
-        let body = build_set_payload_body(ids, serde_json::to_value(&payload)?);
+        let body = build_set_payload_body_overwrite(ids, serde_json::to_value(&payload)?);
 
         let response = self
             .request_json(

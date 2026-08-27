@@ -40,5 +40,30 @@ pub enum VectorSearchError {
     Internal(String),
 }
 
+impl From<VectorSearchError> for VectorEngineError {
+    fn from(err: VectorSearchError) -> Self {
+        VectorEngineError::Local(err.to_string())
+    }
+}
+
+/// Unified error type for the `VectorEngine` trait. Wraps both local
+/// (`VectorSearchError`) and remote (client) errors under one type so that
+/// the trait object can return a single error without depending on any
+/// specific backend crate.
+#[derive(Debug, thiserror::Error)]
+pub enum VectorEngineError {
+    #[error("local vector engine error: {0}")]
+    Local(String),
+    #[error("remote vector engine error: {0}")]
+    Remote(String),
+    #[error("vector engine internal error: {0}")]
+    Internal(String),
+    #[error("operation not supported: {0}")]
+    NotSupported(String),
+}
+
 /// Result type alias for the vector search engine.
 pub type Result<T> = std::result::Result<T, VectorSearchError>;
+
+/// Result type alias for the unified `VectorEngine` trait.
+pub type EngineResult<T> = std::result::Result<T, VectorEngineError>;

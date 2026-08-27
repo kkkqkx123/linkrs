@@ -19,6 +19,19 @@ pub(crate) const EDGE_META_VERSION: u32 = 3;
 const EDGE_ID_STORAGE_MODE_DIRECT: u8 = 0;
 const EDGE_ID_STORAGE_MODE_SEPARATE: u8 = 1;
 
+/// Deserialized edge table metadata returned by [`load_metadata`].
+pub(crate) struct EdgeMetadata {
+    pub label: u32,
+    pub src_label: u32,
+    pub dst_label: u32,
+    pub label_name: String,
+    pub is_open: bool,
+    pub schema: EdgeSchema,
+    pub next_edge_id: EdgeId,
+    pub tombstones: HashMap<EdgeId, Timestamp>,
+    pub min_snapshot_ts: Timestamp,
+}
+
 /// Serialize edge table metadata to a buffer
 #[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
@@ -140,20 +153,7 @@ pub fn serialize_properties(properties: &PropertyTable, buf: &mut Vec<u8>) -> St
 }
 
 /// Load metadata from file cursor
-#[allow(clippy::type_complexity)]
-pub fn load_metadata(
-    cursor: &mut &[u8],
-) -> StorageResult<(
-    u32,
-    u32,
-    u32,
-    String,
-    bool,
-    EdgeSchema,
-    EdgeId,
-    HashMap<EdgeId, Timestamp>,
-    Timestamp,
-)> {
+pub fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
     let mut label_bytes = [0u8; 4];
     cursor.read_exact(&mut label_bytes)?;
     let label = u32::from_le_bytes(label_bytes);
@@ -212,7 +212,7 @@ pub fn load_metadata(
     cursor.read_exact(&mut min_snapshot_ts_bytes)?;
     let min_active_snapshot_ts = u64::from_le_bytes(min_snapshot_ts_bytes);
 
-    Ok((
+    Ok(EdgeMetadata {
         label,
         src_label,
         dst_label,
@@ -221,8 +221,8 @@ pub fn load_metadata(
         schema,
         next_edge_id,
         tombstones,
-        min_active_snapshot_ts,
-    ))
+        min_snapshot_ts: min_active_snapshot_ts,
+    })
 }
 
 /// Load CSR and segments from file

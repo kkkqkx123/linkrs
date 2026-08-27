@@ -12,7 +12,8 @@ pub mod metrics;
 pub mod storage;
 pub mod types;
 
-pub use engine::{LocalVectorEngine, TxnOp};
-pub use error::{Result, VectorSearchError};
+pub use engine::{LocalVectorEngine, TxnOp, VectorEngine};
+pub use error::VectorEngineError;
+pub use error::{EngineResult, Result, VectorSearchError};
 pub use metrics::{IndexTier, Metrics, MetricsSnapshot, SearchPath, SearchRetry};
 pub use types::*;

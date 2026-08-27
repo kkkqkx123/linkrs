@@ -188,6 +188,26 @@ impl From<vector_search::VectorSearchError> for VectorCoordinatorError {
     }
 }
 
+#[cfg(feature = "vector")]
+impl From<vector_search::VectorEngineError> for VectorCoordinatorError {
+    fn from(err: vector_search::VectorEngineError) -> Self {
+        match err {
+            vector_search::VectorEngineError::Local(msg) => {
+                VectorCoordinatorError::Vector(VectorError::Internal(msg))
+            }
+            vector_search::VectorEngineError::Remote(msg) => {
+                VectorCoordinatorError::Vector(VectorError::QdrantError(msg))
+            }
+            vector_search::VectorEngineError::Internal(msg) => {
+                VectorCoordinatorError::Vector(VectorError::Internal(msg))
+            }
+            vector_search::VectorEngineError::NotSupported(op) => VectorCoordinatorError::Vector(
+                VectorError::ConfigError(format!("Operation not supported: {}", op)),
+            ),
+        }
+    }
+}
+
 #[cfg(feature = "vector-qdrant")]
 impl From<vector_client::VectorClientError> for VectorError {
     fn from(err: vector_client::VectorClientError) -> Self {

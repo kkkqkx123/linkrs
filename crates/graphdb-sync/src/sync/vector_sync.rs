@@ -563,6 +563,47 @@ impl VectorSyncCoordinator {
         Ok(results)
     }
 
+    /// Streaming search: yields results one by one.
+    ///
+    /// Uses the backend's streaming implementation (local: buffered iter,
+    /// remote: gRPC streaming when available). Callers can consume the
+    /// stream without materializing the full result set.
+    pub async fn search_stream(
+        &self,
+        collection: &str,
+        query: SearchQuery,
+    ) -> VectorCoordinatorResult<
+        std::pin::Pin<
+            Box<dyn futures::Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>,
+        >,
+    > {
+        if self.is_disabled_engine() {
+            return Err(VectorCoordinatorError::EngineDisabled);
+        }
+        let stream = self.backend.search_stream(collection, query).await?;
+        Ok(stream)
+    }
+
+    /// Streaming scroll: yields points one by one via paginated scroll.
+    pub async fn scroll_stream(
+        &self,
+        collection: &str,
+        batch_size: usize,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> VectorCoordinatorResult<
+        std::pin::Pin<Box<dyn futures::Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
+    > {
+        if self.is_disabled_engine() {
+            return Err(VectorCoordinatorError::EngineDisabled);
+        }
+        let stream = self
+            .backend
+            .scroll_stream(collection, batch_size, with_payload, with_vector)
+            .await?;
+        Ok(stream)
+    }
+
     /// Search with options
     pub async fn search_with_options(
         &self,

@@ -553,6 +553,48 @@ pub async fn set_payload<
     }
 }
 
+/// Merge fields into payload for vector points
+pub async fn set_payload_fields<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<SetPayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let fields: vector_search::types::Payload = request.payload.into_iter().collect();
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .set_payload_fields(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                fields,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload fields merged successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
 /// Delete payload keys from vector points
 pub async fn delete_payload<
     S: StorageClient
@@ -614,15 +656,15 @@ pub async fn scroll<
 
     if let Some(vector_api) = vector_api {
         let (points, next_offset) = vector_api
-            .scroll(
-                request.space_id,
-                &request.tag_name,
-                &request.field_name,
-                request.limit,
-                request.offset.as_deref(),
-                request.with_payload,
-                request.with_vector,
-            )
+            .scroll(graphdb_api::api::core::vector_api::ScrollQuery {
+                space_id: request.space_id,
+                tag_name: &request.tag_name,
+                field_name: &request.field_name,
+                limit: request.limit,
+                offset: request.offset.as_deref(),
+                with_payload: request.with_payload,
+                with_vector: request.with_vector,
+            })
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 

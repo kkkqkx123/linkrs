@@ -233,7 +233,7 @@ impl<
                     ) {
                         engine.set_default_quantization_config(quant);
                     }
-                    crate::sync::backend::VectorBackend::Local(Arc::new(engine))
+                    crate::sync::backend::VectorBackend::local(engine)
                 }
             };
 

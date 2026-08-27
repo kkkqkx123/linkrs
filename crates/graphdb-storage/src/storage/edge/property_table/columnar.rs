@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// A batch of property rows, where each row is an optional list of
+/// (property_name, optional_value) pairs.
+pub(crate) type BatchPropertyRows = Vec<Option<Vec<(String, Option<Value>)>>>;
+
 impl PropertyTable {
     /// Fast path: update a single property value via direct byte manipulation.
     /// Only applicable for fixed-size schemas where byte offsets are known.
@@ -329,12 +333,11 @@ impl PropertyTable {
 
     /// Batch retrieval of properties, sorted by offset for cache locality
     /// Returns results in original order via the provided iterator
-    #[allow(clippy::type_complexity)]
     pub fn get_batch<'a, I>(
         &'a self,
         offsets: I,
         query_ts: Option<Timestamp>,
-    ) -> Vec<Option<Vec<(String, Option<Value>)>>>
+    ) -> BatchPropertyRows
     where
         I: IntoIterator<Item = &'a u32>,
     {

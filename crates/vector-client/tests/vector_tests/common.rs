@@ -340,10 +340,7 @@ impl VectorEngine for MockVectorEngine {
 
         for id in point_ids {
             if let Some(point) = col.points.get_mut(id) {
-                let existing = point.payload.get_or_insert_with(HashMap::new);
-                for (k, v) in payload.clone() {
-                    existing.insert(k, v);
-                }
+                point.payload = Some(payload.clone());
             }
         }
         Ok(())

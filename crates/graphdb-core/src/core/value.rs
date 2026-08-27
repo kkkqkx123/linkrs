@@ -16,7 +16,6 @@
 //! - `json` - JSON/JSONB types
 //! - `memory` - Memory estimation
 
-#[allow(non_snake_case)]
 pub mod date_time;
 pub mod decimal128;
 pub mod geography;

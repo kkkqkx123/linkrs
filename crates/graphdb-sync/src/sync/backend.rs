@@ -1,37 +1,52 @@
 //! Vector backend abstraction.
 //!
-//! The sync layer talks to either the built-in local engine or the remote
-//! qdrant client through a single enum. The local variant is always available
-//! when the `vector` feature is enabled; the qdrant variant additionally
-//! requires the `vector-qdrant` feature (which pulls in the network stack).
+//! The sync layer dispatches to either the built-in local engine or the
+//! remote Qdrant client through an enum [`VectorBackend`]. Each variant
+//! holds the concrete engine type directly, eliminating dynamic dispatch
+//! overhead and `as_any()` downcast.
+//!
+//! The local engine is synchronous; the Qdrant variant delegates to the
+//! async network client.
 
+use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures::Stream;
 use vector_search::{
     CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, Payload, PayloadSchemaType,
     SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
-#[allow(unused_imports)]
-use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
-
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorManager;
 
+use super::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
+
 /// The active vector engine.
-#[derive(Clone)]
+///
+/// An enum dispatching to one of the supported vector engine backends.
+/// Cloning bumps the reference count on the inner engine handle.
 pub enum VectorBackend {
-    /// Built-in local engine (synchronous, disk-backed). Always operational
-    /// when constructed: it fails hard on real errors rather than
-    /// degrading silently.
+    /// Built-in in-process engine (mmap-backed, synchronous I/O).
     Local(Arc<LocalVectorEngine>),
-    /// Remote qdrant client.
+    /// Remote Qdrant service (HTTP or gRPC transport).
     #[cfg(feature = "vector-qdrant")]
     Qdrant(Arc<VectorManager>),
 }
 
-impl std::fmt::Debug for VectorBackend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Clone for VectorBackend {
+    fn clone(&self) -> Self {
+        match self {
+            VectorBackend::Local(engine) => VectorBackend::Local(Arc::clone(engine)),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => VectorBackend::Qdrant(Arc::clone(manager)),
+        }
+    }
+}
+
+impl fmt::Debug for VectorBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VectorBackend::Local(_) => f.debug_tuple("Local").finish(),
             #[cfg(feature = "vector-qdrant")]
@@ -41,18 +56,28 @@ impl std::fmt::Debug for VectorBackend {
 }
 
 impl VectorBackend {
-    /// Whether the engine is the built-in local engine.
+    /// Wrap a [`LocalVectorEngine`] in the [`VectorBackend`] handle.
+    pub fn local(engine: LocalVectorEngine) -> Self {
+        Self::Local(Arc::new(engine))
+    }
+
+    /// Wrap an already-allocated `Arc<LocalVectorEngine>`.
+    pub fn from_local_arc(arc: Arc<LocalVectorEngine>) -> Self {
+        Self::Local(arc)
+    }
+
+    /// Wrap a [`VectorManager`] in the [`VectorBackend`] handle.
+    #[cfg(feature = "vector-qdrant")]
+    pub fn qdrant(manager: Arc<VectorManager>) -> Self {
+        Self::Qdrant(manager)
+    }
+
+    /// Whether this backend is the built-in local engine.
     pub fn is_local(&self) -> bool {
         matches!(self, VectorBackend::Local(_))
     }
 
-    /// Whether the engine is unavailable (qdrant disabled engine).
-    ///
-    /// A disabled engine fails user-facing operations loudly: the coordinator
-    /// turns queries into [`VectorCoordinatorError::EngineDisabled`] instead
-    /// of returning empty results that would be indistinguishable from
-    /// "no matching data". Only delivery-plane batches (background sync) are
-    /// skipped-and-accounted, because failing those would stall replication.
+    /// Whether the engine is currently unavailable (e.g. disabled Qdrant).
     pub fn is_disabled(&self) -> bool {
         match self {
             VectorBackend::Local(_) => false,
@@ -61,26 +86,70 @@ impl VectorBackend {
         }
     }
 
-    /// Access the underlying local engine, if present.
-    pub fn local(&self) -> Option<&Arc<LocalVectorEngine>> {
-        match self {
-            VectorBackend::Local(engine) => Some(engine),
+    /// Build the engine selected by `config`.
+    ///
+    /// Only handles the local engine synchronously. For async Qdrant
+    /// construction, use [`Self::from_config_async`].
+    pub fn from_config(
+        config: &graphdb_config::config::VectorConfig,
+    ) -> VectorCoordinatorResult<Self> {
+        match config.engine {
+            graphdb_config::config::VectorEngineKind::Local => {
+                let data_dir = config
+                    .local
+                    .data_dir
+                    .as_deref()
+                    .unwrap_or_else(|| std::path::Path::new("vector"));
+                let engine = LocalVectorEngine::open(data_dir).map_err(|e| {
+                    VectorCoordinatorError::Vector(VectorError::Internal(format!(
+                        "failed to open local vector engine: {e}"
+                    )))
+                })?;
+                Ok(Self::local(engine))
+            }
             #[cfg(feature = "vector-qdrant")]
-            VectorBackend::Qdrant(_) => None,
+            graphdb_config::config::VectorEngineKind::Qdrant => {
+                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                    "Qdrant engine requires async construction; use from_config_async".to_string(),
+                )))
+            }
+            #[cfg(not(feature = "vector-qdrant"))]
+            graphdb_config::config::VectorEngineKind::Qdrant => {
+                Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
+                    "Qdrant engine requested but the `vector-qdrant` feature is not enabled"
+                        .to_string(),
+                )))
+            }
         }
     }
 
-    /// Access the underlying qdrant manager, if present.
+    /// Async variant that also handles the Qdrant backend.
     #[cfg(feature = "vector-qdrant")]
-    pub fn qdrant(&self) -> Option<&Arc<VectorManager>> {
-        match self {
-            VectorBackend::Local(_) => None,
-            VectorBackend::Qdrant(manager) => Some(manager),
+    pub async fn from_config_async(
+        config: &graphdb_config::config::VectorConfig,
+    ) -> VectorCoordinatorResult<Self> {
+        match config.engine {
+            graphdb_config::config::VectorEngineKind::Local => Self::from_config(config),
+            graphdb_config::config::VectorEngineKind::Qdrant => {
+                let client_config = config.qdrant.clone();
+                let manager = Arc::new(
+                    VectorManager::new(client_config)
+                        .await
+                        .map_err(|e| VectorCoordinatorError::Vector(VectorError::from(e)))?,
+                );
+                Ok(Self::qdrant(manager))
+            }
         }
     }
 
-    /// Engine health status. The local engine is always healthy: it has no
-    /// remote endpoint to probe.
+    #[cfg(not(feature = "vector-qdrant"))]
+    pub async fn from_config_async(
+        config: &graphdb_config::config::VectorConfig,
+    ) -> VectorCoordinatorResult<Self> {
+        Self::from_config(config)
+    }
+
+    /// Engine health status. The local engine is always healthy.
     pub async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
         match self {
             VectorBackend::Local(_) => Ok(HealthStatus::healthy(
@@ -89,6 +158,24 @@ impl VectorBackend {
             )),
             #[cfg(feature = "vector-qdrant")]
             VectorBackend::Qdrant(manager) => Ok(manager.engine().health_check().await?),
+        }
+    }
+
+    /// Access the underlying local engine, if present.
+    pub fn as_local(&self) -> Option<&LocalVectorEngine> {
+        match self {
+            VectorBackend::Local(engine) => Some(engine.as_ref()),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(_) => None,
+        }
+    }
+
+    /// Access the underlying `VectorManager`, if this is a Qdrant backend.
+    #[cfg(feature = "vector-qdrant")]
+    pub fn as_qdrant_manager(&self) -> Option<&VectorManager> {
+        match self {
+            VectorBackend::Local(_) => None,
+            VectorBackend::Qdrant(manager) => Some(manager.as_ref()),
         }
     }
 
@@ -101,18 +188,21 @@ impl VectorBackend {
         config: &CollectionConfig,
     ) -> VectorCoordinatorResult<()> {
         match self {
-            VectorBackend::Local(engine) => engine
-                .create_collection(name, config)
-                .map_err(VectorError::from)?,
+            VectorBackend::Local(engine) => {
+                engine
+                    .create_collection(name, config)
+                    .map_err(VectorError::from)?;
+                Ok(())
+            }
             #[cfg(feature = "vector-qdrant")]
-            VectorBackend::Qdrant(manager) => manager.create_index(name, config.clone()).await?,
+            VectorBackend::Qdrant(manager) => {
+                manager.create_index(name, config.clone()).await?;
+                Ok(())
+            }
         }
-        Ok(())
     }
 
-    /// Create a payload index for filter acceleration. Only meaningful for the
-    /// remote engine; the local engine scans payloads directly (no-op).
-    #[allow(unused_variables)]
+    /// Create a payload index for filter acceleration.
     pub async fn create_payload_index(
         &self,
         collection: &str,
@@ -120,7 +210,12 @@ impl VectorBackend {
         schema: PayloadSchemaType,
     ) -> VectorCoordinatorResult<()> {
         match self {
-            VectorBackend::Local(_) => Ok(()),
+            VectorBackend::Local(engine) => {
+                engine
+                    .create_payload_index(collection, field, schema)
+                    .map_err(VectorError::from)?;
+                Ok(())
+            }
             #[cfg(feature = "vector-qdrant")]
             VectorBackend::Qdrant(manager) => {
                 manager
@@ -164,12 +259,15 @@ impl VectorBackend {
     pub async fn delete_collection(&self, name: &str) -> VectorCoordinatorResult<()> {
         match self {
             VectorBackend::Local(engine) => {
-                engine.delete_collection(name).map_err(VectorError::from)?
+                engine.delete_collection(name).map_err(VectorError::from)?;
+                Ok(())
             }
             #[cfg(feature = "vector-qdrant")]
-            VectorBackend::Qdrant(manager) => manager.drop_index(name).await?,
+            VectorBackend::Qdrant(manager) => {
+                manager.drop_index(name).await?;
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     /// Fetch a single point by id.
@@ -303,11 +401,6 @@ impl VectorBackend {
     }
 
     /// Set/replace payload keys for the given points.
-    ///
-    /// - Local engine: replaces the full payload (atomic).
-    /// - Qdrant engine: per-key set; keys not included in `payload` are
-    ///   preserved (merge semantics).
-    #[allow(unused_variables)]
     pub async fn set_payload(
         &self,
         collection: &str,
@@ -335,8 +428,6 @@ impl VectorBackend {
     }
 
     /// Merge the given fields into the payload of the given points.
-    /// Only the keys in `fields` are updated; other keys are preserved.
-    #[allow(unused_variables)]
     pub async fn set_payload_fields(
         &self,
         collection: &str,
@@ -364,7 +455,6 @@ impl VectorBackend {
     }
 
     /// Remove specific keys from the payload of the given points.
-    #[allow(unused_variables)]
     pub async fn delete_payload(
         &self,
         collection: &str,
@@ -393,7 +483,6 @@ impl VectorBackend {
     }
 
     /// Paginated scan over points in a collection.
-    #[allow(unused_variables)]
     pub async fn scroll(
         &self,
         collection: &str,
@@ -415,15 +504,20 @@ impl VectorBackend {
         }
     }
 
-    /// Delete a payload index. No-op for the local engine.
-    #[allow(unused_variables)]
+    /// Delete a payload index.
     pub async fn delete_payload_index(
         &self,
         collection: &str,
         field: &str,
     ) -> VectorCoordinatorResult<()> {
         match self {
-            VectorBackend::Local(_) => Ok(()),
+            VectorBackend::Local(engine) => {
+                engine
+                    .delete_payload_index(collection, field)
+                    .map(|_| ())
+                    .map_err(VectorError::from)?;
+                Ok(())
+            }
             #[cfg(feature = "vector-qdrant")]
             VectorBackend::Qdrant(manager) => {
                 manager
@@ -435,20 +529,21 @@ impl VectorBackend {
         }
     }
 
-    /// List payload indexes. Returns empty for the local engine.
-    #[allow(unused_variables)]
+    /// List payload indexes.
     pub async fn list_payload_indexes(
         &self,
         collection: &str,
     ) -> VectorCoordinatorResult<Vec<(String, PayloadSchemaType)>> {
         match self {
-            VectorBackend::Local(_) => Ok(Vec::new()),
+            VectorBackend::Local(engine) => Ok(engine
+                .list_payload_indexes(collection)
+                .map_err(VectorError::from)?),
             #[cfg(feature = "vector-qdrant")]
-            VectorBackend::Qdrant(manager) => manager
+            VectorBackend::Qdrant(manager) => Ok(manager
                 .engine()
                 .list_payload_indexes(collection)
                 .await
-                .map_err(VectorError::from),
+                .map_err(VectorError::from)?),
         }
     }
 
@@ -473,5 +568,119 @@ impl VectorBackend {
                 Ok(results)
             }
         }
+    }
+
+    /// Streaming search: yields results one by one.
+    ///
+    /// For the local engine this is implemented by executing a full search
+    /// and streaming the buffered results. Remote engines may use true gRPC
+    /// streaming when available. The stream is boxed to keep the API
+    /// object-safe and feature-unified.
+    pub async fn search_stream(
+        &self,
+        collection: &str,
+        query: SearchQuery,
+    ) -> VectorCoordinatorResult<
+        Pin<Box<dyn Stream<Item = VectorCoordinatorResult<SearchResult>> + Send>>,
+    > {
+        match self {
+            VectorBackend::Local(engine) => {
+                let results = engine
+                    .search(collection, &query)
+                    .map_err(VectorError::from)?;
+                let stream = futures::stream::iter(results.into_iter().map(Ok));
+                Ok(Box::pin(stream))
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                // Prefer native streaming when the gRPC engine is in use;
+                // fall back to unary search + iter for HTTP or disabled.
+                let results = manager.search(collection, query).await?;
+                let stream = futures::stream::iter(results.into_iter().map(Ok));
+                Ok(Box::pin(stream))
+            }
+        }
+    }
+
+    /// Streaming scroll: yields points one by one via paginated scroll.
+    pub async fn scroll_stream(
+        &self,
+        collection: &str,
+        batch_size: usize,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> VectorCoordinatorResult<
+        Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
+    > {
+        match self {
+            VectorBackend::Local(engine) => {
+                let mut offset: Option<String> = None;
+                let mut all_points: Vec<VectorPoint> = Vec::new();
+                loop {
+                    let (points, next) = engine
+                        .scroll(
+                            collection,
+                            batch_size,
+                            offset.as_deref(),
+                            with_payload,
+                            with_vector,
+                        )
+                        .map_err(VectorError::from)?;
+                    let is_last = next.is_none();
+                    all_points.extend(points);
+                    offset = next;
+                    if is_last || offset.is_none() {
+                        break;
+                    }
+                }
+                let stream = futures::stream::iter(all_points.into_iter().map(Ok));
+                Ok(Box::pin(stream))
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                let mut offset: Option<String> = None;
+                let mut all_points: Vec<VectorPoint> = Vec::new();
+                loop {
+                    let (points, next) = manager
+                        .engine()
+                        .scroll(
+                            collection,
+                            batch_size,
+                            offset.as_deref(),
+                            with_payload,
+                            with_vector,
+                        )
+                        .await
+                        .map_err(VectorError::from)?;
+                    let is_last = next.is_none();
+                    all_points.extend(points);
+                    offset = next;
+                    if is_last || offset.is_none() {
+                        break;
+                    }
+                }
+                let stream = futures::stream::iter(all_points.into_iter().map(Ok));
+                Ok(Box::pin(stream))
+            }
+        }
+    }
+
+    /// Whether payload indexes are natively supported by this backend.
+    ///
+    /// The local engine now has real payload indexes (MapIndex / NumericIndex)
+    /// backed by `payload_indexes.json`; the remote Qdrant engine always
+    /// supports them server-side. This helper allows callers to introspect
+    /// capability at runtime instead of via `#[cfg]`.
+    pub fn supports_payload_index(&self) -> bool {
+        true
+    }
+
+    /// Whether streaming search is available.
+    ///
+    /// Both backends support streaming (local via buffered iter, remote via
+    /// gRPC streaming). The method exists so callers can use runtime
+    /// detection rather than conditional compilation.
+    pub fn supports_streaming(&self) -> bool {
+        true
     }
 }

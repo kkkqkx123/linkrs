@@ -87,7 +87,7 @@ fn create_vector_backend(
             let engine = vector_search::LocalVectorEngine::open(&data_dir).map_err(|e| {
                 CoreError::Internal(format!("Failed to initialize local vector engine: {}", e))
             })?;
-            Ok(Some(VectorBackend::Local(Arc::new(engine))))
+            Ok(Some(VectorBackend::local(engine)))
         }
         #[cfg(feature = "vector-qdrant")]
         EmbeddedVectorEngine::Qdrant(client_config) => {
@@ -95,7 +95,7 @@ fn create_vector_backend(
                 return Ok(None);
             }
             let manager = create_vector_manager(client_config, runtime)?;
-            Ok(Some(VectorBackend::Qdrant(manager)))
+            Ok(Some(VectorBackend::qdrant(manager)))
         }
     }
 }
@@ -596,9 +596,10 @@ mod tests {
 
         let backend = create_vector_backend(&config, runtime.handle())
             .expect("local engine construction must succeed");
-        let Some(VectorBackend::Local(_engine)) = backend else {
-            panic!("file databases default to the local engine");
-        };
+        assert!(
+            backend.as_local().is_some(),
+            "file databases default to the local engine"
+        );
 
         let expected_dir = directory.path().join("graph.db_vector");
         assert!(

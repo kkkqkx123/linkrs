@@ -191,7 +191,7 @@ impl VectorCoordinatorBuilder {
         let handle = self.runtime_handle.unwrap_or_else(|| {
             tokio::runtime::Handle::try_current().expect("No tokio runtime available")
         });
-        let backend = crate::sync::backend::VectorBackend::Qdrant(manager);
+        let backend = crate::sync::backend::VectorBackend::qdrant(manager);
 
         Ok(Arc::new(VectorSyncCoordinator::new(
             backend,
