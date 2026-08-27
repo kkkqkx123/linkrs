@@ -56,7 +56,7 @@ use self::vectors::Vectors;
 use crate::error::{Result, VectorSearchError};
 use crate::metrics::Metrics;
 use crate::types::{
-    CollectionConfig, DistanceMetric, IndexType, IvfConfig, PointId, QuantizationConfig,
+    CollectionConfig, DistanceMetric, IndexType, IvfConfig, Payload, PointId, QuantizationConfig,
     VectorPoint,
 };
 
@@ -560,6 +560,25 @@ impl CollectionStore {
                         self.apply_delete_locked(inner, id)?;
                     }
                 }
+                WalRecord::SetPayload { slot, payload } => {
+                    let parsed = match payload {
+                        Some(s) => Some(serde_json::from_str(s)?),
+                        None => None,
+                    };
+                    self.payloads
+                        .append_payload(*slot as usize, parsed.as_ref())?;
+                }
+                WalRecord::DeletePayloadKeys { slot, keys } => {
+                    let current =
+                        Payloads::read_payload(&self.payloads.snapshot(), *slot as usize)?;
+                    if let Some(mut current) = current {
+                        for key in keys {
+                            current.remove(key);
+                        }
+                        self.payloads
+                            .append_payload(*slot as usize, Some(&current))?;
+                    }
+                }
                 // Checkpoint / quantization markers carry no separate mutation.
                 WalRecord::Compact | WalRecord::Quantize | WalRecord::DropCollection => {}
             }
@@ -651,6 +670,124 @@ impl CollectionStore {
     /// Number of live points.
     pub fn count(&self) -> u64 {
         self.inner.read().meta.live_count
+    }
+
+    /// Replace the payload for a single point. The point must exist and not
+    /// be tombstoned. The entire payload map is replaced atomically via a
+    /// WAL-backed transaction.
+    pub fn set_payload(&self, id: &PointId, payload: Payload) -> Result<()> {
+        let slot = {
+            let inner = self.inner.read();
+            inner
+                .reverse
+                .get(id)
+                .copied()
+                .ok_or_else(|| VectorSearchError::InvalidPointId(id.to_string()))?
+        };
+        if self.tombstones.load().bit(slot as usize) {
+            return Err(VectorSearchError::InvalidPointId(format!(
+                "point {} is tombstoned",
+                id
+            )));
+        }
+        let json = serde_json::to_string(&payload)?;
+        self.apply_ops(&[WalRecord::SetPayload {
+            slot,
+            payload: Some(json),
+        }])
+    }
+
+    /// Remove specific keys from a point's payload. The remaining keys are
+    /// preserved. If the point has no payload this is a no-op.
+    pub fn delete_payload_keys(&self, id: &PointId, keys: Vec<String>) -> Result<()> {
+        let slot = {
+            let inner = self.inner.read();
+            inner
+                .reverse
+                .get(id)
+                .copied()
+                .ok_or_else(|| VectorSearchError::InvalidPointId(id.to_string()))?
+        };
+        if self.tombstones.load().bit(slot as usize) {
+            return Err(VectorSearchError::InvalidPointId(format!(
+                "point {} is tombstoned",
+                id
+            )));
+        }
+        self.apply_ops(&[WalRecord::DeletePayloadKeys { slot, keys }])
+    }
+
+    /// Paginated scan over live points in slot order.
+    ///
+    /// Returns up to `limit` points starting after `offset` (the last
+    /// point_id from the previous page). When `with_payload` is false the
+    /// payload field is omitted; when `with_vector` is false the vector
+    /// field is omitted. The returned `Option<String>` is the id of the
+    /// last point in the page (use as the next `offset`), or `None` when
+    /// there are no more pages.
+    pub fn scroll(
+        &self,
+        limit: usize,
+        offset: Option<&str>,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> Result<(Vec<VectorPoint>, Option<String>)> {
+        let inner = self.inner.read();
+        let tombstones = self.tombstones.load();
+        let keysnap = self.keys.snapshot();
+        let psnap = self.payloads.snapshot();
+        let vsnap = self.vectors.snapshot();
+        let dim = inner.meta.vector_size;
+        let include_payload = with_payload.unwrap_or(true);
+        let include_vector = with_vector.unwrap_or(false);
+
+        let mut skip = offset.is_some();
+        let mut results = Vec::with_capacity(limit);
+        let mut last_id: Option<String> = None;
+
+        for slot in 0..inner.meta.next_slot as usize {
+            if tombstones.bit(slot) {
+                continue;
+            }
+            let key = Keys::read_key(&keysnap, slot)?.ok_or_else(|| {
+                VectorSearchError::CorruptData(format!("slot {slot} has no key"))
+            })?;
+            if skip {
+                if key == offset.unwrap_or("") {
+                    skip = false;
+                }
+                continue;
+            }
+            let id = PointId::from(key);
+            let payload = if include_payload {
+                Payloads::read_payload(&psnap, slot)?
+            } else {
+                None
+            };
+            let vector = if include_vector {
+                Some(
+                    Vectors::read_slot(&vsnap, slot as u64, inner.meta.segment_slots, dim)
+                        .ok_or_else(|| {
+                            VectorSearchError::CorruptData(format!(
+                                "slot {slot} out of vectors.bin range"
+                            ))
+                        })?
+                        .to_vec(),
+                )
+            } else {
+                None
+            };
+            last_id = Some(id.to_string());
+            results.push(VectorPoint {
+                id,
+                vector: vector.unwrap_or_default(),
+                payload,
+            });
+            if results.len() >= limit {
+                break;
+            }
+        }
+        Ok((results, last_id))
     }
 
     /// Whether the tombstone ratio has crossed the compaction threshold.
@@ -899,7 +1036,11 @@ fn count_ops(ops: &[WalRecord]) -> (u64, u64) {
             WalRecord::Upsert { .. } => upserts += 1,
             WalRecord::Delete { .. } => deletes += 1,
             WalRecord::DeleteBatch { point_ids } => deletes += point_ids.len() as u64,
-            WalRecord::Compact | WalRecord::Quantize | WalRecord::DropCollection => {}
+            WalRecord::Compact
+            | WalRecord::Quantize
+            | WalRecord::DropCollection
+            | WalRecord::SetPayload { .. }
+            | WalRecord::DeletePayloadKeys { .. } => {}
         }
     }
     (upserts, deletes)

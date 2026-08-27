@@ -105,6 +105,18 @@ pub enum WalRecord {
     Quantize,
     /// Reserved for drop (the whole directory is removed, nothing is logged).
     DropCollection,
+    /// Replace the entire payload for a slot. The payload is JSON-encoded
+    /// because postcard cannot encode `serde_json::Value` (untagged enum).
+    SetPayload {
+        slot: u32,
+        payload: Option<String>,
+    },
+    /// Remove specific keys from a slot's payload. The remaining keys are
+    /// preserved; if the slot has no payload this is a no-op.
+    DeletePayloadKeys {
+        slot: u32,
+        keys: Vec<String>,
+    },
 }
 
 /// Append-only WAL file with group commit.

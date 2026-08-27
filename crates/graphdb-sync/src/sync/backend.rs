@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use vector_search::{
-    CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, PayloadSchemaType,
+    CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, Payload, PayloadSchemaType,
     SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
@@ -299,6 +299,123 @@ impl VectorBackend {
                 manager.delete_by_filter(collection, filter).await?;
                 Ok(())
             }
+        }
+    }
+
+    /// Replace the entire payload for the given points.
+    #[allow(unused_variables)]
+    pub async fn set_payload(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        payload: Payload,
+    ) -> VectorCoordinatorResult<()> {
+        match self {
+            VectorBackend::Local(engine) => {
+                for id in &point_ids {
+                    engine
+                        .set_payload(collection, id, payload.clone())
+                        .map_err(VectorError::from)?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                manager
+                    .engine()
+                    .set_payload(collection, point_ids, payload)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Remove specific keys from the payload of the given points.
+    #[allow(unused_variables)]
+    pub async fn delete_payload(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        keys: Vec<&str>,
+    ) -> VectorCoordinatorResult<()> {
+        match self {
+            VectorBackend::Local(engine) => {
+                let owned_keys: Vec<String> = keys.iter().map(|s| s.to_string()).collect();
+                for id in &point_ids {
+                    engine
+                        .delete_payload(collection, id, owned_keys.clone())
+                        .map_err(VectorError::from)?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                manager
+                    .engine()
+                    .delete_payload(collection, point_ids, keys)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Paginated scan over points in a collection.
+    #[allow(unused_variables)]
+    pub async fn scroll(
+        &self,
+        collection: &str,
+        limit: usize,
+        offset: Option<&str>,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> VectorCoordinatorResult<(Vec<VectorPoint>, Option<String>)> {
+        match self {
+            VectorBackend::Local(engine) => Ok(engine
+                .scroll(collection, limit, offset, with_payload, with_vector)
+                .map_err(VectorError::from)?),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => Ok(manager
+                .engine()
+                .scroll(collection, limit, offset, with_payload, with_vector)
+                .await
+                .map_err(VectorError::from)?),
+        }
+    }
+
+    /// Delete a payload index. No-op for the local engine.
+    #[allow(unused_variables)]
+    pub async fn delete_payload_index(
+        &self,
+        collection: &str,
+        field: &str,
+    ) -> VectorCoordinatorResult<()> {
+        match self {
+            VectorBackend::Local(_) => Ok(()),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                manager
+                    .engine()
+                    .delete_payload_index(collection, field)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// List payload indexes. Returns empty for the local engine.
+    #[allow(unused_variables)]
+    pub async fn list_payload_indexes(
+        &self,
+        collection: &str,
+    ) -> VectorCoordinatorResult<Vec<(String, PayloadSchemaType)>> {
+        match self {
+            VectorBackend::Local(_) => Ok(Vec::new()),
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => manager
+                .engine()
+                .list_payload_indexes(collection)
+                .await
+                .map_err(VectorError::from),
         }
     }
 

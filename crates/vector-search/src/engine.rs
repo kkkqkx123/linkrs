@@ -22,8 +22,8 @@ use crate::error::{Result, VectorSearchError};
 use crate::metrics::MetricsSnapshot;
 use crate::storage::{CollectionStore, WalPoint, WalRecord, WalTxn};
 use crate::types::{
-    CollectionConfig, CollectionInfo, CollectionStatus, HnswConfig, IndexType, IvfConfig, PointId,
-    SearchQuery, SearchResult, VectorFilter, VectorPoint,
+    CollectionConfig, CollectionInfo, CollectionStatus, HnswConfig, IndexType, IvfConfig, Payload,
+    PointId, SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 /// A single operation of a coordinated transaction, grouped per collection.
@@ -462,6 +462,46 @@ impl LocalVectorEngine {
     /// Number of live points in a collection.
     pub fn count(&self, collection: &str) -> Result<u64> {
         Ok(self.store(collection)?.count())
+    }
+
+    /// Replace the payload for a single point. The point must exist and not
+    /// be tombstoned. The entire payload map is replaced atomically.
+    pub fn set_payload(
+        &self,
+        collection: &str,
+        point_id: &str,
+        payload: Payload,
+    ) -> Result<()> {
+        let store = self.store(collection)?;
+        store.set_payload(&PointId::from(point_id.to_string()), payload)
+    }
+
+    /// Remove specific keys from a point's payload. The remaining keys are
+    /// preserved. If the point has no payload this is a no-op.
+    pub fn delete_payload(
+        &self,
+        collection: &str,
+        point_id: &str,
+        keys: Vec<String>,
+    ) -> Result<()> {
+        let store = self.store(collection)?;
+        store.delete_payload_keys(&PointId::from(point_id.to_string()), keys)
+    }
+
+    /// Paginated scan over live points in slot order.
+    ///
+    /// Returns up to `limit` points starting after `offset` (the last
+    /// point_id from the previous page).
+    pub fn scroll(
+        &self,
+        collection: &str,
+        limit: usize,
+        offset: Option<&str>,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> Result<(Vec<VectorPoint>, Option<String>)> {
+        let store = self.store(collection)?;
+        store.scroll(limit, offset, with_payload, with_vector)
     }
 
     /// Commit protocol entry for coordinated transactions.

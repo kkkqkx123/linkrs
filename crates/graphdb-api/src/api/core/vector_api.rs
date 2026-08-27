@@ -352,4 +352,57 @@ impl VectorApi {
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))
     }
+
+    /// Replace the entire payload for the given points.
+    pub async fn set_payload(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: Vec<&str>,
+        payload: vector_search::types::Payload,
+    ) -> CoreResult<()> {
+        let collection_name =
+            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        self.backend
+            .set_payload(&collection_name, point_ids, payload)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+
+    /// Remove specific keys from the payload of the given points.
+    pub async fn delete_payload(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: Vec<&str>,
+        keys: Vec<&str>,
+    ) -> CoreResult<()> {
+        let collection_name =
+            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        self.backend
+            .delete_payload(&collection_name, point_ids, keys)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+
+    /// Paginated scan over points in a collection.
+    pub async fn scroll(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        limit: usize,
+        offset: Option<&str>,
+        with_payload: Option<bool>,
+        with_vector: Option<bool>,
+    ) -> CoreResult<(Vec<VectorPoint>, Option<String>)> {
+        let collection_name =
+            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+        self.backend
+            .scroll(&collection_name, limit, offset, with_payload, with_vector)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
 }

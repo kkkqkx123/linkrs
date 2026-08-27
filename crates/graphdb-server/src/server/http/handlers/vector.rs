@@ -374,7 +374,7 @@ pub async fn search<
                 id: r.id.to_string(),
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
-                payload: None,
+                payload: r.payload.map(|p| p.into_iter().collect()),
             })
             .collect();
 
@@ -464,6 +464,186 @@ pub async fn count<
             "success": true,
             "count": count
         })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+/// Set payload request
+#[derive(Debug, Deserialize)]
+pub struct SetPayloadRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub point_ids: Vec<String>,
+    pub payload: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Delete payload request
+#[derive(Debug, Deserialize)]
+pub struct DeletePayloadRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub point_ids: Vec<String>,
+    pub keys: Vec<String>,
+}
+
+/// Scroll request
+#[derive(Debug, Deserialize)]
+pub struct ScrollRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    pub offset: Option<String>,
+    pub with_payload: Option<bool>,
+    pub with_vector: Option<bool>,
+}
+
+/// Scroll response
+#[derive(Debug, Serialize)]
+pub struct ScrollResponse {
+    pub points: Vec<VectorSearchResult>,
+    pub next_offset: Option<String>,
+}
+
+/// Set payload for vector points
+pub async fn set_payload<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<SetPayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let payload: vector_search::types::Payload = request.payload.into_iter().collect();
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .set_payload(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                payload,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload set successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+/// Delete payload keys from vector points
+pub async fn delete_payload<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<DeletePayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        let keys: Vec<&str> = request.keys.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .delete_payload(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                keys,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload keys deleted successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+/// Paginated scroll over vector points
+pub async fn scroll<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Json(request): Json<ScrollRequest>,
+) -> Result<JsonResponse<ScrollResponse>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let (points, next_offset) = vector_api
+            .scroll(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                request.limit,
+                request.offset.as_deref(),
+                request.with_payload,
+                request.with_vector,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        let results: Vec<VectorSearchResult> = points
+            .into_iter()
+            .map(|p| VectorSearchResult {
+                id: p.id.to_string(),
+                score: 0.0,
+                vector: if request.with_vector.unwrap_or(false) {
+                    Some(p.vector)
+                } else {
+                    None
+                },
+                payload: p.payload.map(|pay| pay.into_iter().collect()),
+            })
+            .collect();
+
+        Ok(JsonResponse(ScrollResponse {
+            points: results,
+            next_offset,
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
