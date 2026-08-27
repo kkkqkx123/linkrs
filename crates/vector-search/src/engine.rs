@@ -23,7 +23,7 @@ use crate::metrics::MetricsSnapshot;
 use crate::storage::{CollectionStore, WalPoint, WalRecord, WalTxn};
 use crate::types::{
     CollectionConfig, CollectionInfo, CollectionStatus, HnswConfig, IndexType, IvfConfig, Payload,
-    PointId, SearchQuery, SearchResult, VectorFilter, VectorPoint,
+    PayloadSchemaType, PointId, SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 /// A single operation of a coordinated transaction, grouped per collection.
@@ -466,12 +466,7 @@ impl LocalVectorEngine {
 
     /// Replace the payload for a single point. The point must exist and not
     /// be tombstoned. The entire payload map is replaced atomically.
-    pub fn set_payload(
-        &self,
-        collection: &str,
-        point_id: &str,
-        payload: Payload,
-    ) -> Result<()> {
+    pub fn set_payload(&self, collection: &str, point_id: &str, payload: Payload) -> Result<()> {
         let store = self.store(collection)?;
         store.set_payload(&PointId::from(point_id.to_string()), payload)
     }
@@ -486,6 +481,56 @@ impl LocalVectorEngine {
     ) -> Result<()> {
         let store = self.store(collection)?;
         store.delete_payload_keys(&PointId::from(point_id.to_string()), keys)
+    }
+
+    /// Set a single field on a point's payload (merge semantics). A missing
+    /// payload is created containing just this field; all other keys are
+    /// preserved. Applied atomically via a WAL-backed transaction.
+    pub fn set_payload_field(
+        &self,
+        collection: &str,
+        point_id: &str,
+        key: String,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        self.set_payload_fields(collection, point_id, Payload::from([(key, value)]))
+    }
+
+    /// Merge the given fields into a point's payload within one WAL-backed
+    /// transaction: keys in `fields` overwrite their previous values while
+    /// all other keys are preserved. A missing payload is created.
+    pub fn set_payload_fields(
+        &self,
+        collection: &str,
+        point_id: &str,
+        fields: Payload,
+    ) -> Result<()> {
+        let store = self.store(collection)?;
+        store.set_payload_fields(&PointId::from(point_id.to_string()), fields)
+    }
+
+    /// Create a payload field index on a collection. The index is populated
+    /// synchronously and its definition persisted with the collection.
+    pub fn create_payload_index(
+        &self,
+        collection: &str,
+        field: &str,
+        schema: PayloadSchemaType,
+    ) -> Result<()> {
+        self.store(collection)?.create_payload_index(field, schema)
+    }
+
+    /// Drop the payload field index on `field`. Returns whether it existed.
+    pub fn delete_payload_index(&self, collection: &str, field: &str) -> Result<bool> {
+        self.store(collection)?.delete_payload_index(field)
+    }
+
+    /// All declared payload indexes as `(field, schema_type)` pairs.
+    pub fn list_payload_indexes(
+        &self,
+        collection: &str,
+    ) -> Result<Vec<(String, PayloadSchemaType)>> {
+        Ok(self.store(collection)?.list_payload_indexes())
     }
 
     /// Paginated scan over live points in slot order.

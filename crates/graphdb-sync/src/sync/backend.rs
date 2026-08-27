@@ -302,7 +302,11 @@ impl VectorBackend {
         }
     }
 
-    /// Replace the entire payload for the given points.
+    /// Set/replace payload keys for the given points.
+    ///
+    /// - Local engine: replaces the full payload (atomic).
+    /// - Qdrant engine: per-key set; keys not included in `payload` are
+    ///   preserved (merge semantics).
     #[allow(unused_variables)]
     pub async fn set_payload(
         &self,
@@ -324,6 +328,35 @@ impl VectorBackend {
                 manager
                     .engine()
                     .set_payload(collection, point_ids, payload)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Merge the given fields into the payload of the given points.
+    /// Only the keys in `fields` are updated; other keys are preserved.
+    #[allow(unused_variables)]
+    pub async fn set_payload_fields(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        fields: Payload,
+    ) -> VectorCoordinatorResult<()> {
+        match self {
+            VectorBackend::Local(engine) => {
+                for id in &point_ids {
+                    engine
+                        .set_payload_fields(collection, id, fields.clone())
+                        .map_err(VectorError::from)?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "vector-qdrant")]
+            VectorBackend::Qdrant(manager) => {
+                manager
+                    .engine()
+                    .set_payload_fields(collection, point_ids, fields)
                     .await?;
                 Ok(())
             }

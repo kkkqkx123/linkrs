@@ -11,7 +11,7 @@ pub mod permission;
 pub mod stats;
 pub mod types;
 pub mod utils;
-
+pub mod vector;
 pub mod wal;
 
 // Error and result types

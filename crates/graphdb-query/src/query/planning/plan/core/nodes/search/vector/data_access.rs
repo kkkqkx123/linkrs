@@ -36,6 +36,27 @@ pub struct VectorSearchParams {
     pub offset: usize,
     pub output_fields: Vec<OutputField>,
     pub metadata_version: u64,
+    /// Static payload-index acceleration hints derived from the filter by
+    /// the planner (explain output / engine-side planning input).
+    pub payload_index_hints: Vec<PayloadIndexHint>,
+}
+
+/// One `must` condition the planner classified as payload-index acceleratable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadIndexHint {
+    /// Payload field of the condition.
+    pub field: String,
+    /// Index kind expected to serve it at execution time.
+    pub index_kind: PayloadIndexKind,
+}
+
+/// Kinds of per-field payload indexes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PayloadIndexKind {
+    /// Equality (`Match` / `MatchAny`) via a posting-list map index.
+    Map,
+    /// Numeric equality or range via a sorted-value index.
+    Numeric,
 }
 
 impl VectorSearchParams {
@@ -58,6 +79,7 @@ impl VectorSearchParams {
             offset: 0,
             output_fields: Vec::new(),
             metadata_version: 0,
+            payload_index_hints: Vec::new(),
         }
     }
 
@@ -90,6 +112,12 @@ impl VectorSearchParams {
         self.metadata_version = version;
         self
     }
+
+    /// Attach planner-computed payload index hints.
+    pub fn with_payload_index_hints(mut self, hints: Vec<PayloadIndexHint>) -> Self {
+        self.payload_index_hints = hints;
+        self
+    }
 }
 
 /// Vector search plan node
@@ -109,6 +137,8 @@ pub struct VectorSearchNode {
     pub output_fields: Vec<OutputField>,
     /// Metadata version for validation (0 if not tracked)
     pub metadata_version: u64,
+    /// Planner-computed payload index acceleration hints (explain output).
+    pub payload_index_hints: Vec<PayloadIndexHint>,
 }
 
 impl VectorSearchNode {
@@ -126,7 +156,36 @@ impl VectorSearchNode {
             offset: params.offset,
             output_fields: params.output_fields,
             metadata_version: params.metadata_version,
+            payload_index_hints: params.payload_index_hints,
         }
+    }
+
+    /// One-line explain summary of the pre-filter plan:
+    /// accelerated conditions and the must conditions left as post-filters.
+    pub fn explain_filter(&self) -> String {
+        let Some(filter) = self.filter.as_ref() else {
+            return "filter: none".to_string();
+        };
+        let must_count = filter.must.as_ref().map_or(0, Vec::len);
+        if must_count == 0 {
+            return "filter: no acceleratable must conditions".to_string();
+        }
+        format!(
+            "pre_filter_indexes: [{}], post_filter_conditions: {}",
+            self.payload_index_hints
+                .iter()
+                .map(|h| format!(
+                    "{}={}",
+                    h.field,
+                    match h.index_kind {
+                        PayloadIndexKind::Map => "MapIndex",
+                        PayloadIndexKind::Numeric => "NumericIndex",
+                    }
+                ))
+                .collect::<Vec<_>>()
+                .join(", "),
+            must_count - self.payload_index_hints.len()
+        )
     }
 }
 

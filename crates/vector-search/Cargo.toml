@@ -23,6 +23,7 @@ lock-metrics = []
 simd_portable = []
 
 [dependencies]
+graphdb-core = { path = "../graphdb-core" }
 serde.workspace = true
 serde_json.workspace = true
 postcard.workspace = true

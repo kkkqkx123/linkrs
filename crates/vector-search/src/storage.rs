@@ -26,6 +26,9 @@ mod filter_bitmap;
 mod index_lifecycle;
 mod keys;
 mod meta;
+mod payload_index;
+mod payload_key;
+mod payload_store;
 mod payloads;
 pub(crate) mod quant;
 mod search;
@@ -43,6 +46,8 @@ use bitvec::prelude::*;
 use parking_lot::{Mutex, RwLock};
 
 pub(crate) use meta::Meta;
+pub(crate) use payload_index::PayloadIndexManager;
+pub(crate) use payload_store::PayloadStore;
 pub(crate) use tombstones::TombstoneBits;
 pub use wal::{Wal, WalPoint, WalRecord, WalTxn};
 
@@ -80,6 +85,8 @@ struct StoreInner {
     last_drift_ratio: Option<f64>,
     /// Slot-indexed pre-filter bitmap for equality payload conditions.
     filter_bitmap: FilterBitmap,
+    /// Declared per-field payload indexes (MapIndex / NumericIndex).
+    payload_indexes: PayloadIndexManager,
 }
 
 /// A single opened collection.
@@ -91,6 +98,9 @@ pub struct CollectionStore {
     vectors: Vectors,
     keys: Keys,
     payloads: Payloads,
+    /// Gridstore-style payload storage. When present, payload operations
+    /// are routed here instead of the legacy `Payloads` blob directory.
+    payload_store: parking_lot::RwLock<Option<PayloadStore>>,
     /// Optional quantized storage (Scalar/Binary/Product). `None` when
     /// quantization is disabled or not yet built.
     quant: parking_lot::RwLock<Option<QuantStore>>,
@@ -244,6 +254,11 @@ impl CollectionStore {
         let tombstones = ArcSwap::from(Arc::new(TombstoneBits::new(meta.slot_capacity as usize)));
         let slot_capacity = meta.slot_capacity;
         let wal = Wal::open_or_create(&dir.join("wal.bin"))?;
+        // New collections always use the Gridstore-style PayloadStore.
+        let payload_store = PayloadStore::create(
+            &dir.join("payloads_store"),
+            payload_store::StoreConfig::default(),
+        )?;
         Ok(Self {
             dir: dir.to_path_buf(),
             inner: RwLock::new(StoreInner {
@@ -252,11 +267,13 @@ impl CollectionStore {
                 ivf_config: config.ivf_config.clone(),
                 last_drift_ratio: None,
                 filter_bitmap: FilterBitmap::with_capacity(slot_capacity as usize),
+                payload_indexes: PayloadIndexManager::new(),
             }),
             tombstones,
             vectors,
             keys,
             payloads,
+            payload_store: parking_lot::RwLock::new(Some(payload_store)),
             quant: parking_lot::RwLock::new(quant),
             wal,
             index: ArcSwap::from(Arc::new(None)),
@@ -297,22 +314,58 @@ impl CollectionStore {
         let keys = Keys::open(&dir.join("keys.bin"))?;
         let payloads = Payloads::open(&dir.join("payloads.bin"))?;
 
+        // Detect PayloadStore early — when present, tombstone/payload reads
+        // come from the Gridstore, not the legacy payloads.bin.
+        let payload_store_path = dir.join("payloads_store");
+        let has_payload_store = payload_store_path.exists();
+
         let mut reverse = HashMap::new();
         let mut tombstones = bitvec![0; meta.slot_capacity as usize];
         let mut filter_bitmap = FilterBitmap::with_capacity(meta.slot_capacity as usize);
+        // Declared payload indexes are rebuilt from the payload storage (a
+        // derived structure) on every open.
+        let mut payload_indexes = PayloadIndexManager::new();
+        for def in PayloadIndexManager::load_defs(dir) {
+            if payload_indexes
+                .declare(&def.field, def.schema, meta.slot_capacity as usize)
+                .is_err()
+            {
+                continue;
+            }
+        }
         {
             let keys_view = keys.snapshot();
-            let payloads_view = payloads.snapshot();
-            for slot in 0..meta.next_slot as usize {
-                if Payloads::is_tombstoned(&payloads_view, slot) {
-                    tombstones.set(slot, true);
-                    continue;
+            if has_payload_store {
+                // PayloadStore is present: derive tombstone status from whether
+                // the key exists and the PayloadStore has data.  We open the
+                // PayloadStore temporarily for reads.
+                let ps = PayloadStore::open(&payload_store_path)?;
+                for slot in 0..meta.next_slot as usize {
+                    if let Some(key) = Keys::read_key(&keys_view, slot)? {
+                        let id = PointId::from(key);
+                        reverse.insert(id, slot as u32);
+                        if let Ok(Some(p)) = ps.get(slot as u32) {
+                            filter_bitmap.register_slot(slot as u32, Some(&p));
+                            payload_indexes.register_slot(slot as u32, Some(&p));
+                        }
+                    }
                 }
-                if let Some(key) = Keys::read_key(&keys_view, slot)? {
-                    let id = PointId::from(key);
-                    reverse.insert(id, slot as u32);
-                    if let Ok(Some(p)) = Payloads::read_payload(&payloads_view, slot) {
-                        filter_bitmap.register_slot(slot as u32, Some(&p));
+            } else {
+                // Legacy path: read tombstone flags and payloads from
+                // the old payloads.bin blob directory.
+                let payloads_view = payloads.snapshot();
+                for slot in 0..meta.next_slot as usize {
+                    if Payloads::is_tombstoned(&payloads_view, slot) {
+                        tombstones.set(slot, true);
+                        continue;
+                    }
+                    if let Some(key) = Keys::read_key(&keys_view, slot)? {
+                        let id = PointId::from(key);
+                        reverse.insert(id, slot as u32);
+                        if let Ok(Some(p)) = Payloads::read_payload(&payloads_view, slot) {
+                            filter_bitmap.register_slot(slot as u32, Some(&p));
+                            payload_indexes.register_slot(slot as u32, Some(&p));
+                        }
                     }
                 }
             }
@@ -337,6 +390,13 @@ impl CollectionStore {
             None
         };
 
+        // Detect and open the new PayloadStore if present.
+        let payload_store = if has_payload_store {
+            PayloadStore::open(&payload_store_path).ok()
+        } else {
+            None
+        };
+
         let store = Self {
             dir: dir.to_path_buf(),
             inner: RwLock::new(StoreInner {
@@ -345,11 +405,13 @@ impl CollectionStore {
                 reverse,
                 last_drift_ratio: None,
                 filter_bitmap,
+                payload_indexes,
             }),
             tombstones: ArcSwap::from(Arc::new(TombstoneBits::from_bits(tombstones))),
             vectors,
             keys,
             payloads,
+            payload_store: parking_lot::RwLock::new(payload_store),
             quant: parking_lot::RwLock::new(quant),
             wal: Wal::open_or_create(&dir.join("wal.bin"))?,
             index: ArcSwap::from(Arc::new(None)),
@@ -371,6 +433,78 @@ impl CollectionStore {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    // ── Payload routing helpers ────────────────────────────────────────
+
+    /// Read the payload for a slot, preferring the new PayloadStore when
+    /// available and falling back to the legacy blob directory.
+    fn read_payload_at(&self, slot: u32) -> Result<Option<Payload>> {
+        let ps_guard = self.payload_store.read();
+        if let Some(ps) = ps_guard.as_ref() {
+            ps.get(slot)
+        } else {
+            Payloads::read_payload(&self.payloads.snapshot(), slot as usize)
+        }
+    }
+
+    /// Write a payload for a slot. When the new PayloadStore is present
+    /// the write goes there; otherwise it goes to the legacy blob directory.
+    fn write_payload_at(&self, slot: u32, payload: Option<&Payload>) -> Result<()> {
+        let ps_guard = self.payload_store.read();
+        if let Some(ps) = ps_guard.as_ref() {
+            ps.put(slot, payload)
+        } else {
+            self.payloads.append_payload(slot as usize, payload)
+        }
+    }
+
+    /// Delete specific keys from a slot's payload, preferring the new
+    /// PayloadStore and falling back to the legacy blob directory.
+    fn delete_keys_at(&self, slot: u32, keys: &[&str]) -> Result<()> {
+        let ps_guard = self.payload_store.read();
+        if let Some(ps) = ps_guard.as_ref() {
+            ps.delete_keys(slot, keys)
+        } else {
+            // Legacy path: read-modify-write through the blob directory.
+            let current = Payloads::read_payload(&self.payloads.snapshot(), slot as usize)?;
+            if let Some(mut current) = current {
+                for key in keys {
+                    current.remove(*key);
+                }
+                self.payloads
+                    .append_payload(slot as usize, Some(&current))?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Merge the given fields into a slot's payload: keys in `partial`
+    /// overwrite their previous values while all other keys are preserved.
+    /// A missing payload is created. Prefers the new PayloadStore and falls
+    /// back to the legacy blob directory.
+    fn merge_payload_at(&self, slot: u32, partial: &Payload) -> Result<()> {
+        let ps_guard = self.payload_store.read();
+        if let Some(ps) = ps_guard.as_ref() {
+            return ps.merge(slot, partial.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        let mut current =
+            Payloads::read_payload(&self.payloads.snapshot(), slot as usize)?.unwrap_or_default();
+        for (key, value) in partial {
+            current.insert(key.clone(), value.clone());
+        }
+        self.payloads.append_payload(slot as usize, Some(&current))
+    }
+
+    /// Re-index a slot's pre-filter structures after a non-upsert payload
+    /// mutation (`SetPayload`/`SetPayloadField`/`DeletePayloadKeys`). The
+    /// bitmap is conservative but must reflect current values: `build_mask`
+    /// ANDs condition masks together, so an unregistered value would
+    /// produce an all-zero candidate mask and wrongly exclude matches.
+    fn refresh_filter_bitmap_locked(&self, inner: &mut StoreInner, slot: u32) {
+        let payload = self.read_payload_at(slot).ok().flatten();
+        inner.filter_bitmap.register_slot(slot, payload.as_ref());
+        inner.payload_indexes.register_slot(slot, payload.as_ref());
     }
 
     /// Snapshot of the metadata (dimension, metric, counts).
@@ -489,7 +623,6 @@ impl CollectionStore {
             let inner = self.inner.read();
             let tombstones = self.tombstones.load();
             let keysnap = self.keys.snapshot();
-            let psnap = self.payloads.snapshot();
             let mut point_ids = Vec::new();
             for slot in 0..inner.meta.next_slot as usize {
                 if tombstones.bit(slot) {
@@ -499,7 +632,7 @@ impl CollectionStore {
                     VectorSearchError::CorruptData(format!("slot {slot} has no key"))
                 })?;
                 let id = PointId::from(key);
-                let payload = Payloads::read_payload(&psnap, slot)?;
+                let payload = self.read_payload_at(slot as u32)?;
                 if crate::filter::matches(filter, &id, payload.as_ref())? {
                     point_ids.push(id.to_string());
                 }
@@ -562,22 +695,22 @@ impl CollectionStore {
                 }
                 WalRecord::SetPayload { slot, payload } => {
                     let parsed = match payload {
-                        Some(s) => Some(serde_json::from_str(s)?),
+                        Some(s) => Some(serde_json::from_str::<Payload>(s)?),
                         None => None,
                     };
-                    self.payloads
-                        .append_payload(*slot as usize, parsed.as_ref())?;
+                    self.write_payload_at(*slot, parsed.as_ref())?;
+                    self.refresh_filter_bitmap_locked(inner, *slot);
                 }
                 WalRecord::DeletePayloadKeys { slot, keys } => {
-                    let current =
-                        Payloads::read_payload(&self.payloads.snapshot(), *slot as usize)?;
-                    if let Some(mut current) = current {
-                        for key in keys {
-                            current.remove(key);
-                        }
-                        self.payloads
-                            .append_payload(*slot as usize, Some(&current))?;
-                    }
+                    let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+                    self.delete_keys_at(*slot, &key_refs)?;
+                    self.refresh_filter_bitmap_locked(inner, *slot);
+                }
+                WalRecord::SetPayloadField { slot, key, value } => {
+                    let parsed: serde_json::Value = serde_json::from_str(value)?;
+                    let partial = Payload::from([(key.clone(), parsed)]);
+                    self.merge_payload_at(*slot, &partial)?;
+                    self.refresh_filter_bitmap_locked(inner, *slot);
                 }
                 // Checkpoint / quantization markers carry no separate mutation.
                 WalRecord::Compact | WalRecord::Quantize | WalRecord::DropCollection => {}
@@ -616,11 +749,13 @@ impl CollectionStore {
                 let _ = q.write_slot(slot, &point.vector);
             }
         }
-        self.payloads
-            .append_payload(slot as usize, point.payload.as_ref())?;
+        self.write_payload_at(slot as u32, point.payload.as_ref())?;
         self.register_slot(slot as u32, &point.vector, inner.meta.segment_slots);
         inner
             .filter_bitmap
+            .register_slot(slot as u32, point.payload.as_ref());
+        inner
+            .payload_indexes
             .register_slot(slot as u32, point.payload.as_ref());
         Ok(())
     }
@@ -637,6 +772,7 @@ impl CollectionStore {
         self.payloads.set_tombstone(slot as usize, true)?;
         self.update_tombstone_bit(slot as usize, true);
         inner.filter_bitmap.unregister_slot(slot);
+        inner.payload_indexes.unregister_slot(slot);
         inner.meta.live_count = inner.meta.live_count.saturating_sub(1);
         inner.meta.tombstone_count += 1;
         Ok(())
@@ -659,7 +795,7 @@ impl CollectionStore {
                 VectorSearchError::CorruptData(format!("slot {slot} out of vectors.bin range"))
             })?
             .to_vec();
-        let payload = Payloads::read_payload(&self.payloads.snapshot(), slot as usize)?;
+        let payload = self.read_payload_at(slot as u32)?;
         Ok(Some(VectorPoint {
             id: id.clone(),
             vector,
@@ -676,20 +812,7 @@ impl CollectionStore {
     /// be tombstoned. The entire payload map is replaced atomically via a
     /// WAL-backed transaction.
     pub fn set_payload(&self, id: &PointId, payload: Payload) -> Result<()> {
-        let slot = {
-            let inner = self.inner.read();
-            inner
-                .reverse
-                .get(id)
-                .copied()
-                .ok_or_else(|| VectorSearchError::InvalidPointId(id.to_string()))?
-        };
-        if self.tombstones.load().bit(slot as usize) {
-            return Err(VectorSearchError::InvalidPointId(format!(
-                "point {} is tombstoned",
-                id
-            )));
-        }
+        let slot = self.live_slot_of(id)?;
         let json = serde_json::to_string(&payload)?;
         self.apply_ops(&[WalRecord::SetPayload {
             slot,
@@ -697,24 +820,112 @@ impl CollectionStore {
         }])
     }
 
+    /// Set a single field on a point's payload (merge semantics). A missing
+    /// payload is created containing just this field; all other keys are
+    /// preserved. Applied atomically via a WAL-backed transaction.
+    pub fn set_payload_field(
+        &self,
+        id: &PointId,
+        key: String,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        self.set_payload_fields(id, Payload::from([(key, value)]))
+    }
+
+    /// Merge the given fields into a point's payload within one WAL-backed
+    /// transaction: keys in `fields` overwrite their previous values while
+    /// all other keys are preserved. A missing payload is created. The point
+    /// must exist and not be tombstoned.
+    pub fn set_payload_fields(&self, id: &PointId, fields: Payload) -> Result<()> {
+        if fields.is_empty() {
+            return Ok(());
+        }
+        let slot = self.live_slot_of(id)?;
+        let mut ops = Vec::with_capacity(fields.len());
+        for (key, value) in fields {
+            let json = serde_json::to_string(&value)?;
+            ops.push(WalRecord::SetPayloadField {
+                slot,
+                key,
+                value: json,
+            });
+        }
+        self.apply_ops(&ops)
+    }
+
     /// Remove specific keys from a point's payload. The remaining keys are
     /// preserved. If the point has no payload this is a no-op.
     pub fn delete_payload_keys(&self, id: &PointId, keys: Vec<String>) -> Result<()> {
-        let slot = {
-            let inner = self.inner.read();
-            inner
-                .reverse
-                .get(id)
-                .copied()
-                .ok_or_else(|| VectorSearchError::InvalidPointId(id.to_string()))?
-        };
+        let slot = self.live_slot_of(id)?;
+        self.apply_ops(&[WalRecord::DeletePayloadKeys { slot, keys }])
+    }
+
+    /// Resolve a live point's slot or fail with `InvalidPointId`.
+    fn live_slot_of(&self, id: &PointId) -> Result<u32> {
+        let slot = self
+            .inner
+            .read()
+            .reverse
+            .get(id)
+            .copied()
+            .ok_or_else(|| VectorSearchError::InvalidPointId(id.to_string()))?;
         if self.tombstones.load().bit(slot as usize) {
             return Err(VectorSearchError::InvalidPointId(format!(
                 "point {} is tombstoned",
                 id
             )));
         }
-        self.apply_ops(&[WalRecord::DeletePayloadKeys { slot, keys }])
+        Ok(slot)
+    }
+
+    // ── Payload field indexes ──────────────────────────────────────────
+
+    /// Create a payload field index. The index is populated from the
+    /// current live set synchronously (under the store write lock) and its
+    /// definition persisted to `payload_indexes.json`, so a restart or
+    /// concurrent search either sees the complete index or none.
+    pub fn create_payload_index(
+        &self,
+        field: &str,
+        schema: crate::types::PayloadSchemaType,
+    ) -> Result<()> {
+        let mut inner = self.inner.write();
+        let capacity = inner.meta.slot_capacity as usize;
+        inner.payload_indexes.declare(field, schema, capacity)?;
+        // Populate from the current live payloads; registration for slots
+        // without an indexable value on `field` is a no-op.
+        let tombstones = self.tombstones.load();
+        for slot in 0..inner.meta.next_slot as u32 {
+            if tombstones.bit(slot as usize) {
+                continue;
+            }
+            let payload = self.read_payload_at(slot).ok().flatten();
+            inner.payload_indexes.register_slot(slot, payload.as_ref());
+        }
+        inner.payload_indexes.save_defs(&self.dir)?;
+        Ok(())
+    }
+
+    /// Drop the payload field index on `field`. Returns whether it existed.
+    /// The persisted definitions are updated only after successful removal.
+    pub fn delete_payload_index(&self, field: &str) -> Result<bool> {
+        let mut inner = self.inner.write();
+        if !inner.payload_indexes.delete(field) {
+            return Ok(false);
+        }
+        inner.payload_indexes.save_defs(&self.dir)?;
+        Ok(true)
+    }
+
+    /// All declared payload indexes as `(field, schema_type)` pairs.
+    pub fn list_payload_indexes(&self) -> Vec<(String, crate::types::PayloadSchemaType)> {
+        self.inner
+            .read()
+            .payload_indexes
+            .defs()
+            .into_iter()
+            .map(|d| (d.field, d.schema))
+            .collect()
     }
 
     /// Paginated scan over live points in slot order.
@@ -735,7 +946,6 @@ impl CollectionStore {
         let inner = self.inner.read();
         let tombstones = self.tombstones.load();
         let keysnap = self.keys.snapshot();
-        let psnap = self.payloads.snapshot();
         let vsnap = self.vectors.snapshot();
         let dim = inner.meta.vector_size;
         let include_payload = with_payload.unwrap_or(true);
@@ -749,9 +959,8 @@ impl CollectionStore {
             if tombstones.bit(slot) {
                 continue;
             }
-            let key = Keys::read_key(&keysnap, slot)?.ok_or_else(|| {
-                VectorSearchError::CorruptData(format!("slot {slot} has no key"))
-            })?;
+            let key = Keys::read_key(&keysnap, slot)?
+                .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
             if skip {
                 if key == offset.unwrap_or("") {
                     skip = false;
@@ -760,7 +969,7 @@ impl CollectionStore {
             }
             let id = PointId::from(key);
             let payload = if include_payload {
-                Payloads::read_payload(&psnap, slot)?
+                self.read_payload_at(slot as u32)?
             } else {
                 None
             };
@@ -845,6 +1054,7 @@ impl CollectionStore {
 
         meta.slot_capacity = new_capacity;
         inner.filter_bitmap.resize(new_capacity as usize);
+        inner.payload_indexes.resize(new_capacity as usize);
         Ok(())
     }
 
@@ -1040,7 +1250,8 @@ fn count_ops(ops: &[WalRecord]) -> (u64, u64) {
             | WalRecord::Quantize
             | WalRecord::DropCollection
             | WalRecord::SetPayload { .. }
-            | WalRecord::DeletePayloadKeys { .. } => {}
+            | WalRecord::DeletePayloadKeys { .. }
+            | WalRecord::SetPayloadField { .. } => {}
         }
     }
     (upserts, deletes)
@@ -1138,6 +1349,168 @@ mod tests {
         let reopened = CollectionStore::open(&store_dir).unwrap();
         let got = reopened.get(&PointId::Num(1)).unwrap().unwrap();
         assert_eq!(got.payload, Some(payload));
+    }
+
+    #[test]
+    fn test_set_payload_fields_merges_and_reindexes_bitmap() {
+        use crate::filter;
+        use crate::types::{ConditionType, FilterCondition, VectorFilter};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("col_pf");
+        let store = CollectionStore::create(&store_dir, "col_pf", &config(2)).unwrap();
+        let mut payload = HashMap::new();
+        payload.insert("color".to_string(), serde_json::json!("red"));
+        store.upsert(&point_with_payload(1, 2, payload)).unwrap();
+
+        // Partial merge overwrites the given keys and preserves the rest.
+        let fields: Payload = [
+            ("color", serde_json::json!("blue")),
+            ("size", serde_json::json!(7)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        store.set_payload_fields(&PointId::Num(1), fields).unwrap();
+        let got = store.get(&PointId::Num(1)).unwrap().unwrap();
+        let got = got.payload.expect("payload present");
+        assert_eq!(got.get("color"), Some(&serde_json::json!("blue")));
+        assert_eq!(got.get("size"), Some(&serde_json::json!(7)));
+
+        // The pre-filter bitmap must reflect the merged values so an
+        // equality filter on the new value finds the slot and on the old
+        // value no longer claims it.
+        let make_filter = |value: &str| {
+            VectorFilter::new().must(FilterCondition {
+                field: "color".to_string(),
+                condition: ConditionType::Match {
+                    value: value.to_string(),
+                },
+            })
+        };
+        let inner = store.inner.read();
+        let blue = inner
+            .filter_bitmap
+            .build_mask(&make_filter("blue"))
+            .expect("merged value is indexed");
+        assert!(!blue.not_any());
+        match inner.filter_bitmap.build_mask(&make_filter("red")) {
+            None => {}
+            Some(m) => assert!(!m.any()),
+        }
+        // Full filter evaluation agrees with the stored payload.
+        let id = PointId::Num(1);
+        assert!(filter::matches(&make_filter("blue"), &id, Some(&got)).unwrap());
+        assert!(!filter::matches(&make_filter("red"), &id, Some(&got)).unwrap());
+    }
+
+    #[test]
+    fn test_set_payload_field_wal_replay_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("col_r");
+        let store = CollectionStore::create(&store_dir, "col_r", &config(2)).unwrap();
+        store.upsert(&point(1, 2)).unwrap();
+        store
+            .set_payload_field(
+                &PointId::Num(1),
+                "env".to_string(),
+                serde_json::json!("prod"),
+            )
+            .unwrap();
+        drop(store);
+
+        let reopened = CollectionStore::open(&store_dir).unwrap();
+        let payload = reopened
+            .get(&PointId::Num(1))
+            .unwrap()
+            .unwrap()
+            .payload
+            .expect("payload recreated by partial update");
+        assert_eq!(payload.get("env"), Some(&serde_json::json!("prod")));
+    }
+
+    #[test]
+    fn test_numeric_index_range_accelerated_search() {
+        use crate::types::{
+            ConditionType, FilterCondition, PayloadSchemaType, RangeCondition, SearchQuery,
+            VectorFilter,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("col_num");
+        let store = CollectionStore::create(&store_dir, "col_num", &config(2)).unwrap();
+        for (id, price) in [(1u64, 10.0f64), (2, 50.0), (3, 120.0)] {
+            let mut p = HashMap::new();
+            p.insert("price".to_string(), serde_json::json!(price));
+            store.upsert(&point_with_payload(id, 2, p)).unwrap();
+        }
+        assert!(store.list_payload_indexes().is_empty());
+        store
+            .create_payload_index("price", PayloadSchemaType::Float)
+            .unwrap();
+        assert_eq!(
+            store.list_payload_indexes(),
+            vec![("price".to_string(), PayloadSchemaType::Float)]
+        );
+
+        // Range filter via the numeric index mask; identical results must
+        // hold with and without the index because the post-filter still
+        // re-evaluates the full filter. All vectors score identically, so
+        // ties break by slot ascending.
+        let make_query = || {
+            SearchQuery::new(vec![0.5, 0.5], 10).with_filter(VectorFilter::new().must(
+                FilterCondition {
+                    field: "price".to_string(),
+                    condition: ConditionType::Range(RangeCondition::new().gt(20.0).lte(130.0)),
+                },
+            ))
+        };
+        let hits = store
+            .search(&make_query())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>();
+        assert_eq!(hits, vec![PointId::Num(2), PointId::Num(3)]);
+
+        // Definitions survive reopen and contents rebuild from payloads.
+        drop(store);
+        let reopened = CollectionStore::open(&store_dir).unwrap();
+        let hits = reopened
+            .search(&make_query())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>();
+        assert_eq!(hits, vec![PointId::Num(2), PointId::Num(3)]);
+        assert!(reopened.delete_payload_index("price").unwrap());
+        assert!(!reopened.delete_payload_index("price").unwrap());
+        assert!(reopened.list_payload_indexes().is_empty());
+    }
+
+    #[test]
+    fn test_search_payload_selector_projection() {
+        use crate::types::{PayloadSelector, SearchQuery};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("col_sel");
+        let store = CollectionStore::create(&store_dir, "col_sel", &config(2)).unwrap();
+        let mut p = HashMap::new();
+        p.insert("keep".to_string(), serde_json::json!("yes"));
+        p.insert("drop".to_string(), serde_json::json!("gone"));
+        store.upsert(&point_with_payload(1, 2, p.clone())).unwrap();
+
+        let query = SearchQuery::new(vec![0.5, 0.5], 5)
+            .with_payload_selector(PayloadSelector::include(vec!["keep".to_string()]));
+        let results = store.search(&query).unwrap();
+        let payload = results[0].payload.as_ref().expect("payload present");
+        assert_eq!(payload.len(), 1);
+        assert_eq!(payload.get("keep"), Some(&serde_json::json!("yes")));
+
+        // Selector building helpers merge into one selector.
+        let mut sel = PayloadSelector::all();
+        sel.include = Some(vec!["a".to_string()]);
+        assert_eq!(sel.apply(&p).len(), 0, "missing field yields empty map");
     }
 
     #[test]

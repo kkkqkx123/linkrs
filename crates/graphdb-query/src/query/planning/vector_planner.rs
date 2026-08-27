@@ -15,7 +15,8 @@ use crate::query::parser::ast::vector::{
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::search::vector::data_access::{
-    OutputField, VectorLookupNode, VectorMatchNode, VectorSearchNode,
+    OutputField, PayloadIndexHint, PayloadIndexKind, VectorLookupNode, VectorMatchNode,
+    VectorSearchNode,
 };
 use crate::query::planning::plan::core::nodes::search::vector::management::{
     CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode,
@@ -358,6 +359,10 @@ impl VectorSearchPlanner {
         filter: Option<VectorFilter>,
         output_fields: Vec<OutputField>,
     ) -> VectorSearchNode {
+        let hints = filter
+            .as_ref()
+            .map(|f| self.classify_payload_index_hints(f))
+            .unwrap_or_default();
         VectorSearchNode::new(
             VectorSearchParams::new(
                 search.index_name.clone(),
@@ -370,8 +375,37 @@ impl VectorSearchPlanner {
             .with_filter(filter)
             .with_limit(search.limit.as_ref().map(|l| l.count).unwrap_or(10))
             .with_offset(search.skip.as_ref().map(|s| s.count).unwrap_or(0))
-            .with_output_fields(output_fields),
+            .with_output_fields(output_fields)
+            .with_payload_index_hints(hints),
         )
+    }
+
+    /// Static payload-index classification of a filter's `must` conditions.
+    ///
+    /// Conditions on equality-comparables (`Match` / `MatchAny`) map to the
+    /// `MapIndex` kind and numeric ranges to the `NumericIndex` kind; every
+    /// other condition stays a post-filter. The execution engine performs
+    /// the actual index lookup — this annotation only documents which
+    /// conditions *can* be served by an index if one is declared.
+    fn classify_payload_index_hints(&self, filter: &VectorFilter) -> Vec<PayloadIndexHint> {
+        let Some(must) = filter.must.as_ref() else {
+            return Vec::new();
+        };
+        must.iter()
+            .filter_map(|cond| {
+                let kind = match &cond.condition {
+                    ConditionType::Match { .. } | ConditionType::MatchAny { .. } => {
+                        PayloadIndexKind::Map
+                    }
+                    ConditionType::Range(_) => PayloadIndexKind::Numeric,
+                    _ => return None,
+                };
+                Some(PayloadIndexHint {
+                    field: cond.field.clone(),
+                    index_kind: kind,
+                })
+            })
+            .collect()
     }
 
     /// Convert a contextual WHERE expression to VectorFilter
@@ -975,5 +1009,44 @@ mod tests {
             .convert_expression_to_filter(&range)
             .expect_err("non-numeric range literal must be rejected instead of dropped");
         assert!(matches!(error, PlannerError::UnsupportedVectorFilter(_)));
+    }
+
+    #[test]
+    fn payload_index_hints_classify_must_conditions() {
+        use vector_search::types::ConditionType as CT;
+
+        let filter = VectorFilter::new()
+            .must(FilterCondition::new(
+                "color",
+                CT::Match {
+                    value: "red".to_string(),
+                },
+            ))
+            .must(FilterCondition::new(
+                "price",
+                CT::Range(RangeCondition::new().lt(100.0)),
+            ));
+        let hints = planner_hints(&filter);
+        assert_eq!(
+            hints,
+            vec![
+                PayloadIndexHint {
+                    field: "color".to_string(),
+                    index_kind: PayloadIndexKind::Map,
+                },
+                PayloadIndexHint {
+                    field: "price".to_string(),
+                    index_kind: PayloadIndexKind::Numeric,
+                },
+            ]
+        );
+
+        // Unsupported conditions (IsEmpty) are never hinted.
+        let filter = VectorFilter::new().must(FilterCondition::new("tag", CT::IsEmpty));
+        assert!(planner_hints(&filter).is_empty());
+    }
+
+    fn planner_hints(filter: &VectorFilter) -> Vec<PayloadIndexHint> {
+        VectorSearchPlanner::new().classify_payload_index_hints(filter)
     }
 }

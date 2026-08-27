@@ -20,7 +20,6 @@ use rayon::prelude::*;
 use super::directory::DirView;
 use super::index_lifecycle::PublishedIndex;
 use super::keys::Keys;
-use super::payloads::Payloads;
 use super::quant::QuantStore;
 use super::vectors::Vectors;
 use super::{CollectionStore, TombstoneBits};
@@ -31,14 +30,17 @@ use crate::index::{HnswIndex, IvfIndex};
 use crate::metrics::{SearchPath, SearchRetry};
 use crate::types::{PointId, SearchQuery, SearchResult};
 
-/// Snapshot of the immutable views used by a single search pass.
+/// Snapshot of the immutable views used by a single search pass. Payload
+/// reads are NOT part of this snapshot: they go through
+/// [`CollectionStore::read_payload_at`] so collections backed by the
+/// Gridstore-style `PayloadStore` route correctly (the legacy `payloads.bin`
+/// blob stays empty for new collections).
 struct SearchSnapshot<'a> {
     dim: usize,
     segment_slots: u32,
     tombstones: &'a TombstoneBits,
     vsnap: &'a [Arc<memmap2::Mmap>],
     keysnap: &'a DirView,
-    paysnap: &'a DirView,
     filter_mask: Option<&'a BitVec>,
 }
 
@@ -68,7 +70,6 @@ impl CollectionStore {
             tombstones,
             vsnap,
             keysnap,
-            paysnap,
             published,
             filter_mask,
             pending,
@@ -80,10 +81,17 @@ impl CollectionStore {
                     actual: query.vector.len(),
                 });
             }
-            let mask = query
-                .filter
-                .as_ref()
-                .and_then(|f| inner.filter_bitmap.build_mask(f));
+            let mask = query.filter.as_ref().and_then(|f| {
+                let capacity = inner.meta.slot_capacity as usize;
+                // Prefer per-field index acceleration (numeric ranges plus
+                // equality on declared fields); when no condition could be
+                // accelerated fall back to the auto-populated equality
+                // bitmap, and finally to no mask at all.
+                match inner.payload_indexes.plan_filter(f, capacity) {
+                    plan if plan.pre_mask.is_some() => plan.pre_mask,
+                    _ => inner.filter_bitmap.build_mask(f),
+                }
+            });
             (
                 inner.meta.vector_size,
                 inner.meta.distance,
@@ -92,7 +100,6 @@ impl CollectionStore {
                 self.tombstones.load(),
                 self.vectors.snapshot(),
                 self.keys.snapshot(),
-                self.payloads.snapshot(),
                 self.index.load(),
                 mask,
                 self.pending.load_full(),
@@ -107,7 +114,6 @@ impl CollectionStore {
                     tombstones: &tombstones,
                     vsnap: &vsnap,
                     keysnap: &keysnap,
-                    paysnap: &paysnap,
                     filter_mask: filter_mask.as_ref(),
                 };
                 let results = self.search_ivf(index.as_ref(), query, &snap, &pending);
@@ -123,7 +129,6 @@ impl CollectionStore {
                     tombstones: &tombstones,
                     vsnap: &vsnap,
                     keysnap: &keysnap,
-                    paysnap: &paysnap,
                     filter_mask: filter_mask.as_ref(),
                 };
                 let results = self.search_hnsw(index.as_ref(), query, &snap, &pending);
@@ -152,7 +157,6 @@ impl CollectionStore {
                 &tombstones,
                 &vsnap,
                 &keysnap,
-                &paysnap,
                 filter_mask.as_ref(),
                 filtered,
                 started,
@@ -185,7 +189,6 @@ impl CollectionStore {
                             tombstones: &tombstones,
                             vsnap: &vsnap,
                             keysnap: &keysnap,
-                            paysnap: &paysnap,
                             filter_mask: None,
                         },
                     );
@@ -226,7 +229,6 @@ impl CollectionStore {
                 tombstones: &tombstones,
                 vsnap: &vsnap,
                 keysnap: &keysnap,
-                paysnap: &paysnap,
                 filter_mask: None,
             },
         )
@@ -242,7 +244,6 @@ impl CollectionStore {
         tombstones: &TombstoneBits,
         vsnap: &[Arc<Mmap>],
         keysnap: &DirView,
-        paysnap: &DirView,
         filter_mask: Option<&BitVec>,
         filtered: bool,
         started: Instant,
@@ -299,7 +300,6 @@ impl CollectionStore {
                         bytes_per_vector,
                         segment_slots,
                         keysnap,
-                        paysnap,
                         filter_mask,
                         query_bits.as_deref(),
                     );
@@ -342,7 +342,6 @@ impl CollectionStore {
                     tombstones,
                     vsnap,
                     keysnap,
-                    paysnap,
                     filter_mask: None,
                 },
             );
@@ -372,7 +371,6 @@ impl CollectionStore {
                 tombstones,
                 vsnap,
                 keysnap,
-                paysnap,
                 filter_mask: None,
             },
         )
@@ -390,7 +388,6 @@ impl CollectionStore {
         bytes_per_vector: usize,
         segment_slots: u32,
         keysnap: &DirView,
-        paysnap: &DirView,
         filter_mask: Option<&BitVec>,
         query_bits: Option<&[u8]>,
     ) {
@@ -413,9 +410,7 @@ impl CollectionStore {
             else {
                 return;
             };
-            let payload = Payloads::read_payload(paysnap, slot as usize)
-                .ok()
-                .flatten();
+            let payload = self.read_payload_at(slot).ok().flatten();
             let ok = crate::filter::matches(filter, &id, payload.as_ref()).unwrap_or(false);
             if !ok {
                 return;
@@ -468,9 +463,7 @@ impl CollectionStore {
         query: &SearchQuery,
         snap: &SearchSnapshot<'_>,
     ) {
-        let SearchSnapshot {
-            keysnap, paysnap, ..
-        } = snap;
+        let SearchSnapshot { keysnap, .. } = snap;
         if let Some(filter) = &query.filter {
             let Some(id) = Keys::read_key(keysnap, slot as usize)
                 .ok()
@@ -479,9 +472,7 @@ impl CollectionStore {
             else {
                 return;
             };
-            let payload = Payloads::read_payload(paysnap, slot as usize)
-                .ok()
-                .flatten();
+            let payload = self.read_payload_at(slot).ok().flatten();
             let ok = crate::filter::matches(filter, &id, payload.as_ref()).unwrap_or(false);
             if !ok {
                 return;
@@ -654,7 +645,6 @@ impl CollectionStore {
             tombstones,
             vsnap,
             keysnap,
-            paysnap,
             filter_mask,
         } = snap;
         let _ = tombstones;
@@ -668,7 +658,7 @@ impl CollectionStore {
                     VectorSearchError::CorruptData(format!("slot {slot} has no key"))
                 })?;
                 let id = PointId::from(key);
-                let payload = Payloads::read_payload(paysnap, slot as usize)?;
+                let payload = self.read_payload_at(slot)?;
                 if crate::filter::matches(filter, &id, payload.as_ref())? {
                     kept.push((score, slot));
                 }
@@ -720,7 +710,13 @@ impl CollectionStore {
                 .ok_or_else(|| VectorSearchError::CorruptData(format!("slot {slot} has no key")))?;
             let mut result = SearchResult::new(PointId::from(key), score);
             if with_payload {
-                if let Some(payload) = Payloads::read_payload(paysnap, slot as usize)? {
+                if let Some(payload) = self.read_payload_at(slot)? {
+                    // Field projection trims the payload after the read; a
+                    // selector that removes everything yields an empty map.
+                    let payload = match &query.payload_selector {
+                        Some(sel) => sel.apply(&payload),
+                        None => payload,
+                    };
                     result = result.with_payload(payload);
                 }
             }

@@ -342,7 +342,10 @@ mod tests {
         assert_eq!(distance_from_qdrant("Cosine"), Some(DistanceMetric::Cosine));
         assert_eq!(distance_from_qdrant("euclid"), Some(DistanceMetric::Euclid));
         assert_eq!(distance_from_qdrant("DOT"), Some(DistanceMetric::Dot));
-        assert_eq!(distance_from_qdrant("Manhattan"), Some(DistanceMetric::Manhattan));
+        assert_eq!(
+            distance_from_qdrant("Manhattan"),
+            Some(DistanceMetric::Manhattan)
+        );
     }
 
     #[test]
@@ -396,10 +399,7 @@ mod tests {
         .unwrap();
         let vectors = body.get("vectors").unwrap();
         assert_eq!(vectors.get("size").unwrap().as_u64(), Some(64));
-        assert_eq!(
-            vectors.get("distance").unwrap().as_str(),
-            Some("Manhattan")
-        );
+        assert_eq!(vectors.get("distance").unwrap().as_str(), Some("Manhattan"));
     }
 
     #[test]

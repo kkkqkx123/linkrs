@@ -171,7 +171,10 @@ impl VectorCoordinatorBuilder {
         self
     }
 
-    pub fn with_embedding_service(mut self, service: Arc<graphdb_embedding::EmbeddingService>) -> Self {
+    pub fn with_embedding_service(
+        mut self,
+        service: Arc<graphdb_embedding::EmbeddingService>,
+    ) -> Self {
         self.embedding_service = Some(service);
         self
     }

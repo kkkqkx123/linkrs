@@ -968,6 +968,32 @@ impl VectorEngine for QdrantEngine {
         self.check_response(response).await
     }
 
+    async fn set_payload_fields(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        fields: Payload,
+    ) -> Result<()> {
+        debug!(
+            "Merging {} fields into payload for {} points in collection '{}'",
+            fields.len(),
+            point_ids.len(),
+            collection
+        );
+
+        let ids: Vec<Value> = point_ids.iter().map(|id| point_id_to_json(id)).collect();
+        let body = build_set_payload_body(ids, serde_json::to_value(&fields)?);
+
+        let response = self
+            .request_json(
+                reqwest::Method::PUT,
+                &format!("/collections/{}/points/payload", collection),
+                body,
+            )
+            .await?;
+        self.check_response(response).await
+    }
+
     async fn scroll(
         &self,
         collection: &str,

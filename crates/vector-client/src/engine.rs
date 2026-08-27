@@ -222,6 +222,21 @@ pub trait VectorEngine: Send + Sync + std::fmt::Debug {
         Err(VectorClientError::NotSupported("set_payload".to_string()))
     }
 
+    /// Merge the given fields into the payload of the given points. Only the
+    /// supplied keys are updated; other existing keys are preserved. Engines
+    /// that do not support per-key merge fall back to `set_payload`.
+    async fn set_payload_fields(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        fields: Payload,
+    ) -> Result<()> {
+        let _ = (collection, point_ids, fields);
+        Err(VectorClientError::NotSupported(
+            "set_payload_fields".to_string(),
+        ))
+    }
+
     async fn delete_payload(
         &self,
         collection: &str,

@@ -654,6 +654,43 @@ impl VectorEngine for QdrantGrpcEngine {
         Ok(())
     }
 
+    async fn set_payload_fields(
+        &self,
+        collection: &str,
+        point_ids: Vec<&str>,
+        fields: Payload,
+    ) -> Result<()> {
+        debug!(
+            "Merging {} fields into payload for {} points via gRPC",
+            fields.len(),
+            point_ids.len()
+        );
+
+        let ids: Vec<proto::PointId> = point_ids.iter().map(|id| point_id_to_proto(id)).collect();
+        let proto_payload = convert::payload_to_proto_map(&fields);
+
+        let points_selector = proto::PointsSelector {
+            points_selector_one_of: Some(proto::points_selector::PointsSelectorOneOf::Points(
+                proto::PointsIdsList { ids },
+            )),
+        };
+
+        let request = proto::SetPayloadPoints {
+            collection_name: collection.to_string(),
+            wait: Some(true),
+            payload: proto_payload,
+            points_selector: Some(points_selector),
+            ordering: None,
+            shard_key_selector: None,
+            key: None,
+        };
+
+        self.points()
+            .set_payload(self.into_request(request))
+            .await?;
+        Ok(())
+    }
+
     async fn scroll(
         &self,
         collection: &str,

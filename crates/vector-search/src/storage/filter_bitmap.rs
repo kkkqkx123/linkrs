@@ -32,57 +32,8 @@ use std::collections::HashMap;
 
 use bitvec::prelude::*;
 
+use super::payload_key::{collect_keys, Key};
 use crate::types::{ConditionType, Payload, VectorFilter};
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum Key {
-    Str(String),
-    Num(u64),
-    Bool(bool),
-}
-
-impl Key {
-    /// Lookup keys for a `Match` condition value string.
-    fn for_match(value: &str) -> Vec<Key> {
-        let mut keys = vec![Key::Str(value.to_string())];
-        if let Ok(n) = value.parse::<f64>() {
-            keys.push(Key::Num(n.to_bits()));
-        }
-        match value {
-            "true" => keys.push(Key::Bool(true)),
-            "false" => keys.push(Key::Bool(false)),
-            _ => {}
-        }
-        keys
-    }
-
-    /// Keys a payload value indexes under (empty for non-scalar values).
-    fn for_value(value: &serde_json::Value) -> Vec<Key> {
-        match value {
-            serde_json::Value::String(s) => vec![Key::Str(s.clone())],
-            serde_json::Value::Number(n) => n
-                .as_f64()
-                .map(|f| vec![Key::Num(f.to_bits())])
-                .unwrap_or_default(),
-            serde_json::Value::Bool(b) => vec![Key::Bool(*b)],
-            _ => Vec::new(),
-        }
-    }
-}
-
-fn collect_keys(field: &str, value: &serde_json::Value, out: &mut Vec<(String, Key)>) {
-    if let serde_json::Value::Array(items) = value {
-        for item in items {
-            for key in Key::for_value(item) {
-                out.push((field.to_string(), key));
-            }
-        }
-    } else {
-        for key in Key::for_value(value) {
-            out.push((field.to_string(), key));
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub(crate) struct FilterBitmap {

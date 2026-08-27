@@ -220,7 +220,9 @@ impl QdrantTelemetrySampler {
         Self::parse_telemetry(&json)
     }
 
-    fn parse_telemetry(json: &serde_json::Value) -> Result<QdrantTelemetrySnapshot, reqwest::Error> {
+    fn parse_telemetry(
+        json: &serde_json::Value,
+    ) -> Result<QdrantTelemetrySnapshot, reqwest::Error> {
         let responses = json
             .pointer("/result/requests/rest/responses")
             .and_then(|v| v.as_object());
@@ -267,9 +269,7 @@ impl QdrantTelemetrySampler {
                 "POST /collections/{name}/points/delete",
             ],
         )
-        .or_else(|| {
-            Self::extract_endpoint(grpc_responses, &["/qdrant.Points/Delete"])
-        })
+        .or_else(|| Self::extract_endpoint(grpc_responses, &["/qdrant.Points/Delete"]))
         .unwrap_or_default();
 
         Ok(QdrantTelemetrySnapshot {
@@ -292,14 +292,9 @@ impl QdrantTelemetrySampler {
             if let Some(status_map) = responses.get(*key).and_then(|v| v.as_object()) {
                 for (_status, stats_val) in status_map {
                     if let Some(obj) = stats_val.as_object() {
-                        total.count += obj
-                            .get("count")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        total.fail_count += obj
-                            .get("fail_count")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
+                        total.count += obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        total.fail_count +=
+                            obj.get("fail_count").and_then(|v| v.as_u64()).unwrap_or(0);
                         total.total_duration_micros += obj
                             .get("total_duration_micros")
                             .and_then(|v| v.as_u64())
@@ -316,10 +311,7 @@ impl QdrantTelemetrySampler {
         let prev = &self.last;
 
         let search_ops = cur.search.count.saturating_sub(prev.search.count);
-        let search_errors = cur
-            .search
-            .fail_count
-            .saturating_sub(prev.search.fail_count);
+        let search_errors = cur.search.fail_count.saturating_sub(prev.search.fail_count);
         let search_ms = micros_to_ms(
             cur.search
                 .total_duration_micros
@@ -327,10 +319,7 @@ impl QdrantTelemetrySampler {
         );
 
         let upsert_ops = cur.upsert.count.saturating_sub(prev.upsert.count);
-        let upsert_errors = cur
-            .upsert
-            .fail_count
-            .saturating_sub(prev.upsert.fail_count);
+        let upsert_errors = cur.upsert.fail_count.saturating_sub(prev.upsert.fail_count);
         let upsert_ms = micros_to_ms(
             cur.upsert
                 .total_duration_micros
@@ -338,10 +327,7 @@ impl QdrantTelemetrySampler {
         );
 
         let delete_ops = cur.delete.count.saturating_sub(prev.delete.count);
-        let delete_errors = cur
-            .delete
-            .fail_count
-            .saturating_sub(prev.delete.fail_count);
+        let delete_errors = cur.delete.fail_count.saturating_sub(prev.delete.fail_count);
         let delete_ms = micros_to_ms(
             cur.delete
                 .total_duration_micros
@@ -400,8 +386,7 @@ pub fn spawn_remote_vector_metrics_sampler(
     ThreadBuilder::new()
         .name("vector-remote-metrics".to_string())
         .spawn(move || {
-            let mut sampler =
-                QdrantTelemetrySampler::new(&http_host, http_port, api_key, stats);
+            let mut sampler = QdrantTelemetrySampler::new(&http_host, http_port, api_key, stats);
             loop {
                 std::thread::sleep(SAMPLE_INTERVAL);
                 sampler.sample_once();

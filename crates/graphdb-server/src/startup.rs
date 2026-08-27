@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "vector-qdrant")]
+use graphdb_embedding::EmbeddingService;
 #[cfg(feature = "vector")]
 use log::warn;
 use log::{error, info};
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorManager;
-#[cfg(feature = "vector-qdrant")]
-use graphdb_embedding::EmbeddingService;
 
 use crate::config::Config;
 use crate::core::error::DBResult;

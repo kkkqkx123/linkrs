@@ -7,47 +7,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use graphdb_core::core::vector::{
+    ConditionType, FilterCondition, GeoBoundingBox, GeoPoint, GeoRadius, MinShouldCondition,
+    Payload, PayloadSchemaType, PayloadSelector, PayloadValue, PointId, RangeCondition,
+    ValuesCountCondition, VectorFilter,
+};
+
 use crate::error::{Result, VectorSearchError};
-
-pub type Payload = HashMap<String, serde_json::Value>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PointId {
-    Num(u64),
-    Uuid(String),
-}
-
-impl std::fmt::Display for PointId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PointId::Num(n) => write!(f, "{}", n),
-            PointId::Uuid(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-impl From<u64> for PointId {
-    fn from(n: u64) -> Self {
-        PointId::Num(n)
-    }
-}
-
-impl From<String> for PointId {
-    fn from(s: String) -> Self {
-        if let Ok(n) = s.parse::<u64>() {
-            PointId::Num(n)
-        } else {
-            PointId::Uuid(s)
-        }
-    }
-}
-
-impl From<&str> for PointId {
-    fn from(s: &str) -> Self {
-        PointId::from(s.to_string())
-    }
-}
 
 pub type CollectionName = String;
 
@@ -72,7 +38,10 @@ pub enum DistanceMetric {
 impl DistanceMetric {
     /// Whether the remote qdrant engine natively supports this metric.
     pub fn is_supported_by_qdrant(&self) -> bool {
-        matches!(self, Self::Cosine | Self::Euclid | Self::Dot | Self::Manhattan)
+        matches!(
+            self,
+            Self::Cosine | Self::Euclid | Self::Dot | Self::Manhattan
+        )
     }
 
     /// Inverse of [`DistanceMetric::is_supported_by_qdrant`].
@@ -679,31 +648,6 @@ impl IndexMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PayloadSchemaType {
-    Keyword,
-    Integer,
-    Float,
-    Text,
-    Bool,
-    Geo,
-    Datetime,
-}
-
-impl PayloadSchemaType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PayloadSchemaType::Keyword => "keyword",
-            PayloadSchemaType::Integer => "integer",
-            PayloadSchemaType::Float => "float",
-            PayloadSchemaType::Text => "text",
-            PayloadSchemaType::Bool => "bool",
-            PayloadSchemaType::Geo => "geo",
-            PayloadSchemaType::Datetime => "datetime",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthStatus {
     pub is_healthy: bool,
@@ -732,317 +676,6 @@ impl HealthStatus {
             engine_name: engine_name.into(),
             engine_version: engine_version.into(),
             message: Some(message.into()),
-        }
-    }
-}
-
-pub type PayloadValue = serde_json::Value;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct GeoPoint {
-    pub lat: f64,
-    pub lon: f64,
-}
-
-impl GeoPoint {
-    pub fn new(lat: f64, lon: f64) -> Self {
-        Self { lat, lon }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeoRadius {
-    pub center: GeoPoint,
-    pub radius: f64,
-}
-
-impl GeoRadius {
-    pub fn new(center: GeoPoint, radius: f64) -> Self {
-        Self { center, radius }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeoBoundingBox {
-    pub top_left: GeoPoint,
-    pub bottom_right: GeoPoint,
-}
-
-impl GeoBoundingBox {
-    pub fn new(top_left: GeoPoint, bottom_right: GeoPoint) -> Self {
-        Self {
-            top_left,
-            bottom_right,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValuesCountCondition {
-    pub gt: Option<u64>,
-    pub gte: Option<u64>,
-    pub lt: Option<u64>,
-    pub lte: Option<u64>,
-}
-
-impl ValuesCountCondition {
-    pub fn new() -> Self {
-        Self {
-            gt: None,
-            gte: None,
-            lt: None,
-            lte: None,
-        }
-    }
-
-    pub fn gt(mut self, value: u64) -> Self {
-        self.gt = Some(value);
-        self
-    }
-
-    pub fn gte(mut self, value: u64) -> Self {
-        self.gte = Some(value);
-        self
-    }
-
-    pub fn lt(mut self, value: u64) -> Self {
-        self.lt = Some(value);
-        self
-    }
-
-    pub fn lte(mut self, value: u64) -> Self {
-        self.lte = Some(value);
-        self
-    }
-}
-
-impl Default for ValuesCountCondition {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VectorFilter {
-    pub must: Option<Vec<FilterCondition>>,
-    pub must_not: Option<Vec<FilterCondition>>,
-    pub should: Option<Vec<FilterCondition>>,
-    pub min_should: Option<MinShouldCondition>,
-}
-
-impl VectorFilter {
-    pub fn new() -> Self {
-        Self {
-            must: None,
-            must_not: None,
-            should: None,
-            min_should: None,
-        }
-    }
-
-    pub fn must(mut self, condition: FilterCondition) -> Self {
-        self.must.get_or_insert_with(Vec::new).push(condition);
-        self
-    }
-
-    pub fn must_not(mut self, condition: FilterCondition) -> Self {
-        self.must_not.get_or_insert_with(Vec::new).push(condition);
-        self
-    }
-
-    pub fn should(mut self, condition: FilterCondition) -> Self {
-        self.should.get_or_insert_with(Vec::new).push(condition);
-        self
-    }
-}
-
-impl Default for VectorFilter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MinShouldCondition {
-    pub conditions: Vec<FilterCondition>,
-    pub min_count: usize,
-}
-
-/// A single filter condition. Translated to backend-specific representations
-/// by each engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilterCondition {
-    pub field: String,
-    pub condition: ConditionType,
-}
-
-impl FilterCondition {
-    pub fn new(field: impl Into<String>, condition: ConditionType) -> Self {
-        Self {
-            field: field.into(),
-            condition,
-        }
-    }
-
-    pub fn match_value(field: impl Into<String>, value: impl Into<String>) -> Self {
-        Self::new(
-            field,
-            ConditionType::Match {
-                value: value.into(),
-            },
-        )
-    }
-
-    pub fn match_any(field: impl Into<String>, values: Vec<serde_json::Value>) -> Self {
-        Self::new(field, ConditionType::MatchAny { values })
-    }
-
-    pub fn range(field: impl Into<String>, range: RangeCondition) -> Self {
-        Self::new(field, ConditionType::Range(range))
-    }
-
-    pub fn is_empty(field: impl Into<String>) -> Self {
-        Self::new(field, ConditionType::IsEmpty)
-    }
-
-    pub fn is_null(field: impl Into<String>) -> Self {
-        Self::new(field, ConditionType::IsNull)
-    }
-
-    pub fn has_id(ids: Vec<String>) -> Self {
-        Self::new("_id", ConditionType::HasId { ids })
-    }
-
-    pub fn geo_radius(field: impl Into<String>, radius: GeoRadius) -> Self {
-        Self::new(field, ConditionType::GeoRadius(radius))
-    }
-
-    pub fn geo_bounding_box(field: impl Into<String>, bbox: GeoBoundingBox) -> Self {
-        Self::new(field, ConditionType::GeoBoundingBox(bbox))
-    }
-
-    pub fn values_count(field: impl Into<String>, count: ValuesCountCondition) -> Self {
-        Self::new(field, ConditionType::ValuesCount(count))
-    }
-
-    pub fn contains(field: impl Into<String>, value: impl Into<String>) -> Self {
-        Self::new(
-            field,
-            ConditionType::Contains {
-                value: value.into(),
-            },
-        )
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ConditionType {
-    /// Match a scalar field value.
-    ///
-    /// The local engine compares stringified values (a numeric payload `42`
-    /// matches `"42"`). Remote Qdrant receives a *typed* match: integer- and
-    /// boolean-shaped strings translate to integer/boolean match conditions,
-    /// everything else to keyword matching. A string payload holding
-    /// digits therefore only matches locally — keep filter values aligned
-    /// with the stored payload type.
-    Match {
-        value: String,
-    },
-    /// Match any of the given values (OR semantics). Values are translated
-    /// by their actual JSON type: pure integer lists map to integer matching,
-    /// pure boolean lists to an OR over singular boolean matches, and mixed
-    /// lists degrade to the shared stringified representation on remote
-    /// backends.
-    MatchAny {
-        values: Vec<PayloadValue>,
-    },
-    Range(RangeCondition),
-    IsEmpty,
-    IsNull,
-    HasId {
-        ids: Vec<String>,
-    },
-    Nested {
-        filter: Box<VectorFilter>,
-    },
-    GeoRadius(GeoRadius),
-    GeoBoundingBox(GeoBoundingBox),
-    ValuesCount(ValuesCountCondition),
-    Contains {
-        value: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RangeCondition {
-    pub gt: Option<f64>,
-    pub gte: Option<f64>,
-    pub lt: Option<f64>,
-    pub lte: Option<f64>,
-}
-
-impl RangeCondition {
-    pub fn new() -> Self {
-        Self {
-            gt: None,
-            gte: None,
-            lt: None,
-            lte: None,
-        }
-    }
-
-    pub fn gt(mut self, value: f64) -> Self {
-        self.gt = Some(value);
-        self
-    }
-
-    pub fn gte(mut self, value: f64) -> Self {
-        self.gte = Some(value);
-        self
-    }
-
-    pub fn lt(mut self, value: f64) -> Self {
-        self.lt = Some(value);
-        self
-    }
-
-    pub fn lte(mut self, value: f64) -> Self {
-        self.lte = Some(value);
-        self
-    }
-}
-
-impl Default for RangeCondition {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PayloadSelector {
-    pub include: Option<Vec<String>>,
-    pub exclude: Option<Vec<String>>,
-}
-
-impl PayloadSelector {
-    pub fn include(fields: Vec<String>) -> Self {
-        Self {
-            include: Some(fields),
-            exclude: None,
-        }
-    }
-
-    pub fn exclude(fields: Vec<String>) -> Self {
-        Self {
-            include: None,
-            exclude: Some(fields),
-        }
-    }
-
-    pub fn all() -> Self {
-        Self {
-            include: None,
-            exclude: None,
         }
     }
 }
@@ -1159,6 +792,10 @@ pub struct SearchQuery {
     /// For HNSW recall control use `SearchMode::KNN.ef_search` instead.
     pub nprobe: Option<usize>,
     pub search_mode: Option<SearchMode>,
+    /// Returned payload field projection (include / exclude lists).
+    /// `None` returns the whole payload. Applied after the payload read,
+    /// so it only trims serialization cost, never filtering semantics.
+    pub payload_selector: Option<PayloadSelector>,
 }
 
 impl SearchQuery {
@@ -1173,6 +810,7 @@ impl SearchQuery {
             with_vector: None,
             nprobe: None,
             search_mode: None,
+            payload_selector: None,
         }
     }
 
@@ -1203,6 +841,28 @@ impl SearchQuery {
 
     pub fn with_nprobe(mut self, nprobe: usize) -> Self {
         self.nprobe = Some(nprobe);
+        self
+    }
+
+    /// Restrict the returned payload to the given fields (include list).
+    pub fn with_payload_include(mut self, fields: Vec<String>) -> Self {
+        let mut sel = self.payload_selector.take().unwrap_or_default();
+        sel.include = Some(fields);
+        self.payload_selector = Some(sel);
+        self
+    }
+
+    /// Set an explicit payload projection for the search results.
+    pub fn with_payload_selector(mut self, selector: PayloadSelector) -> Self {
+        self.payload_selector = Some(selector);
+        self
+    }
+
+    /// Remove the given fields from the returned payload (exclude list).
+    pub fn with_payload_exclude(mut self, fields: Vec<String>) -> Self {
+        let mut sel = self.payload_selector.take().unwrap_or_default();
+        sel.exclude = Some(fields);
+        self.payload_selector = Some(sel);
         self
     }
 

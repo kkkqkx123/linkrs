@@ -117,6 +117,15 @@ pub enum WalRecord {
         slot: u32,
         keys: Vec<String>,
     },
+    /// Set a single key on a slot's payload (merge semantics). A missing
+    /// payload is created containing just this key; all other keys are
+    /// preserved. The value is JSON-encoded because postcard cannot encode
+    /// `serde_json::Value` (untagged enum).
+    SetPayloadField {
+        slot: u32,
+        key: String,
+        value: String,
+    },
 }
 
 /// Append-only WAL file with group commit.

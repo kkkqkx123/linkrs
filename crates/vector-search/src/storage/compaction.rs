@@ -322,9 +322,32 @@ impl CollectionStore {
             )?;
         }
 
-        // 3. payloads.bin
-        let tmp_payloads = self.dir.join("payloads_tmp.bin");
-        {
+        // 3. payloads.bin (legacy) or PayloadStore (new)
+        if self.payload_store.read().is_some() {
+            // Compact the PayloadStore: read live payloads from the old store
+            // and write them to a temporary compacted store.
+            let tmp_payload_store = self.dir.join("payloads_store_tmp");
+            if tmp_payload_store.exists() {
+                std::fs::remove_dir_all(&tmp_payload_store)?;
+            }
+            let live_slots: Vec<(u32, u32)> = plan
+                .map
+                .iter()
+                .enumerate()
+                .filter(|(_, new_slot)| **new_slot != u32::MAX)
+                .map(|(old, &new)| (old as u32, new))
+                .collect();
+            let ps_guard = self.payload_store.read();
+            let old_store = ps_guard.as_ref().expect("checked above");
+            let new_store = old_store.compact_to(&tmp_payload_store, &live_slots)?;
+            let _ = old_store;
+            drop(ps_guard);
+            // Persist tracker of the new store.
+            let tracker_guard = new_store.tracker().write();
+            let config = new_store.config().clone();
+            tracker_guard.save(&tmp_payload_store, &config)?;
+        } else {
+            let tmp_payloads = self.dir.join("payloads_tmp.bin");
             let payloads_view = self.payloads.snapshot();
             let mut entries = Vec::with_capacity(plan.live_count as usize);
             for (old_slot, new_slot) in plan.map.iter().enumerate() {
@@ -375,8 +398,28 @@ impl CollectionStore {
             }
         }
         self.keys.replace_from(&self.dir.join("keys_tmp.bin"))?;
-        self.payloads
-            .replace_from(&self.dir.join("payloads_tmp.bin"))?;
+
+        // Swap payload storage: either the new PayloadStore or legacy blobs.
+        {
+            let ps_guard = self.payload_store.read();
+            if ps_guard.is_some() {
+                drop(ps_guard);
+                let live_store = self.dir.join("payloads_store");
+                let tmp_store = self.dir.join("payloads_store_tmp");
+                if tmp_store.exists() {
+                    if live_store.exists() {
+                        std::fs::remove_dir_all(&live_store)?;
+                    }
+                    std::fs::rename(&tmp_store, &live_store)?;
+                    // Re-open the compacted PayloadStore and swap it in.
+                    let new_ps = super::PayloadStore::open(&live_store)?;
+                    *self.payload_store.write() = Some(new_ps);
+                }
+            } else {
+                self.payloads
+                    .replace_from(&self.dir.join("payloads_tmp.bin"))?;
+            }
+        }
 
         // In-memory rebuild against the new files.
         self.tombstones
@@ -396,16 +439,25 @@ impl CollectionStore {
         inner.meta.live_count = plan.live_count;
         inner.meta.tombstone_count = 0;
         {
-            let payloads_view = self.payloads.snapshot();
+            // Pre-read all live payloads once for the filter bitmap and
+            // payload index rebuilds (slot numbering changed wholesale).
+            let mut live_payloads: Vec<Option<super::Payload>> =
+                Vec::with_capacity(plan.live_count as usize);
+            for slot in 0..plan.live_count {
+                live_payloads.push(self.read_payload_at(slot as u32).ok().flatten());
+            }
             inner.filter_bitmap.rebuild(
                 plan.new_capacity as usize,
-                |slot| {
-                    Payloads::read_payload(&payloads_view, slot as usize)
-                        .ok()
-                        .flatten()
-                },
+                |slot| live_payloads.get(slot as usize).cloned().flatten(),
                 0..plan.live_count as u32,
             );
+            if !inner.payload_indexes.is_empty() {
+                inner.payload_indexes.rebuild(
+                    plan.new_capacity as usize,
+                    |slot| live_payloads.get(slot as usize).cloned().flatten(),
+                    0..plan.live_count as u32,
+                );
+            }
         }
         inner.meta.save(&self.dir)?;
 
