@@ -507,15 +507,38 @@ impl VectorSyncCoordinator {
             }
         } else {
             if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
-                if existing_meta.config.vector_size != vector_size
-                    || existing_meta.config.distance != distance
+                let existing = &existing_meta.config;
+                // Core dimensions/metrics must match; hnsw/quantization/index_type
+                // differences also trigger a conflict so a caller cannot silently
+                // shadow an existing collection with altered knobs (e.g. scalar
+                // quantization enabled on second CREATE with same space).
+                if existing.vector_size != vector_size
+                    || existing.distance != distance
+                    || existing.index_type != config.index_type
+                    || format!("{:?}", existing.hnsw_config)
+                        != format!("{:?}", config.hnsw_config)
+                    || existing.quantization_config != config.quantization_config
+                    || format!("{:?}", existing.ivf_config)
+                        != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),
-                        existing_size: existing_meta.config.vector_size,
-                        existing_dist: format!("{:?}", existing_meta.config.distance),
+                        existing_size: existing.vector_size,
+                        existing_dist: format!(
+                            "{:?}/{:?}/{:?}/{:?}",
+                            existing.distance,
+                            existing.index_type,
+                            existing.hnsw_config,
+                            existing.quantization_config
+                        ),
                         requested_size: vector_size,
-                        requested_dist: format!("{:?}", distance),
+                        requested_dist: format!(
+                            "{:?}/{:?}/{:?}/{:?}",
+                            distance,
+                            config.index_type,
+                            config.hnsw_config,
+                            config.quantization_config
+                        ),
                     });
                 }
             }
@@ -1119,15 +1142,34 @@ impl VectorSyncCoordinator {
             }
         } else {
             if let Some(existing_meta) = self.backend.get_index_metadata(&collection_name) {
-                if existing_meta.config.vector_size != config.vector_size
-                    || existing_meta.config.distance != config.distance
+                let existing = &existing_meta.config;
+                if existing.vector_size != config.vector_size
+                    || existing.distance != config.distance
+                    || existing.index_type != config.index_type
+                    || format!("{:?}", existing.hnsw_config)
+                        != format!("{:?}", config.hnsw_config)
+                    || existing.quantization_config != config.quantization_config
+                    || format!("{:?}", existing.ivf_config)
+                        != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),
-                        existing_size: existing_meta.config.vector_size,
-                        existing_dist: format!("{:?}", existing_meta.config.distance),
+                        existing_size: existing.vector_size,
+                        existing_dist: format!(
+                            "{:?}/{:?}/{:?}/{:?}",
+                            existing.distance,
+                            existing.index_type,
+                            existing.hnsw_config,
+                            existing.quantization_config
+                        ),
                         requested_size: config.vector_size,
-                        requested_dist: format!("{:?}", config.distance),
+                        requested_dist: format!(
+                            "{:?}/{:?}/{:?}/{:?}",
+                            config.distance,
+                            config.index_type,
+                            config.hnsw_config,
+                            config.quantization_config
+                        ),
                     });
                 }
             }

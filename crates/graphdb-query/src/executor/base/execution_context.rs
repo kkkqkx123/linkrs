@@ -81,6 +81,10 @@ pub struct ExecutionContext {
     /// an explicit transaction. Execution-time knob threaded from the
     /// API layer through [`crate::QueryContext`]; `None` = auto-commit.
     pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
+    /// Consistency timeout for secondary-index reads. `None` = eventual.
+    pub consistency_timeout_ms: Option<u64>,
+    /// Minimum LSN to wait for when consistency is RYW.
+    pub minimum_lsn: Option<graphdb_core::types::CommitLsn>,
 }
 
 impl ExecutionContext {
@@ -115,6 +119,8 @@ impl ExecutionContext {
             columnar_policy: None,
             join_algorithms: HashMap::new(),
             isolation_level: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         }
     }
 
@@ -149,6 +155,8 @@ impl ExecutionContext {
             columnar_policy: None,
             join_algorithms: HashMap::new(),
             isolation_level: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         }
     }
 
@@ -182,6 +190,8 @@ impl ExecutionContext {
             columnar_policy: None,
             join_algorithms: HashMap::new(),
             isolation_level: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         }
     }
 
@@ -225,6 +235,8 @@ impl ExecutionContext {
             columnar_policy: None,
             join_algorithms: HashMap::new(),
             isolation_level: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         }
     }
 
@@ -303,6 +315,8 @@ impl Default for ExecutionContext {
             columnar_policy: None,
             join_algorithms: HashMap::new(),
             isolation_level: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         }
     }
 }

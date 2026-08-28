@@ -20,6 +20,13 @@ pub struct QueryRequest {
     /// is used.
     #[serde(default)]
     pub session_variables: HashMap<String, serde_json::Value>,
+    /// Consistency level: None = eventual (default), Some("read_your_writes") enables RYW.
+    #[serde(default)]
+    pub consistency: Option<String>,
+    #[serde(default)]
+    pub consistency_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub minimum_lsn: Option<u64>,
 }
 
 /// Batch query request: multiple auto-commit DML statements executed inside a

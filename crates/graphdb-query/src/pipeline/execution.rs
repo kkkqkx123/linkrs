@@ -342,6 +342,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         context.cancel_token = Some(query_context.cancel_token());
         context.isolation_level = query_context.isolation_level();
+        context.consistency_timeout_ms =
+            query_context.request_context().consistency_timeout_ms;
+        context.minimum_lsn = query_context.request_context().minimum_lsn;
         if query_context.has_arena() {
             context.arena = Some(Arc::new(
                 parking_lot::Mutex::new(graphdb_core::Arena::new()),

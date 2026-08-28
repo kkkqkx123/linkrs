@@ -281,6 +281,13 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             .as_ref()
             .is_some_and(|context| context.read_only);
         request_context.isolation_level = ctx.isolation_level;
+        request_context.consistency_timeout_ms = match ctx.consistency {
+            crate::api_core::types::ConsistencyLevel::Eventual => None,
+            crate::api_core::types::ConsistencyLevel::ReadYourWrites { timeout_ms } => {
+                Some(timeout_ms)
+            }
+        };
+        request_context.minimum_lsn = ctx.minimum_lsn;
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
@@ -415,6 +422,13 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             .as_ref()
             .is_some_and(|context| context.read_only);
         request_context.isolation_level = ctx.isolation_level;
+        request_context.consistency_timeout_ms = match ctx.consistency {
+            crate::api_core::types::ConsistencyLevel::Eventual => None,
+            crate::api_core::types::ConsistencyLevel::ReadYourWrites { timeout_ms } => {
+                Some(timeout_ms)
+            }
+        };
+        request_context.minimum_lsn = ctx.minimum_lsn;
         request_context.operation_context = operation_context;
         request_context.operation_storage = operation_storage
             .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);

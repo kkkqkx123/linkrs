@@ -133,6 +133,9 @@ impl HttpClient {
             session_id,
             parameters: std::collections::HashMap::new(),
             session_variables: std::collections::HashMap::new(),
+            consistency: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
         };
 
         let response = self.inner.post(&url).json(&request).send().await?;

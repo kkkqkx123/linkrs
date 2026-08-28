@@ -60,6 +60,13 @@ pub struct VectorSearchRequest {
     pub limit: usize,
     pub threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
+    /// Consistency level: "eventual" (default) or "read_your_writes"
+    #[serde(default)]
+    pub consistency: Option<String>,
+    /// Timeout in milliseconds when consistency is read_your_writes
+    pub consistency_timeout_ms: Option<u64>,
+    /// Minimum LSN to wait for (when RYW)
+    pub minimum_lsn: Option<u64>,
 }
 
 fn default_limit() -> usize {
@@ -360,6 +367,27 @@ pub async fn search<
 
         if let Some(filter) = request.filter {
             options = options.with_filter(filter);
+        }
+        if let Some(cons) = request.consistency.as_deref() {
+            let is_ryw = cons.eq_ignore_ascii_case("read_your_writes")
+                || cons.eq_ignore_ascii_case("ryw")
+                || cons.eq_ignore_ascii_case("read-your-writes");
+            if is_ryw {
+                let timeout = request.consistency_timeout_ms.unwrap_or(2000);
+                options.consistency =
+                    graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites {
+                        timeout_ms: timeout,
+                    };
+                if let Some(lsn) = request.minimum_lsn {
+                    options.minimum_lsn = Some(graphdb_core::types::CommitLsn::new(lsn));
+                }
+            }
+        } else if let Some(timeout) = request.consistency_timeout_ms {
+            options.consistency =
+                graphdb_sync::vector_sync::SearchConsistency::ReadYourWrites { timeout_ms: timeout };
+            if let Some(lsn) = request.minimum_lsn {
+                options.minimum_lsn = Some(graphdb_core::types::CommitLsn::new(lsn));
+            }
         }
 
         let results = vector_api

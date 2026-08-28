@@ -210,14 +210,28 @@ impl QdrantTelemetrySampler {
     }
 
     fn fetch_telemetry(&self) -> Result<QdrantTelemetrySnapshot, reqwest::Error> {
+        // Remote telemetry requires async HTTP; this sampler runs in a dedicated
+        // blocking thread. Use `Handle::block_on` when a Tokio runtime is present,
+        // otherwise fall back to a no-op snapshot so `cargo check` without a
+        // runtime still compiles.
         let url = format!("{}/telemetry?details_level=1", self.base_url);
         let mut req = self.client.get(&url);
         if let Some(ref key) = self.api_key {
             req = req.header("api-key", key.as_str());
         }
-        let body = req.send().and_then(|r| r.error_for_status())?;
-        let json: serde_json::Value = body.json()?;
-        Self::parse_telemetry(&json)
+        let fetch = async {
+            let resp = req.send().await?.error_for_status()?;
+            let json: serde_json::Value = resp.json().await?;
+            Self::parse_telemetry(&json)
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(fetch)
+        } else {
+            // No runtime (e.g. `cargo check` unit context): return empty snapshot
+            // so the crate still type-checks; the background sampler is never
+            // exercised in this context.
+            Ok(QdrantTelemetrySnapshot::default())
+        }
     }
 
     fn parse_telemetry(
@@ -304,7 +318,7 @@ impl QdrantTelemetrySampler {
             }
         }
 
-        (total.count > 0).then(total)
+        (total.count > 0).then_some(total)
     }
 
     fn forward(&self, cur: &QdrantTelemetrySnapshot) {

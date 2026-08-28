@@ -949,6 +949,10 @@ pub enum VectorSpec {
         /// Number of leading result rows to skip after the engine returns
         /// `top_k + offset` candidates (OFFSET semantics).
         offset: usize,
+        /// Consistency timeout for RYW; None = eventual.
+        consistency_timeout_ms: Option<u64>,
+        /// Minimum LSN to wait for when RYW is set.
+        minimum_lsn: Option<u64>,
     },
     VectorLookup {
         space_name: String,
@@ -958,6 +962,8 @@ pub enum VectorSpec {
         top_k: u32,
         tag_name: String,
         field_name: String,
+        consistency_timeout_ms: Option<u64>,
+        minimum_lsn: Option<u64>,
     },
     VectorMatch {
         space_name: String,
@@ -968,6 +974,8 @@ pub enum VectorSpec {
         tag_name: String,
         field_name: String,
         space_id: u64,
+        consistency_timeout_ms: Option<u64>,
+        minimum_lsn: Option<u64>,
     },
 }
 

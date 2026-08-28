@@ -31,13 +31,34 @@ pub async fn execute<
     let parameters = json_params_to_core(&request.parameters);
     let session_variables = json_params_to_core(&request.session_variables);
 
+    // Map consistency from wire to API consistency
+    let consistency = match request.consistency.as_deref() {
+        Some(s) if s.eq_ignore_ascii_case("read_your_writes")
+            || s.eq_ignore_ascii_case("ryw")
+            || s.eq_ignore_ascii_case("read-your-writes") =>
+        {
+            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites {
+                timeout_ms: request.consistency_timeout_ms.unwrap_or(2000),
+            }
+        }
+        _ if request.consistency_timeout_ms.is_some() => {
+            graphdb_api::api_core::types::ConsistencyLevel::ReadYourWrites {
+                timeout_ms: request.consistency_timeout_ms.unwrap(),
+            }
+        }
+        _ => graphdb_api::api_core::types::ConsistencyLevel::Eventual,
+    };
+    let minimum_lsn = request.minimum_lsn.map(graphdb_core::types::CommitLsn::new);
+
     // Executing Queries with GraphService
     let result = match graph_service
-        .execute_with_params(
+        .execute_with_consistency(
             request.session_id,
             &request.query,
             parameters,
             session_variables,
+            consistency,
+            minimum_lsn,
         )
         .await
     {

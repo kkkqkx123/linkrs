@@ -423,7 +423,7 @@ impl VectorApi {
         }
     }
 
-    /// Delete a vector point
+    /// Delete a vector point (Direct, non-transactional).
     pub async fn delete_vector(
         &self,
         space_id: u64,
@@ -431,15 +431,64 @@ impl VectorApi {
         field_name: &str,
         point_id: &str,
     ) -> CoreResult<()> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.backend
-            .delete(&collection_name, point_id)
+        self.delete_vector_with_mode(space_id, tag_name, field_name, point_id, VectorWriteMode::Direct)
             .await
-            .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
-    /// Delete vector points in batch
+    /// Delete a vector point with explicit write mode.
+    pub async fn delete_vector_with_mode(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_id: &str,
+        mode: VectorWriteMode,
+    ) -> CoreResult<()> {
+        match mode {
+            VectorWriteMode::Direct => {
+                let collection_name =
+                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+                self.backend
+                    .delete(&collection_name, point_id)
+                    .await
+                    .map_err(|e| CoreError::VectorError(e.to_string()))
+            }
+            VectorWriteMode::Transactional {
+                txn_id,
+                space_id: txn_space,
+                tag,
+                field,
+            } => {
+                let Some(manager) = self.sync_manager.as_ref() else {
+                    return Err(CoreError::VectorError(
+                        "Transactional vector deletes require a configured SyncManager".to_string(),
+                    ));
+                };
+                let vertex_id = graphdb_core::Value::string(point_id.to_string());
+                // Stage a Delete mutation so it flows through the outbox and
+                // participates in the graph transaction's commit/abort. Properties
+                // are empty; manager's delete fan-out will cover all indexed fields.
+                manager
+                    .on_vertex_change_with_txn(
+                        txn_id,
+                        txn_space,
+                        &tag,
+                        &vertex_id,
+                        &[],
+                        graphdb_sync::types::ChangeType::Delete,
+                    )
+                    .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                // The point_id is derived as "{vid}#{tag}#{field}" in the delivery
+                // layer, so the specific field to delete is conveyed via the staged
+                // tag/field in the transactional path; the extra `field` param keeps
+                // call-site symmetry with insert.
+                let _ = (space_id, tag_name, field_name, field);
+                Ok(())
+            }
+        }
+    }
+
+    /// Delete vector points in batch (Direct, non-transactional).
     pub async fn delete_vector_batch(
         &self,
         space_id: u64,
@@ -447,12 +496,56 @@ impl VectorApi {
         field_name: &str,
         point_ids: Vec<&str>,
     ) -> CoreResult<()> {
-        let collection_name =
-            VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-        self.backend
-            .delete_batch(&collection_name, &point_ids)
+        self.delete_vector_batch_with_mode(space_id, tag_name, field_name, point_ids, VectorWriteMode::Direct)
             .await
-            .map_err(|e| CoreError::VectorError(e.to_string()))
+    }
+
+    /// Delete vector points in batch with explicit write mode.
+    pub async fn delete_vector_batch_with_mode(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: Vec<&str>,
+        mode: VectorWriteMode,
+    ) -> CoreResult<()> {
+        match mode {
+            VectorWriteMode::Direct => {
+                let collection_name =
+                    VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
+                self.backend
+                    .delete_batch(&collection_name, &point_ids)
+                    .await
+                    .map_err(|e| CoreError::VectorError(e.to_string()))
+            }
+            VectorWriteMode::Transactional {
+                txn_id,
+                space_id: txn_space,
+                tag,
+                field,
+            } => {
+                let Some(manager) = self.sync_manager.as_ref() else {
+                    return Err(CoreError::VectorError(
+                        "Transactional vector deletes require a configured SyncManager".to_string(),
+                    ));
+                };
+                for point_id in point_ids {
+                    let vertex_id = graphdb_core::Value::string(point_id.to_string());
+                    manager
+                        .on_vertex_change_with_txn(
+                            txn_id,
+                            txn_space,
+                            &tag,
+                            &vertex_id,
+                            &[],
+                            graphdb_sync::types::ChangeType::Delete,
+                        )
+                        .map_err(|e| CoreError::VectorError(e.to_string()))?;
+                }
+                let _ = (space_id, tag_name, field_name, field);
+                Ok(())
+            }
+        }
     }
 
     /// Search vectors with options

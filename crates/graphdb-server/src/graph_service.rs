@@ -528,6 +528,104 @@ impl<
         result
     }
 
+    /// Execute a query with explicit consistency requirement.
+    pub async fn execute_with_consistency(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+
+        let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
+
+        if let Some(ref txn_manager) = self.transaction_manager {
+            txn_manager.cleanup_expired_transactions();
+        }
+
+        match Self::parse_command(stmt) {
+            Err(parse_error) => return Err(parse_error),
+            Ok(Some(parsed)) => {
+                let parsed_ast = parsed.ast;
+                let stmt_ast = parsed_ast.stmt();
+                match stmt_ast {
+                    Stmt::AssignVariable(assign) => {
+                        return self
+                            .execute_variable_assignment_with_consistency(
+                                &session,
+                                parsed_ast.clone(),
+                                assign,
+                                stmt,
+                                space_id,
+                                parameters,
+                                session_variables,
+                                consistency,
+                                minimum_lsn,
+                            );
+                    }
+                    _ => {
+                        return self.execute_transaction_command_with_consistency(
+                            &session,
+                            stmt,
+                            stmt_ast,
+                            parsed_ast.clone(),
+                            space_id,
+                            parameters,
+                            session_variables,
+                            consistency,
+                            minimum_lsn,
+                        );
+                    }
+                }
+            }
+            Ok(None) => {}
+        }
+
+        let mut result = self.execute_query_with_permission_and_consistency(
+            session_id,
+            stmt,
+            None,
+            space_id,
+            parameters,
+            session_variables,
+            consistency,
+            minimum_lsn,
+        );
+
+        if stmt.trim().to_uppercase().starts_with("USE ") {
+            if let Ok(ref exec_result) = result {
+                if let Some(space_summary) = Self::extract_space_summary_from_result(exec_result) {
+                    session.set_space(space_summary);
+                }
+            }
+        }
+
+        if result.is_ok() && session.is_auto_commit() {
+            if let Some(txn_id) = session.current_transaction() {
+                if let Some(ref txn_manager) = self.transaction_manager {
+                    match txn_manager.commit_transaction(txn_id) {
+                        Ok(()) => {
+                            session.unbind_transaction();
+                        }
+                        Err(e) => {
+                            warn!("Auto-commit failed for transaction {}: {}", txn_id, e);
+                            session.unbind_transaction();
+                            result = Err(format!("Auto-commit failed: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     /// Execute a query and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
     ///
     /// Similar to [`execute`] but returns a streaming handle instead of a materialized result.
@@ -1232,6 +1330,458 @@ impl<
                 .execute_with_operation_storage(stmt, query_request, execution_storage)
                 .map_err(|e| e.to_string())
         };
+
+        result
+    }
+
+    fn run_query_plan_with_consistency(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt: &str,
+        parsed_ast: Option<Arc<Ast>>,
+        transaction_id: Option<TransactionId>,
+        execution: Option<graphdb_transaction::types::TransactionExecution>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        let merged_session_variables = match session_variables {
+            Some(client_variables) => {
+                let mut merged = session.variables_snapshot();
+                merged.extend(client_variables);
+                Some(merged)
+            }
+            None => Some(session.variables_snapshot()),
+        };
+        let query_request = graphdb_api::api_core::QueryRequest {
+            isolation_level: None,
+            space_id: session.space().map(|s| s.id),
+            space_name: session.space().map(|s| s.name),
+            auto_commit: session.is_auto_commit(),
+            transaction_id: transaction_id.or_else(|| session.current_transaction()),
+            parameters,
+            session_variables: merged_session_variables,
+            query_id: None,
+            parsed_statement: parsed_ast,
+            consistency,
+            minimum_lsn,
+        };
+
+        let mut query_api = self.query_api.write();
+        let result = if let Some(execution) = execution.as_ref() {
+            query_api
+                .execute_with_execution(stmt, query_request, execution)
+                .map_err(|e| e.to_string())
+        } else {
+            let execution_storage = self
+                .storage
+                .bind_auto_commit_context()
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_with_operation_storage(stmt, query_request, execution_storage)
+                .map_err(|e| e.to_string())
+        };
+
+        result
+    }
+
+    fn execute_variable_assignment_with_consistency(
+        &self,
+        session: &Arc<ClientSession>,
+        parsed_ast: Arc<Ast>,
+        assign: &crate::query::parser::ast::stmt::AssignVariableStmt,
+        stmt: &str,
+        space_id: i64,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        let result = self.execute_query_with_permission_and_consistency(
+            session.id(),
+            stmt,
+            Some(parsed_ast),
+            space_id,
+            parameters,
+            session_variables,
+            consistency,
+            minimum_lsn,
+        )?;
+        let value = {
+            if result.columns().len() != 1 {
+                return Err(format!(
+                    "LET expression must evaluate to a single value, got {} columns",
+                    result.columns().len()
+                ));
+            }
+            if result.rows().len() != 1 {
+                return Err(format!(
+                    "LET expression must evaluate to a single row, got {} rows",
+                    result.rows().len()
+                ));
+            }
+            result
+                .first_value()
+                .cloned()
+                .ok_or_else(|| "LET expression returned no value".to_string())?
+        };
+        session.set_variable(assign.name.clone(), value);
+        info!("Session {} set session variable", session.id());
+        Ok(graphdb_api::api_core::QueryResult::empty())
+    }
+
+    fn execute_transaction_command_with_consistency(
+        &self,
+        session: &Arc<ClientSession>,
+        stmt_text: &str,
+        stmt: &Stmt,
+        parsed_ast: Arc<Ast>,
+        space_id: i64,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        self.validate_session_transaction_state(session)?;
+        let txn_manager = self
+            .transaction_manager
+            .as_ref()
+            .ok_or("Transaction manager not initialized")?;
+
+        match stmt {
+            Stmt::BeginTransaction(begin_stmt) => {
+                if session.has_active_transaction() {
+                    return Err("Session already has an active transaction".to_string());
+                }
+                let mut options = session.transaction_options();
+                if let Some(read_only) = begin_stmt.read_only {
+                    options.read_only = read_only;
+                }
+                let txn_id = match txn_manager
+                    .begin_transaction_with_owner(options.clone(), session.id().to_string())
+                {
+                    Ok(txn_id) => txn_id,
+                    Err(e) => {
+                        if matches!(
+                            e.kind(),
+                            graphdb_transaction::TransactionErrorKind::WriteTransactionConflict
+                        ) {
+                            txn_manager.cleanup_expired_transactions();
+                            match txn_manager
+                                .begin_transaction_with_owner(options, session.id().to_string())
+                            {
+                                Ok(txn_id) => txn_id,
+                                Err(retry_err) => {
+                                    return Err(format!(
+                                        "Failed to start transaction: {}",
+                                        retry_err
+                                    ));
+                                }
+                            }
+                        } else {
+                            return Err(format!("Failed to start transaction: {}", e));
+                        }
+                    }
+                };
+                session.bind_transaction(txn_id);
+                session.set_auto_commit(false);
+                let result = self.run_transaction_command_plan_with_consistency(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                    consistency,
+                    minimum_lsn,
+                );
+                if result.is_err() {
+                    let _ = txn_manager.abort_transaction(txn_id);
+                    session.unbind_transaction();
+                    session.set_auto_commit(true);
+                    session.rollback_variables();
+                }
+                result
+            }
+            Stmt::CommitTransaction(_) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction to commit")?;
+                txn_manager
+                    .commit_transaction(txn_id)
+                    .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+                session.unbind_transaction();
+                session.set_auto_commit(true);
+                session.commit_variables();
+                self.run_transaction_command_plan_with_consistency(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                    consistency,
+                    minimum_lsn,
+                )
+            }
+            Stmt::RollbackTransaction(rollback_stmt) => {
+                if let Some(savepoint_name) = &rollback_stmt.savepoint_name {
+                    let txn_id = session
+                        .current_transaction()
+                        .ok_or("No active transaction to rollback")?;
+                    let savepoint_info = txn_manager
+                        .get_context(txn_id)
+                        .map_err(|e| format!("Failed to get transaction context: {}", e))?
+                        .find_savepoint_by_name(savepoint_name)
+                        .ok_or_else(|| format!("Savepoint '{}' does not exist", savepoint_name))?;
+                    let storage = &*self.storage;
+                    txn_manager
+                        .rollback_to_savepoint(txn_id, savepoint_info.id, storage)
+                        .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                    session.rollback_variables_to(savepoint_name);
+                    self.run_transaction_command_plan_with_consistency(
+                        session.id(),
+                        stmt_text,
+                        parsed_ast,
+                        space_id,
+                        Some(txn_id),
+                        parameters,
+                        session_variables,
+                        consistency,
+                        minimum_lsn,
+                    )
+                } else {
+                    let txn_id = session
+                        .current_transaction()
+                        .ok_or("No active transaction to rollback")?;
+                    txn_manager
+                        .abort_transaction(txn_id)
+                        .map_err(|e| format!("Failed to rollback transaction: {}", e))?;
+                    session.unbind_transaction();
+                    session.set_auto_commit(true);
+                    session.rollback_variables();
+                    self.run_transaction_command_plan_with_consistency(
+                        session.id(),
+                        stmt_text,
+                        parsed_ast,
+                        space_id,
+                        Some(txn_id),
+                        parameters,
+                        session_variables,
+                        consistency,
+                        minimum_lsn,
+                    )
+                }
+            }
+            Stmt::Savepoint(savepoint_stmt) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction, cannot create savepoint")?;
+                let savepoint_id = txn_manager
+                    .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()))
+                    .map_err(|e| format!("Failed to create savepoint: {}", e))?;
+                let result = self.run_transaction_command_plan_with_consistency(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                    consistency.clone(),
+                    minimum_lsn,
+                );
+                if result.is_ok() {
+                    session.push_variable_savepoint(&savepoint_stmt.name);
+                }
+                let _ = savepoint_id;
+                result
+            }
+            Stmt::ReleaseSavepoint(release_stmt) => {
+                let txn_id = session
+                    .current_transaction()
+                    .ok_or("No active transaction, cannot release savepoint")?;
+                let context = txn_manager
+                    .get_context(txn_id)
+                    .map_err(|e| format!("Failed to get transaction context: {}", e))?;
+                let savepoint_info = context
+                    .find_savepoint_by_name(&release_stmt.name)
+                    .ok_or_else(|| format!("Savepoint '{}' does not exist", release_stmt.name))?;
+                txn_manager
+                    .release_savepoint(txn_id, savepoint_info.id)
+                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                let result = self.run_transaction_command_plan_with_consistency(
+                    session.id(),
+                    stmt_text,
+                    parsed_ast,
+                    space_id,
+                    Some(txn_id),
+                    parameters,
+                    session_variables,
+                    consistency,
+                    minimum_lsn,
+                );
+                if result.is_ok() {
+                    session.release_variable_savepoint(&release_stmt.name);
+                }
+                result
+            }
+            _ => Err("Statement is not a transaction command".to_string()),
+        }
+    }
+
+    fn run_transaction_command_plan_with_consistency(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parsed_ast: Arc<Ast>,
+        space_id: i64,
+        transaction_id: Option<TransactionId>,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+
+        session.charge();
+        let username = session.user();
+
+        if !self.permission_manager.is_admin(&username)
+            && !stmt.trim().to_uppercase().starts_with("USE ")
+        {
+            let permission = self.extract_permission_from_statement(stmt);
+            if let Err(e) = self
+                .permission_manager
+                .check_permission(&username, space_id, permission)
+            {
+                return Err(format!("Permission check failed: {}", e));
+            }
+        }
+
+        let execution = transaction_id.and_then(|id| {
+            let manager = self.transaction_manager.as_ref()?;
+            if manager.is_transaction_active(id) {
+                manager.create_execution(id, false).ok()
+            } else {
+                None
+            }
+        });
+
+        self.run_query_plan_with_consistency(
+            &session,
+            stmt,
+            Some(parsed_ast.clone()),
+            transaction_id,
+            execution,
+            parameters,
+            session_variables,
+            consistency,
+            minimum_lsn,
+        )
+    }
+
+    fn execute_query_with_permission_and_consistency(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parsed_ast: Option<Arc<Ast>>,
+        space_id: i64,
+        parameters: Option<HashMap<String, graphdb_core::Value>>,
+        session_variables: Option<HashMap<String, graphdb_core::Value>>,
+        consistency: graphdb_api::api_core::types::ConsistencyLevel,
+        minimum_lsn: Option<graphdb_core::types::CommitLsn>,
+    ) -> Result<QueryResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+
+        session.charge();
+        let username = session.user();
+
+        let stmt_upper = stmt.trim().to_uppercase();
+        let session_only_statement =
+            stmt_upper.starts_with("USE ") || stmt_upper.starts_with("LET ");
+        if !self.permission_manager.is_admin(&username) && !session_only_statement {
+            let permission = self.extract_permission_from_statement(stmt);
+            if let Err(e) = self
+                .permission_manager
+                .check_permission(&username, space_id, permission)
+            {
+                return Err(format!("Permission check failed: {}", e));
+            }
+        }
+
+        let mut statement_guard = None;
+        let execution = if let Some(txn_id) = session.current_transaction() {
+            if let Some(ref txn_manager) = self.transaction_manager {
+                match txn_manager.begin_statement(txn_id) {
+                    Ok((ctx, statement_start)) => {
+                        statement_guard = Some((txn_manager.clone(), ctx.clone(), statement_start));
+                        Some(
+                            txn_manager
+                                .create_execution(ctx.id, false)
+                                .map_err(|error| error.to_string())?,
+                        )
+                    }
+                    Err(e) => {
+                        if e.is_timeout() {
+                            warn!(
+                                "Transaction {} exceeded a timeout before statement execution",
+                                txn_id
+                            );
+                        }
+                        return Err(e.to_string());
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut result = self.run_query_plan_with_consistency(
+            &session,
+            stmt,
+            parsed_ast,
+            None,
+            execution,
+            parameters,
+            session_variables,
+            consistency,
+            minimum_lsn,
+        );
+
+        if let Some((txn_manager, context, statement_start)) = statement_guard {
+            if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
+                result = Err(error.to_string());
+            }
+        }
+
+        if result.is_err() {
+            if let Some(txn_id) = session.current_transaction() {
+                if let Some(ref txn_manager) = self.transaction_manager {
+                    if let Ok(ctx) = txn_manager.get_context(txn_id) {
+                        if !ctx.state().can_execute() {
+                            if let Err(e) = txn_manager.abort_transaction(txn_id) {
+                                warn!("Failed to rollback invalid transaction {}: {}", txn_id, e);
+                            }
+                            session.unbind_transaction();
+                            session.set_auto_commit(true);
+                            session.rollback_variables();
+                        }
+                    }
+                }
+            }
+        }
 
         result
     }
