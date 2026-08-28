@@ -19,7 +19,8 @@ use graphdb_core::Value;
 use graphdb_embedding::EmbeddingService;
 pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use vector_search::{
-    CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, VectorFilter,
+    types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,
+    PayloadSchemaType, VectorFilter,
 };
 
 /// Validate a distance metric at the index-creation entry points.
@@ -28,21 +29,9 @@ use vector_search::{
 /// fast with one consistent error instead of deep inside a specific engine
 /// or on the remote server.
 fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
-    if matches!(
-        distance,
-        DistanceMetric::Cosine
-            | DistanceMetric::Euclid
-            | DistanceMetric::Dot
-            | DistanceMetric::Manhattan
-    ) {
-        Ok(())
-    } else {
-        Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
-            format!(
-                "distance metric {distance:?} is not supported; supported metrics: Cosine, Euclid, Dot, Manhattan",
-            ),
-        )))
-    }
+    validate_distance_metric(distance).map_err(|e| {
+        VectorCoordinatorError::Vector(VectorError::ConfigError(e))
+    })
 }
 
 fn validate_metric_for_backend(

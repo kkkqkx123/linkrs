@@ -7,7 +7,7 @@ use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use std::sync::Arc;
 use vector_search::{
-    types::{IndexMetadata, PointId},
+    types::{validate_distance_metric, IndexMetadata, PointId},
     CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
 
@@ -25,19 +25,7 @@ pub struct ScrollQuery<'a> {
 /// Metrics every backend accepts at index-creation time; anything else is
 /// rejected up front instead of failing deep inside one engine.
 fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
-    if matches!(
-        distance,
-        DistanceMetric::Cosine
-            | DistanceMetric::Euclid
-            | DistanceMetric::Dot
-            | DistanceMetric::Manhattan
-    ) {
-        Ok(())
-    } else {
-        Err(CoreError::VectorError(format!(
-            "distance metric {distance:?} is not supported; supported metrics: Cosine, Euclid, Dot, Manhattan"
-        )))
-    }
+    validate_distance_metric(distance).map_err(CoreError::VectorError)
 }
 
 /// Vector search result

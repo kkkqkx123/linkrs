@@ -465,12 +465,10 @@ impl FulltextOperator {
                         return Ok(None);
                     }
 
-                    // No manager configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("Fulltext");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "FULLTEXT SEARCH cannot execute: no fulltext manager is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "fulltext-search"))]
@@ -514,12 +512,10 @@ impl FulltextOperator {
                         };
                     }
 
-                    // No manager configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("Fulltext");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "FULLTEXT LOOKUP cannot execute: no fulltext manager is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "fulltext-search"))]
@@ -564,12 +560,10 @@ impl FulltextOperator {
                         };
                     }
 
-                    // No manager configured: fall through to the input.
-                    if let Some(mut chunk) = input.advance()? {
-                        chunk.materialize_selection_by("Fulltext");
-                        return Ok(Some(chunk));
-                    }
-                    Ok(None)
+                    let _ = input;
+                    Err(QueryError::execution(
+                        "FULLTEXT MATCH cannot execute: no fulltext manager is configured",
+                    ))
                 }
 
                 #[cfg(not(feature = "fulltext-search"))]

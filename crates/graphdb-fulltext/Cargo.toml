@@ -23,8 +23,7 @@ tokio = { workspace = true, features = ["fs"] }
 [features]
 fulltext-search = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
-vector = ["graphdb-sync/vector"]
 
 [dev-dependencies]
 tempfile.workspace = true
-graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search", "vector"] }
+graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search"] }

@@ -31,21 +31,6 @@ mod tests {
         assert!(index_id.starts_with(FULLTEXT_INDEX_PREFIX));
     }
 
-    /// Test vector index naming format: space_{space_id}
-    #[cfg(feature = "vector")]
-    #[test]
-    fn test_vector_index_naming_format() {
-        use graphdb_sync::vector_sync::VectorIndexLocation;
-
-        const VECTOR_COLLECTION_PREFIX: &str = "space";
-
-        let location = VectorIndexLocation::new(1, "Article", "content");
-        let collection_name = location.to_collection_name();
-
-        assert_eq!(collection_name, "space_1");
-        assert!(collection_name.starts_with(VECTOR_COLLECTION_PREFIX));
-    }
-
     /// Test index naming with special characters in tag/field names
     #[test]
     fn test_index_naming_with_special_chars() {
@@ -53,31 +38,6 @@ mod tests {
         let index_id = key.to_index_id();
 
         assert_eq!(index_id, "space_ft_1_User_Profile_email_address");
-    }
-
-    /// Test index naming consistency between vector and fulltext
-    #[cfg(feature = "vector")]
-    #[test]
-    fn test_index_naming_consistency() {
-        use graphdb_sync::vector_sync::VectorIndexLocation;
-
-        let space_id = 42;
-        let tag = "Product";
-        let field = "description";
-
-        let ft_key = IndexKey::new(space_id, tag, field);
-        let ft_index_id = ft_key.to_index_id();
-
-        let vec_location = VectorIndexLocation::new(space_id, tag, field);
-        let vec_collection = vec_location.to_collection_name();
-
-        // Vector collection only contains space_id (one collection per space)
-        assert!(vec_collection.contains(&space_id.to_string()));
-        // Tag and field are in group_id payload, not collection name
-
-        // Prefixes should be different
-        assert!(ft_index_id.starts_with("space_ft_"));
-        assert!(vec_collection.starts_with("space_"));
     }
 
     // ==================== SpaceInfo Isolation Level Tests ====================

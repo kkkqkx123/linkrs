@@ -5,6 +5,8 @@
 
 pub mod batch;
 pub mod error;
+#[cfg(feature = "fulltext-search")]
+pub mod fulltext_api;
 pub mod query_api;
 pub mod schema_api;
 pub mod sync_api;
@@ -18,6 +20,8 @@ pub use batch::{
     BatchResult,
 };
 pub use error::{CoreError, CoreResult, ExtendedErrorCode};
+#[cfg(feature = "fulltext-search")]
+pub use fulltext_api::FulltextApi;
 pub use query_api::QueryApi;
 pub use schema_api::SchemaApi;
 pub use sync_api::SyncApi;

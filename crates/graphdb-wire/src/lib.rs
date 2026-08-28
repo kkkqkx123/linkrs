@@ -9,6 +9,7 @@
 //! crate stays usable from both sides without dragging in axum/tonic.
 
 pub mod batch;
+pub mod fulltext;
 pub mod meta;
 pub mod query;
 pub mod schema;
